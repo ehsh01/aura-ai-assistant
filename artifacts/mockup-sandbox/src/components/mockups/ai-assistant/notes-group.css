@@ -1,0 +1,120 @@
+@keyframes aura-fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes aura-pulse-glow {
+  0%, 100% { box-shadow: 0 0 15px rgba(99, 102, 241, 0.1); }
+  50% { box-shadow: 0 0 25px rgba(99, 102, 241, 0.3); }
+}
+
+@keyframes aura-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.animate-aura-fade-in {
+  animation: aura-fade-in 0.4s ease-out forwards;
+}
+
+.animate-aura-glow {
+  animation: aura-pulse-glow 3s infinite;
+}
+
+.aura-glass-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  transition: all 0.2s ease-in-out;
+}
+
+.aura-glass-card:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(99, 102, 241, 0.3);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.5), 0 0 12px rgba(99, 102, 241, 0.15);
+}
+
+.aura-note-active {
+  background: rgba(99, 102, 241, 0.08) !important;
+  border-color: rgba(99, 102, 241, 0.4) !important;
+  box-shadow: 0 0 15px rgba(99, 102, 241, 0.1);
+}
+
+.aura-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.aura-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.aura-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+.aura-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.ai-toolbar-wrap {
+  position: relative;
+  background: rgba(15, 15, 20, 0.85);
+  backdrop-filter: blur(16px);
+  border-radius: 100px;
+  z-index: 10;
+}
+.ai-toolbar-wrap::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: 100px;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(99,102,241,0.5), rgba(139,92,246,0.2), rgba(255,255,255,0.05));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.prose-aura h1 {
+  font-size: 2.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 1rem;
+  color: rgba(255,255,255,0.95);
+}
+.prose-aura h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+  color: rgba(255,255,255,0.9);
+}
+.prose-aura p {
+  line-height: 1.7;
+  color: rgba(255,255,255,0.7);
+  margin-bottom: 1.25rem;
+}
+.prose-aura ul {
+  list-style-type: none;
+  padding-left: 0;
+  margin-bottom: 1.25rem;
+}
+.prose-aura li {
+  position: relative;
+  padding-left: 1.5rem;
+  margin-bottom: 0.5rem;
+  color: rgba(255,255,255,0.7);
+  line-height: 1.6;
+}
+.prose-aura li::before {
+  content: "";
+  position: absolute;
+  left: 0.3rem;
+  top: 0.6rem;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: rgba(99,102,241,0.8);
+}

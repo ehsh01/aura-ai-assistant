@@ -1,0 +1,19 @@
+@keyframes ai-pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 15px 0 rgba(99, 102, 241, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 25px 5px rgba(99, 102, 241, 0.6);
+  }
+}
+.animate-ai-pulse-glow {
+  animation: ai-pulse-glow 3s infinite ease-in-out;
+}
+
+@keyframes map-viewport-pulse {
+  0%, 100% { border-color: rgba(99, 102, 241, 0.5); }
+  50% { border-color: rgba(99, 102, 241, 1); }
+}
+.animate-map-viewport-pulse {
+  animation: map-viewport-pulse 4s infinite ease-in-out;
+}
