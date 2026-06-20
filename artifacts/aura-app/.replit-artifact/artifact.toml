@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Aura — AI Personal Assistant"
+version = "1.0.0"
+id = "artifacts/aura-app"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 20991
+
+[services.development]
+run = "pnpm --filter @workspace/aura-app run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/aura-app", "run", "build" ]
+publicDir = "artifacts/aura-app/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20991"
+BASE_PATH = "/"
