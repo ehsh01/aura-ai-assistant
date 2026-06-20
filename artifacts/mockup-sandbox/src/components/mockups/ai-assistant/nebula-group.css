@@ -1,0 +1,142 @@
+/* Nebula Glass Aesthetics */
+.nebula-bg {
+  background-color: #060610;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Glowing Orbs */
+.nebula-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(120px);
+  z-index: 0;
+  pointer-events: none;
+  animation: drift 20s infinite alternate ease-in-out;
+}
+
+.orb-1 {
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, rgba(124, 58, 237, 0.4) 0%, transparent 70%);
+  top: -200px;
+  left: -100px;
+  animation-duration: 25s;
+}
+
+.orb-2 {
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(79, 70, 229, 0.3) 0%, transparent 70%);
+  bottom: -150px;
+  right: -100px;
+  animation-duration: 22s;
+  animation-delay: -5s;
+}
+
+.orb-3 {
+  width: 700px;
+  height: 700px;
+  background: radial-gradient(circle, rgba(29, 78, 216, 0.25) 0%, transparent 70%);
+  top: 30%;
+  left: 50%;
+  transform: translateX(-50%);
+  animation-duration: 28s;
+  animation-delay: -10s;
+}
+
+.orb-4 {
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(circle, rgba(219, 39, 119, 0.2) 0%, transparent 70%);
+  top: 10%;
+  right: 10%;
+  animation-duration: 18s;
+  animation-delay: -2s;
+}
+
+@keyframes drift {
+  0% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(30px, -50px) scale(1.1); }
+  66% { transform: translate(-20px, 20px) scale(0.9); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+
+/* Glass Cards */
+.nebula-glass {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 
+    0 10px 40px -10px rgba(0, 0, 0, 0.5), 
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  position: relative;
+  z-index: 10;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.nebula-glass-hover:hover {
+  transform: translateY(-4px);
+  box-shadow: 
+    0 20px 40px -10px rgba(124, 58, 237, 0.2), 
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Floating Elements */
+.nebula-float {
+  animation: float-bob 4s ease-in-out infinite;
+}
+
+@keyframes float-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+.mic-halo {
+  box-shadow: 
+    0 0 30px rgba(139, 92, 246, 0.6),
+    inset 0 0 10px rgba(255, 255, 255, 0.3);
+}
+
+.mic-pulse::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100%;
+  height: 100%;
+  background: rgba(139, 92, 246, 0.4);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  z-index: -1;
+  animation: pulse-ring 3s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+}
+
+@keyframes pulse-ring {
+  0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(2.5); opacity: 0; }
+}
+
+/* Typography Gradients */
+.text-gradient-nebula {
+  background: linear-gradient(135deg, #e0e7ff 0%, #a5b4fc 50%, #c084fc 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Search Focus */
+.nebula-search-container:focus-within {
+  border-color: rgba(165, 180, 252, 0.5);
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.2);
+}
+
+/* Glass Pills */
+.nebula-pill {
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9999px;
+}

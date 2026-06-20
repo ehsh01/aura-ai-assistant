@@ -1,0 +1,185 @@
+@import "tailwindcss";
+
+.chrome-bg {
+  background-color: #050508;
+  position: relative;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.chrome-bg::before {
+  content: '';
+  position: absolute;
+  top: -10%;
+  right: -10%;
+  width: 50vw;
+  height: 50vw;
+  background: rgba(6, 182, 212, 0.15);
+  filter: blur(100px);
+  border-radius: 50%;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.chrome-bg::after {
+  content: '';
+  position: absolute;
+  bottom: -10%;
+  left: -10%;
+  width: 50vw;
+  height: 50vw;
+  background: rgba(168, 85, 247, 0.15);
+  filter: blur(100px);
+  border-radius: 50%;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.chrome-radial {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, rgba(255, 255, 255, 0.03) 0%, transparent 60%);
+  z-index: -1;
+  pointer-events: none;
+}
+
+.chrome-glass {
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15), 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.chrome-text-gradient {
+  background: linear-gradient(135deg, #e0f2fe, #a78bfa, #f0abfc);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.chrome-shimmer-border {
+  position: relative;
+}
+
+.chrome-shimmer-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, cyan, violet, gold);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.5;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.chrome-shimmer-border:hover::before,
+.chrome-shimmer-border.active::before {
+  opacity: 1;
+  animation: shimmer-shift 3s linear infinite;
+}
+
+@keyframes shimmer-shift {
+  0% { filter: hue-rotate(0deg); }
+  100% { filter: hue-rotate(360deg); }
+}
+
+.chrome-floating {
+  perspective: 1000px;
+  transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.3s ease;
+}
+
+.chrome-floating:hover {
+  transform: translateY(-4px) rotateX(5deg) rotateY(-2deg);
+  box-shadow: 0 15px 35px rgba(168, 85, 247, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+.chrome-floating::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.chrome-floating:hover::after {
+  opacity: 1;
+}
+
+.chrome-mic-ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px dashed rgba(255, 255, 255, 0.3);
+  animation: rotate-ring 10s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes rotate-ring {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.chrome-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.2em;
+  background-color: #a78bfa;
+  vertical-align: middle;
+  animation: blink-cursor 1s step-end infinite;
+  margin-left: 2px;
+}
+
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.chrome-light-leak {
+  position: relative;
+  overflow: hidden;
+}
+
+.chrome-light-leak::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+  transform: rotate(-45deg);
+  pointer-events: none;
+  animation: light-leak-shimmer 8s infinite;
+}
+
+@keyframes light-leak-shimmer {
+  0% { transform: rotate(-45deg) translateY(-100px); opacity: 0; }
+  20% { opacity: 1; }
+  80% { transform: rotate(-45deg) translateY(200px); opacity: 0; }
+  100% { transform: rotate(-45deg) translateY(200px); opacity: 0; }
+}
+
+.chrome-hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.chrome-hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.chrome-snap-x {
+  scroll-snap-type: x mandatory;
+}
+
+.chrome-snap-start {
+  scroll-snap-align: start;
+}
