@@ -87,7 +87,7 @@ export function Dashboard() {
               <Search className={`w-5 h-5 mr-3 transition-colors ${searchFocused ? 'text-indigo-300' : 'text-zinc-400'}`} />
               <input 
                 type="text" 
-                placeholder="Ask Aura anything..." 
+                placeholder="Ask Recall anything..." 
                 className="bg-transparent border-none outline-none text-sm text-zinc-200 placeholder:text-zinc-500 w-full font-medium"
                 onFocus={() => setSearchFocused(true)}
                 onBlur={() => setSearchFocused(false)}
@@ -106,7 +106,7 @@ export function Dashboard() {
             </button>
             
             <div className="w-10 h-10 rounded-full nebula-glass flex items-center justify-center text-sm font-bold text-indigo-200 z-20 shadow-[0_0_15px_rgba(99,102,241,0.3)] cursor-pointer">
-              AM
+              E
             </div>
           </div>
         </header>
@@ -118,7 +118,7 @@ export function Dashboard() {
             {/* Greeting */}
             <section className="flex flex-col items-center text-center space-y-4">
               <h1 className="text-5xl md:text-6xl font-semibold tracking-tight text-gradient-nebula mb-2">
-                Good morning, Alex <span className="text-indigo-400 text-4xl inline-block ml-2 animate-pulse">✦</span>
+                Good morning, Ernesto <span className="text-indigo-400 text-4xl inline-block ml-2 animate-pulse">✦</span>
               </h1>
               <div className="flex items-center gap-2 text-indigo-200/60 font-light tracking-wide text-sm">
                 <Calendar className="w-4 h-4" />
@@ -250,7 +250,7 @@ export function Dashboard() {
             {/* Bottom: Recent AI Conversations */}
             <section className="pt-8 pb-4">
               <h2 className="text-sm font-light text-zinc-400 uppercase tracking-widest mb-6 flex items-center gap-3">
-                <div className="nebula-pill p-1.5"><MessageSquare className="w-3.5 h-3.5 text-pink-400" /></div> Recent with Aura
+                <div className="nebula-pill p-1.5"><MessageSquare className="w-3.5 h-3.5 text-pink-400" /></div> Recent with Recall
               </h2>
               <div className="flex flex-wrap gap-4">
                 {aiConversations.map((conv, idx) => (

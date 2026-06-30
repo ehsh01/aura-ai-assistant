@@ -73,7 +73,7 @@ export function AppLayout({ children }: AppLayoutProps) {
             </svg>
           </div>
           {!collapsed && (
-            <span className="font-semibold text-[15px] tracking-tight text-white/90">Aura</span>
+            <span className="font-semibold text-[15px] tracking-tight text-white/90">Recall</span>
           )}
         </div>
 
@@ -126,10 +126,10 @@ export function AppLayout({ children }: AppLayoutProps) {
                  style={{ background: "rgba(255,255,255,0.04)" }}>
               <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0"
                    style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)" }}>
-                A
+                E
               </div>
               <div className="flex-1 min-w-0">
-                <div className="text-[12px] font-medium text-white/80 truncate">Alex Morgan</div>
+                <div className="text-[12px] font-medium text-white/80 truncate">Ernesto</div>
                 <div className="text-[10px] text-white/30 truncate">Pro plan</div>
               </div>
             </div>

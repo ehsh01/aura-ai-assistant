@@ -210,7 +210,7 @@ export function Tasks() {
                 </div>
               </div>
               <div>
-                <h2 className="text-[15px] font-semibold tracking-tight text-white/90">Aura AI</h2>
+                <h2 className="text-[15px] font-semibold tracking-tight text-white/90">Recall AI</h2>
                 <div className="text-[11px] text-white/40 flex items-center gap-1.5">
                   <span className="w-1 h-1 rounded-full bg-green-400" /> Online
                 </div>
@@ -314,7 +314,7 @@ export function Tasks() {
             <div className="bg-[#15151e] border border-white/10 rounded-2xl p-2 focus-within:border-indigo-500/50 focus-within:ring-1 focus-within:ring-indigo-500/50 transition-all flex flex-col">
               <textarea 
                 rows={1}
-                placeholder="Ask Aura anything..." 
+                placeholder="Ask Recall anything..." 
                 className="w-full bg-transparent resize-none text-[14px] text-white placeholder:text-white/30 px-2 py-1.5 focus:outline-none"
               />
               <div className="flex items-center justify-between mt-2 pt-1 border-t border-white/5">
@@ -333,7 +333,7 @@ export function Tasks() {
             </div>
             
             <div className="text-center mt-3">
-              <p className="text-[10px] text-white/20">Aura AI can make mistakes. Verify important tasks.</p>
+              <p className="text-[10px] text-white/20">Recall AI can make mistakes. Verify important tasks.</p>
             </div>
           </div>
           

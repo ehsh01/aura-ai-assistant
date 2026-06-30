@@ -1,10 +1,12 @@
-# [Project name]
+# Recall — AI Personal Assistant
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Recall is an AI-first personal assistant for notes, tasks, and canvas. **Production:** [https://recall-app.net](https://recall-app.net)
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm dev` — frontend locally (port 5173)
+- `pnpm dev:api` — API locally (port 5008, matches production)
+- **Production:** see [DEPLOYMENT.md](./DEPLOYMENT.md) — DigitalOcean `159.223.130.69`, nginx → **port 5008**
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
@@ -20,21 +22,19 @@ _Replace the heading above with the project's name, and this line with one sente
 - API codegen: Orval (from OpenAPI spec)
 - Build: esbuild (CJS bundle)
 
-## Where things live
-
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
-
-## Architecture decisions
-
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
-
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- **Website:** https://recall-app.net
+- **App name (UI):** Recall
+- Dashboard, Notes, Tasks, and Canvas with glassmorphism UI
+- AI layer (chat, summarization, task extraction, semantic search) — in progress
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- Production domain for this app is **recall-app.net** (not a separate marketing site).
+- Product branding is **Recall**, not Aura.
+
+## Where things live
 
 ## Gotchas
 

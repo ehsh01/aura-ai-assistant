@@ -244,7 +244,7 @@ export function Canvas() {
                     <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-indigo-500 to-violet-500 flex items-center justify-center">
                       <Sparkles className="w-3 h-3 text-white" />
                     </div>
-                    <span className="text-[13px] font-medium text-white/90">Aura</span>
+                    <span className="text-[13px] font-medium text-white/90">Recall</span>
                   </div>
                   <button onClick={() => setAiExpanded(false)} className="text-white/40 hover:text-white/80 p-1">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
@@ -264,7 +264,7 @@ export function Canvas() {
                   <div className="relative flex items-center">
                     <input 
                       type="text" 
-                      placeholder="Ask Aura about this canvas..." 
+                      placeholder="Ask Recall about this canvas..." 
                       className="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl pl-4 pr-10 py-2.5 text-[13px] text-white placeholder:text-white/30 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 transition-all"
                     />
                     <button className="absolute right-2 p-1.5 bg-indigo-500 rounded-lg text-white hover:bg-indigo-400 transition-colors">
@@ -279,7 +279,7 @@ export function Canvas() {
                 className="group flex items-center gap-3 bg-[#14141c]/90 backdrop-blur-xl border border-indigo-500/30 px-4 py-3 rounded-full shadow-2xl hover:bg-[#1a1a24] transition-all animate-ai-pulse-glow"
               >
                 <Sparkles className="w-4 h-4 text-indigo-400 group-hover:text-indigo-300" />
-                <span className="text-[13px] font-medium text-white/80 group-hover:text-white">Ask Aura...</span>
+                <span className="text-[13px] font-medium text-white/80 group-hover:text-white">Ask Recall...</span>
               </button>
             )}
           </div>

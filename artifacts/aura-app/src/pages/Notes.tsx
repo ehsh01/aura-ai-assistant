@@ -6,12 +6,12 @@ const TAGS = ["All", "Work", "Personal", "Ideas", "Meeting", "Code", "Recipes"];
 const NOTES = [
   {
     id: 1,
-    title: "Project Aura Q3 Strategy",
+    title: "Project Recall Q3 Strategy",
     preview: "Focusing on context-aware responses and faster local generation.",
     tags: ["Work", "Meeting"],
     date: "10m ago",
     pinned: true,
-    content: "We need to align on the upcoming Q3 deliverables for the Aura assistant. The core focus will be on improving context-aware processing by integrating better local caching mechanisms."
+    content: "We need to align on the upcoming Q3 deliverables for the Recall assistant. The core focus will be on improving context-aware processing by integrating better local caching mechanisms."
   },
   {
     id: 2,
@@ -129,7 +129,7 @@ export function Notes() {
               </div>
               <input 
                 type="text" 
-                placeholder="Search notes or ask Aura..." 
+                placeholder="Search notes or ask Recall..." 
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full bg-white/[0.03] border border-white/[0.08] rounded-xl pl-9 pr-4 py-2.5 text-sm text-white/90 placeholder:text-white/30 focus:outline-none focus:border-indigo-500/50 focus:bg-white/[0.05] transition-all"
@@ -218,10 +218,10 @@ export function Notes() {
                 <span className="px-2.5 py-1 rounded-md bg-white/5 text-white/50 text-xs font-medium border border-white/10">Meeting</span>
               </div>
               
-              <h1 contentEditable suppressContentEditableWarning>Project Aura Q3 Strategy</h1>
+              <h1 contentEditable suppressContentEditableWarning>Project Recall Q3 Strategy</h1>
               
               <p contentEditable suppressContentEditableWarning>
-                We need to align on the upcoming Q3 deliverables for the Aura assistant. The core focus will be on improving context-aware processing by integrating better local caching mechanisms. This should drastically reduce perceived latency during complex, multi-turn conversational flows.
+                We need to align on the upcoming Q3 deliverables for the Recall assistant. The core focus will be on improving context-aware processing by integrating better local caching mechanisms. This should drastically reduce perceived latency during complex, multi-turn conversational flows.
               </p>
 
               <h2 contentEditable suppressContentEditableWarning>Key Objectives</h2>
@@ -238,7 +238,7 @@ export function Notes() {
                     <circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>
                   </svg>
                   <div>
-                    <h4 className="text-sm font-semibold text-indigo-300 mb-1">Aura Suggestion</h4>
+                    <h4 className="text-sm font-semibold text-indigo-300 mb-1">Recall Suggestion</h4>
                     <p className="text-sm text-indigo-200/70 leading-relaxed m-0">Based on past meeting notes, you might want to invite <span className="text-white/90 font-medium">David Chen</span> to this review to cover the database migration details.</p>
                   </div>
                 </div>
@@ -279,7 +279,7 @@ export function Notes() {
               <div className="flex-1 relative">
                 <input 
                   type="text" 
-                  placeholder="Ask Aura to write, brainstorm, or edit..." 
+                  placeholder="Ask Recall to write, brainstorm, or edit..." 
                   className="w-full bg-transparent border-none text-sm text-white/90 placeholder:text-white/40 focus:outline-none focus:ring-0 px-2 py-1"
                 />
               </div>

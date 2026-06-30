@@ -1,6 +1,6 @@
 kind = "web"
 previewPath = "/"
-title = "Aura — AI Personal Assistant"
+title = "Recall — AI Personal Assistant"
 version = "1.0.0"
 id = "artifacts/aura-app"
 router = "path"
