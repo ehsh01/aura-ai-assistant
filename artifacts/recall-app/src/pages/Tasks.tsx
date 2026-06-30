@@ -1,5 +1,14 @@
 import React, { useState } from "react";
 import { AppLayout } from "@/components/AppLayout";
+import { useAiChat, useGetAiStatus } from "@workspace/api-client-react";
+import {
+  MOCK_NOTES,
+  MOCK_TASKS,
+  RECALL_USER_NAME,
+  type RecallTask,
+  notesForAiContext,
+  tasksForAiContext,
+} from "@/lib/recall-context";
 import { 
   Check, 
   Circle, 
@@ -15,33 +24,15 @@ import {
   Clock
 } from "lucide-react";
 
-type Priority = "high" | "med" | "low" | "none";
+type Priority = RecallTask["priority"];
 
-interface Task {
-  id: string;
-  title: string;
-  time?: string;
-  priority: Priority;
-  tags?: string[];
-  completed: boolean;
-}
+interface Task extends RecallTask {}
 
-const MORNING_TASKS: Task[] = [
-  { id: "1", title: "Review Q3 metrics", time: "9:00 AM", priority: "high", tags: ["Work"], completed: false },
-  { id: "2", title: "Finish project proposal", time: "10:30 AM", priority: "high", tags: ["Deep Work"], completed: false },
-  { id: "3", title: "Sync with design team", time: "11:30 AM", priority: "med", completed: false },
-];
+const MORNING_TASKS = MOCK_TASKS.filter((t) => ["1", "2", "3"].includes(t.id));
+const AFTERNOON_TASKS = MOCK_TASKS.filter((t) => ["4", "5", "6"].includes(t.id));
+const COMPLETED_TASKS = MOCK_TASKS.filter((t) => t.completed);
 
-const AFTERNOON_TASKS: Task[] = [
-  { id: "4", title: "Call Dr. Martinez", time: "2:00 PM", priority: "high", tags: ["Personal"], completed: false },
-  { id: "5", title: "Review pull request #442", priority: "med", tags: ["Dev"], completed: false },
-  { id: "6", title: "Grocery run", time: "5:00 PM", priority: "low", completed: false },
-];
-
-const COMPLETED_TASKS: Task[] = [
-  { id: "7", title: "Morning workout", time: "7:00 AM", priority: "low", completed: true },
-  { id: "8", title: "Inbox zero", time: "8:30 AM", priority: "med", completed: true },
-];
+type ChatMsg = { role: "user" | "assistant"; content: string; time: string };
 
 const PRIORITY_COLORS: Record<Priority, string> = {
   high: "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]",
@@ -97,7 +88,54 @@ function TaskItem({ task, onToggle }: { task: Task; onToggle: (id: string) => vo
 }
 
 export function Tasks() {
-  const [tasks, setTasks] = useState([...MORNING_TASKS, ...AFTERNOON_TASKS, ...COMPLETED_TASKS]);
+  const [tasks, setTasks] = useState([...MOCK_TASKS]);
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [draft, setDraft] = useState("");
+  const aiChat = useAiChat();
+  const { data: aiStatus } = useGetAiStatus();
+
+  const formatTime = () =>
+    new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+
+  const sendMessage = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || aiChat.isPending) return;
+
+    const userMsg: ChatMsg = { role: "user", content: trimmed, time: formatTime() };
+    const history = [...messages, userMsg];
+    setMessages(history);
+    setDraft("");
+
+    try {
+      const res = await aiChat.mutateAsync({
+        data: {
+          messages: history.map((m) => ({ role: m.role, content: m.content })),
+          context: {
+            userName: RECALL_USER_NAME,
+            tasks: tasksForAiContext(tasks),
+            notes: notesForAiContext(MOCK_NOTES),
+          },
+        },
+      });
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: res.message.content,
+          time: formatTime(),
+        },
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "Something went wrong reaching Recall AI. Check that the API is running.",
+          time: formatTime(),
+        },
+      ]);
+    }
+  };
 
   const toggleTask = (id: string) => {
     setTasks(tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
@@ -218,80 +256,42 @@ export function Tasks() {
             </div>
             
             <div className="px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-[10px] font-medium text-white/60 tracking-wider">
-              GPT-4o
+              {aiStatus?.enabled ? (aiStatus.model ?? "GPT") : "Offline"}
             </div>
           </header>
 
           {/* Chat History */}
           <div className="flex-1 overflow-y-auto task-scroll p-6 space-y-6">
-            
-            {/* Msg 1 */}
-            <div className="flex flex-col items-end gap-1.5">
-              <div className="bg-white/10 px-4 py-2.5 rounded-2xl rounded-tr-sm text-[14px] text-white/90 max-w-[85%]">
-                What do I have left for today?
+            {messages.length === 0 && (
+              <p className="text-sm text-white/40 text-center py-8">
+                Ask about your tasks, notes, or priorities. Recall sees your current task list.
+              </p>
+            )}
+            {messages.map((msg, idx) => (
+              <div
+                key={idx}
+                className={`flex flex-col gap-1.5 ${msg.role === "user" ? "items-end" : "items-start"}`}
+              >
+                <div
+                  className={`px-4 py-2.5 rounded-2xl text-[14px] max-w-[90%] whitespace-pre-wrap ${
+                    msg.role === "user"
+                      ? "bg-white/10 text-white/90 rounded-tr-sm"
+                      : "bg-indigo-500/10 border-l-2 border-indigo-500 text-white/90 rounded-tl-sm shadow-[0_4px_20px_rgba(99,102,241,0.05)]"
+                  }`}
+                >
+                  {msg.content}
+                </div>
+                <span className={`text-[10px] text-white/30 ${msg.role === "user" ? "mr-1" : "ml-1"}`}>
+                  {msg.time}
+                </span>
               </div>
-              <span className="text-[10px] text-white/30 mr-1">1:42 PM</span>
-            </div>
-
-            {/* Msg 2 */}
-            <div className="flex flex-col items-start gap-1.5">
-              <div className="bg-indigo-500/10 border-l-2 border-indigo-500 px-4 py-3 rounded-2xl rounded-tl-sm text-[14px] text-white/90 max-w-[90%] shadow-[0_4px_20px_rgba(99,102,241,0.05)]">
-                <p className="mb-3">You have <strong className="text-white">4 tasks</strong> remaining for today:</p>
-                <ul className="space-y-2 text-white/70">
-                  <li className="flex items-start gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-red-500 mt-1.5 shrink-0" />
-                    <span><strong>Review Q3 metrics</strong> (High priority, missed 9:00 AM)</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-red-500 mt-1.5 shrink-0" />
-                    <span><strong>Call Dr. Martinez</strong> at 2:00 PM</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-orange-400 mt-1.5 shrink-0" />
-                    <span><strong>Review pull request #442</strong></span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-blue-400 mt-1.5 shrink-0" />
-                    <span><strong>Grocery run</strong> at 5:00 PM</span>
-                  </li>
-                </ul>
+            ))}
+            {aiChat.isPending && (
+              <div className="flex items-start gap-2 text-sm text-white/40 ml-1">
+                <Sparkles size={14} className="animate-pulse text-indigo-400" />
+                Recall is thinking…
               </div>
-              <span className="text-[10px] text-white/30 ml-1">1:42 PM</span>
-            </div>
-
-            {/* Msg 3 */}
-            <div className="flex flex-col items-end gap-1.5">
-              <div className="bg-white/10 px-4 py-2.5 rounded-2xl rounded-tr-sm text-[14px] text-white/90 max-w-[85%]">
-                Move the grocery run to tomorrow
-              </div>
-            </div>
-
-            {/* Msg 4 */}
-            <div className="flex flex-col items-start gap-1.5">
-              <div className="bg-indigo-500/10 border-l-2 border-indigo-500 px-4 py-3 rounded-2xl rounded-tl-sm text-[14px] text-white/90 max-w-[90%] shadow-[0_4px_20px_rgba(99,102,241,0.05)]">
-                Done! I've moved <span className="bg-white/10 px-1.5 py-0.5 rounded text-xs mx-1">Grocery run</span> to tomorrow. Anything else?
-              </div>
-            </div>
-
-            {/* Msg 5 */}
-            <div className="flex flex-col items-end gap-1.5">
-              <div className="bg-white/10 px-4 py-2.5 rounded-2xl rounded-tr-sm text-[14px] text-white/90 max-w-[85%]">
-                Summarize my notes from the team meeting yesterday
-              </div>
-            </div>
-
-            {/* Msg 6 */}
-            <div className="flex flex-col items-start gap-1.5">
-              <div className="bg-indigo-500/10 border-l-2 border-indigo-500 px-4 py-3 rounded-2xl rounded-tl-sm text-[14px] text-white/90 max-w-[90%] shadow-[0_4px_20px_rgba(99,102,241,0.05)]">
-                <p className="mb-2 text-indigo-200">Here's a quick summary of the Design Sync (Oct 23):</p>
-                <ul className="space-y-1.5 text-white/80 list-disc pl-4 marker:text-indigo-500/50">
-                  <li><strong>Q4 Vision:</strong> Shift focus to mobile-first interactions.</li>
-                  <li><strong>New Component Library:</strong> Needs review by Friday. You were assigned the button variants.</li>
-                  <li><strong>Blocker:</strong> Waiting on marketing copy for the landing page hero section.</li>
-                </ul>
-              </div>
-            </div>
-
+            )}
           </div>
 
           {/* Input Area */}
@@ -299,34 +299,48 @@ export function Tasks() {
             
             {/* Quick prompts */}
             <div className="flex gap-2 mb-3 overflow-x-auto task-scroll pb-1">
-              <button className="whitespace-nowrap px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 text-[11px] font-medium text-white/60 transition-colors">
-                Prioritize my tasks
-              </button>
-              <button className="whitespace-nowrap px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 text-[11px] font-medium text-white/60 transition-colors">
-                What did I miss?
-              </button>
-              <button className="whitespace-nowrap px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 text-[11px] font-medium text-white/60 transition-colors">
-                Add a task
-              </button>
+              {["Prioritize my tasks", "What did I miss?", "Summarize my notes"].map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => void sendMessage(prompt)}
+                  className="whitespace-nowrap px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 text-[11px] font-medium text-white/60 transition-colors"
+                >
+                  {prompt}
+                </button>
+              ))}
             </div>
 
             {/* Chat Box */}
             <div className="bg-[#15151e] border border-white/10 rounded-2xl p-2 focus-within:border-indigo-500/50 focus-within:ring-1 focus-within:ring-indigo-500/50 transition-all flex flex-col">
-              <textarea 
+              <textarea
                 rows={1}
-                placeholder="Ask Recall anything..." 
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void sendMessage(draft);
+                  }
+                }}
+                placeholder="Ask Recall anything..."
                 className="w-full bg-transparent resize-none text-[14px] text-white placeholder:text-white/30 px-2 py-1.5 focus:outline-none"
               />
               <div className="flex items-center justify-between mt-2 pt-1 border-t border-white/5">
                 <div className="flex items-center gap-1">
-                  <button className="w-8 h-8 rounded-lg flex items-center justify-center text-white/40 hover:text-white/80 hover:bg-white/5 transition-colors">
+                  <button type="button" className="w-8 h-8 rounded-lg flex items-center justify-center text-white/40 hover:text-white/80 hover:bg-white/5 transition-colors">
                     <Paperclip size={16} />
                   </button>
-                  <button className="w-8 h-8 rounded-lg flex items-center justify-center text-white/40 hover:text-white/80 hover:bg-white/5 transition-colors">
+                  <button type="button" className="w-8 h-8 rounded-lg flex items-center justify-center text-white/40 hover:text-white/80 hover:bg-white/5 transition-colors">
                     <Mic size={16} />
                   </button>
                 </div>
-                <button className="w-8 h-8 rounded-lg bg-indigo-500 hover:bg-indigo-400 flex items-center justify-center text-white transition-colors shadow-[0_0_10px_rgba(99,102,241,0.3)]">
+                <button
+                  type="button"
+                  onClick={() => void sendMessage(draft)}
+                  disabled={aiChat.isPending || !draft.trim()}
+                  className="w-8 h-8 rounded-lg bg-indigo-500 hover:bg-indigo-400 disabled:opacity-40 flex items-center justify-center text-white transition-colors shadow-[0_0_10px_rgba(99,102,241,0.3)]"
+                >
                   <Send size={14} className="ml-0.5" />
                 </button>
               </div>

@@ -45,6 +45,7 @@ module.exports = {
       name: "recall-api",
       script: "dist/index.mjs",
       cwd: __dirname,
+      exec_mode: "fork",
       instances: 1,
       autorestart: true,
       max_memory_restart: "512M",

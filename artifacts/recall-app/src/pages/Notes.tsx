@@ -1,87 +1,61 @@
 import React, { useState } from "react";
 import { AppLayout } from "@/components/AppLayout";
+import { useAiChat, useSummarizeNote } from "@workspace/api-client-react";
+import {
+  MOCK_NOTES,
+  MOCK_TASKS,
+  RECALL_USER_NAME,
+  notesForAiContext,
+  tasksForAiContext,
+} from "@/lib/recall-context";
 
 const TAGS = ["All", "Work", "Personal", "Ideas", "Meeting", "Code", "Recipes"];
 
-const NOTES = [
-  {
-    id: 1,
-    title: "Project Recall Q3 Strategy",
-    preview: "Focusing on context-aware responses and faster local generation.",
-    tags: ["Work", "Meeting"],
-    date: "10m ago",
-    pinned: true,
-    content: "We need to align on the upcoming Q3 deliverables for the Recall assistant. The core focus will be on improving context-aware processing by integrating better local caching mechanisms."
-  },
-  {
-    id: 2,
-    title: "System Architecture V2",
-    preview: "Drafting the new microservices layout for the data ingestion pipeline.",
-    tags: ["Code", "Work"],
-    date: "2h ago",
-    pinned: true,
-    content: ""
-  },
-  {
-    id: 3,
-    title: "Weekly Reflection",
-    preview: "Felt really productive this week. Finally nailed the tricky bug in the routing.",
-    tags: ["Personal"],
-    date: "Yesterday",
-    pinned: false,
-    content: ""
-  },
-  {
-    id: 4,
-    title: "App Layout Ideas",
-    preview: "Glassmorphism vs flat design? I think glass fits the AI aesthetic better.",
-    tags: ["Ideas", "Work"],
-    date: "Yesterday",
-    pinned: false,
-    content: ""
-  },
-  {
-    id: 5,
-    title: "Matcha Latte Recipe",
-    preview: "2 tsp ceremonial matcha, 2oz hot water, 6oz oat milk, dash of vanilla.",
-    tags: ["Recipes", "Personal"],
-    date: "Oct 12",
-    pinned: false,
-    content: ""
-  },
-  {
-    id: 6,
-    title: "1-on-1 with Sarah",
-    preview: "Discussed her transition to the new frontend team and upcoming goals.",
-    tags: ["Meeting", "Work"],
-    date: "Oct 10",
-    pinned: false,
-    content: ""
-  },
-  {
-    id: 7,
-    title: "Next.js 14 Migration",
-    preview: "Notes on upgrading our internal dashboard to use App Router.",
-    tags: ["Code"],
-    date: "Oct 8",
-    pinned: false,
-    content: ""
-  },
-  {
-    id: 8,
-    title: "Gift ideas for Mom",
-    preview: "Ceramic vase, new gardening gloves, or that book on French countryside.",
-    tags: ["Personal"],
-    date: "Oct 5",
-    pinned: false,
-    content: ""
-  }
-];
+const NOTES = MOCK_NOTES;
 
 export function Notes() {
   const [activeTag, setActiveTag] = useState("All");
-  const [activeNoteId, setActiveNoteId] = useState(1);
+  const [activeNoteId, setActiveNoteId] = useState("1");
   const [searchQuery, setSearchQuery] = useState("");
+  const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
+  const [toolbarDraft, setToolbarDraft] = useState("");
+  const summarizeNote = useSummarizeNote();
+  const aiChat = useAiChat();
+
+  const activeNote = NOTES.find((n) => n.id === activeNoteId) ?? NOTES[0];
+
+  const handleSummarize = async () => {
+    if (!activeNote?.content) return;
+    try {
+      const res = await summarizeNote.mutateAsync({
+        data: { content: activeNote.content, maxLength: 500 },
+      });
+      setAiSuggestion(res.summary);
+    } catch {
+      setAiSuggestion("Could not summarize — check that the API is running.");
+    }
+  };
+
+  const handleToolbarSend = async () => {
+    const text = toolbarDraft.trim();
+    if (!text || aiChat.isPending) return;
+    setToolbarDraft("");
+    try {
+      const res = await aiChat.mutateAsync({
+        data: {
+          messages: [{ role: "user", content: text }],
+          context: {
+            userName: RECALL_USER_NAME,
+            tasks: tasksForAiContext(MOCK_TASKS),
+            notes: notesForAiContext(NOTES),
+          },
+        },
+      });
+      setAiSuggestion(res.message.content);
+    } catch {
+      setAiSuggestion("Recall AI is unavailable right now.");
+    }
+  };
 
   const filteredNotes = NOTES.filter(note => {
     const matchesTag = activeTag === "All" || note.tags.includes(activeTag);
@@ -239,7 +213,10 @@ export function Notes() {
                   </svg>
                   <div>
                     <h4 className="text-sm font-semibold text-indigo-300 mb-1">Recall Suggestion</h4>
-                    <p className="text-sm text-indigo-200/70 leading-relaxed m-0">Based on past meeting notes, you might want to invite <span className="text-white/90 font-medium">David Chen</span> to this review to cover the database migration details.</p>
+                    <p className="text-sm text-indigo-200/70 leading-relaxed m-0">
+                      {aiSuggestion ??
+                        "Use Summarize or ask Recall in the toolbar below for AI help with this note."}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -263,7 +240,13 @@ export function Notes() {
           {/* AI Toolbar */}
           <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-[90%] max-w-2xl">
             <div className="ai-toolbar-wrap flex items-center gap-2 p-2 shadow-2xl shadow-indigo-500/10">
-              <button className="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-indigo-300 transition-colors" title="Summarize">
+              <button
+                type="button"
+                onClick={() => void handleSummarize()}
+                disabled={summarizeNote.isPending}
+                className="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-indigo-300 transition-colors disabled:opacity-50"
+                title="Summarize"
+              >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                 </svg>
@@ -280,11 +263,21 @@ export function Notes() {
                 <input 
                   type="text" 
                   placeholder="Ask Recall to write, brainstorm, or edit..." 
+                  value={toolbarDraft}
+                  onChange={(e) => setToolbarDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleToolbarSend();
+                  }}
                   className="w-full bg-transparent border-none text-sm text-white/90 placeholder:text-white/40 focus:outline-none focus:ring-0 px-2 py-1"
                 />
               </div>
 
-              <button className="w-8 h-8 rounded-full bg-indigo-500 hover:bg-indigo-400 text-white flex items-center justify-center transition-colors">
+              <button
+                type="button"
+                onClick={() => void handleToolbarSend()}
+                disabled={aiChat.isPending || !toolbarDraft.trim()}
+                className="w-8 h-8 rounded-full bg-indigo-500 hover:bg-indigo-400 disabled:opacity-40 text-white flex items-center justify-center transition-colors"
+              >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M5 12h14M12 5v14"/>
                 </svg>

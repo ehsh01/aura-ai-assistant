@@ -1,10 +1,67 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { AppLayout } from "@/components/AppLayout";
+import { useDashboardDigest, useSemanticSearch } from "@workspace/api-client-react";
+import {
+  MOCK_NOTES,
+  MOCK_TASKS,
+  RECALL_USER_NAME,
+  notesForAiContext,
+  notesForSemanticSearch,
+  tasksForAiContext,
+} from "@/lib/recall-context";
 import { Search, Mic, Bell, Calendar, CheckCircle2, Circle, MoreHorizontal, MessageSquare, Sparkles, Pin, Plus, CheckSquare, FileText, Clock } from "lucide-react";
 import { Link } from "wouter";
 
 export function Dashboard() {
   const [searchFocused, setSearchFocused] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [digestText, setDigestText] = useState<string | null>(null);
+  const [digestHighlights, setDigestHighlights] = useState<string[]>([]);
+  const [searchHint, setSearchHint] = useState<string | null>(null);
+  const digestMutation = useDashboardDigest();
+  const searchMutation = useSemanticSearch();
+
+  useEffect(() => {
+    digestMutation.mutate(
+      {
+        data: {
+          userName: RECALL_USER_NAME,
+          tasks: tasksForAiContext(MOCK_TASKS),
+          notes: notesForAiContext(MOCK_NOTES),
+        },
+      },
+      {
+        onSuccess: (data) => {
+          setDigestText(data.digest);
+          setDigestHighlights(data.highlights);
+        },
+      },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
+  }, []);
+
+  const runSearch = async () => {
+    const q = searchQuery.trim();
+    if (!q || searchMutation.isPending) return;
+    try {
+      const res = await searchMutation.mutateAsync({
+        data: {
+          query: q,
+          items: notesForSemanticSearch(MOCK_NOTES),
+          limit: 3,
+        },
+      });
+      if (!res.results.length) {
+        setSearchHint("No matching notes found.");
+        return;
+      }
+      setSearchHint(
+        res.results.map((r) => r.title ?? r.text.slice(0, 60)).join(" · "),
+      );
+    } catch {
+      setSearchHint("Search unavailable — is the API running?");
+    }
+  };
 
   const stats = [
     { id: 1, value: "3", label: "tasks due", icon: <CheckSquare className="w-5 h-5 text-emerald-400" /> },
@@ -88,6 +145,11 @@ export function Dashboard() {
               <input 
                 type="text" 
                 placeholder="Ask Recall anything..." 
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void runSearch();
+                }}
                 className="bg-transparent border-none outline-none text-sm text-zinc-200 placeholder:text-zinc-500 w-full font-medium"
                 onFocus={() => setSearchFocused(true)}
                 onBlur={() => setSearchFocused(false)}
@@ -125,8 +187,21 @@ export function Dashboard() {
                 <span>{currentDate}</span>
               </div>
               <p className="text-lg text-zinc-300 italic font-light max-w-2xl mt-4 leading-relaxed mix-blend-screen">
-                "Clarity comes from action, not thought. Here's what needs your attention today."
+                {digestMutation.isPending
+                  ? "Recall is preparing your morning digest…"
+                  : digestText ??
+                    '"Clarity comes from action, not thought. Here\'s what needs your attention today."'}
               </p>
+              {digestHighlights.length > 0 && (
+                <ul className="text-sm text-zinc-400 space-y-1 max-w-xl">
+                  {digestHighlights.map((h) => (
+                    <li key={h}>• {h}</li>
+                  ))}
+                </ul>
+              )}
+              {searchHint && (
+                <p className="text-xs text-indigo-300/80 max-w-xl">{searchHint}</p>
+              )}
             </section>
 
             {/* Stats Row */}

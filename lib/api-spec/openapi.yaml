@@ -2,14 +2,16 @@ openapi: 3.1.0
 info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
-  version: 0.1.0
-  description: API specification
+  version: 0.2.0
+  description: Recall API — health and AI operations
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: ai
+    description: AI operations (OpenAI-backed, degrades gracefully when unconfigured)
 paths:
   /healthz:
     get:
@@ -24,6 +26,129 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /ai/status:
+    get:
+      operationId: getAiStatus
+      tags: [ai]
+      summary: AI availability
+      description: Whether OpenAI is configured and which model is active
+      responses:
+        "200":
+          description: AI status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiStatus"
+  /ai/chat:
+    post:
+      operationId: aiChat
+      tags: [ai]
+      summary: Chat with Recall
+      description: Multi-turn chat with optional task/note context and tool calling
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: Assistant reply
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+  /ai/notes/summarize:
+    post:
+      operationId: summarizeNote
+      tags: [ai]
+      summary: Summarize note content
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SummarizeNoteRequest"
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SummarizeNoteResponse"
+  /ai/notes/title:
+    post:
+      operationId: generateNoteTitle
+      tags: [ai]
+      summary: Generate a note title from content
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateNoteTitleRequest"
+      responses:
+        "200":
+          description: Title
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenerateNoteTitleResponse"
+  /ai/tasks/extract:
+    post:
+      operationId: extractTasks
+      tags: [ai]
+      summary: Extract actionable tasks from text
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExtractTasksRequest"
+      responses:
+        "200":
+          description: Extracted tasks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtractTasksResponse"
+  /ai/search/semantic:
+    post:
+      operationId: semanticSearch
+      tags: [ai]
+      summary: Semantic search over provided items
+      description: Ranks items by embedding similarity (no persistence required)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SemanticSearchRequest"
+      responses:
+        "200":
+          description: Ranked results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SemanticSearchResponse"
+  /ai/dashboard/digest:
+    post:
+      operationId: dashboardDigest
+      tags: [ai]
+      summary: Daily dashboard digest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DashboardDigestRequest"
+      responses:
+        "200":
+          description: Digest text
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardDigestResponse"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +158,282 @@ components:
           type: string
       required:
         - status
-
+    AiDegradedMeta:
+      type: object
+      properties:
+        degraded:
+          type: boolean
+        degradedReason:
+          type: string
+          nullable: true
+      required:
+        - degraded
+    AiStatus:
+      allOf:
+        - $ref: "#/components/schemas/AiDegradedMeta"
+        - type: object
+          properties:
+            enabled:
+              type: boolean
+            model:
+              type: string
+              nullable: true
+            embeddingModel:
+              type: string
+              nullable: true
+          required:
+            - enabled
+    ChatRole:
+      type: string
+      enum: [system, user, assistant]
+    ChatMessage:
+      type: object
+      properties:
+        role:
+          $ref: "#/components/schemas/ChatRole"
+        content:
+          type: string
+      required:
+        - role
+        - content
+    TaskContextItem:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        completed:
+          type: boolean
+        priority:
+          type: string
+          enum: [high, med, medium, low, none]
+        time:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+      required:
+        - id
+        - title
+    NoteContextItem:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        content:
+          type: string
+          nullable: true
+        preview:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+      required:
+        - id
+        - title
+    AiContext:
+      type: object
+      properties:
+        userName:
+          type: string
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskContextItem"
+        notes:
+          type: array
+          items:
+            $ref: "#/components/schemas/NoteContextItem"
+    ChatRequest:
+      type: object
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+          minItems: 1
+        context:
+          $ref: "#/components/schemas/AiContext"
+      required:
+        - messages
+    ChatResponse:
+      allOf:
+        - $ref: "#/components/schemas/AiDegradedMeta"
+        - type: object
+          properties:
+            message:
+              $ref: "#/components/schemas/ChatMessage"
+            model:
+              type: string
+              nullable: true
+          required:
+            - message
+    SummarizeNoteRequest:
+      type: object
+      properties:
+        content:
+          type: string
+          minLength: 1
+        maxLength:
+          type: integer
+          minimum: 50
+          maximum: 2000
+          default: 400
+      required:
+        - content
+    SummarizeNoteResponse:
+      allOf:
+        - $ref: "#/components/schemas/AiDegradedMeta"
+        - type: object
+          properties:
+            summary:
+              type: string
+          required:
+            - summary
+    GenerateNoteTitleRequest:
+      type: object
+      properties:
+        content:
+          type: string
+          minLength: 1
+      required:
+        - content
+    GenerateNoteTitleResponse:
+      allOf:
+        - $ref: "#/components/schemas/AiDegradedMeta"
+        - type: object
+          properties:
+            title:
+              type: string
+          required:
+            - title
+    ExtractedTask:
+      type: object
+      properties:
+        title:
+          type: string
+        priority:
+          type: string
+          enum: [high, med, medium, low, none]
+        time:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+      required:
+        - title
+    ExtractTasksRequest:
+      type: object
+      properties:
+        text:
+          type: string
+          minLength: 1
+      required:
+        - text
+    ExtractTasksResponse:
+      allOf:
+        - $ref: "#/components/schemas/AiDegradedMeta"
+        - type: object
+          properties:
+            tasks:
+              type: array
+              items:
+                $ref: "#/components/schemas/ExtractedTask"
+          required:
+            - tasks
+    SemanticSearchItem:
+      type: object
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        title:
+          type: string
+          nullable: true
+      required:
+        - id
+        - text
+    SemanticSearchRequest:
+      type: object
+      properties:
+        query:
+          type: string
+          minLength: 1
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SemanticSearchItem"
+          minItems: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 5
+      required:
+        - query
+        - items
+    SemanticSearchResult:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+          nullable: true
+        text:
+          type: string
+        score:
+          type: number
+      required:
+        - id
+        - text
+        - score
+    SemanticSearchResponse:
+      allOf:
+        - $ref: "#/components/schemas/AiDegradedMeta"
+        - type: object
+          properties:
+            results:
+              type: array
+              items:
+                $ref: "#/components/schemas/SemanticSearchResult"
+          required:
+            - results
+    DashboardDigestRequest:
+      type: object
+      properties:
+        userName:
+          type: string
+          default: Ernesto
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskContextItem"
+        notes:
+          type: array
+          items:
+            $ref: "#/components/schemas/NoteContextItem"
+    DashboardDigestResponse:
+      allOf:
+        - $ref: "#/components/schemas/AiDegradedMeta"
+        - type: object
+          properties:
+            digest:
+              type: string
+            highlights:
+              type: array
+              items:
+                type: string
+          required:
+            - digest
+            - highlights

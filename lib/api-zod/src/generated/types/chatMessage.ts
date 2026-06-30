@@ -5,7 +5,9 @@
  * Recall API — health and AI operations
  * OpenAPI spec version: 0.2.0
  */
+import type { ChatRole } from './chatRole';
 
-export interface HealthStatus {
-  status: string;
+export interface ChatMessage {
+  role: ChatRole;
+  content: string;
 }

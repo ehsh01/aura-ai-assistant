@@ -5,7 +5,8 @@
  * Recall API — health and AI operations
  * OpenAPI spec version: 0.2.0
  */
+import type { AiDegradedMeta } from './aiDegradedMeta';
 
-export interface HealthStatus {
-  status: string;
-}
+export type SummarizeNoteResponse = AiDegradedMeta & {
+  summary: string;
+};
