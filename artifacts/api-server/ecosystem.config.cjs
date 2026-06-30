@@ -1,5 +1,5 @@
 /**
- * PM2 — Aura API on DigitalOcean
+ * PM2 — Recall API on DigitalOcean
  *
  * Default port 5008 (does not conflict with other apps on this droplet).
  * From repo root:

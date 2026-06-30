@@ -4,9 +4,9 @@
   "license": "MIT",
   "scripts": {
     "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
-    "dev": "PORT=5173 BASE_PATH=/ pnpm --filter @workspace/aura-app run dev",
+    "dev": "PORT=5173 BASE_PATH=/ pnpm --filter @workspace/recall-app run dev",
     "dev:api": "PORT=5008 pnpm --filter @workspace/api-server run dev",
-    "build:frontend": "PORT=20991 BASE_PATH=/ pnpm --filter @workspace/aura-app run build",
+    "build:frontend": "PORT=20991 BASE_PATH=/ pnpm --filter @workspace/recall-app run build",
     "build:api": "pnpm --filter @workspace/api-server run build",
     "build:prod": "pnpm run build:api && pnpm run build:frontend",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",

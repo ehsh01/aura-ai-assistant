@@ -234,7 +234,7 @@
     0%, 100% { box-shadow: 0 0 15px 0 rgba(99, 102, 241, 0.3); }
     50% { box-shadow: 0 0 25px 5px rgba(99, 102, 241, 0.6); }
   }
-  @keyframes aura-fade-in {
+  @keyframes recall-fade-in {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
   }
@@ -259,27 +259,27 @@
   .nebula-pill { background: rgba(255,255,255,0.08); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.1); border-radius: 9999px; }
   .dashboard-hide-scrollbar::-webkit-scrollbar { display: none; }
   .dashboard-hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-  .aura-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
-  .aura-scrollbar::-webkit-scrollbar-track { background: transparent; }
-  .aura-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+  .recall-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+  .recall-scrollbar::-webkit-scrollbar-track { background: transparent; }
+  .recall-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
   .task-scroll::-webkit-scrollbar { width: 6px; }
   .task-scroll::-webkit-scrollbar-track { background: transparent; }
   .task-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
-  .aura-glass-card { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); backdrop-filter: blur(10px); transition: all 0.2s ease-in-out; }
-  .aura-glass-card:hover { background: rgba(255,255,255,0.04); border-color: rgba(99,102,241,0.3); transform: translateY(-2px); box-shadow: 0 8px 24px -4px rgba(0,0,0,0.5), 0 0 12px rgba(99,102,241,0.15); }
-  .aura-note-active { background: rgba(99,102,241,0.08) !important; border-color: rgba(99,102,241,0.4) !important; box-shadow: 0 0 15px rgba(99,102,241,0.1); }
+  .recall-glass-card { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); backdrop-filter: blur(10px); transition: all 0.2s ease-in-out; }
+  .recall-glass-card:hover { background: rgba(255,255,255,0.04); border-color: rgba(99,102,241,0.3); transform: translateY(-2px); box-shadow: 0 8px 24px -4px rgba(0,0,0,0.5), 0 0 12px rgba(99,102,241,0.15); }
+  .recall-note-active { background: rgba(99,102,241,0.08) !important; border-color: rgba(99,102,241,0.4) !important; box-shadow: 0 0 15px rgba(99,102,241,0.1); }
   .ai-toolbar-wrap { position: relative; background: rgba(15,15,20,0.85); backdrop-filter: blur(16px); border-radius: 100px; z-index: 10; }
   .ai-toolbar-wrap::before { content: ""; position: absolute; inset: -1px; border-radius: 100px; padding: 1px; background: linear-gradient(135deg,rgba(99,102,241,0.5),rgba(139,92,246,0.2),rgba(255,255,255,0.05)); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; }
-  .prose-aura h1 { font-size: 2.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 1rem; color: rgba(255,255,255,0.95); }
-  .prose-aura h2 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.01em; margin-top: 2rem; margin-bottom: 0.75rem; color: rgba(255,255,255,0.9); }
-  .prose-aura p { line-height: 1.7; color: rgba(255,255,255,0.7); margin-bottom: 1.25rem; }
-  .prose-aura ul { list-style-type: none; padding-left: 0; margin-bottom: 1.25rem; }
-  .prose-aura li { position: relative; padding-left: 1.5rem; margin-bottom: 0.5rem; color: rgba(255,255,255,0.7); line-height: 1.6; }
-  .prose-aura li::before { content: ""; position: absolute; left: 0.3rem; top: 0.6rem; width: 4px; height: 4px; border-radius: 50%; background-color: rgba(99,102,241,0.8); }
+  .prose-recall h1 { font-size: 2.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 1rem; color: rgba(255,255,255,0.95); }
+  .prose-recall h2 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.01em; margin-top: 2rem; margin-bottom: 0.75rem; color: rgba(255,255,255,0.9); }
+  .prose-recall p { line-height: 1.7; color: rgba(255,255,255,0.7); margin-bottom: 1.25rem; }
+  .prose-recall ul { list-style-type: none; padding-left: 0; margin-bottom: 1.25rem; }
+  .prose-recall li { position: relative; padding-left: 1.5rem; margin-bottom: 0.5rem; color: rgba(255,255,255,0.7); line-height: 1.6; }
+  .prose-recall li::before { content: ""; position: absolute; left: 0.3rem; top: 0.6rem; width: 4px; height: 4px; border-radius: 50%; background-color: rgba(99,102,241,0.8); }
   .animate-mic-pulse { animation: mic-pulse 2s infinite; }
   .animate-ai-pulse { animation: ai-pulse 1.5s ease-in-out infinite; }
   .animate-ai-pulse-glow { animation: ai-pulse-glow 3s infinite ease-in-out; }
-  .animate-aura-fade-in { animation: aura-fade-in 0.4s ease-out forwards; }
+  .animate-recall-fade-in { animation: recall-fade-in 0.4s ease-out forwards; }
   .animate-map-viewport-pulse { animation: map-viewport-pulse 4s infinite ease-in-out; }
 }
 

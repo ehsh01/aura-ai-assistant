@@ -3,7 +3,8 @@
 # Run on droplet as root: bash scripts/deploy-recall-app.sh
 set -euo pipefail
 
-DEPLOY_PATH="/var/www/aura-ai-assistant"
+DEPLOY_PATH="/var/www/recall-app"
+# GitHub repo slug may still be aura-ai-assistant until renamed in GitHub settings
 REPO_URL="https://github.com/ehsh01/aura-ai-assistant.git"
 API_PORT="5008"
 
@@ -32,6 +33,7 @@ if ! grep -q "^API_PORT=" "$ENV_FILE"; then
 fi
 
 echo "==> PM2"
+pm2 delete aura-api 2>/dev/null || true
 pm2 delete recall-api 2>/dev/null || true
 pm2 start artifacts/api-server/ecosystem.config.cjs
 pm2 save

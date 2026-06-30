@@ -112,7 +112,7 @@ export function Notes() {
                     <line x1="12" x2="12" y1="19" y2="22"/>
                   </svg>
                 </button>
-                <button className="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 hover:opacity-90 transition-opacity animate-aura-fade-in" title="New Note">
+                <button className="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 hover:opacity-90 transition-opacity animate-recall-fade-in" title="New Note">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M5 12h14M12 5v14"/>
                   </svg>
@@ -137,7 +137,7 @@ export function Notes() {
             </div>
 
             {/* Tags */}
-            <div className="flex overflow-x-auto aura-scrollbar pb-2 -mb-2 gap-2">
+            <div className="flex overflow-x-auto recall-scrollbar pb-2 -mb-2 gap-2">
               {TAGS.map(tag => (
                 <button 
                   key={tag}
@@ -155,7 +155,7 @@ export function Notes() {
           </div>
 
           {/* List */}
-          <div className="flex-1 overflow-y-auto aura-scrollbar p-3 space-y-6">
+          <div className="flex-1 overflow-y-auto recall-scrollbar p-3 space-y-6">
             
             {pinnedNotes.length > 0 && (
               <div className="space-y-2">
@@ -211,8 +211,8 @@ export function Notes() {
           </div>
 
           {/* Editor Content */}
-          <div className="flex-1 overflow-y-auto aura-scrollbar p-10 lg:p-16 max-w-4xl mx-auto w-full prose-aura">
-            <div className="animate-aura-fade-in" style={{ animationDelay: '0.1s' }}>
+          <div className="flex-1 overflow-y-auto recall-scrollbar p-10 lg:p-16 max-w-4xl mx-auto w-full prose-recall">
+            <div className="animate-recall-fade-in" style={{ animationDelay: '0.1s' }}>
               <div className="flex gap-2 mb-6">
                 <span className="px-2.5 py-1 rounded-md bg-indigo-500/10 text-indigo-300 text-xs font-medium border border-indigo-500/20">Work</span>
                 <span className="px-2.5 py-1 rounded-md bg-white/5 text-white/50 text-xs font-medium border border-white/10">Meeting</span>
@@ -311,7 +311,7 @@ function NoteCard({ note, isActive, onClick, index }: { note: any, isActive: boo
   return (
     <button 
       onClick={onClick}
-      className={`w-full text-left p-3 rounded-xl aura-glass-card animate-aura-fade-in group relative overflow-hidden ${isActive ? 'aura-note-active' : ''}`}
+      className={`w-full text-left p-3 rounded-xl recall-glass-card animate-recall-fade-in group relative overflow-hidden ${isActive ? 'recall-note-active' : ''}`}
       style={{ animationDelay: `${index * 0.05}s` }}
     >
       {isActive && (

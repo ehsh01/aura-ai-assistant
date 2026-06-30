@@ -2,7 +2,7 @@ kind = "web"
 previewPath = "/"
 title = "Recall — AI Personal Assistant"
 version = "1.0.0"
-id = "artifacts/aura-app"
+id = "artifacts/recall-app"
 router = "path"
 
 [[integratedSkills]]
@@ -15,11 +15,11 @@ paths = [ "/" ]
 localPort = 20991
 
 [services.development]
-run = "pnpm --filter @workspace/aura-app run dev"
+run = "pnpm --filter @workspace/recall-app run dev"
 
 [services.production]
-build = [ "pnpm", "--filter", "@workspace/aura-app", "run", "build" ]
-publicDir = "artifacts/aura-app/dist/public"
+build = [ "pnpm", "--filter", "@workspace/recall-app", "run", "build" ]
+publicDir = "artifacts/recall-app/dist/public"
 serve = "static"
 
 [[services.production.rewrites]]

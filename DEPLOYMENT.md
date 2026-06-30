@@ -2,18 +2,12 @@
 
 **Droplet:** `ssh root@159.223.130.69`  
 **Domain:** https://recall-app.net  
-**App path on server:** `/var/www/aura-ai-assistant`  
-**API port:** `5008` (PM2 + nginx `proxy_pass`)
+**App path on server:** `/var/www/recall-app`  
+**API port:** `5008` (PM2 `recall-api` + nginx `proxy_pass`)
 
 ## Current situation
 
-`recall-app.net` currently serves **ABA Note Assistant** (same stack as `abanoteassistant.com` — static SPA + API on port **5002**). To host Recall there, you must:
-
-1. Deploy this repo on the droplet.
-2. Point **nginx** for `recall-app.net` at Recall’s static build + port **5008**.
-3. **Remove** `recall-app.net` from any other nginx `server_name` (likely the ABA config).
-
-DNS goes through **Cloudflare**; origin should remain the droplet IP `159.223.130.69` (orange cloud proxy is fine).
+`recall-app.net` serves the Recall SPA + API on port **5008**. DNS goes through **Cloudflare**; origin is droplet IP `159.223.130.69`.
 
 ## Port map on this droplet (avoid conflicts)
 
@@ -28,32 +22,59 @@ DNS goes through **Cloudflare**; origin should remain the droplet IP `159.223.13
 | 5006 | IT Ops staging |
 | **5008** | **Recall / recall-app.net (this app)** |
 
-## One-time server setup
+## Migrate from old path (`/var/www/aura-ai-assistant`)
+
+If the app was previously cloned to `aura-ai-assistant`, run once on the droplet:
 
 ```bash
 ssh root@159.223.130.69
 
-# Clone
-git clone https://github.com/ehsh01/aura-ai-assistant.git /var/www/aura-ai-assistant
-cd /var/www/aura-ai-assistant
+# Stop legacy PM2 name if present
+pm2 delete aura-api 2>/dev/null || true
 
-# Env
+# Move deploy directory (or re-clone — see below)
+if [ -d /var/www/aura-ai-assistant ] && [ ! -d /var/www/recall-app ]; then
+  mv /var/www/aura-ai-assistant /var/www/recall-app
+fi
+
+cd /var/www/recall-app
+git pull
+pnpm install
+pnpm run build:prod
+
+# Update nginx root path, then reload
+cp nginx-recall-app.conf /etc/nginx/sites-available/recall-app
+ln -sf /etc/nginx/sites-available/recall-app /etc/nginx/sites-enabled/recall-app
+nginx -t && systemctl reload nginx
+
+pm2 delete recall-api 2>/dev/null || true
+pm2 start artifacts/api-server/ecosystem.config.cjs
+pm2 save
+```
+
+## One-time server setup (fresh install)
+
+```bash
+ssh root@159.223.130.69
+
+git clone https://github.com/ehsh01/aura-ai-assistant.git /var/www/recall-app
+cd /var/www/recall-app
+
 cp artifacts/api-server/.env.example artifacts/api-server/.env
 # Edit .env — at minimum PORT/API_PORT=5008; add DATABASE_URL when schema exists
 
 pnpm install
-PORT=20991 BASE_PATH=/ pnpm --filter @workspace/aura-app run build
-pnpm --filter @workspace/api-server run build
+pnpm run build:prod
 
-# PM2
 pm2 start artifacts/api-server/ecosystem.config.cjs
 pm2 save
 
-# Nginx
 cp nginx-recall-app.conf /etc/nginx/sites-available/recall-app
 ln -sf /etc/nginx/sites-available/recall-app /etc/nginx/sites-enabled/recall-app
 nginx -t && systemctl reload nginx
 ```
+
+> **GitHub:** The remote repo may still be named `aura-ai-assistant`. You can rename it to `recall-app` in GitHub Settings → General; update `origin` with `git remote set-url` if you do.
 
 ### Fix recall-app.net routing (critical)
 
@@ -70,24 +91,25 @@ curl -sI -H "Host: recall-app.net" http://127.0.0.1/ | head -5
 
 ### SSL
 
-If HTTPS is terminated on the droplet:
-
 ```bash
 certbot --nginx -d recall-app.net -d www.recall-app.net
 ```
-
-If Cloudflare handles SSL (Flexible/Full), port 80 on the origin may be enough.
 
 ## Day-to-day deploy
 
 ```bash
 ssh root@159.223.130.69
-cd /var/www/aura-ai-assistant
+cd /var/www/recall-app
 git pull
 pnpm install
-PORT=20991 BASE_PATH=/ pnpm --filter @workspace/aura-app run build
-pnpm --filter @workspace/api-server run build
+pnpm run build:prod
 pm2 restart recall-api --update-env
+```
+
+Or run the bundled script from the repo root on the server:
+
+```bash
+cd /var/www/recall-app && bash scripts/deploy-recall-app.sh
 ```
 
 ## Verify
@@ -97,7 +119,7 @@ curl -sS http://127.0.0.1:5008/api/healthz
 curl -sI -H "Host: recall-app.net" http://127.0.0.1/ | head -10
 ```
 
-Browser: https://recall-app.net — title should be **Recall — AI Personal Assistant**, not ABA Note Assistant.
+Browser: https://recall-app.net — title should be **Recall — AI Personal Assistant**.
 
 ## Architecture
 
@@ -105,7 +127,7 @@ Browser: https://recall-app.net — title should be **Recall — AI Personal Ass
 recall-app.net (Cloudflare)
     → nginx :80/:443
         /api/*  → 127.0.0.1:5008  (PM2: recall-api)
-        /*      → /var/www/aura-ai-assistant/artifacts/aura-app/dist/public
+        /*      → /var/www/recall-app/artifacts/recall-app/dist/public
 ```
 
 Frontend uses same-origin `/api/...` (no `VITE_API_BASE_URL` needed when nginx proxies as above).

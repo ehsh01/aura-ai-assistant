@@ -36,6 +36,10 @@ Recall is an AI-first personal assistant for notes, tasks, and canvas. **Product
 
 ## Where things live
 
+- **Frontend:** `artifacts/recall-app` (`@workspace/recall-app`)
+- **API:** `artifacts/api-server` (PM2 name `recall-api`, port 5008)
+- **Server deploy path:** `/var/www/recall-app`
+
 ## Gotchas
 
 _Populate as you build — sharp edges, "always run X before Y" rules._
