@@ -52,6 +52,7 @@ module.exports = {
       env: {
         ...fileEnvNoPort,
         NODE_ENV: "production",
+        HOST: fileEnv.HOST || "127.0.0.1",
         PORT: fileEnv.API_PORT || fileEnv.API_PORT_PROD || "5008",
       },
     },
