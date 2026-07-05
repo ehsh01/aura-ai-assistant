@@ -287,6 +287,8 @@
   .note-rich-content-evernote .recall-note-image,
   .note-image-gallery img,
   .note-image-gallery .recall-note-image { max-width: 100% !important; height: auto !important; display: block; margin: 0 auto; border-radius: 0.5rem; }
+  .recall-note-image-btn { cursor: zoom-in; }
+  .note-rich-content-evernote .recall-note-image { cursor: zoom-in; }
   .note-rich-content-evernote table { max-width: 100%; border-collapse: collapse; }
   .note-rich-content-evernote a { color: rgb(129, 140, 248); text-decoration: underline; }
   .note-rich-content-evernote a:hover { color: rgb(165, 180, 252); }

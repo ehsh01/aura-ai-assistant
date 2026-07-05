@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   attachmentUrl,
   fetchAttachmentBlob,
   fetchNoteAttachments,
   type NoteAttachmentMeta,
 } from "@/lib/note-attachments";
+import { ImageLightbox, type LightboxImage } from "@/components/ImageLightbox";
 
 type Props = {
   noteId: string;
@@ -92,7 +93,15 @@ function useAttachmentBlob(attachmentId: string): string | null {
   return src;
 }
 
-function AuthenticatedImage({ attachmentId, alt }: { attachmentId: string; alt: string }) {
+function AuthenticatedImage({
+  attachmentId,
+  alt,
+  onOpen,
+}: {
+  attachmentId: string;
+  alt: string;
+  onOpen?: (src: string, alt: string) => void;
+}) {
   const src = useAttachmentBlob(attachmentId);
 
   if (!src) {
@@ -104,11 +113,18 @@ function AuthenticatedImage({ attachmentId, alt }: { attachmentId: string; alt: 
   }
 
   return (
-    <img
-      src={src}
-      alt={alt}
-      className="recall-note-image my-3 max-w-full rounded-lg border border-white/10"
-    />
+    <button
+      type="button"
+      onClick={() => onOpen?.(src, alt)}
+      className="recall-note-image-btn block w-full text-left cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/60 rounded-lg"
+      aria-label={`View full size: ${alt}`}
+    >
+      <img
+        src={src}
+        alt={alt}
+        className="recall-note-image my-3 max-w-full rounded-lg border border-white/10 pointer-events-none"
+      />
+    </button>
   );
 }
 
@@ -171,9 +187,15 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
-function AttachmentBlock({ att }: { att: NoteAttachmentMeta }) {
+function AttachmentBlock({
+  att,
+  onOpen,
+}: {
+  att: NoteAttachmentMeta;
+  onOpen?: (src: string, alt: string) => void;
+}) {
   if (att.isImage) {
-    return <AuthenticatedImage attachmentId={att.id} alt={att.fileName} />;
+    return <AuthenticatedImage attachmentId={att.id} alt={att.fileName} onOpen={onOpen} />;
   }
   if (att.mimeType === "application/pdf") {
     return <EmbeddedPdf attachmentId={att.id} fileName={att.fileName} />;
@@ -185,7 +207,13 @@ function AttachmentBlock({ att }: { att: NoteAttachmentMeta }) {
   );
 }
 
-function NoteImageGallery({ images }: { images: NoteAttachmentMeta[] }) {
+function NoteImageGallery({
+  images,
+  onOpen,
+}: {
+  images: NoteAttachmentMeta[];
+  onOpen?: (src: string, alt: string) => void;
+}) {
   if (images.length === 0) return null;
 
   return (
@@ -195,7 +223,7 @@ function NoteImageGallery({ images }: { images: NoteAttachmentMeta[] }) {
       </h4>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {images.map((att) => (
-          <AuthenticatedImage key={att.id} attachmentId={att.id} alt={att.fileName} />
+          <AuthenticatedImage key={att.id} attachmentId={att.id} alt={att.fileName} onOpen={onOpen} />
         ))}
       </div>
     </div>
@@ -208,7 +236,7 @@ async function setImageSrc(img: HTMLImageElement, attachmentId: string, revoked:
   const url = URL.createObjectURL(blob);
   revoked.push(url);
   img.src = url;
-  img.classList.add("recall-note-image");
+  img.classList.add("recall-note-image", "cursor-zoom-in");
 }
 
 async function hydrateAttachmentElements(
@@ -318,6 +346,8 @@ function HtmlNoteBody({
 
 export function NoteRichContent({ noteId, content, contentFormat }: Props) {
   const [attachments, setAttachments] = useState<NoteAttachmentMeta[]>([]);
+  const [lightbox, setLightbox] = useState<{ images: LightboxImage[]; index: number } | null>(null);
+  const noteContentRef = useRef<HTMLDivElement>(null);
   const isHtml =
     contentFormat === "html" ||
     content.includes("data-recall-attachment") ||
@@ -341,10 +371,49 @@ export function NoteRichContent({ noteId, content, contentFormat }: Props) {
     (a) => !content.includes(`data-recall-attachment="${a.id}"`),
   );
 
+  const openLightbox = useCallback((src: string, alt: string) => {
+    const container = noteContentRef.current;
+    const images: LightboxImage[] = container
+      ? Array.from(container.querySelectorAll("img.recall-note-image"))
+          .filter((img): img is HTMLImageElement => img instanceof HTMLImageElement && Boolean(img.src))
+          .map((img) => ({ src: img.src, alt: img.alt || "Note image" }))
+      : [{ src, alt }];
+
+    const index = images.findIndex((img) => img.src === src);
+    setLightbox({ images, index: index >= 0 ? index : 0 });
+  }, []);
+
+  const handleContentClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      const target = e.target;
+      if (!(target instanceof HTMLImageElement)) return;
+      if (!target.classList.contains("recall-note-image")) return;
+      if (!target.src) return;
+      openLightbox(target.src, target.alt || "Note image");
+    },
+    [openLightbox],
+  );
+
+  const contentShell = (children: React.ReactNode) => (
+    <>
+      <div ref={noteContentRef} className="note-rich-content" onClick={handleContentClick}>
+        {children}
+      </div>
+      {lightbox && (
+        <ImageLightbox
+          images={lightbox.images}
+          index={lightbox.index}
+          onClose={() => setLightbox(null)}
+          onIndexChange={(index) => setLightbox((prev) => (prev ? { ...prev, index } : null))}
+        />
+      )}
+    </>
+  );
+
   if (!isHtml) {
-    return (
-      <div className="note-rich-content">
-        <NoteImageGallery images={showImageGallery ? imageAttachments : []} />
+    return contentShell(
+      <>
+        <NoteImageGallery images={showImageGallery ? imageAttachments : []} onOpen={openLightbox} />
         <div className="whitespace-pre-wrap text-base text-white/80 leading-relaxed">
           {content}
         </div>
@@ -355,20 +424,20 @@ export function NoteRichContent({ noteId, content, contentFormat }: Props) {
                 <h4 className="text-sm font-semibold text-white/70 mb-3">Attachments</h4>
                 <div className="space-y-2">
                   {nonImageAttachments.map((att) => (
-                    <AttachmentBlock key={att.id} att={att} />
+                    <AttachmentBlock key={att.id} att={att} onOpen={openLightbox} />
                   ))}
                 </div>
               </>
             )}
           </div>
         )}
-      </div>
+      </>,
     );
   }
 
-  return (
-    <div className="note-rich-content">
-      <NoteImageGallery images={showImageGallery ? imageAttachments : []} />
+  return contentShell(
+    <>
+      <NoteImageGallery images={showImageGallery ? imageAttachments : []} onOpen={openLightbox} />
       <HtmlNoteBody content={content} attachmentMap={attachmentMap} />
 
       {unusedNonImageAttachments.length > 0 && (
@@ -376,11 +445,11 @@ export function NoteRichContent({ noteId, content, contentFormat }: Props) {
           <h4 className="text-sm font-semibold text-white/70 mb-3">Attachments</h4>
           <div className="space-y-2">
             {unusedNonImageAttachments.map((att) => (
-              <AttachmentBlock key={att.id} att={att} />
+              <AttachmentBlock key={att.id} att={att} onOpen={openLightbox} />
             ))}
           </div>
         </div>
       )}
-    </div>
+    </>,
   );
 }
