@@ -125,6 +125,39 @@ export interface DashboardDigestResponse extends AiDegradedMeta {
   highlights: string[];
 }
 
+export interface CaptureClassificationItem {
+  cleanedTitle: string;
+  suggestedType: "note" | "task" | "reminder" | "work_note" | "project_item" | "reference";
+  suggestedPriority: "low" | "medium" | "high" | "urgent";
+  suggestedDueDate: string | null;
+  suggestedProject: string | null;
+  suggestedTags: string[];
+  suggestedActions: string[];
+}
+
+export interface ClassifyCaptureRequest {
+  rawText: string;
+  dueDate?: string | null;
+  tags?: string[];
+}
+
+export interface ClassifyCaptureResponse extends AiDegradedMeta {
+  item: CaptureClassificationItem;
+}
+
+export interface GenerateWorkNoteRequest {
+  rawText: string;
+  tone?: "concise" | "friendly" | "technical";
+}
+
+export interface GenerateWorkNoteResponse extends AiDegradedMeta {
+  internalWorkNote: string;
+  customerUpdate: string;
+  transferReason: string;
+  resolutionNote: string;
+  emailReply: string;
+}
+
 // ---------------------------------------------------------------------------
 // Service interface
 // ---------------------------------------------------------------------------
@@ -143,13 +176,100 @@ export interface AiService {
   dashboardDigest(
     request: DashboardDigestRequest,
   ): Promise<DashboardDigestResponse>;
+  classifyCapture(request: ClassifyCaptureRequest): Promise<ClassifyCaptureResponse>;
+  generateWorkNote(request: GenerateWorkNoteRequest): Promise<GenerateWorkNoteResponse>;
 }
 
 const DISABLED_REASON =
   "OPENAI_API_KEY is not configured. Add it to artifacts/api-server/.env to enable Recall AI.";
 
+/** Keep prompts within model context limits even for large libraries. */
+const MAX_CONTEXT_NOTES = 50;
+const MAX_CONTEXT_TASKS = 100;
+const MAX_NOTE_BODY_IN_PROMPT = 200;
+
+function trimAiContext(context?: AiContext): {
+  context: AiContext | undefined;
+  totalNotes: number;
+  totalTasks: number;
+} {
+  if (!context) {
+    return { context, totalNotes: 0, totalTasks: 0 };
+  }
+
+  const totalNotes = context.notes?.length ?? 0;
+  const totalTasks = context.tasks?.length ?? 0;
+
+  const notes = context.notes?.slice(0, MAX_CONTEXT_NOTES).map((n) => ({
+    id: n.id,
+    title: n.title,
+    preview: (n.preview ?? n.content ?? "").slice(0, MAX_NOTE_BODY_IN_PROMPT),
+    tags: n.tags,
+  }));
+
+  const tasks = context.tasks?.slice(0, MAX_CONTEXT_TASKS);
+
+  return {
+    context: { ...context, notes, tasks },
+    totalNotes,
+    totalTasks,
+  };
+}
+
+function isOpenAiContextError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const code = (err as { code?: string }).code;
+  return code === "context_length_exceeded";
+}
+
 function degradedMeta(reason: string = DISABLED_REASON): AiDegradedMeta {
   return { degraded: true, degradedReason: reason };
+}
+
+function fallbackCaptureClassification(
+  request: ClassifyCaptureRequest,
+): CaptureClassificationItem {
+  const raw = request.rawText.trim();
+  const firstLine = raw.split(/\r?\n/).find(Boolean) ?? "Untitled capture";
+  const lower = raw.toLowerCase();
+  const isTask = /\b(todo|task|call|email|follow up|remind|schedule|send|check|fix)\b/.test(lower);
+  const isReminder = /\b(remind|due|tomorrow|today|next week|appointment)\b/.test(lower);
+  const isWork = /\b(ticket|user|vpn|printer|outlook|email|server|network|troubleshoot|support)\b/.test(lower);
+  const isProject = /\b(permit|inspection|contractor|construction|project|city of miami)\b/.test(lower);
+  const urgent = /\b(urgent|asap|critical|emergency|blocked|down)\b/.test(lower);
+  const high = urgent || /\b(follow up|waiting|call|deadline|due today)\b/.test(lower);
+  return {
+    cleanedTitle: firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine,
+    suggestedType: isReminder
+      ? "reminder"
+      : isTask
+        ? "task"
+        : isWork
+          ? "work_note"
+          : isProject
+            ? "project_item"
+            : "note",
+    suggestedPriority: urgent ? "urgent" : high ? "high" : "medium",
+    suggestedDueDate: request.dueDate ?? null,
+    suggestedProject: null,
+    suggestedTags: Array.from(new Set([...(request.tags ?? []), isWork ? "work" : "", isProject ? "project" : ""].filter(Boolean))),
+    suggestedActions: [
+      ...(isTask || isReminder ? ["Create task"] : []),
+      ...(isWork ? ["Generate IT work note"] : []),
+      ...(isProject ? ["Attach to project"] : []),
+    ],
+  };
+}
+
+function fallbackWorkNote(rawText: string): Omit<GenerateWorkNoteResponse, keyof AiDegradedMeta> {
+  const text = rawText.trim();
+  return {
+    internalWorkNote: text,
+    customerUpdate: `Reviewed the reported issue and documented the troubleshooting performed. Current notes: ${text.slice(0, 500)}`,
+    transferReason: "Transfer if additional access, escalation, or specialized support is required.",
+    resolutionNote: `Resolution details pending. Troubleshooting notes: ${text.slice(0, 500)}`,
+    emailReply: `Hi,\n\nI reviewed this issue and documented the troubleshooting performed. I will follow up with the next step or resolution shortly.\n\nThank you.`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +369,16 @@ class DisabledAiService implements AiService {
       ],
     };
   }
+
+  async classifyCapture(request: ClassifyCaptureRequest): Promise<ClassifyCaptureResponse> {
+    return { ...degradedMeta(), item: fallbackCaptureClassification(request) };
+  }
+
+  async generateWorkNote(
+    request: GenerateWorkNoteRequest,
+  ): Promise<GenerateWorkNoteResponse> {
+    return { ...degradedMeta(), ...fallbackWorkNote(request.rawText) };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -270,13 +400,17 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return denom === 0 ? 0 : dot / denom;
 }
 
-function buildSystemPrompt(context?: AiContext): string {
+function buildSystemPrompt(
+  context?: AiContext,
+  totals?: { totalNotes: number; totalTasks: number },
+): string {
   const name = context?.userName ?? "Ernesto";
   const parts = [
     `You are Recall, a concise and helpful AI personal assistant for ${name}.`,
     "You help with notes, tasks, and planning. Be warm, direct, and actionable.",
     "When listing tasks, use bullet points with priority cues when known.",
     "If you lack information, say so briefly instead of inventing facts.",
+    "Use the search_notes tool to find notes not listed below.",
   ];
 
   if (context?.tasks?.length) {
@@ -286,15 +420,23 @@ function buildSystemPrompt(context?: AiContext): string {
       const time = t.time ? ` @ ${t.time}` : "";
       return `- (${status}) ${t.title}${pri}${time} (id: ${t.id})`;
     });
-    parts.push(`Current tasks:\n${taskLines.join("\n")}`);
+    const taskHeader =
+      totals && totals.totalTasks > context.tasks.length
+        ? `Current tasks (showing ${context.tasks.length} of ${totals.totalTasks}):`
+        : "Current tasks:";
+    parts.push(`${taskHeader}\n${taskLines.join("\n")}`);
   }
 
   if (context?.notes?.length) {
     const noteLines = context.notes.map((n) => {
-      const body = (n.content ?? n.preview ?? "").slice(0, 500);
+      const body = (n.preview ?? n.content ?? "").slice(0, MAX_NOTE_BODY_IN_PROMPT);
       return `- ${n.title} (id: ${n.id})${body ? `: ${body}` : ""}`;
     });
-    parts.push(`Available notes:\n${noteLines.join("\n")}`);
+    const noteHeader =
+      totals && totals.totalNotes > context.notes.length
+        ? `Recent notes (showing ${context.notes.length} of ${totals.totalNotes} — use search_notes for others):`
+        : "Available notes:";
+    parts.push(`${noteHeader}\n${noteLines.join("\n")}`);
   }
 
   return parts.join("\n\n");
@@ -387,76 +529,95 @@ class OpenAiService implements AiService {
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    const context = request.context;
+    const { context, totalNotes, totalTasks } = trimAiContext(request.context);
     const messages: ChatCompletionMessageParam[] = [
-      { role: "system", content: buildSystemPrompt(context) },
+      {
+        role: "system",
+        content: buildSystemPrompt(context, { totalNotes, totalTasks }),
+      },
       ...request.messages
         .filter((m) => m.role !== "system")
         .map((m) => ({ role: m.role, content: m.content })),
     ];
 
-    let response = await this.client.chat.completions.create({
-      model: this.model,
-      messages,
-      tools: CHAT_TOOLS,
-      tool_choice: "auto",
-    });
-
-    for (let round = 0; round < 3; round++) {
-      const choice = response.choices[0];
-      if (!choice) break;
-
-      const toolCalls = choice.message.tool_calls;
-      if (!toolCalls?.length) {
-        const content = choice.message.content?.trim();
-        return {
-          degraded: false,
-          degradedReason: null,
-          message: {
-            role: "assistant",
-            content: content || "I couldn't generate a response. Please try again.",
-          },
-          model: this.model,
-        };
-      }
-
-      messages.push(choice.message);
-      for (const call of toolCalls) {
-        if (call.type !== "function") continue;
-        let parsedArgs: Record<string, unknown> = {};
-        try {
-          parsedArgs = JSON.parse(call.function.arguments || "{}") as Record<
-            string,
-            unknown
-          >;
-        } catch {
-          parsedArgs = {};
-        }
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
-          content: this.runTool(call.function.name, parsedArgs, context),
-        });
-      }
-
-      response = await this.client.chat.completions.create({
+    try {
+      let response = await this.client.chat.completions.create({
         model: this.model,
         messages,
         tools: CHAT_TOOLS,
         tool_choice: "auto",
       });
-    }
 
-    const fallback = response.choices[0]?.message.content?.trim();
-    return {
-      degraded: false,
-      degradedReason: null,
-      message: {
-        role: "assistant",
-        content: fallback || "I couldn't complete that request. Please try again.",
-      },
-      model: this.model,
-    };
+      for (let round = 0; round < 3; round++) {
+        const choice = response.choices[0];
+        if (!choice) break;
+
+        const toolCalls = choice.message.tool_calls;
+        if (!toolCalls?.length) {
+          const content = choice.message.content?.trim();
+          return {
+            degraded: false,
+            degradedReason: null,
+            message: {
+              role: "assistant",
+              content: content || "I couldn't generate a response. Please try again.",
+            },
+            model: this.model,
+          };
+        }
+
+        messages.push(choice.message);
+        for (const call of toolCalls) {
+          if (call.type !== "function") continue;
+          let parsedArgs: Record<string, unknown> = {};
+          try {
+            parsedArgs = JSON.parse(call.function.arguments || "{}") as Record<
+              string,
+              unknown
+            >;
+          } catch {
+            parsedArgs = {};
+          }
+          messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: this.runTool(call.function.name, parsedArgs, context),
+          });
+        }
+
+        response = await this.client.chat.completions.create({
+          model: this.model,
+          messages,
+          tools: CHAT_TOOLS,
+          tool_choice: "auto",
+        });
+      }
+
+      const fallback = response.choices[0]?.message.content?.trim();
+      return {
+        degraded: false,
+        degradedReason: null,
+        message: {
+          role: "assistant",
+          content: fallback || "I couldn't complete that request. Please try again.",
+        },
+        model: this.model,
+      };
+    } catch (err) {
+      if (isOpenAiContextError(err)) {
+        return {
+          degraded: true,
+          degradedReason: "context_length_exceeded",
+          message: {
+            role: "assistant",
+            content:
+              "Your note library is very large, so I couldn't load everything at once. Ask about a specific topic, notebook, or note title and I'll search from there.",
+          },
+          model: this.model,
+        };
+      }
+      throw err;
+    }
   }
 
   async summarizeNote(
@@ -565,13 +726,19 @@ class OpenAiService implements AiService {
     request: DashboardDigestRequest,
   ): Promise<DashboardDigestResponse> {
     const name = request.userName ?? "Ernesto";
+    const { context } = trimAiContext({
+      userName: name,
+      tasks: request.tasks,
+      notes: request.notes,
+    });
     const payload = {
       userName: name,
-      tasks: request.tasks ?? [],
-      notes: (request.notes ?? []).map((n) => ({
+      tasks: context?.tasks ?? [],
+      notes: (context?.notes ?? []).map((n) => ({
         title: n.title,
         preview: (n.preview ?? n.content ?? "").slice(0, 300),
       })),
+      totalNotes: request.notes?.length ?? 0,
     };
 
     const completion = await this.client.chat.completions.create({
@@ -608,6 +775,105 @@ class OpenAiService implements AiService {
         digest: raw,
         highlights: [],
       };
+    }
+  }
+
+  async classifyCapture(request: ClassifyCaptureRequest): Promise<ClassifyCaptureResponse> {
+    const completion = await this.client.chat.completions.create({
+      model: this.model,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Classify a short personal capture for Recall. Return JSON only: {\"cleanedTitle\":\"...\",\"suggestedType\":\"note|task|reminder|work_note|project_item|reference\",\"suggestedPriority\":\"low|medium|high|urgent\",\"suggestedDueDate\":null,\"suggestedProject\":null,\"suggestedTags\":[],\"suggestedActions\":[]}. Do not infer from any wider note library.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            rawText: request.rawText.slice(0, 4000),
+            dueDate: request.dueDate ?? null,
+            tags: request.tags ?? [],
+          }),
+        },
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 350,
+    });
+
+    const fallback = fallbackCaptureClassification(request);
+    const raw = completion.choices[0]?.message.content ?? "{}";
+    try {
+      const parsed = JSON.parse(raw) as Partial<CaptureClassificationItem>;
+      return {
+        degraded: false,
+        degradedReason: null,
+        item: {
+          cleanedTitle: parsed.cleanedTitle || fallback.cleanedTitle,
+          suggestedType:
+            parsed.suggestedType === "task" ||
+            parsed.suggestedType === "reminder" ||
+            parsed.suggestedType === "work_note" ||
+            parsed.suggestedType === "project_item" ||
+            parsed.suggestedType === "reference"
+              ? parsed.suggestedType
+              : fallback.suggestedType,
+          suggestedPriority:
+            parsed.suggestedPriority === "low" ||
+            parsed.suggestedPriority === "high" ||
+            parsed.suggestedPriority === "urgent"
+              ? parsed.suggestedPriority
+              : "medium",
+          suggestedDueDate: parsed.suggestedDueDate ?? fallback.suggestedDueDate,
+          suggestedProject: parsed.suggestedProject ?? null,
+          suggestedTags: Array.isArray(parsed.suggestedTags) ? parsed.suggestedTags : fallback.suggestedTags,
+          suggestedActions: Array.isArray(parsed.suggestedActions)
+            ? parsed.suggestedActions
+            : fallback.suggestedActions,
+        },
+      };
+    } catch {
+      return { degraded: true, degradedReason: "classification_parse_failed", item: fallback };
+    }
+  }
+
+  async generateWorkNote(
+    request: GenerateWorkNoteRequest,
+  ): Promise<GenerateWorkNoteResponse> {
+    const completion = await this.client.chat.completions.create({
+      model: this.model,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You create concise IT support work notes from rough troubleshooting dictation. Return JSON only with internalWorkNote, customerUpdate, transferReason, resolutionNote, emailReply. Use only the provided text. Do not invent facts.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            rawText: request.rawText.slice(0, 6000),
+            tone: request.tone ?? "concise",
+          }),
+        },
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 900,
+    });
+
+    const fallback = fallbackWorkNote(request.rawText);
+    const raw = completion.choices[0]?.message.content ?? "{}";
+    try {
+      const parsed = JSON.parse(raw) as Partial<GenerateWorkNoteResponse>;
+      return {
+        degraded: false,
+        degradedReason: null,
+        internalWorkNote: parsed.internalWorkNote || fallback.internalWorkNote,
+        customerUpdate: parsed.customerUpdate || fallback.customerUpdate,
+        transferReason: parsed.transferReason || fallback.transferReason,
+        resolutionNote: parsed.resolutionNote || fallback.resolutionNote,
+        emailReply: parsed.emailReply || fallback.emailReply,
+      };
+    } catch {
+      return { degraded: true, degradedReason: "work_note_parse_failed", ...fallback };
     }
   }
 }

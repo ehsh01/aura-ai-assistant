@@ -1,0 +1,283 @@
+import React, { useMemo, useState } from "react";
+import { createCapture, generateWorkNote, listProjects } from "@workspace/api-client-react";
+import { MicButton } from "@/components/MicButton";
+import { useRecallData } from "@/context/RecallDataContext";
+import { toast } from "@/hooks/use-toast";
+import type { RecallProject } from "@/lib/recall-context";
+
+type Props = {
+  open: boolean;
+  onClose: () => void;
+};
+
+function firstLineTitle(text: string): string {
+  const line = text.trim().split(/\r?\n/).find(Boolean) ?? "Quick capture";
+  return line.length > 80 ? `${line.slice(0, 77)}...` : line;
+}
+
+export function CaptureModal({ open, onClose }: Props) {
+  const { notebooks, addNote, addTask } = useRecallData();
+  const [text, setText] = useState("");
+  const [dueDate, setDueDate] = useState("");
+  const [notebookId, setNotebookId] = useState("");
+  const [projectId, setProjectId] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [projects, setProjects] = useState<RecallProject[]>([]);
+  const [workNote, setWorkNote] = useState<null | {
+    internalWorkNote: string;
+    customerUpdate: string;
+    transferReason: string;
+    resolutionNote: string;
+    emailReply: string;
+  }>(null);
+  const [saving, setSaving] = useState(false);
+
+  React.useEffect(() => {
+    if (!open) return;
+    void listProjects().then((res) => setProjects(res.projects as RecallProject[])).catch(() => {});
+  }, [open]);
+
+  const attachmentSummary = useMemo(() => {
+    if (files.length === 0) return "";
+    return `\n\nAttachments selected: ${files.map((file) => file.name).join(", ")}`;
+  }, [files]);
+
+  if (!open) return null;
+
+  const reset = () => {
+    setText("");
+    setDueDate("");
+    setNotebookId("");
+    setProjectId("");
+    setFiles([]);
+    setWorkNote(null);
+  };
+
+  const close = () => {
+    reset();
+    onClose();
+  };
+
+  const requireText = () => {
+    const rawText = `${text.trim()}${attachmentSummary}`;
+    if (!rawText.trim()) {
+      toast({ title: "Capture is empty", description: "Type or dictate something first." });
+      return null;
+    }
+    return rawText;
+  };
+
+  const saveAsNote = () => {
+    const rawText = requireText();
+    if (!rawText) return;
+    addNote({
+      title: firstLineTitle(text),
+      content: rawText,
+      notebookId: notebookId || null,
+      projectId: projectId || null,
+      tags: ["capture"],
+    });
+    toast({ title: "Saved as note", description: "Your capture was added to Notes." });
+    close();
+  };
+
+  const saveAsTask = () => {
+    const rawText = requireText();
+    if (!rawText) return;
+    addTask(`${firstLineTitle(text)}${dueDate ? ` — due ${dueDate}` : ""}`);
+    toast({ title: "Saved as task", description: "Your capture was added to Tasks." });
+    close();
+  };
+
+  const sendToInbox = async () => {
+    const rawText = requireText();
+    if (!rawText || saving) return;
+    setSaving(true);
+    try {
+      await createCapture({
+        rawText,
+        mode: "inbox",
+        dueDate: dueDate || null,
+        notebookId: notebookId || null,
+        projectId: projectId || null,
+        tags: ["capture"],
+      });
+      toast({ title: "Sent to AI Inbox", description: "Recall will suggest how to organize it." });
+      close();
+    } catch {
+      toast({
+        title: "Capture failed",
+        description: "Could not save this capture. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const createWorkNote = async () => {
+    const rawText = requireText();
+    if (!rawText || saving) return;
+    setSaving(true);
+    try {
+      const result = await generateWorkNote({ rawText, tone: "concise" });
+      setWorkNote(result);
+      toast({ title: "Work note generated", description: "Review and save or copy the outputs." });
+    } catch {
+      toast({ title: "Could not generate work note", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveWorkNote = () => {
+    if (!workNote) return;
+    addNote({
+      title: `IT Work Note — ${firstLineTitle(text)}`,
+      content: [
+        "Internal Work Note",
+        workNote.internalWorkNote,
+        "",
+        "Customer Update",
+        workNote.customerUpdate,
+        "",
+        "Transfer Reason",
+        workNote.transferReason,
+        "",
+        "Resolution Note",
+        workNote.resolutionNote,
+        "",
+        "Email Reply",
+        workNote.emailReply,
+      ].join("\n"),
+      tags: ["work", "it-support"],
+      notebookId: notebookId || null,
+      projectId: projectId || null,
+    });
+    toast({ title: "Saved work note", description: "The generated IT note was saved." });
+    close();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="w-full max-w-2xl rounded-3xl border border-white/10 bg-[#101018] shadow-2xl">
+        <div className="flex items-center justify-between p-5 border-b border-white/10">
+          <div>
+            <h2 className="text-lg font-semibold text-white">Quick Capture</h2>
+            <p className="text-sm text-white/45">Dump anything. Recall can save it now or route it to the AI Inbox.</p>
+          </div>
+          <button type="button" onClick={close} className="text-white/50 hover:text-white">
+            Close
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <div className="flex items-start gap-2">
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Type or dictate anything: a task, reminder, work note, permit detail, follow-up, idea..."
+              className="min-h-44 flex-1 rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-sm text-white/85 outline-none placeholder:text-white/30"
+            />
+            <MicButton
+              onTranscript={(transcript) =>
+                setText((prev) => `${prev}${prev.trim() ? " " : ""}${transcript}`)
+              }
+              className="rounded-xl border border-white/10 bg-white/[0.05] p-3 text-indigo-300"
+              title="Dictate capture"
+            />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <input
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white/80"
+            />
+            <select
+              value={notebookId}
+              onChange={(e) => setNotebookId(e.target.value)}
+              className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white/80"
+            >
+              <option value="">No notebook</option>
+              {notebooks.map((notebook) => (
+                <option key={notebook.id} value={notebook.id}>
+                  {notebook.name}
+                </option>
+              ))}
+            </select>
+            <select
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white/80"
+            >
+              <option value="">No project</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <label className="block rounded-xl border border-dashed border-white/10 bg-white/[0.03] p-3 text-sm text-white/55">
+            Optional files/images/PDFs
+            <input
+              type="file"
+              multiple
+              className="mt-2 block w-full text-xs text-white/45"
+              onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+            />
+          </label>
+          {files.length > 0 && (
+            <p className="text-xs text-white/40">
+              Selected: {files.map((file) => file.name).join(", ")}
+            </p>
+          )}
+
+          {workNote && (
+            <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/10 p-4 text-sm text-white/75">
+              <h3 className="mb-3 font-semibold text-indigo-200">Generated IT Work Note</h3>
+              {Object.entries(workNote).map(([key, value]) => (
+                <div key={key} className="mb-3">
+                  <p className="mb-1 text-xs uppercase tracking-[0.2em] text-white/35">
+                    {key.replace(/([A-Z])/g, " $1")}
+                  </p>
+                  <p className="whitespace-pre-wrap">{value}</p>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={saveWorkNote}
+                className="rounded-xl bg-indigo-500 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-400"
+              >
+                Save generated work note
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-wrap justify-end gap-2 p-5 border-t border-white/10">
+          <button type="button" onClick={() => void createWorkNote()} className="rounded-xl bg-white/10 px-4 py-2 text-sm text-white hover:bg-white/15">
+            Create Work Note
+          </button>
+          <button type="button" onClick={saveAsNote} className="rounded-xl bg-white/10 px-4 py-2 text-sm text-white hover:bg-white/15">
+            Save as note
+          </button>
+          <button type="button" onClick={saveAsTask} className="rounded-xl bg-white/10 px-4 py-2 text-sm text-white hover:bg-white/15">
+            Save as task
+          </button>
+          <button
+            type="button"
+            onClick={() => void sendToInbox()}
+            disabled={saving}
+            className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
+          >
+            Send to AI Inbox
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

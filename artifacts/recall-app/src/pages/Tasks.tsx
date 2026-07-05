@@ -1,36 +1,33 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { useLocation } from "wouter";
 import { AppLayout } from "@/components/AppLayout";
 import { useAiChat, useGetAiStatus } from "@workspace/api-client-react";
+import { useAuth } from "@/context/AuthContext";
 import {
-  MOCK_NOTES,
-  MOCK_TASKS,
-  RECALL_USER_NAME,
   type RecallTask,
-  notesForAiContext,
   tasksForAiContext,
 } from "@/lib/recall-context";
-import { 
-  Check, 
-  Circle, 
-  GripVertical, 
-  Mic, 
-  Paperclip, 
-  Plus, 
-  Send, 
-  Sparkles, 
-  Tag, 
+import { useRecallData } from "@/context/RecallDataContext";
+import { firstName } from "@/lib/user-display";
+import { readSearchParam } from "@/lib/recall-nav";
+import {
+  Check,
+  Circle,
+  GripVertical,
+  Paperclip,
+  Plus,
+  Send,
+  Sparkles,
+  Tag,
   MoreHorizontal,
   Calendar,
-  Clock
+  Clock,
 } from "lucide-react";
+import { MicButton } from "@/components/MicButton";
 
 type Priority = RecallTask["priority"];
 
 interface Task extends RecallTask {}
-
-const MORNING_TASKS = MOCK_TASKS.filter((t) => ["1", "2", "3"].includes(t.id));
-const AFTERNOON_TASKS = MOCK_TASKS.filter((t) => ["4", "5", "6"].includes(t.id));
-const COMPLETED_TASKS = MOCK_TASKS.filter((t) => t.completed);
 
 type ChatMsg = { role: "user" | "assistant"; content: string; time: string };
 
@@ -41,9 +38,26 @@ const PRIORITY_COLORS: Record<Priority, string> = {
   none: "bg-white/20"
 };
 
-function TaskItem({ task, onToggle }: { task: Task; onToggle: (id: string) => void }) {
+function TaskItem({
+  task,
+  onToggle,
+  highlighted,
+  itemRef,
+}: {
+  task: Task;
+  onToggle: (id: string) => void;
+  highlighted?: boolean;
+  itemRef?: (el: HTMLDivElement | null) => void;
+}) {
   return (
-    <div className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-white/5 hover:bg-white/[0.02] transition-colors ${task.completed ? "opacity-50" : ""}`}>
+    <div
+      ref={itemRef}
+      className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-colors ${
+        highlighted
+          ? "border-indigo-500/50 bg-indigo-500/10 ring-1 ring-indigo-500/30"
+          : "border-transparent hover:border-white/5 hover:bg-white/[0.02]"
+      } ${task.completed ? "opacity-50" : ""}`}
+    >
       <button className="text-white/20 cursor-grab hover:text-white/50 opacity-0 group-hover:opacity-100 transition-opacity">
         <GripVertical size={16} />
       </button>
@@ -88,11 +102,30 @@ function TaskItem({ task, onToggle }: { task: Task; onToggle: (id: string) => vo
 }
 
 export function Tasks() {
-  const [tasks, setTasks] = useState([...MOCK_TASKS]);
+  const [location] = useLocation();
+  const { user } = useAuth();
+  const userName = firstName(user?.name);
+  const { tasks, addTask, toggleTask } = useRecallData();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState("");
+  const [quickAdd, setQuickAdd] = useState("");
+  const [highlightedTaskId, setHighlightedTaskId] = useState<string | null>(null);
+  const quickAddRef = useRef<HTMLInputElement>(null);
+  const taskRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const aiChat = useAiChat();
   const { data: aiStatus } = useGetAiStatus();
+
+  useEffect(() => {
+    const taskId = readSearchParam("task");
+    if (!taskId || !tasks.some((t) => t.id === taskId)) return;
+
+    setHighlightedTaskId(taskId);
+    requestAnimationFrame(() => {
+      taskRefs.current[taskId]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    const timer = window.setTimeout(() => setHighlightedTaskId(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [location, tasks]);
 
   const formatTime = () =>
     new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
@@ -111,9 +144,9 @@ export function Tasks() {
         data: {
           messages: history.map((m) => ({ role: m.role, content: m.content })),
           context: {
-            userName: RECALL_USER_NAME,
+            userName,
             tasks: tasksForAiContext(tasks),
-            notes: notesForAiContext(MOCK_NOTES),
+            notes: [],
           },
         },
       });
@@ -137,13 +170,17 @@ export function Tasks() {
     }
   };
 
-  const toggleTask = (id: string) => {
-    setTasks(tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
+  const handleAddTask = (title: string) => {
+    addTask(title);
+    setQuickAdd("");
   };
 
-  const morning = tasks.filter(t => !t.completed && MORNING_TASKS.some(m => m.id === t.id));
-  const afternoon = tasks.filter(t => !t.completed && AFTERNOON_TASKS.some(a => a.id === t.id));
-  const completed = tasks.filter(t => t.completed);
+  const appendToDraft = (text: string) => {
+    setDraft((prev) => (prev ? `${prev} ${text}` : text));
+  };
+
+  const openTasks = tasks.filter((t) => !t.completed);
+  const completed = tasks.filter((t) => t.completed);
 
   return (
     <AppLayout>
@@ -161,11 +198,15 @@ export function Tasks() {
                 </span>
               </div>
               <p className="text-white/40 text-sm flex items-center gap-2">
-                <Calendar size={14} /> Thursday, October 24
+                <Calendar size={14} /> {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
               </p>
             </div>
             
-            <button className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white/90 font-medium text-sm transition-colors border border-white/5">
+            <button
+              type="button"
+              onClick={() => quickAddRef.current?.focus()}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white/90 font-medium text-sm transition-colors border border-white/5"
+            >
               <Plus size={16} />
               Add task
             </button>
@@ -184,54 +225,74 @@ export function Tasks() {
           {/* Task List */}
           <div className="flex-1 overflow-y-auto task-scroll px-8 pb-32 pt-6">
             
-            {/* Section: Morning */}
             <div className="mb-8">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-white/30 mb-3 px-3">Morning</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-white/30 mb-3 px-3">To do</h3>
               <div className="space-y-1">
-                {morning.map(task => (
-                  <TaskItem key={task.id} task={task} onToggle={toggleTask} />
+                {openTasks.length === 0 && (
+                  <p className="text-sm text-white/30 px-3 py-4">No tasks yet — use quick add below or Add task.</p>
+                )}
+                {openTasks.map((task) => (
+                  <TaskItem
+                    key={task.id}
+                    task={task}
+                    onToggle={toggleTask}
+                    highlighted={highlightedTaskId === task.id}
+                    itemRef={(el) => {
+                      taskRefs.current[task.id] = el;
+                    }}
+                  />
                 ))}
               </div>
             </div>
 
-            {/* Section: Afternoon */}
+            {completed.length > 0 && (
             <div className="mb-8">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-white/30 mb-3 px-3">Afternoon</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-white/30 mb-3 px-3">Done</h3>
               <div className="space-y-1">
-                {afternoon.map(task => (
-                  <TaskItem key={task.id} task={task} onToggle={toggleTask} />
+                {completed.map((task) => (
+                  <TaskItem
+                    key={task.id}
+                    task={task}
+                    onToggle={toggleTask}
+                    highlighted={highlightedTaskId === task.id}
+                    itemRef={(el) => {
+                      taskRefs.current[task.id] = el;
+                    }}
+                  />
                 ))}
               </div>
             </div>
-
-            {/* Section: Completed */}
-            <div className="mb-8">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-white/30 mb-3 px-3">Completed</h3>
-              <div className="space-y-1">
-                {completed.map(task => (
-                  <TaskItem key={task.id} task={task} onToggle={toggleTask} />
-                ))}
-              </div>
-            </div>
+            )}
 
           </div>
 
           {/* Quick Add */}
           <div className="absolute bottom-6 left-10 right-28">
             <div className="relative group">
-              <input 
-                type="text" 
-                placeholder="Quick add a task..." 
+              <input
+                ref={quickAddRef}
+                type="text"
+                placeholder="Quick add a task..."
+                value={quickAdd}
+                onChange={(e) => setQuickAdd(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addTask(quickAdd);
+                  }
+                }}
                 className="w-full bg-[#12121a]/80 backdrop-blur-md border border-white/10 rounded-2xl pl-12 pr-4 py-3.5 text-sm text-white focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 shadow-2xl transition-all"
               />
               <Plus size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40" />
             </div>
           </div>
 
-          {/* Floating Mic FAB */}
-          <button className="absolute bottom-6 right-8 w-14 h-14 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white animate-mic-pulse hover:scale-105 transition-transform z-10">
-            <Mic size={24} />
-          </button>
+          <MicButton
+            onTranscript={(text) => void sendMessage(text)}
+            className="absolute bottom-6 right-8 w-14 h-14 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white animate-mic-pulse hover:scale-105 transition-transform z-10"
+            iconSize={24}
+            title="Talk to Recall AI"
+          />
         </div>
 
 
@@ -331,9 +392,11 @@ export function Tasks() {
                   <button type="button" className="w-8 h-8 rounded-lg flex items-center justify-center text-white/40 hover:text-white/80 hover:bg-white/5 transition-colors">
                     <Paperclip size={16} />
                   </button>
-                  <button type="button" className="w-8 h-8 rounded-lg flex items-center justify-center text-white/40 hover:text-white/80 hover:bg-white/5 transition-colors">
-                    <Mic size={16} />
-                  </button>
+                  <MicButton
+                    onTranscript={appendToDraft}
+                    className="w-8 h-8 rounded-lg flex items-center justify-center text-white/40 hover:text-white/80 hover:bg-white/5 transition-colors"
+                    title="Voice input"
+                  />
                 </div>
                 <button
                   type="button"

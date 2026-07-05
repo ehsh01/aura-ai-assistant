@@ -8,6 +8,8 @@ import {
   ExtractTasksResponse,
   GenerateNoteTitleBody,
   GenerateNoteTitleResponse,
+  GenerateWorkNoteBody,
+  GenerateWorkNoteResponse,
   GetAiStatusResponse,
   SemanticSearchBody,
   SemanticSearchResponse,
@@ -17,6 +19,8 @@ import {
 import { aiService } from "../services/ai";
 
 const router: IRouter = Router();
+
+// All routes here require authentication (enforced in routes/index.ts)
 
 router.get("/ai/status", (_req, res) => {
   const data = GetAiStatusResponse.parse(aiService.getStatus());
@@ -78,6 +82,16 @@ router.post("/ai/dashboard/digest", async (req, res, next) => {
     const body = DashboardDigestBody.parse(req.body);
     const result = await aiService.dashboardDigest(body);
     res.json(DashboardDigestResponse.parse(result));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/ai/generate-work-note", async (req, res, next) => {
+  try {
+    const body = GenerateWorkNoteBody.parse(req.body);
+    const result = await aiService.generateWorkNote(body);
+    res.json(GenerateWorkNoteResponse.parse(result));
   } catch (err) {
     next(err);
   }

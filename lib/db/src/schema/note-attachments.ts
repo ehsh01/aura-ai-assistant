@@ -1,0 +1,22 @@
+import { integer, pgTable, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { notes } from "./notes";
+import { users } from "./users";
+
+export const noteAttachments = pgTable("note_attachments", {
+  id: varchar("id", { length: 128 }).primaryKey(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  noteId: varchar("note_id", { length: 64 })
+    .notNull()
+    .references(() => notes.id, { onDelete: "cascade" }),
+  resourceHash: varchar("resource_hash", { length: 64 }).notNull().default(""),
+  fileName: varchar("file_name", { length: 500 }).notNull().default("attachment"),
+  mimeType: varchar("mime_type", { length: 128 }).notNull().default("application/octet-stream"),
+  sizeBytes: integer("size_bytes").notNull().default(0),
+  storagePath: varchar("storage_path", { length: 1024 }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type NoteAttachment = typeof noteAttachments.$inferSelect;
+export type NewNoteAttachment = typeof noteAttachments.$inferInsert;

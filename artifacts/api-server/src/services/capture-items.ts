@@ -1,0 +1,277 @@
+import { and, desc, eq } from "drizzle-orm";
+import { captureItems, type CaptureItem } from "@workspace/db/schema";
+import { getDb } from "../lib/db";
+import { newCaptureId } from "../lib/recall-format";
+import { createNoteForUser, type RecallNoteDto } from "./notes";
+import { createTaskForUser, type RecallTaskDto } from "./tasks";
+
+export type CaptureSuggestedType =
+  | "note"
+  | "task"
+  | "reminder"
+  | "work_note"
+  | "project_item"
+  | "reference";
+
+export type CaptureSuggestedPriority = "low" | "medium" | "high" | "urgent";
+export type CaptureStatus = "pending" | "accepted" | "dismissed";
+
+export type RecallCaptureItemDto = {
+  id: string;
+  rawText: string;
+  cleanedTitle: string;
+  suggestedType: CaptureSuggestedType;
+  suggestedPriority: CaptureSuggestedPriority;
+  suggestedDueDate: string | null;
+  suggestedProject: string | null;
+  suggestedTags: string[];
+  suggestedActions: string[];
+  status: CaptureStatus;
+  projectId: string | null;
+  notebookId: string | null;
+  attachmentCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CaptureClassification = Pick<
+  RecallCaptureItemDto,
+  | "cleanedTitle"
+  | "suggestedType"
+  | "suggestedPriority"
+  | "suggestedDueDate"
+  | "suggestedProject"
+  | "suggestedTags"
+  | "suggestedActions"
+>;
+
+export type CreateCaptureInput = {
+  rawText: string;
+  mode?: "inbox" | "note" | "task";
+  dueDate?: string | null;
+  projectId?: string | null;
+  notebookId?: string | null;
+  tags?: string[];
+  classification?: Partial<CaptureClassification>;
+};
+
+export type UpdateCaptureInput = Partial<
+  Omit<RecallCaptureItemDto, "id" | "attachmentCount" | "createdAt" | "updatedAt">
+>;
+
+export type AcceptCaptureInput = {
+  type?: CaptureSuggestedType;
+  title?: string;
+  content?: string;
+  dueDate?: string | null;
+  projectId?: string | null;
+  notebookId?: string | null;
+  tags?: string[];
+};
+
+export type AcceptCaptureResult = {
+  item: RecallCaptureItemDto;
+  note?: RecallNoteDto;
+  task?: RecallTaskDto;
+};
+
+function normalizeType(type?: string): CaptureSuggestedType {
+  if (
+    type === "task" ||
+    type === "reminder" ||
+    type === "work_note" ||
+    type === "project_item" ||
+    type === "reference"
+  ) {
+    return type;
+  }
+  return "note";
+}
+
+function normalizePriority(priority?: string): CaptureSuggestedPriority {
+  if (priority === "urgent" || priority === "high" || priority === "low") return priority;
+  return "medium";
+}
+
+function cleanTitle(text: string): string {
+  const firstLine = text.trim().split(/\r?\n/).find(Boolean) ?? "Untitled capture";
+  return firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
+}
+
+export function classifyCaptureDeterministically(
+  rawText: string,
+  input?: Pick<CreateCaptureInput, "dueDate" | "projectId" | "tags">,
+): CaptureClassification {
+  const lower = rawText.toLowerCase();
+  const isTask = /\b(todo|task|call|email|follow up|remind|schedule|send|check|fix)\b/.test(lower);
+  const isReminder = /\b(remind|due|tomorrow|today|next week|appointment)\b/.test(lower);
+  const isWork = /\b(ticket|user|vpn|printer|outlook|email|server|network|troubleshoot|support)\b/.test(lower);
+  const isProject = /\b(permit|inspection|contractor|construction|project|city of miami)\b/.test(lower);
+  const urgent = /\b(urgent|asap|critical|emergency|blocked|down)\b/.test(lower);
+  const high = urgent || /\b(follow up|waiting|call|deadline|due today)\b/.test(lower);
+
+  const suggestedType: CaptureSuggestedType = isReminder
+    ? "reminder"
+    : isTask
+      ? "task"
+      : isWork
+        ? "work_note"
+        : isProject
+          ? "project_item"
+          : "note";
+
+  const tags = new Set(input?.tags ?? []);
+  if (isWork) tags.add("work");
+  if (isProject) tags.add("project");
+  if (isReminder) tags.add("reminder");
+  if (high) tags.add("follow-up");
+
+  const actions: string[] = [];
+  if (isTask || isReminder) actions.push("Create task");
+  if (isWork) actions.push("Generate IT work note");
+  if (isProject) actions.push("Attach to project");
+
+  return {
+    cleanedTitle: cleanTitle(rawText),
+    suggestedType,
+    suggestedPriority: urgent ? "urgent" : high ? "high" : "medium",
+    suggestedDueDate: input?.dueDate ?? null,
+    suggestedProject: null,
+    suggestedTags: Array.from(tags),
+    suggestedActions: actions,
+  };
+}
+
+function toDto(row: CaptureItem): RecallCaptureItemDto {
+  return {
+    id: row.id,
+    rawText: row.rawText,
+    cleanedTitle: row.cleanedTitle,
+    suggestedType: normalizeType(row.suggestedType),
+    suggestedPriority: normalizePriority(row.suggestedPriority),
+    suggestedDueDate: row.suggestedDueDate ?? null,
+    suggestedProject: row.suggestedProject ?? null,
+    suggestedTags: row.suggestedTags ?? [],
+    suggestedActions: row.suggestedActions ?? [],
+    status: row.status === "accepted" || row.status === "dismissed" ? row.status : "pending",
+    projectId: row.projectId ?? null,
+    notebookId: row.notebookId ?? null,
+    attachmentCount: 0,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+export async function createCaptureForUser(
+  userId: string,
+  input: CreateCaptureInput,
+): Promise<RecallCaptureItemDto> {
+  const fallback = classifyCaptureDeterministically(input.rawText, input);
+  const classification = { ...fallback, ...input.classification };
+  const now = new Date();
+  const [row] = await getDb()
+    .insert(captureItems)
+    .values({
+      id: newCaptureId(),
+      userId,
+      rawText: input.rawText,
+      cleanedTitle: classification.cleanedTitle ?? fallback.cleanedTitle,
+      suggestedType: normalizeType(classification.suggestedType),
+      suggestedPriority: normalizePriority(classification.suggestedPriority),
+      suggestedDueDate: classification.suggestedDueDate ?? input.dueDate ?? null,
+      suggestedProject: classification.suggestedProject ?? null,
+      suggestedTags: classification.suggestedTags ?? [],
+      suggestedActions: classification.suggestedActions ?? [],
+      status: "pending",
+      projectId: input.projectId ?? null,
+      notebookId: input.notebookId ?? null,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning();
+
+  return toDto(row!);
+}
+
+export async function listCaptureInboxForUser(userId: string): Promise<RecallCaptureItemDto[]> {
+  const rows = await getDb()
+    .select()
+    .from(captureItems)
+    .where(and(eq(captureItems.userId, userId), eq(captureItems.status, "pending")))
+    .orderBy(desc(captureItems.updatedAt));
+  return rows.map(toDto);
+}
+
+export async function updateCaptureForUser(
+  userId: string,
+  captureId: string,
+  input: UpdateCaptureInput,
+): Promise<RecallCaptureItemDto | null> {
+  const [row] = await getDb()
+    .update(captureItems)
+    .set({
+      ...(input.rawText !== undefined ? { rawText: input.rawText } : {}),
+      ...(input.cleanedTitle !== undefined ? { cleanedTitle: input.cleanedTitle } : {}),
+      ...(input.suggestedType !== undefined ? { suggestedType: normalizeType(input.suggestedType) } : {}),
+      ...(input.suggestedPriority !== undefined
+        ? { suggestedPriority: normalizePriority(input.suggestedPriority) }
+        : {}),
+      ...(input.suggestedDueDate !== undefined ? { suggestedDueDate: input.suggestedDueDate } : {}),
+      ...(input.suggestedProject !== undefined ? { suggestedProject: input.suggestedProject } : {}),
+      ...(input.suggestedTags !== undefined ? { suggestedTags: input.suggestedTags } : {}),
+      ...(input.suggestedActions !== undefined ? { suggestedActions: input.suggestedActions } : {}),
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      ...(input.notebookId !== undefined ? { notebookId: input.notebookId } : {}),
+      updatedAt: new Date(),
+    })
+    .where(and(eq(captureItems.id, captureId), eq(captureItems.userId, userId)))
+    .returning();
+  return row ? toDto(row) : null;
+}
+
+export async function acceptCaptureForUser(
+  userId: string,
+  captureId: string,
+  input: AcceptCaptureInput,
+): Promise<AcceptCaptureResult | null> {
+  const rows = await getDb()
+    .select()
+    .from(captureItems)
+    .where(and(eq(captureItems.id, captureId), eq(captureItems.userId, userId)))
+    .limit(1);
+  const existing = rows[0];
+  if (!existing) return null;
+
+  const item = toDto(existing);
+  const type = normalizeType(input.type ?? item.suggestedType);
+  const title = input.title?.trim() || item.cleanedTitle;
+  const content = input.content ?? item.rawText;
+  const tags = input.tags ?? item.suggestedTags;
+  const projectId = input.projectId ?? item.projectId;
+  const notebookId = input.notebookId ?? item.notebookId;
+
+  let note: RecallNoteDto | undefined;
+  let task: RecallTaskDto | undefined;
+
+  if (type === "task" || type === "reminder") {
+    task = await createTaskForUser(userId, {
+      title,
+      time: input.dueDate ?? item.suggestedDueDate,
+      priority: item.suggestedPriority === "urgent" ? "high" : item.suggestedPriority,
+      tags,
+      projectId,
+    });
+  } else {
+    note = await createNoteForUser(userId, {
+      title,
+      content,
+      tags,
+      projectId,
+      notebookId,
+    });
+  }
+
+  const updated = await updateCaptureForUser(userId, captureId, { status: "accepted" });
+  return updated ? { item: updated, note, task } : null;
+}

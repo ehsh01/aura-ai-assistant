@@ -158,3 +158,9 @@ overrides:
   # drizzle-kit uses esbuild internally on an older version that's vulnerable, this overrides it
   "@esbuild-kit/esm-loader": "npm:tsx@^4.21.0"
   esbuild: "0.27.3"
+  # rollup 4.53.0+ regressed HTML entry handling (treats index.html script as a
+  # source-phase import and fails the build). Pin below that until it is fixed.
+  rollup: "4.52.4"
+
+allowBuilds:
+  esbuild: set this to true or false
