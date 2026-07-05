@@ -12,7 +12,7 @@ import {
 import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
 import { Search, Bell, Calendar, CheckCircle2, Circle, MoreHorizontal, MessageSquare, Sparkles, Pin, Plus, CheckSquare, FileText, Clock, Loader2 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { MicButton } from "@/components/MicButton";
 import { notesPath, tasksPath } from "@/lib/recall-nav";
 import {
@@ -29,6 +29,7 @@ const DEFAULT_DIGEST =
 export function Dashboard() {
   const { user } = useAuth();
   const { notes, tasks } = useRecallData();
+  const [, navigate] = useLocation();
   const userName = firstName(user?.name);
   const [searchFocused, setSearchFocused] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -82,6 +83,10 @@ export function Dashboard() {
           },
         },
       });
+      if (res.openNote?.id) {
+        navigate(notesPath({ noteId: res.openNote.id }));
+        return;
+      }
       setAiReply(res.message.content);
     } catch {
       setAiReply("Could not reach Recall AI. Check that you are signed in and try again.");

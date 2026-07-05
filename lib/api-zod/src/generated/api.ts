@@ -120,7 +120,11 @@ export const AiChatResponse = zod.object({
   "role": zod.enum(['system', 'user', 'assistant']),
   "content": zod.string()
 }),
-  "model": zod.string().nullish()
+  "model": zod.string().nullish(),
+  "openNote": zod.object({
+  "id": zod.string(),
+  "title": zod.string()
+}).nullish()
 }))
 
 

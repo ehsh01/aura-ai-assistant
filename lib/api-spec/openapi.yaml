@@ -800,6 +800,16 @@ components:
       required:
         - role
         - content
+    OpenNoteAction:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+      required:
+        - id
+        - title
     TaskContextItem:
       type: object
       properties:
@@ -877,6 +887,11 @@ components:
             model:
               type: string
               nullable: true
+            openNote:
+              allOf:
+                - $ref: "#/components/schemas/OpenNoteAction"
+              nullable: true
+              description: When set, the client should navigate to this note instead of only showing the text reply.
           required:
             - message
     SummarizeNoteRequest:

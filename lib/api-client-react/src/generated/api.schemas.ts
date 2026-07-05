@@ -114,6 +114,7 @@ export interface ChatRequest {
 export type ChatResponse = AiDegradedMeta & ({
   message: ChatMessage;
   model?: string | null;
+  openNote?: { id: string; title: string } | null;
 });
 
 export interface SummarizeNoteRequest {

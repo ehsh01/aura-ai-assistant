@@ -80,6 +80,7 @@ export interface ChatRequest {
 export interface ChatResponse extends AiDegradedMeta {
   message: ChatMessage;
   model: string | null;
+  openNote?: { id: string; title: string } | null;
 }
 
 export interface SummarizeNoteRequest {
@@ -462,6 +463,7 @@ function buildSystemPrompt(
     "When listing tasks, use bullet points with priority cues when known.",
     "If you lack information, say so briefly instead of inventing facts.",
     "Use the search_notes tool to search the user's entire note library by keyword.",
+    "When the user asks to find or show a note, keep your reply to one short sentence — the app will open the note for them.",
   ];
 
   if (context?.tasks?.length) {

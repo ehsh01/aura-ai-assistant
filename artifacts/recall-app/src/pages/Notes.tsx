@@ -175,6 +175,12 @@ export function Notes() {
           },
         },
       });
+      if (res.openNote?.id) {
+        setActiveNoteId(res.openNote.id);
+        setAiSuggestion(null);
+        navigate(notesPath({ noteId: res.openNote.id, notebook: activeNotebook }));
+        return;
+      }
       setAiSuggestion(res.message.content);
     } catch {
       setAiSuggestion("Recall AI is unavailable right now.");

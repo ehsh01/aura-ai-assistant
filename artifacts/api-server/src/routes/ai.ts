@@ -18,6 +18,7 @@ import {
 } from "@workspace/api-zod";
 import { aiService, type AiContext, type NoteContextItem } from "../services/ai";
 import { searchNotesForUser } from "../services/notes";
+import { pickBestNoteToOpen, userWantsNoteOpened } from "../lib/note-open-intent";
 
 function mergeSearchHitsIntoContext(
   context: AiContext | undefined,
@@ -61,14 +62,26 @@ router.post("/ai/chat", async (req, res, next) => {
     const userId = req.user!.id;
     const lastUserMessage = [...body.messages].reverse().find((m) => m.role === "user");
     let context = body.context;
+    let searchHits: Awaited<ReturnType<typeof searchNotesForUser>> = [];
 
     if (lastUserMessage?.content.trim()) {
-      const hits = await searchNotesForUser(userId, lastUserMessage.content, 20);
-      context = mergeSearchHitsIntoContext(context, hits);
+      searchHits = await searchNotesForUser(userId, lastUserMessage.content, 20);
+      context = mergeSearchHitsIntoContext(context, searchHits);
     }
 
     const result = await aiService.chat({ ...body, context, userId });
-    res.json(AiChatResponse.parse(result));
+
+    const openTarget =
+      lastUserMessage && userWantsNoteOpened(lastUserMessage.content)
+        ? pickBestNoteToOpen(searchHits)
+        : null;
+
+    res.json(
+      AiChatResponse.parse({
+        ...result,
+        openNote: openTarget ? { id: openTarget.id, title: openTarget.title } : null,
+      }),
+    );
   } catch (err) {
     next(err);
   }
