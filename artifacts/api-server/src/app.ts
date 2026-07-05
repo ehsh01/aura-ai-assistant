@@ -1,6 +1,6 @@
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import pinoHttp from "pino-http";
-import { ZodError } from "zod/v4";
+import { ZodError } from "zod";
 import router from "./routes";
 import { config } from "./lib/config";
 import { logger } from "./lib/logger";
@@ -36,12 +36,28 @@ app.use(express.json({ limit: config.jsonLimit }));
 app.use(express.urlencoded({ extended: true, limit: config.jsonLimit }));
 app.use("/api", generalRateLimiter, router);
 
+function asZodError(err: unknown): ZodError | null {
+  if (err instanceof ZodError) return err;
+  // Schemas may be validated by a different zod build (e.g. zod/v4), so the
+  // thrown error can be a structurally-identical ZodError from another class.
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { name?: string }).name === "ZodError" &&
+    Array.isArray((err as { issues?: unknown }).issues)
+  ) {
+    return err as ZodError;
+  }
+  return null;
+}
+
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  if (err instanceof ZodError) {
+  const zodErr = asZodError(err);
+  if (zodErr) {
     res.status(400).json({
       error: "VALIDATION_ERROR",
       message: "Request body failed validation",
-      ...(config.isProduction ? {} : { issues: err.issues }),
+      ...(config.isProduction ? {} : { issues: zodErr.issues }),
     });
     return;
   }

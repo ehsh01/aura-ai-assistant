@@ -222,6 +222,54 @@ function isOpenAiContextError(err: unknown): boolean {
   return code === "context_length_exceeded";
 }
 
+/**
+ * Current date in the user's timezone so the model can resolve relative dates
+ * ("tomorrow", "next Friday") to absolute ISO dates instead of hallucinating a
+ * year from its training data.
+ */
+function currentDateContext(): { iso: string; weekday: string } {
+  const tz = process.env.RECALL_TIMEZONE?.trim() || "America/New_York";
+  const now = new Date();
+  try {
+    // en-CA formats as YYYY-MM-DD.
+    const iso = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(now);
+    const weekday = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      weekday: "long",
+    }).format(now);
+    return { iso, weekday };
+  } catch {
+    const iso = now.toISOString().slice(0, 10);
+    const weekday = now.toLocaleDateString("en-US", { weekday: "long" });
+    return { iso, weekday };
+  }
+}
+
+/**
+ * Accept only a real YYYY-MM-DD date that is today or later. Rejects free-text
+ * ("Friday"), malformed dates, and hallucinated past dates (e.g. a wrong year).
+ */
+function normalizeDueDate(value: unknown, todayIso: string): string | null {
+  if (typeof value !== "string") return null;
+  const v = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
+  const [y, m, d] = v.split("-").map(Number);
+  const date = new Date(Date.UTC(y!, m! - 1, d!));
+  if (
+    date.getUTCFullYear() !== y ||
+    date.getUTCMonth() !== m! - 1 ||
+    date.getUTCDate() !== d
+  ) {
+    return null; // not a real calendar date
+  }
+  return v >= todayIso ? v : null;
+}
+
 function degradedMeta(reason: string = DISABLED_REASON): AiDegradedMeta {
   return { degraded: true, degradedReason: reason };
 }
@@ -779,17 +827,22 @@ class OpenAiService implements AiService {
   }
 
   async classifyCapture(request: ClassifyCaptureRequest): Promise<ClassifyCaptureResponse> {
+    const today = currentDateContext();
     const completion = await this.client.chat.completions.create({
       model: this.model,
       messages: [
         {
           role: "system",
           content:
-            "Classify a short personal capture for Recall. Return JSON only: {\"cleanedTitle\":\"...\",\"suggestedType\":\"note|task|reminder|work_note|project_item|reference\",\"suggestedPriority\":\"low|medium|high|urgent\",\"suggestedDueDate\":null,\"suggestedProject\":null,\"suggestedTags\":[],\"suggestedActions\":[]}. Do not infer from any wider note library.",
+            `Classify a short personal capture for Recall. Today is ${today.weekday}, ${today.iso}. ` +
+            "Resolve any relative dates (today, tomorrow, tonight, this/next weekday, in N days, next week) to an absolute calendar date in strict YYYY-MM-DD format for suggestedDueDate, computed relative to today. " +
+            "Never guess or carry over a year from prior knowledge — always compute from today's date. If no due date is implied, set suggestedDueDate to null. " +
+            "Return JSON only: {\"cleanedTitle\":\"...\",\"suggestedType\":\"note|task|reminder|work_note|project_item|reference\",\"suggestedPriority\":\"low|medium|high|urgent\",\"suggestedDueDate\":null,\"suggestedProject\":null,\"suggestedTags\":[],\"suggestedActions\":[]}. Do not infer from any wider note library.",
         },
         {
           role: "user",
           content: JSON.stringify({
+            today: today.iso,
             rawText: request.rawText.slice(0, 4000),
             dueDate: request.dueDate ?? null,
             tags: request.tags ?? [],
@@ -823,7 +876,10 @@ class OpenAiService implements AiService {
             parsed.suggestedPriority === "urgent"
               ? parsed.suggestedPriority
               : "medium",
-          suggestedDueDate: parsed.suggestedDueDate ?? fallback.suggestedDueDate,
+          // An explicitly picked date always wins; otherwise use the model's
+          // computed absolute date (validated), else nothing.
+          suggestedDueDate:
+            request.dueDate ?? normalizeDueDate(parsed.suggestedDueDate, today.iso),
           suggestedProject: parsed.suggestedProject ?? null,
           suggestedTags: Array.isArray(parsed.suggestedTags) ? parsed.suggestedTags : fallback.suggestedTags,
           suggestedActions: Array.isArray(parsed.suggestedActions)
