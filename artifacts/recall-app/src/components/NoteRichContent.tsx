@@ -24,6 +24,19 @@ const BLOCKED_TAGS = new Set([
   "select",
 ]);
 
+const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|svg|heic|heif)$/i;
+
+function isImageAttachment(
+  id: string,
+  attachmentMap: Map<string, NoteAttachmentMeta>,
+  label?: string | null,
+): boolean {
+  const meta = attachmentMap.get(id);
+  if (meta?.isImage) return true;
+  if (meta && !meta.mimeType.startsWith("image/")) return false;
+  return IMAGE_EXT.test(label ?? "");
+}
+
 /** Strip scripts and event handlers; keep Evernote/web-clip layout (styles, tables, etc.). */
 function sanitizeNoteHtml(html: string): string {
   const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
@@ -172,6 +185,93 @@ function AttachmentBlock({ att }: { att: NoteAttachmentMeta }) {
   );
 }
 
+function NoteImageGallery({ images }: { images: NoteAttachmentMeta[] }) {
+  if (images.length === 0) return null;
+
+  return (
+    <div className="note-image-gallery mb-6 pb-6 border-b border-white/10">
+      <h4 className="text-sm font-semibold text-white/70 mb-3">
+        {images.length === 1 ? "Photo" : `Photos (${images.length})`}
+      </h4>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {images.map((att) => (
+          <AuthenticatedImage key={att.id} attachmentId={att.id} alt={att.fileName} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+async function setImageSrc(img: HTMLImageElement, attachmentId: string, revoked: string[]): Promise<void> {
+  const blob = await fetchAttachmentBlob(attachmentId);
+  if (!blob) return;
+  const url = URL.createObjectURL(blob);
+  revoked.push(url);
+  img.src = url;
+  img.classList.add("recall-note-image");
+}
+
+async function hydrateAttachmentElements(
+  container: HTMLElement,
+  attachmentMap: Map<string, NoteAttachmentMeta>,
+  revoked: string[],
+): Promise<void> {
+  const images = container.querySelectorAll("img[data-recall-attachment]");
+  for (const img of images) {
+    if (!(img instanceof HTMLImageElement)) continue;
+    const id = img.getAttribute("data-recall-attachment");
+    if (!id || img.src.startsWith("blob:")) continue;
+    await setImageSrc(img, id, revoked);
+    if (!img.alt) {
+      img.alt = attachmentMap.get(id)?.fileName ?? "Note image";
+    }
+  }
+
+  const links = container.querySelectorAll("a[data-recall-attachment]");
+  for (const link of links) {
+    if (!(link instanceof HTMLAnchorElement)) continue;
+    const id = link.getAttribute("data-recall-attachment");
+    if (!id) continue;
+
+    const meta = attachmentMap.get(id);
+    const label = link.textContent?.trim() || meta?.fileName || "Attachment";
+
+    if (isImageAttachment(id, attachmentMap, label)) {
+      const img = document.createElement("img");
+      img.setAttribute("data-recall-attachment", id);
+      img.alt = meta?.fileName ?? label;
+      img.className = "recall-note-image";
+      await setImageSrc(img, id, revoked);
+      link.replaceWith(img);
+      continue;
+    }
+
+    if (meta?.mimeType === "application/pdf") {
+      const wrapper = document.createElement("div");
+      wrapper.className = "recall-pdf-embed my-4";
+
+      const title = document.createElement("p");
+      title.className = "text-xs text-white/50 mb-2";
+      title.textContent = meta.fileName;
+      wrapper.appendChild(title);
+
+      const blob = await fetchAttachmentBlob(id);
+      if (!blob) continue;
+      const url = URL.createObjectURL(blob);
+      revoked.push(url);
+
+      const iframe = document.createElement("iframe");
+      iframe.src = url;
+      iframe.title = meta.fileName;
+      iframe.className =
+        "w-full h-[min(70vh,720px)] rounded-lg border border-white/10 bg-white";
+      wrapper.appendChild(iframe);
+
+      link.replaceWith(wrapper);
+    }
+  }
+}
+
 function HtmlNoteBody({
   content,
   attachmentMap,
@@ -185,58 +285,22 @@ function HtmlNoteBody({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    container.innerHTML = sanitized;
+  }, [sanitized]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
 
     const revoked: string[] = [];
     let cancelled = false;
 
-    const hydrate = async () => {
-      const images = container.querySelectorAll("img[data-recall-attachment]");
-      for (const img of images) {
-        const id = img.getAttribute("data-recall-attachment");
-        if (!id) continue;
-        const blob = await fetchAttachmentBlob(id);
-        if (cancelled || !blob) continue;
-        const url = URL.createObjectURL(blob);
-        revoked.push(url);
-        img.setAttribute("src", url);
-        img.classList.add("recall-note-image");
-        if (!img.getAttribute("alt")) {
-          img.setAttribute("alt", attachmentMap.get(id)?.fileName ?? "Note image");
-        }
+    void (async () => {
+      await hydrateAttachmentElements(container, attachmentMap, revoked);
+      if (cancelled) {
+        for (const url of revoked) URL.revokeObjectURL(url);
       }
-
-      const links = container.querySelectorAll("a[data-recall-attachment]");
-      for (const link of links) {
-        const id = link.getAttribute("data-recall-attachment");
-        if (!id) continue;
-        const meta = attachmentMap.get(id);
-        if (meta?.mimeType !== "application/pdf") continue;
-
-        const wrapper = document.createElement("div");
-        wrapper.className = "recall-pdf-embed my-4";
-
-        const label = document.createElement("p");
-        label.className = "text-xs text-white/50 mb-2";
-        label.textContent = meta.fileName;
-        wrapper.appendChild(label);
-
-        const blob = await fetchAttachmentBlob(id);
-        if (cancelled || !blob) continue;
-        const url = URL.createObjectURL(blob);
-        revoked.push(url);
-
-        const iframe = document.createElement("iframe");
-        iframe.src = url;
-        iframe.title = meta.fileName;
-        iframe.className =
-          "w-full h-[min(70vh,720px)] rounded-lg border border-white/10 bg-white";
-        wrapper.appendChild(iframe);
-
-        link.replaceWith(wrapper);
-      }
-    };
-
-    void hydrate();
+    })();
 
     return () => {
       cancelled = true;
@@ -248,7 +312,6 @@ function HtmlNoteBody({
     <div
       ref={containerRef}
       className="note-rich-content-evernote text-base text-white/80 leading-relaxed"
-      dangerouslySetInnerHTML={{ __html: sanitized }}
     />
   );
 }
@@ -269,24 +332,34 @@ export function NoteRichContent({ noteId, content, contentFormat }: Props) {
     [attachments],
   );
 
-  const unusedAttachments = attachments.filter(
+  const imageAttachments = attachments.filter((a) => a.isImage);
+  const nonImageAttachments = attachments.filter((a) => !a.isImage);
+  const hasInlineImageRefs = /<img[^>]+data-recall-attachment/i.test(content);
+  const showImageGallery = imageAttachments.length > 0 && !hasInlineImageRefs;
+
+  const unusedNonImageAttachments = nonImageAttachments.filter(
     (a) => !content.includes(`data-recall-attachment="${a.id}"`),
   );
 
   if (!isHtml) {
     return (
       <div className="note-rich-content">
+        <NoteImageGallery images={showImageGallery ? imageAttachments : []} />
         <div className="whitespace-pre-wrap text-base text-white/80 leading-relaxed">
           {content}
         </div>
         {attachments.length > 0 && (
           <div className="mt-6 pt-4 border-t border-white/10">
-            <h4 className="text-sm font-semibold text-white/70 mb-3">Attachments</h4>
-            <div className="space-y-2">
-              {attachments.map((att) => (
-                <AttachmentBlock key={att.id} att={att} />
-              ))}
-            </div>
+            {nonImageAttachments.length > 0 && (
+              <>
+                <h4 className="text-sm font-semibold text-white/70 mb-3">Attachments</h4>
+                <div className="space-y-2">
+                  {nonImageAttachments.map((att) => (
+                    <AttachmentBlock key={att.id} att={att} />
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -295,13 +368,14 @@ export function NoteRichContent({ noteId, content, contentFormat }: Props) {
 
   return (
     <div className="note-rich-content">
+      <NoteImageGallery images={showImageGallery ? imageAttachments : []} />
       <HtmlNoteBody content={content} attachmentMap={attachmentMap} />
 
-      {unusedAttachments.length > 0 && (
+      {unusedNonImageAttachments.length > 0 && (
         <div className="mt-6 pt-4 border-t border-white/10">
           <h4 className="text-sm font-semibold text-white/70 mb-3">Attachments</h4>
           <div className="space-y-2">
-            {unusedAttachments.map((att) => (
+            {unusedNonImageAttachments.map((att) => (
               <AttachmentBlock key={att.id} att={att} />
             ))}
           </div>

@@ -143,10 +143,12 @@ function enmlToHtml(
   );
   if (unusedFiles.length > 0) {
     const links = unusedFiles
-      .map(
-        (f) =>
-          `<li><a data-recall-attachment="${f.id}" class="recall-attachment-link">${escapeHtml(f.fileName)}</a> <span class="recall-attachment-mime">(${escapeHtml(f.mimeType)})</span></li>`,
-      )
+      .map((f) => {
+        if (f.mimeType.startsWith("image/")) {
+          return `<li><img data-recall-attachment="${f.id}" alt="${escapeHtml(f.fileName)}" class="recall-note-image" /></li>`;
+        }
+        return `<li><a data-recall-attachment="${f.id}" class="recall-attachment-link">${escapeHtml(f.fileName)}</a> <span class="recall-attachment-mime">(${escapeHtml(f.mimeType)})</span></li>`;
+      })
       .join("");
     html += `\n<div class="recall-attachments"><h4>Attachments</h4><ul>${links}</ul></div>`;
   }
