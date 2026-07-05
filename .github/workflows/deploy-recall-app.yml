@@ -1,9 +1,6 @@
 name: Deploy Recall App
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
@@ -13,12 +10,9 @@ jobs:
       - name: Deploy to DigitalOcean droplet
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
+          host: 159.223.130.69
+          username: root
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             cd /var/www/recall-app
-            git pull --ff-only
-            pnpm install
-            pnpm run build:prod
-            pm2 restart recall-api --update-env
+            bash scripts/deploy-recall-app.sh
