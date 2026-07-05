@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { Sparkles } from "lucide-react";
+import { RecallLogo } from "@/components/RecallLogo";
 
 type Mode = "login" | "register";
 
@@ -38,9 +38,7 @@ export function Login() {
     <div className="min-h-[100dvh] flex items-center justify-center bg-[#0a0a0f] text-white p-4 sm:p-6 recall-safe-top recall-safe-bottom">
       <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-6 sm:p-8 shadow-2xl">
         <div className="flex items-center gap-3 mb-8">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-            <Sparkles className="w-5 h-5 text-white" />
-          </div>
+          <RecallLogo size={40} rounded="xl" />
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Recall</h1>
             <p className="text-sm text-white/40">Sign in to your assistant</p>

@@ -40,6 +40,8 @@ export default defineConfig({
         "favicon.svg",
         "pwa-icon.svg",
         "recall-icon-source.png",
+        "recall-logo-48.png",
+        "recall-logo-128.png",
         "apple-touch-icon.png",
         "pwa-192x192.png",
         "pwa-512x512.png",

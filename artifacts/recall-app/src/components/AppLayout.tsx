@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { BookOpen, Inbox, Library, Plus, FolderKanban } from "lucide-react";
 import { CaptureModal } from "@/components/CaptureModal";
 import { MobileBottomNav, MobileMoreSheet } from "@/components/MobileShell";
+import { RecallLogo } from "@/components/RecallLogo";
 import { useAuth } from "@/context/AuthContext";
 import { useRecallData } from "@/context/RecallDataContext";
 import { notesPath, readSearchParam } from "@/lib/recall-nav";
@@ -258,13 +259,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         style={{ width: collapsed ? 64 : 220, background: "rgba(255,255,255,0.02)" }}
       >
         <div className="flex items-center gap-3 px-4 py-5 border-b border-white/[0.06]">
-          <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
-               style={{ background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)" }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2a10 10 0 1 0 10 10"/>
-              <path d="M12 6v6l4 2"/>
-            </svg>
-          </div>
+          <RecallLogo size={collapsed ? 32 : 32} rounded="xl" />
           {!collapsed && (
             <span className="font-semibold text-[15px] tracking-tight text-white/90">Recall</span>
           )}

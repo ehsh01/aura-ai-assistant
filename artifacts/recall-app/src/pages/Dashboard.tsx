@@ -13,6 +13,7 @@ import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
 import { Search, Bell, Calendar, CheckCircle2, Circle, MoreHorizontal, MessageSquare, Sparkles, Pin, Plus, CheckSquare, FileText, Clock, Loader2 } from "lucide-react";
 import { Link, useLocation } from "wouter";
+import { RecallLogo } from "@/components/RecallLogo";
 import { MicButton } from "@/components/MicButton";
 import { notesPath, tasksPath } from "@/lib/recall-nav";
 import {
@@ -153,10 +154,13 @@ export function Dashboard() {
 
         {/* Top Header — stacked on phone, row on desktop */}
         <header className="flex-none px-4 py-4 md:px-8 md:py-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 z-20 relative">
+          <div className="flex md:hidden items-center gap-2.5">
+            <RecallLogo size={36} rounded="xl" />
+            <span className="font-semibold text-lg tracking-tight text-white/90">Recall</span>
+          </div>
+
           <div className="hidden md:flex items-center gap-4">
-            <div className="w-10 h-10 rounded-2xl nebula-glass flex items-center justify-center shadow-[0_0_20px_rgba(124,58,237,0.4)]">
-              <Sparkles className="w-6 h-6 text-indigo-300" />
-            </div>
+            <RecallLogo size={40} rounded="xl" className="shadow-[0_0_20px_rgba(99,102,241,0.35)]" />
           </div>
 
           <div className="flex-1 w-full md:max-w-xl md:mx-8">
