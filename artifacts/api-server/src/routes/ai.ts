@@ -16,7 +16,35 @@ import {
   SummarizeNoteBody,
   SummarizeNoteResponse,
 } from "@workspace/api-zod";
-import { aiService } from "../services/ai";
+import { aiService, type AiContext, type NoteContextItem } from "../services/ai";
+import { searchNotesForUser } from "../services/notes";
+
+function mergeSearchHitsIntoContext(
+  context: AiContext | undefined,
+  hits: Awaited<ReturnType<typeof searchNotesForUser>>,
+): AiContext | undefined {
+  if (hits.length === 0) return context;
+
+  const byId = new Map<string, NoteContextItem>();
+  for (const note of context?.notes ?? []) {
+    byId.set(note.id, note);
+  }
+  for (const hit of hits) {
+    if (!byId.has(hit.id)) {
+      byId.set(hit.id, {
+        id: hit.id,
+        title: hit.title,
+        preview: hit.preview,
+        tags: hit.tags,
+      });
+    }
+  }
+
+  return {
+    ...context,
+    notes: Array.from(byId.values()),
+  };
+}
 
 const router: IRouter = Router();
 
@@ -30,7 +58,16 @@ router.get("/ai/status", (_req, res) => {
 router.post("/ai/chat", async (req, res, next) => {
   try {
     const body = AiChatBody.parse(req.body);
-    const result = await aiService.chat(body);
+    const userId = req.user!.id;
+    const lastUserMessage = [...body.messages].reverse().find((m) => m.role === "user");
+    let context = body.context;
+
+    if (lastUserMessage?.content.trim()) {
+      const hits = await searchNotesForUser(userId, lastUserMessage.content, 20);
+      context = mergeSearchHitsIntoContext(context, hits);
+    }
+
+    const result = await aiService.chat({ ...body, context, userId });
     res.json(AiChatResponse.parse(result));
   } catch (err) {
     next(err);

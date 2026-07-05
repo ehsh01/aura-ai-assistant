@@ -75,7 +75,10 @@ export function Dashboard() {
           context: {
             userName,
             tasks: tasksForAiContext(tasks),
-            notes: notesForAiContext(notes, 20),
+            notes: resolveNotesForAi({
+              notes,
+              searchQuery: q,
+            }),
           },
         },
       });

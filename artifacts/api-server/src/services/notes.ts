@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { noteAttachments, notes, type Note } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import {
@@ -102,6 +102,75 @@ export async function listNotesForUser(userId: string): Promise<RecallNoteDto[]>
 export async function listNoteMetadataForUser(userId: string): Promise<RecallNoteMetadataDto[]> {
   const all = await listNotesForUser(userId);
   return all.map(toMetadata);
+}
+
+const SEARCH_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "the",
+  "my",
+  "me",
+  "i",
+  "you",
+  "find",
+  "show",
+  "get",
+  "where",
+  "what",
+  "how",
+  "is",
+  "are",
+  "do",
+  "does",
+  "can",
+  "please",
+  "note",
+  "notes",
+  "for",
+  "of",
+  "in",
+  "on",
+  "to",
+  "and",
+  "or",
+]);
+
+function extractSearchTerms(query: string): string[] {
+  return query
+    .toLowerCase()
+    .replace(/['']/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter((term) => term.length >= 2 && !SEARCH_STOP_WORDS.has(term));
+}
+
+/** Keyword search across the user's full note library (title, preview, tags). */
+export async function searchNotesForUser(
+  userId: string,
+  query: string,
+  limit = 20,
+): Promise<RecallNoteMetadataDto[]> {
+  const terms = extractSearchTerms(query);
+  if (terms.length === 0) return [];
+
+  const db = getDb();
+  const termFilters = terms.map((term) => {
+    const pattern = `%${term}%`;
+    return or(
+      ilike(notes.title, pattern),
+      ilike(notes.preview, pattern),
+      sql`${notes.tags}::text ilike ${pattern}`,
+    );
+  });
+
+  const rows = await db
+    .select()
+    .from(notes)
+    .where(and(eq(notes.userId, userId), ...termFilters))
+    .orderBy(desc(notes.updatedAt))
+    .limit(limit);
+
+  const counts = await attachmentCountsForNotes(rows.map((row) => row.id));
+  return rows.map((row) => toMetadata(toDto(row, counts.get(row.id) ?? 0)));
 }
 
 export async function getNoteForUser(

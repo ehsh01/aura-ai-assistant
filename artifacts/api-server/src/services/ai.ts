@@ -3,6 +3,7 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionTool,
 } from "openai/resources/chat/completions";
+import { searchNotesForUser } from "./notes";
 
 // ---------------------------------------------------------------------------
 // Types (mirror OpenAPI / api-zod shapes)
@@ -72,6 +73,8 @@ export interface AiStatus extends AiDegradedMeta {
 export interface ChatRequest {
   messages: ChatMessage[];
   context?: AiContext;
+  /** Set by the API route so tools can search the user's full note library. */
+  userId?: string;
 }
 
 export interface ChatResponse extends AiDegradedMeta {
@@ -458,7 +461,7 @@ function buildSystemPrompt(
     "You help with notes, tasks, and planning. Be warm, direct, and actionable.",
     "When listing tasks, use bullet points with priority cues when known.",
     "If you lack information, say so briefly instead of inventing facts.",
-    "Use the search_notes tool to find notes not listed below.",
+    "Use the search_notes tool to search the user's entire note library by keyword.",
   ];
 
   if (context?.tasks?.length) {
@@ -503,7 +506,8 @@ const CHAT_TOOLS: ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "search_notes",
-      description: "Keyword search across note titles and content in context",
+      description:
+        "Keyword search across the user's full note library (titles, previews, tags). Use when the user asks to find or open a note.",
       parameters: {
         type: "object",
         properties: {
@@ -537,11 +541,12 @@ class OpenAiService implements AiService {
     };
   }
 
-  private runTool(
+  private async runTool(
     name: string,
     args: Record<string, unknown>,
     context?: AiContext,
-  ): string {
+    userId?: string,
+  ): Promise<string> {
     if (name === "list_open_tasks") {
       const open =
         context?.tasks?.filter((t) => !t.completed) ?? [];
@@ -558,11 +563,29 @@ class OpenAiService implements AiService {
     }
 
     if (name === "search_notes") {
-      const query = String(args.query ?? "").toLowerCase();
+      const query = String(args.query ?? "").trim();
+      if (!query) {
+        return JSON.stringify({ results: [], message: "Empty search query" });
+      }
+
+      if (userId) {
+        const dbMatches = await searchNotesForUser(userId, query, 25);
+        return JSON.stringify({
+          results: dbMatches.map((n) => ({
+            id: n.id,
+            title: n.title,
+            preview: n.preview.slice(0, 200),
+            tags: n.tags,
+          })),
+          source: "full_library",
+        });
+      }
+
       const notes = context?.notes ?? [];
+      const q = query.toLowerCase();
       const matches = notes.filter((n) => {
         const hay = `${n.title} ${n.content ?? ""} ${n.preview ?? ""}`.toLowerCase();
-        return query.split(/\s+/).some((term) => term && hay.includes(term));
+        return q.split(/\s+/).some((term) => term && hay.includes(term));
       });
       return JSON.stringify({
         results: matches.map((n) => ({
@@ -570,6 +593,7 @@ class OpenAiService implements AiService {
           title: n.title,
           preview: (n.preview ?? n.content ?? "").slice(0, 200),
         })),
+        source: "context_only",
       });
     }
 
@@ -578,6 +602,7 @@ class OpenAiService implements AiService {
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const { context, totalNotes, totalTasks } = trimAiContext(request.context);
+    const userId = request.userId;
     const messages: ChatCompletionMessageParam[] = [
       {
         role: "system",
@@ -629,7 +654,7 @@ class OpenAiService implements AiService {
           messages.push({
             role: "tool",
             tool_call_id: call.id,
-            content: this.runTool(call.function.name, parsedArgs, context),
+            content: await this.runTool(call.function.name, parsedArgs, context, userId),
           });
         }
 
