@@ -103,13 +103,6 @@ export function Dashboard() {
       icon: <CheckSquare className="w-5 h-5 text-emerald-400" />,
     },
     {
-      id: 2,
-      value: String(notes.length),
-      label: "notes",
-      href: notesPath(),
-      icon: <FileText className="w-5 h-5 text-indigo-400" />,
-    },
-    {
       id: 3,
       value: String(notes.filter((n) => n.pinned).length),
       label: "pinned",
@@ -281,7 +274,7 @@ export function Dashboard() {
             </section>
 
             {/* Stats Row */}
-            <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {stats.map((stat) => (
                 <Link
                   key={stat.id}
