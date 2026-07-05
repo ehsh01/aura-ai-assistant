@@ -1,64 +1,49 @@
 #!/usr/bin/env python3
-"""Generate PNG PWA icons for Recall (run from artifacts/recall-app)."""
+"""Generate PNG PWA icons for Recall from public/recall-icon-source.png."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 PUBLIC = ROOT / "public"
+SOURCE = PUBLIC / "recall-icon-source.png"
 
-PRIMARY = (99, 102, 241, 255)
-WHITE = (255, 255, 255, 255)
+THEME_BG = (6, 6, 16, 255)  # #060610 — matches PWA manifest background
 
 
-def draw_icon(size: int) -> Image.Image:
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    inset = max(1, size // 16)
-    radius = max(8, size // 5)
-    draw.rounded_rectangle(
-        [inset, inset, size - inset, size - inset],
-        radius=radius,
-        fill=PRIMARY,
-    )
-
-    cx = cy = size // 2
-    arm = size // 5
-    half = max(2, size // 28)
-    star = [
-        (cx, cy - arm * 2),
-        (cx + half, cy - half),
-        (cx + arm * 2, cy),
-        (cx + half, cy + half),
-        (cx, cy + arm * 2),
-        (cx - half, cy + half),
-        (cx - arm * 2, cy),
-        (cx - half, cy - half),
-    ]
-    draw.polygon(star, fill=WHITE)
-
-    dot_r = max(3, size // 18)
-    dot_cx = cx - arm
-    dot_cy = cy + arm // 2
-    draw.ellipse(
-        [dot_cx - dot_r, dot_cy - dot_r, dot_cx + dot_r, dot_cy + dot_r],
-        fill=WHITE,
-    )
-    return img
+def fit_icon(source: Image.Image, size: int, *, maskable: bool = False) -> Image.Image:
+    """Resize source art into a square PNG, with safe-zone padding for maskable icons."""
+    canvas = Image.new("RGBA", (size, size), THEME_BG if maskable else (0, 0, 0, 0))
+    max_side = int(size * 0.82) if maskable else size
+    fitted = source.copy()
+    fitted.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+    x = (size - fitted.width) // 2
+    y = (size - fitted.height) // 2
+    canvas.paste(fitted, (x, y), fitted)
+    return canvas
 
 
 def main() -> None:
+    if not SOURCE.is_file():
+        raise SystemExit(f"Missing source icon: {SOURCE}")
+
     PUBLIC.mkdir(parents=True, exist_ok=True)
-    outputs = {
-        180: PUBLIC / "apple-touch-icon.png",
-        192: PUBLIC / "pwa-192x192.png",
-        512: PUBLIC / "pwa-512x512.png",
-    }
-    for size, path in outputs.items():
-        draw_icon(size).save(path, format="PNG")
+    source = Image.open(SOURCE).convert("RGBA")
+
+    outputs: list[tuple[int, Path, bool]] = [
+        (16, PUBLIC / "favicon-16.png", False),
+        (32, PUBLIC / "favicon-32.png", False),
+        (180, PUBLIC / "apple-touch-icon.png", False),
+        (192, PUBLIC / "pwa-192x192.png", False),
+        (512, PUBLIC / "pwa-512x512.png", False),
+        (512, PUBLIC / "pwa-512x512-maskable.png", True),
+    ]
+
+    for size, path, maskable in outputs:
+        fit_icon(source, size, maskable=maskable).save(path, format="PNG")
         print(f"wrote {path.relative_to(ROOT)}")
 
 

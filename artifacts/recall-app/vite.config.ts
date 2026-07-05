@@ -35,11 +35,15 @@ export default defineConfig({
     VitePWA({
       registerType: "autoUpdate",
       includeAssets: [
+        "favicon-16.png",
+        "favicon-32.png",
         "favicon.svg",
         "pwa-icon.svg",
+        "recall-icon-source.png",
         "apple-touch-icon.png",
         "pwa-192x192.png",
         "pwa-512x512.png",
+        "pwa-512x512-maskable.png",
       ],
       manifest: {
         name: "Recall — AI Personal Assistant",
@@ -66,7 +70,7 @@ export default defineConfig({
             purpose: "any",
           },
           {
-            src: `${basePath}pwa-512x512.png`,
+            src: `${basePath}pwa-512x512-maskable.png`,
             sizes: "512x512",
             type: "image/png",
             purpose: "maskable",
