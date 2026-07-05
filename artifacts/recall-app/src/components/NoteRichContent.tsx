@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   attachmentUrl,
   fetchAttachmentBlob,
@@ -11,6 +11,50 @@ type Props = {
   content: string;
   contentFormat?: "plain" | "html";
 };
+
+const BLOCKED_TAGS = new Set([
+  "script",
+  "iframe",
+  "object",
+  "embed",
+  "form",
+  "input",
+  "button",
+  "textarea",
+  "select",
+]);
+
+/** Strip scripts and event handlers; keep Evernote/web-clip layout (styles, tables, etc.). */
+function sanitizeNoteHtml(html: string): string {
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
+  const root = doc.body.firstElementChild;
+  if (!root) return "";
+
+  const walk = (el: Element) => {
+    for (const child of [...el.children]) {
+      const tag = child.tagName.toLowerCase();
+      if (BLOCKED_TAGS.has(tag)) {
+        child.remove();
+        continue;
+      }
+      for (const attr of [...child.attributes]) {
+        const name = attr.name.toLowerCase();
+        if (name.startsWith("on")) {
+          child.removeAttribute(attr.name);
+        } else if (
+          (name === "href" || name === "src") &&
+          attr.value.trim().toLowerCase().startsWith("javascript:")
+        ) {
+          child.removeAttribute(attr.name);
+        }
+      }
+      walk(child);
+    }
+  };
+
+  walk(root);
+  return root.innerHTML;
+}
 
 function useAttachmentBlob(attachmentId: string): string | null {
   const [src, setSrc] = useState<string | null>(null);
@@ -128,12 +172,93 @@ function AttachmentBlock({ att }: { att: NoteAttachmentMeta }) {
   );
 }
 
+function HtmlNoteBody({
+  content,
+  attachmentMap,
+}: {
+  content: string;
+  attachmentMap: Map<string, NoteAttachmentMeta>;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const sanitized = useMemo(() => sanitizeNoteHtml(content), [content]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const revoked: string[] = [];
+    let cancelled = false;
+
+    const hydrate = async () => {
+      const images = container.querySelectorAll("img[data-recall-attachment]");
+      for (const img of images) {
+        const id = img.getAttribute("data-recall-attachment");
+        if (!id) continue;
+        const blob = await fetchAttachmentBlob(id);
+        if (cancelled || !blob) continue;
+        const url = URL.createObjectURL(blob);
+        revoked.push(url);
+        img.setAttribute("src", url);
+        img.classList.add("recall-note-image");
+        if (!img.getAttribute("alt")) {
+          img.setAttribute("alt", attachmentMap.get(id)?.fileName ?? "Note image");
+        }
+      }
+
+      const links = container.querySelectorAll("a[data-recall-attachment]");
+      for (const link of links) {
+        const id = link.getAttribute("data-recall-attachment");
+        if (!id) continue;
+        const meta = attachmentMap.get(id);
+        if (meta?.mimeType !== "application/pdf") continue;
+
+        const wrapper = document.createElement("div");
+        wrapper.className = "recall-pdf-embed my-4";
+
+        const label = document.createElement("p");
+        label.className = "text-xs text-white/50 mb-2";
+        label.textContent = meta.fileName;
+        wrapper.appendChild(label);
+
+        const blob = await fetchAttachmentBlob(id);
+        if (cancelled || !blob) continue;
+        const url = URL.createObjectURL(blob);
+        revoked.push(url);
+
+        const iframe = document.createElement("iframe");
+        iframe.src = url;
+        iframe.title = meta.fileName;
+        iframe.className =
+          "w-full h-[min(70vh,720px)] rounded-lg border border-white/10 bg-white";
+        wrapper.appendChild(iframe);
+
+        link.replaceWith(wrapper);
+      }
+    };
+
+    void hydrate();
+
+    return () => {
+      cancelled = true;
+      for (const url of revoked) URL.revokeObjectURL(url);
+    };
+  }, [sanitized, attachmentMap]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="note-rich-content-evernote text-base text-white/80 leading-relaxed"
+      dangerouslySetInnerHTML={{ __html: sanitized }}
+    />
+  );
+}
+
 export function NoteRichContent({ noteId, content, contentFormat }: Props) {
   const [attachments, setAttachments] = useState<NoteAttachmentMeta[]>([]);
   const isHtml =
     contentFormat === "html" ||
     content.includes("data-recall-attachment") ||
-    /<(div|ul|ol|li|br|p|a|table|h[1-6])\b/i.test(content);
+    /<(div|ul|ol|li|br|p|a|table|h[1-6]|span|td|tr|th|tbody|thead)\b/i.test(content);
 
   useEffect(() => {
     void fetchNoteAttachments(noteId).then(setAttachments);
@@ -154,11 +279,11 @@ export function NoteRichContent({ noteId, content, contentFormat }: Props) {
         <div className="whitespace-pre-wrap text-base text-white/80 leading-relaxed">
           {content}
         </div>
-        {unusedAttachments.length > 0 && (
+        {attachments.length > 0 && (
           <div className="mt-6 pt-4 border-t border-white/10">
             <h4 className="text-sm font-semibold text-white/70 mb-3">Attachments</h4>
             <div className="space-y-2">
-              {unusedAttachments.map((att) => (
+              {attachments.map((att) => (
                 <AttachmentBlock key={att.id} att={att} />
               ))}
             </div>
@@ -168,84 +293,9 @@ export function NoteRichContent({ noteId, content, contentFormat }: Props) {
     );
   }
 
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(`<div>${content}</div>`, "text/html");
-  const root = doc.body.firstElementChild;
-  if (!root) {
-    return <div className="text-white/80 whitespace-pre-wrap">{content}</div>;
-  }
-
-  const renderNode = (node: ChildNode, key: string): React.ReactNode => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      return node.textContent;
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE) return null;
-    const el = node as HTMLElement;
-    const attId = el.getAttribute("data-recall-attachment");
-
-    if (attId && el.tagName === "IMG") {
-      const meta = attachmentMap.get(attId);
-      return <AuthenticatedImage key={key} attachmentId={attId} alt={meta?.fileName ?? "Image"} />;
-    }
-
-    if (attId && el.tagName === "A") {
-      const meta = attachmentMap.get(attId);
-      if (meta?.mimeType === "application/pdf") {
-        return <EmbeddedPdf key={key} attachmentId={attId} fileName={meta.fileName} />;
-      }
-      return (
-        <AttachmentLink
-          key={key}
-          attachmentId={attId}
-          label={el.textContent?.trim() || meta?.fileName || "Attachment"}
-          meta={meta}
-        />
-      );
-    }
-
-    const tag = el.tagName.toLowerCase();
-    const children = Array.from(el.childNodes).map((child, i) =>
-      renderNode(child, `${key}-${i}`),
-    );
-
-    if (tag === "h4") {
-      return (
-        <h4 key={key} className="text-sm font-semibold text-white/70 mt-4 mb-2">
-          {children}
-        </h4>
-      );
-    }
-    if (tag === "ul") {
-      return (
-        <ul key={key} className="list-disc pl-5 space-y-1 text-sm text-white/75">
-          {children}
-        </ul>
-      );
-    }
-    if (tag === "li") {
-      return <li key={key}>{children}</li>;
-    }
-    if (tag === "div" && el.classList.contains("recall-attachments")) {
-      return (
-        <div key={key} className="mt-6 pt-4 border-t border-white/10">
-          {children}
-        </div>
-      );
-    }
-    if (tag === "br") {
-      return <br key={key} />;
-    }
-
-    return (
-      <div key={key} className="my-1">
-        {children}
-      </div>
-    );
-  };
-
   return (
-    <div className="note-rich-content text-base text-white/80 leading-relaxed space-y-1">
-      {Array.from(root.childNodes).map((node, i) => renderNode(node, `n-${i}`))}
+    <div className="note-rich-content">
+      <HtmlNoteBody content={content} attachmentMap={attachmentMap} />
 
       {unusedAttachments.length > 0 && (
         <div className="mt-6 pt-4 border-t border-white/10">

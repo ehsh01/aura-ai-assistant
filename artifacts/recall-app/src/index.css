@@ -281,6 +281,13 @@
   .recall-glass-card { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); backdrop-filter: blur(10px); transition: all 0.2s ease-in-out; }
   .recall-glass-card:hover { background: rgba(255,255,255,0.04); border-color: rgba(99,102,241,0.3); transform: translateY(-2px); box-shadow: 0 8px 24px -4px rgba(0,0,0,0.5), 0 0 12px rgba(99,102,241,0.15); }
   .recall-note-active { background: rgba(99,102,241,0.08) !important; border-color: rgba(99,102,241,0.4) !important; box-shadow: 0 0 15px rgba(99,102,241,0.1); }
+  /* Evernote web clips (Amazon, etc.) — preserve imported layout on mobile/desktop */
+  .note-rich-content-evernote { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; word-wrap: break-word; }
+  .note-rich-content-evernote img,
+  .note-rich-content-evernote .recall-note-image { max-width: 100% !important; height: auto !important; display: block; margin: 0.75rem auto; border-radius: 0.5rem; }
+  .note-rich-content-evernote table { max-width: 100%; border-collapse: collapse; }
+  .note-rich-content-evernote a { color: rgb(129, 140, 248); text-decoration: underline; }
+  .note-rich-content-evernote a:hover { color: rgb(165, 180, 252); }
   .ai-toolbar-wrap { position: relative; background: rgba(15,15,20,0.85); backdrop-filter: blur(16px); border-radius: 100px; z-index: 10; }
   .ai-toolbar-wrap::before { content: ""; position: absolute; inset: -1px; border-radius: 100px; padding: 1px; background: linear-gradient(135deg,rgba(99,102,241,0.5),rgba(139,92,246,0.2),rgba(255,255,255,0.05)); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; }
   .prose-recall h1 { font-size: 2.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 1rem; color: rgba(255,255,255,0.95); }
