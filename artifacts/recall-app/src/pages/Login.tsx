@@ -35,8 +35,8 @@ export function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0a0a0f] text-white p-6">
-      <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-8 shadow-2xl">
+    <div className="min-h-[100dvh] flex items-center justify-center bg-[#0a0a0f] text-white p-4 sm:p-6 recall-safe-top recall-safe-bottom">
+      <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-6 sm:p-8 shadow-2xl">
         <div className="flex items-center gap-3 mb-8">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
             <Sparkles className="w-5 h-5 text-white" />

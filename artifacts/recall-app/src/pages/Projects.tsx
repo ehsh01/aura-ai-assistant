@@ -38,7 +38,7 @@ export function Projects() {
 
   return (
     <AppLayout>
-      <div className="h-full overflow-y-auto bg-[#0a0a0f] p-8 text-white">
+      <div className="h-full overflow-y-auto bg-[#0a0a0f] p-4 md:p-8 text-white">
         <div className="mx-auto max-w-6xl">
           <p className="text-sm uppercase tracking-[0.3em] text-indigo-300/70">Command center</p>
           <h1 className="mt-2 text-3xl font-semibold">Projects</h1>

@@ -159,19 +159,19 @@ export function CaptureModal({ open, onClose }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="w-full max-w-2xl rounded-3xl border border-white/10 bg-[#101018] shadow-2xl">
-        <div className="flex items-center justify-between p-5 border-b border-white/10">
-          <div>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4">
+      <div className="w-full sm:max-w-2xl max-h-[92dvh] sm:max-h-[90vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl border border-white/10 bg-[#101018] shadow-2xl recall-safe-bottom">
+        <div className="flex items-start justify-between gap-3 p-4 sm:p-5 border-b border-white/10 sticky top-0 bg-[#101018] z-10">
+          <div className="min-w-0">
             <h2 className="text-lg font-semibold text-white">Quick Capture</h2>
             <p className="text-sm text-white/45">Dump anything. Recall can save it now or route it to the AI Inbox.</p>
           </div>
-          <button type="button" onClick={close} className="text-white/50 hover:text-white">
+          <button type="button" onClick={close} className="text-white/50 hover:text-white shrink-0 px-2 py-1">
             Close
           </button>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="p-4 sm:p-5 space-y-4">
           <div className="flex items-start gap-2">
             <textarea
               value={text}
@@ -258,21 +258,21 @@ export function CaptureModal({ open, onClose }: Props) {
           )}
         </div>
 
-        <div className="flex flex-wrap justify-end gap-2 p-5 border-t border-white/10">
-          <button type="button" onClick={() => void createWorkNote()} className="rounded-xl bg-white/10 px-4 py-2 text-sm text-white hover:bg-white/15">
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap sm:justify-end gap-2 p-4 sm:p-5 border-t border-white/10 sticky bottom-0 bg-[#101018]">
+          <button type="button" onClick={() => void createWorkNote()} className="rounded-xl bg-white/10 px-3 py-2.5 text-sm text-white hover:bg-white/15 col-span-2 sm:col-span-1">
             Create Work Note
           </button>
-          <button type="button" onClick={saveAsNote} className="rounded-xl bg-white/10 px-4 py-2 text-sm text-white hover:bg-white/15">
+          <button type="button" onClick={saveAsNote} className="rounded-xl bg-white/10 px-3 py-2.5 text-sm text-white hover:bg-white/15">
             Save as note
           </button>
-          <button type="button" onClick={saveAsTask} className="rounded-xl bg-white/10 px-4 py-2 text-sm text-white hover:bg-white/15">
+          <button type="button" onClick={saveAsTask} className="rounded-xl bg-white/10 px-3 py-2.5 text-sm text-white hover:bg-white/15">
             Save as task
           </button>
           <button
             type="button"
             onClick={() => void sendToInbox()}
             disabled={saving}
-            className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
+            className="rounded-xl bg-indigo-500 px-3 py-2.5 text-sm font-medium text-white hover:bg-indigo-400 disabled:opacity-50 col-span-2 sm:col-span-1"
           >
             Send to AI Inbox
           </button>

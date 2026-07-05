@@ -205,7 +205,20 @@
     @apply font-sans antialiased bg-background text-foreground;
   }
 
-  html, body, #root { height: 100%; background-color: #060610; }
+  html, body, #root {
+    height: 100%;
+    background-color: #060610;
+  }
+
+  /* iOS PWA / notch safe areas */
+  @supports (padding: env(safe-area-inset-top)) {
+    .recall-safe-top {
+      padding-top: env(safe-area-inset-top);
+    }
+    .recall-safe-bottom {
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+  }
 
   @keyframes drift {
     0% { transform: translate(0, 0) scale(1); }

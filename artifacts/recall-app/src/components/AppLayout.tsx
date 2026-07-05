@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { BookOpen, Inbox, Library, Plus, FolderKanban } from "lucide-react";
 import { CaptureModal } from "@/components/CaptureModal";
+import { MobileBottomNav, MobileMoreSheet } from "@/components/MobileShell";
 import { useAuth } from "@/context/AuthContext";
 import { useRecallData } from "@/context/RecallDataContext";
 import { notesPath, readSearchParam } from "@/lib/recall-nav";
@@ -142,6 +143,7 @@ function SidebarNavButton({
 export function AppLayout({ children }: AppLayoutProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [captureOpen, setCaptureOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [sidebarQuery, setSidebarQuery] = useState("");
   const sidebarSearchRef = useRef<HTMLInputElement>(null);
   const [location, navigate] = useLocation();
@@ -234,10 +236,25 @@ export function AppLayout({ children }: AppLayoutProps) {
     });
   }
 
+  const moreActive =
+    location === "/notebooks" ||
+    location === "/tasks" ||
+    location === "/canvas" ||
+    location === "/projects" ||
+    location.startsWith("/projects/");
+
+  const mobileNotebookLinks = isReady
+    ? notebooks.slice(0, 12).map((notebook) => ({
+        href: notesPath({ notebook: notebook.id }),
+        label: notebook.name,
+        count: notebook.noteCount,
+      }))
+    : [];
+
   return (
-    <div className="flex h-screen bg-[#0a0a0f] text-white overflow-hidden">
+    <div className="flex h-[100dvh] bg-[#0a0a0f] text-white overflow-hidden recall-safe-top">
       <aside
-        className="flex flex-col border-r border-white/[0.06] transition-all duration-300 ease-in-out flex-shrink-0"
+        className="hidden md:flex flex-col border-r border-white/[0.06] transition-all duration-300 ease-in-out flex-shrink-0"
         style={{ width: collapsed ? 64 : 220, background: "rgba(255,255,255,0.02)" }}
       >
         <div className="flex items-center gap-3 px-4 py-5 border-b border-white/[0.06]">
@@ -279,7 +296,7 @@ export function AppLayout({ children }: AppLayoutProps) {
                 placeholder="Search notes…"
                 className="text-xs text-white/70 flex-1 bg-transparent border-none outline-none placeholder:text-white/30 min-w-0"
               />
-              <kbd className="text-[10px] text-white/20 border border-white/10 rounded px-1 flex-shrink-0">⌘K</kbd>
+              <kbd className="hidden lg:inline text-[10px] text-white/20 border border-white/10 rounded px-1 flex-shrink-0">⌘K</kbd>
             </form>
           </div>
         )}
@@ -400,17 +417,34 @@ export function AppLayout({ children }: AppLayoutProps) {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-hidden flex flex-col min-w-0">
+      <main className="flex-1 overflow-hidden flex flex-col min-w-0 pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:pb-0">
         {children}
       </main>
       <button
         type="button"
         onClick={() => setCaptureOpen(true)}
-        className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-indigo-500 px-5 py-3 text-sm font-semibold text-white shadow-2xl shadow-indigo-500/25 hover:bg-indigo-400"
+        className="hidden md:flex fixed bottom-6 right-6 z-40 items-center gap-2 rounded-full bg-indigo-500 px-5 py-3 text-sm font-semibold text-white shadow-2xl shadow-indigo-500/25 hover:bg-indigo-400"
       >
         <Plus size={18} />
         Capture
       </button>
+      <MobileBottomNav
+        location={location}
+        onCapture={() => setCaptureOpen(true)}
+        onOpenMore={() => setMoreOpen(true)}
+        moreActive={moreActive}
+      />
+      <MobileMoreSheet
+        open={moreOpen}
+        onOpenChange={setMoreOpen}
+        location={location}
+        userName={user?.name}
+        userEmail={user?.email}
+        userInitial={initial}
+        onCapture={() => setCaptureOpen(true)}
+        onLogout={logout}
+        notebookLinks={mobileNotebookLinks}
+      />
       <CaptureModal open={captureOpen} onClose={() => setCaptureOpen(false)} />
     </div>
   );

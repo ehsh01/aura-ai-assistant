@@ -143,22 +143,21 @@ export function Dashboard() {
         <div className="orb-3 nebula-orb"></div>
         <div className="orb-4 nebula-orb"></div>
 
-        {/* Top Header */}
-        <header className="flex-none px-8 py-6 flex items-center justify-between z-20 relative">
-          <div className="flex items-center gap-4">
-            {/* Glowing Logo */}
+        {/* Top Header — stacked on phone, row on desktop */}
+        <header className="flex-none px-4 py-4 md:px-8 md:py-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 z-20 relative">
+          <div className="hidden md:flex items-center gap-4">
             <div className="w-10 h-10 rounded-2xl nebula-glass flex items-center justify-center shadow-[0_0_20px_rgba(124,58,237,0.4)]">
               <Sparkles className="w-6 h-6 text-indigo-300" />
             </div>
           </div>
 
-          <div className="flex-1 max-w-xl mx-8">
+          <div className="flex-1 w-full md:max-w-xl md:mx-8">
             <form
               onSubmit={(e) => {
                 e.preventDefault();
                 void handleAskRecall();
               }}
-              className={`nebula-glass rounded-full px-5 py-3 flex items-center transition-all duration-300 nebula-search-container ${searchFocused ? "bg-white/[0.08]" : ""}`}
+              className={`nebula-glass rounded-full px-4 md:px-5 py-3 flex items-center transition-all duration-300 nebula-search-container ${searchFocused ? "bg-white/[0.08]" : ""}`}
             >
               {aiChat.isPending ? (
                 <Loader2 className="w-5 h-5 mr-3 text-indigo-300 animate-spin flex-shrink-0" />
@@ -171,14 +170,20 @@ export function Dashboard() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 disabled={aiChat.isPending}
-                className="bg-transparent border-none outline-none text-sm text-zinc-200 placeholder:text-zinc-500 w-full font-medium"
+                className="bg-transparent border-none outline-none text-sm text-zinc-200 placeholder:text-zinc-500 w-full font-medium min-w-0"
                 onFocus={() => setSearchFocused(true)}
                 onBlur={() => setSearchFocused(false)}
+              />
+              <MicButton
+                onTranscript={(text) => void handleAskRecall(text)}
+                className="md:hidden ml-2 flex-shrink-0 w-10 h-10 rounded-full bg-indigo-500/20 text-indigo-200 flex items-center justify-center border border-indigo-400/30"
+                iconSize={18}
+                title="Ask Recall with your voice"
               />
             </form>
           </div>
 
-          <div className="flex items-center gap-6">
+          <div className="hidden md:flex items-center gap-6">
             <MicButton
               onTranscript={(text) => void handleAskRecall(text)}
               className="relative w-14 h-14 rounded-full bg-indigo-500/20 text-indigo-200 flex items-center justify-center border border-indigo-400/30 hover:bg-indigo-500/30 transition-colors group cursor-pointer nebula-float mic-halo mic-pulse z-30"
@@ -198,7 +203,7 @@ export function Dashboard() {
         </header>
 
         {(aiChat.isPending || aiReply) && (
-          <div className="flex-none px-8 pb-2 z-20 relative">
+          <div className="flex-none px-4 pb-2 md:px-8 z-20 relative">
             <div className="max-w-3xl mx-auto nebula-glass rounded-2xl px-5 py-4 border border-indigo-500/20">
               <div className="flex items-start gap-3">
                 <Sparkles className="w-5 h-5 text-indigo-400 flex-shrink-0 mt-0.5" />
@@ -214,13 +219,13 @@ export function Dashboard() {
         )}
 
         {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto px-8 pb-12 pt-4 z-10 relative dashboard-hide-scrollbar">
-          <div className="max-w-6xl mx-auto space-y-12">
+        <div className="flex-1 overflow-y-auto px-4 pb-8 pt-2 md:px-8 md:pb-12 md:pt-4 z-10 relative dashboard-hide-scrollbar">
+          <div className="max-w-6xl mx-auto space-y-8 md:space-y-12">
             
             {/* Greeting */}
             <section className="flex flex-col items-center text-center space-y-4">
-              <h1 className="text-5xl md:text-6xl font-semibold tracking-tight text-gradient-nebula mb-2">
-                Good morning, {userName} <span className="text-indigo-400 text-4xl inline-block ml-2 animate-pulse">✦</span>
+              <h1 className="text-3xl sm:text-4xl md:text-6xl font-semibold tracking-tight text-gradient-nebula mb-2">
+                Good morning, {userName} <span className="text-indigo-400 text-2xl sm:text-3xl md:text-4xl inline-block ml-2 animate-pulse">✦</span>
               </h1>
               <div className="flex items-center gap-2 text-indigo-200/60 font-light tracking-wide text-sm">
                 <Calendar className="w-4 h-4" />

@@ -25,7 +25,7 @@ export function Notebooks() {
   return (
     <AppLayout>
       <div className="flex h-full flex-col bg-[#0a0a0f] text-white">
-        <div className="flex items-center justify-between px-8 py-6 border-b border-white/[0.06]">
+        <div className="flex items-center justify-between px-4 py-4 md:px-8 md:py-6 border-b border-white/[0.06]">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight text-white/90">Notebooks</h1>
             <p className="text-sm text-white/40 mt-1">
@@ -59,7 +59,7 @@ export function Notebooks() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto recall-scrollbar p-8">
+        <div className="flex-1 overflow-y-auto recall-scrollbar p-4 md:p-8">
           {!isReady && (
             <p className="text-sm text-white/40">Loading your notebooks…</p>
           )}

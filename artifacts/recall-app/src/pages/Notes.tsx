@@ -19,7 +19,8 @@ import {
 import { readSearchParam, notesPath } from "@/lib/recall-nav";
 import { importEvernoteFiles } from "@/lib/evernote-import-ui";
 import { NoteRichContent } from "@/components/NoteRichContent";
-import { Download, Loader2, BookOpen, ChevronDown, Sparkles } from "lucide-react";
+import { Download, Loader2, BookOpen, ChevronDown, Sparkles, ChevronLeft } from "lucide-react";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 function notebookIdFromFilter(filter: NotebookFilter): string | null {
   if (filter === "all" || filter === "unfiled") return null;
@@ -47,6 +48,7 @@ export function Notes() {
   const summarizeNote = useSummarizeNote();
   const aiChat = useAiChat();
   const semanticSearch = useSemanticSearch();
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     setEditingContent(false);
@@ -224,11 +226,21 @@ export function Notes() {
 
   const pinnedNotes = filteredNotes.filter((n) => n.pinned);
   const recentNotes = filteredNotes.filter((n) => !n.pinned);
+  const showListOnMobile = !isMobile || !activeNoteId;
+  const showEditorOnMobile = !isMobile || !!activeNoteId;
 
   return (
     <AppLayout>
       <div className="flex h-full w-full bg-[#0a0a0f] text-white">
-        <div className="w-[300px] border-r border-white/[0.06] flex flex-col flex-shrink-0 bg-[#0a0a0f]/50">
+        <div
+          className={
+            showListOnMobile
+              ? isMobile
+                ? "flex w-full flex-col flex-shrink-0 bg-[#0a0a0f]/50"
+                : "w-[300px] border-r border-white/[0.06] flex flex-col flex-shrink-0 bg-[#0a0a0f]/50"
+              : "hidden"
+          }
+        >
           <div className="p-4 border-b border-white/[0.06] space-y-4">
             <div className="flex items-center justify-between">
               <div>
@@ -395,17 +407,30 @@ export function Notes() {
           </div>
         </div>
 
-        <div className="flex-1 flex flex-col relative bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900/10 via-[#0a0a0f] to-[#0a0a0f]">
+        <div
+          className={`flex-1 flex flex-col relative bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900/10 via-[#0a0a0f] to-[#0a0a0f] ${showEditorOnMobile ? "" : "hidden md:flex"}`}
+        >
           {!activeNote ? (
-            <div className="flex-1 flex items-center justify-center text-white/40 text-sm">
+            <div className="flex-1 hidden md:flex items-center justify-center text-white/40 text-sm">
               Select a note or create a new one to get started.
             </div>
           ) : (
             <>
-              <div className="h-14 flex items-center justify-between px-6 border-b border-white/[0.02]">
-                <div className="flex items-center gap-4 text-sm text-white/40">
-                  <span>Last edited {activeNote.date}</span>
-                </div>
+              <div className="h-14 flex items-center justify-between px-4 md:px-6 border-b border-white/[0.02] gap-3">
+                {isMobile ? (
+                  <button
+                    type="button"
+                    onClick={() => setActiveNoteId(null)}
+                    className="inline-flex items-center gap-1 text-sm font-medium text-indigo-300 shrink-0"
+                  >
+                    <ChevronLeft size={18} />
+                    Notes
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-4 text-sm text-white/40">
+                    <span>Last edited {activeNote.date}</span>
+                  </div>
+                )}
                 <NoteNotebookPicker
                   notebooks={notebooks}
                   value={activeNote.notebookId ?? null}
@@ -413,7 +438,7 @@ export function Notes() {
                 />
               </div>
 
-              <div className="flex-1 overflow-y-auto recall-scrollbar p-10 lg:p-16 max-w-4xl mx-auto w-full">
+              <div className="flex-1 overflow-y-auto recall-scrollbar p-4 sm:p-8 md:p-10 lg:p-16 max-w-4xl mx-auto w-full">
                 <input
                   type="text"
                   value={activeNote.title}

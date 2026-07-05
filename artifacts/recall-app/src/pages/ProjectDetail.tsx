@@ -23,7 +23,7 @@ export function ProjectDetail() {
 
   return (
     <AppLayout>
-      <div className="h-full overflow-y-auto bg-[#0a0a0f] p-8 text-white">
+      <div className="h-full overflow-y-auto bg-[#0a0a0f] p-4 md:p-8 text-white">
         <div className="mx-auto max-w-6xl">
           <Link href="/projects" className="text-sm text-indigo-300 no-underline">
             Back to projects

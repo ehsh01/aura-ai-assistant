@@ -187,9 +187,9 @@ export function Tasks() {
       <div className="flex h-full w-full">
         
         {/* LEFT PANEL: Tasks */}
-        <div className="flex-1 flex flex-col relative min-w-[400px]">
+        <div className="flex-1 flex flex-col relative min-w-0 lg:min-w-[400px]">
           {/* Header */}
-          <header className="pt-10 pb-6 px-10 flex items-end justify-between border-b border-white/[0.04]">
+          <header className="pt-6 pb-4 px-4 md:pt-10 md:pb-6 md:px-10 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 border-b border-white/[0.04]">
             <div>
               <div className="flex items-center gap-3 mb-2">
                 <h1 className="text-3xl font-semibold tracking-tight">Today</h1>
@@ -213,7 +213,7 @@ export function Tasks() {
           </header>
 
           {/* Filters */}
-          <div className="px-10 py-3 flex gap-6 text-sm font-medium border-b border-white/[0.04]">
+          <div className="px-4 md:px-10 py-3 flex gap-4 md:gap-6 text-sm font-medium border-b border-white/[0.04] overflow-x-auto">
             <button className="text-white border-b-2 border-indigo-500 pb-3 -mb-[13px]">Today</button>
             <button className="text-white/40 hover:text-white/70 transition-colors pb-3">Upcoming</button>
             <button className="text-white/40 hover:text-white/70 transition-colors pb-3">All</button>
@@ -223,7 +223,7 @@ export function Tasks() {
           </div>
 
           {/* Task List */}
-          <div className="flex-1 overflow-y-auto task-scroll px-8 pb-32 pt-6">
+          <div className="flex-1 overflow-y-auto task-scroll px-4 md:px-8 pb-28 md:pb-32 pt-6">
             
             <div className="mb-8">
               <h3 className="text-xs font-bold uppercase tracking-wider text-white/30 mb-3 px-3">To do</h3>
@@ -289,15 +289,15 @@ export function Tasks() {
 
           <MicButton
             onTranscript={(text) => void sendMessage(text)}
-            className="absolute bottom-6 right-8 w-14 h-14 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white animate-mic-pulse hover:scale-105 transition-transform z-10"
+            className="hidden md:flex absolute bottom-6 right-8 w-14 h-14 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-500 items-center justify-center text-white animate-mic-pulse hover:scale-105 transition-transform z-10"
             iconSize={24}
             title="Talk to Recall AI"
           />
         </div>
 
 
-        {/* RIGHT PANEL: AI Chat Assistant */}
-        <div className="w-[45%] max-w-[600px] border-l border-white/[0.06] bg-[#0c0c12]/80 backdrop-blur-3xl flex flex-col relative z-20 shadow-[-20px_0_40px_rgba(0,0,0,0.2)]">
+        {/* RIGHT PANEL: AI Chat Assistant — desktop only */}
+        <div className="hidden lg:flex w-[45%] max-w-[600px] border-l border-white/[0.06] bg-[#0c0c12]/80 backdrop-blur-3xl flex-col relative z-20 shadow-[-20px_0_40px_rgba(0,0,0,0.2)]">
           
           {/* Header */}
           <header className="px-6 py-5 flex items-center justify-between border-b border-white/[0.04]">
