@@ -259,7 +259,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         style={{ width: collapsed ? 64 : 220, background: "rgba(255,255,255,0.02)" }}
       >
         <div className="flex items-center gap-3 px-4 py-5 border-b border-white/[0.06]">
-          <RecallLogo size={collapsed ? 32 : 32} rounded="xl" />
+          <RecallLogo size={collapsed ? 36 : 44} />
           {!collapsed && (
             <span className="font-semibold text-[15px] tracking-tight text-white/90">Recall</span>
           )}

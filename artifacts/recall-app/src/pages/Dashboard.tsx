@@ -155,12 +155,12 @@ export function Dashboard() {
         {/* Top Header — stacked on phone, row on desktop */}
         <header className="flex-none px-4 py-4 md:px-8 md:py-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 z-20 relative">
           <div className="flex md:hidden items-center gap-2.5">
-            <RecallLogo size={36} rounded="xl" />
+            <RecallLogo size={44} />
             <span className="font-semibold text-lg tracking-tight text-white/90">Recall</span>
           </div>
 
           <div className="hidden md:flex items-center gap-4">
-            <RecallLogo size={40} rounded="xl" className="shadow-[0_0_20px_rgba(99,102,241,0.35)]" />
+            <RecallLogo size={48} className="shadow-[0_0_24px_rgba(99,102,241,0.4)]" />
           </div>
 
           <div className="flex-1 w-full md:max-w-xl md:mx-8">

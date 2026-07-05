@@ -38,7 +38,7 @@ export function Login() {
     <div className="min-h-[100dvh] flex items-center justify-center bg-[#0a0a0f] text-white p-4 sm:p-6 recall-safe-top recall-safe-bottom">
       <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-6 sm:p-8 shadow-2xl">
         <div className="flex items-center gap-3 mb-8">
-          <RecallLogo size={40} rounded="xl" />
+          <RecallLogo size={52} />
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Recall</h1>
             <p className="text-sm text-white/40">Sign in to your assistant</p>
