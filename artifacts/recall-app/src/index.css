@@ -282,7 +282,7 @@
   .recall-glass-card:hover { background: rgba(255,255,255,0.04); border-color: rgba(99,102,241,0.3); transform: translateY(-2px); box-shadow: 0 8px 24px -4px rgba(0,0,0,0.5), 0 0 12px rgba(99,102,241,0.15); }
   .recall-note-active { background: rgba(99,102,241,0.08) !important; border-color: rgba(99,102,241,0.4) !important; box-shadow: 0 0 15px rgba(99,102,241,0.1); }
   /* Evernote web clips (Amazon, etc.) — preserve imported layout on mobile/desktop */
-  .note-rich-content-evernote { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; word-wrap: break-word; }
+  .note-rich-content-evernote { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; word-wrap: break-word; overflow-wrap: anywhere; }
   .note-rich-content-evernote img,
   .note-rich-content-evernote .recall-note-image,
   .note-image-gallery img,

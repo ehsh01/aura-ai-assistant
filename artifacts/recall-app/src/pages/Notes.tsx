@@ -106,10 +106,15 @@ export function Notes() {
       setActiveNoteId(null);
       return;
     }
-    if (!activeNoteId || !notes.some((n) => n.id === activeNoteId)) {
+    if (activeNoteId && !notes.some((n) => n.id === activeNoteId)) {
+      setActiveNoteId(isMobile ? null : notes[0]!.id);
+      return;
+    }
+    // Desktop: default to first note. Mobile: show the list until the user picks one.
+    if (!activeNoteId && !isMobile) {
       setActiveNoteId(notes[0]!.id);
     }
-  }, [notes, activeNoteId]);
+  }, [notes, activeNoteId, isMobile]);
 
   const activeNote = notes.find((n) => n.id === activeNoteId) ?? null;
 
@@ -237,13 +242,13 @@ export function Notes() {
 
   return (
     <AppLayout>
-      <div className="flex h-full w-full bg-[#0a0a0f] text-white">
+      <div className="flex h-full min-h-0 w-full overflow-hidden bg-[#0a0a0f] text-white">
         <div
           className={
             showListOnMobile
               ? isMobile
-                ? "flex w-full flex-col flex-shrink-0 bg-[#0a0a0f]/50"
-                : "w-[300px] border-r border-white/[0.06] flex flex-col flex-shrink-0 bg-[#0a0a0f]/50"
+                ? "flex min-h-0 w-full flex-1 flex-col bg-[#0a0a0f]/50"
+                : "w-[300px] border-r border-white/[0.06] flex min-h-0 flex-col flex-shrink-0 bg-[#0a0a0f]/50"
               : "hidden"
           }
         >
@@ -414,7 +419,7 @@ export function Notes() {
         </div>
 
         <div
-          className={`flex-1 flex flex-col relative bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900/10 via-[#0a0a0f] to-[#0a0a0f] ${showEditorOnMobile ? "" : "hidden md:flex"}`}
+          className={`min-h-0 flex-1 flex flex-col relative overflow-hidden bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900/10 via-[#0a0a0f] to-[#0a0a0f] ${showEditorOnMobile ? "" : "hidden md:flex"}`}
         >
           {!activeNote ? (
             <div className="flex-1 hidden md:flex items-center justify-center text-white/40 text-sm">
@@ -422,7 +427,7 @@ export function Notes() {
             </div>
           ) : (
             <>
-              <div className="h-14 flex items-center justify-between px-4 md:px-6 border-b border-white/[0.02] gap-3">
+              <div className="h-14 shrink-0 flex items-center justify-between px-4 md:px-6 border-b border-white/[0.02] gap-3">
                 {isMobile ? (
                   <button
                     type="button"
@@ -444,13 +449,13 @@ export function Notes() {
                 />
               </div>
 
-              <div className="flex-1 overflow-y-auto recall-scrollbar p-4 sm:p-8 md:p-10 lg:p-16 max-w-4xl mx-auto w-full">
+              <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden recall-scrollbar p-4 sm:p-8 md:p-10 lg:p-16 md:pb-28 max-w-4xl mx-auto w-full">
                 <input
                   type="text"
                   value={activeNote.title}
                   onChange={(e) => updateNote(activeNote.id, { title: e.target.value })}
                   placeholder="Note title"
-                  className="w-full bg-transparent text-3xl font-semibold text-white/95 mb-6 outline-none border-none placeholder:text-white/20"
+                  className="w-full bg-transparent text-2xl sm:text-3xl font-semibold text-white/95 mb-4 sm:mb-6 outline-none border-none placeholder:text-white/20"
                 />
 
                 {noteUsesRichViewer(activeNote) && !editingContent ? (
@@ -492,7 +497,7 @@ export function Notes() {
                   </div>
                 )}
 
-                <div className="my-8 p-5 rounded-xl bg-indigo-900/10 border border-indigo-500/20 relative overflow-hidden">
+                <div className="my-6 sm:my-8 p-4 sm:p-5 rounded-xl bg-indigo-900/10 border border-indigo-500/20 relative overflow-hidden">
                   <div className="absolute top-0 left-0 w-1 h-full bg-indigo-500" />
                   <div className="flex items-start gap-3 pl-2">
                     <div>
@@ -508,8 +513,8 @@ export function Notes() {
                 </div>
               </div>
 
-              <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-[90%] max-w-2xl">
-                <div className="ai-toolbar-wrap flex items-center gap-2 p-2 shadow-2xl shadow-indigo-500/10">
+              <div className="flex-none px-3 sm:px-4 pt-2 pb-2 md:absolute md:bottom-8 md:left-1/2 md:-translate-x-1/2 md:w-[90%] md:max-w-2xl md:px-0 md:pb-0 md:pt-0">
+                <div className="ai-toolbar-wrap flex items-center gap-1.5 sm:gap-2 p-2 shadow-2xl shadow-indigo-500/10">
                   <button
                     type="button"
                     onClick={() => void handleSummarize()}
@@ -580,7 +585,7 @@ function NoteNotebookPicker({
       <select
         value={value ?? ""}
         onChange={(e) => onChange(e.target.value || null)}
-        className="appearance-none pl-8 pr-8 py-1.5 rounded-lg text-sm bg-white/[0.05] border border-white/[0.08] text-white/70 hover:bg-white/[0.08] focus:outline-none focus:border-indigo-500/40 transition-colors cursor-pointer max-w-[220px]"
+        className="appearance-none pl-8 pr-8 py-1.5 rounded-lg text-sm bg-white/[0.05] border border-white/[0.08] text-white/70 hover:bg-white/[0.08] focus:outline-none focus:border-indigo-500/40 transition-colors cursor-pointer max-w-[min(220px,42vw)] truncate"
         title="Assign to notebook"
       >
         <option value="">Unfiled</option>
