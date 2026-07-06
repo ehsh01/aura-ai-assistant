@@ -1,7 +1,8 @@
-import React from "react";
-import { Mic, MicOff } from "lucide-react";
+import React, { useCallback } from "react";
+import { Mic } from "lucide-react";
 import { useSpeechInput } from "@/hooks/use-speech-input";
 import { toast } from "@/hooks/use-toast";
+import { speechErrorMessage, type SpeechInputError } from "@/lib/speech-support";
 
 interface MicButtonProps {
   onTranscript: (text: string) => void;
@@ -10,35 +11,56 @@ interface MicButtonProps {
   title?: string;
 }
 
+function showSpeechError(error: SpeechInputError) {
+  const { title, description } = speechErrorMessage(error);
+  toast({ title, description, variant: "destructive" });
+}
+
 export function MicButton({
   onTranscript,
   className = "",
   iconSize = 16,
   title = "Voice input",
 }: MicButtonProps) {
-  const { listening, supported, toggle } = useSpeechInput(onTranscript);
+  const onError = useCallback((error: SpeechInputError) => {
+    showSpeechError(error);
+  }, []);
 
-  const handleClick = () => {
-    if (!supported) {
-      toast({
-        title: "Voice not available",
-        description: "Use Chrome or Safari — microphone permission is required.",
-        variant: "destructive",
-      });
+  const { listening, supported, blockReason, toggle } = useSpeechInput(onTranscript, { onError });
+
+  const handleClick = async () => {
+    if (blockReason) {
+      showSpeechError(blockReason);
       return;
     }
-    toggle();
+    if (!supported) {
+      showSpeechError("unsupported");
+      return;
+    }
+
+    const result = await toggle();
+    if (!result.ok) {
+      showSpeechError(result.error);
+      return;
+    }
+    if ("stopped" in result) return;
+
+    toast({
+      title: "Listening…",
+      description: "Speak now, then wait a moment for Recall to respond.",
+    });
   };
 
   return (
     <button
       type="button"
-      onClick={handleClick}
+      onClick={() => void handleClick()}
       title={listening ? "Stop listening" : title}
       aria-label={listening ? "Stop listening" : title}
-      className={`${className} ${listening ? "text-red-400 bg-red-500/20" : ""}`}
+      aria-pressed={listening}
+      className={`${className} ${listening ? "text-red-400 bg-red-500/20 animate-pulse" : ""}`}
     >
-      {listening ? <MicOff size={iconSize} /> : <Mic size={iconSize} />}
+      <Mic size={iconSize} className={listening ? "scale-110" : undefined} />
     </button>
   );
 }
