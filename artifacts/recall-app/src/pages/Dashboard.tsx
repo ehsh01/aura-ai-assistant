@@ -7,29 +7,47 @@ import {
   resolveNotesForAi,
   tasksForAiContext,
   type RecallCaptureItem,
+  type RecallNote,
   type RecallProject,
+  type RecallTask,
 } from "@/lib/recall-context";
 import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
-import { Search, Bell, Calendar, CheckCircle2, Circle, MoreHorizontal, MessageSquare, Sparkles, Pin, Plus, CheckSquare, FileText, Clock, Loader2 } from "lucide-react";
+import { Search, Bell, Calendar, CheckCircle2, Circle, MoreHorizontal, MessageSquare, Sparkles, Pin, Plus, CheckSquare, FileText, Clock, Loader2, Inbox, ChevronRight, AlertCircle } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { MicButton } from "@/components/MicButton";
-import { notesPath, tasksPath } from "@/lib/recall-nav";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { toast } from "@/hooks/use-toast";
+import { notesPath, tasksPath, inboxPath } from "@/lib/recall-nav";
 import {
   personalProjects,
+  pressingFeed,
   thingsYouMayForget,
   urgentTasks,
   waitingNotes,
   workFollowUps,
+  type PressingItem,
 } from "@/lib/urgency";
+
+function firstLineTitle(text: string, fallback = "Voice note"): string {
+  const line = text.trim().split(/\r?\n/).find(Boolean) ?? fallback;
+  return line.length > 80 ? `${line.slice(0, 77)}…` : line;
+}
+
+function greetingForHour(hour: number): string {
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
 
 const DEFAULT_DIGEST =
   '"Clarity comes from action, not thought. Here\'s what needs your attention today."';
 
 export function Dashboard() {
   const { user } = useAuth();
-  const { notes, tasks } = useRecallData();
+  const { notes, tasks, addNote } = useRecallData();
   const [, navigate] = useLocation();
+  const isMobile = useIsMobile();
   const userName = firstName(user?.name);
   const [searchFocused, setSearchFocused] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -110,10 +128,19 @@ export function Dashboard() {
     },
   ];
 
+  const handleVoiceNote = (text: string) => {
+    const body = text.trim();
+    if (!body) return;
+    const note = addNote({ title: firstLineTitle(body), content: body, tags: ["voice"] });
+    toast({ title: "Voice note saved", description: "Opening it so you can review or edit." });
+    navigate(notesPath({ noteId: note.id }));
+  };
+
   const pinnedNotes = notes.filter((n) => n.pinned).slice(0, 2);
   const recentNotes = notes.filter((n) => !n.pinned).slice(0, 4);
   const upcomingTasks = tasks.filter((t) => !t.completed).slice(0, 4);
   const urgentToday = urgentTasks(tasks, 5);
+  const pressing = pressingFeed(tasks, notes, captures, 6);
   const waiting = waitingNotes(notes, 5);
   const followUps = workFollowUps(notes, tasks, 5);
   const projectFocus = personalProjects(projects, 5);
@@ -134,6 +161,32 @@ export function Dashboard() {
   };
 
   const currentDate = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
+  if (isMobile) {
+    return (
+      <AppLayout>
+        <MobileHome
+          greeting={greetingForHour(new Date().getHours())}
+          userName={userName}
+          currentDate={currentDate}
+          userInitial={(userName?.[0] ?? "U").toUpperCase()}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          onAsk={() => void handleAskRecall()}
+          aiPending={aiChat.isPending}
+          aiReply={aiReply}
+          pressing={pressing}
+          upcoming={upcomingTasks}
+          recentNotes={recentNotes}
+          onVoiceNote={handleVoiceNote}
+          onNewNote={() => navigate(notesPath({ newNote: true }))}
+          onDigest={handleGenerateDigest}
+          digestText={digestText}
+          digestPending={digestMutation.isPending}
+        />
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>
@@ -478,6 +531,267 @@ export function Dashboard() {
         </div>
       </div>
     </AppLayout>
+  );
+}
+
+function pressingHref(item: PressingItem): string {
+  if (item.kind === "task") return tasksPath({ taskId: item.id });
+  if (item.kind === "capture") return inboxPath();
+  return notesPath({ noteId: item.id });
+}
+
+function pressingIcon(kind: PressingItem["kind"]) {
+  if (kind === "task") return <CheckCircle2 className="w-4 h-4" />;
+  if (kind === "capture") return <Inbox className="w-4 h-4" />;
+  return <FileText className="w-4 h-4" />;
+}
+
+function reasonStyle(reason: string): string {
+  switch (reason) {
+    case "Due":
+      return "bg-pink-500/15 text-pink-300 border-pink-500/25";
+    case "High":
+      return "bg-amber-500/15 text-amber-300 border-amber-500/25";
+    case "Waiting":
+      return "bg-sky-500/15 text-sky-300 border-sky-500/25";
+    case "Don't forget":
+      return "bg-violet-500/15 text-violet-300 border-violet-500/25";
+    case "Inbox":
+      return "bg-indigo-500/15 text-indigo-300 border-indigo-500/25";
+    default:
+      return "bg-white/[0.06] text-white/50 border-white/10";
+  }
+}
+
+type MobileHomeProps = {
+  greeting: string;
+  userName: string;
+  currentDate: string;
+  userInitial: string;
+  searchQuery: string;
+  onSearchChange: (value: string) => void;
+  onAsk: () => void;
+  aiPending: boolean;
+  aiReply: string | null;
+  pressing: PressingItem[];
+  upcoming: RecallTask[];
+  recentNotes: RecallNote[];
+  onVoiceNote: (text: string) => void;
+  onNewNote: () => void;
+  onDigest: () => void;
+  digestText: string | null;
+  digestPending: boolean;
+};
+
+function MobileHome({
+  greeting,
+  userName,
+  currentDate,
+  userInitial,
+  searchQuery,
+  onSearchChange,
+  onAsk,
+  aiPending,
+  aiReply,
+  pressing,
+  upcoming,
+  recentNotes,
+  onVoiceNote,
+  onNewNote,
+  onDigest,
+  digestText,
+  digestPending,
+}: MobileHomeProps) {
+  return (
+    <div className="nebula-bg h-full overflow-y-auto text-zinc-100 dashboard-hide-scrollbar">
+      <div className="orb-1 nebula-orb" />
+      <div className="orb-3 nebula-orb" />
+
+      <div className="relative z-10 px-4 pt-5 pb-6 space-y-5">
+        {/* Compact header */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="flex items-center gap-1.5 text-xs text-indigo-200/60">
+              <Calendar className="w-3.5 h-3.5" /> {currentDate}
+            </p>
+            <h1 className="truncate text-2xl font-semibold tracking-tight text-white">
+              {greeting}, {userName}
+            </h1>
+          </div>
+          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full text-sm font-bold text-white shadow-[0_0_15px_rgba(99,102,241,0.3)]" style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)" }}>
+            {userInitial}
+          </div>
+        </div>
+
+        {/* Primary actions — thumb zone */}
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={onNewNote}
+            className="flex items-center justify-center gap-2 rounded-2xl bg-indigo-500 py-4 font-medium text-white shadow-lg shadow-indigo-500/25 active:scale-[0.98] transition-transform"
+          >
+            <Plus size={20} /> New note
+          </button>
+          <MicButton
+            onTranscript={onVoiceNote}
+            iconSize={20}
+            title="Dictate a note"
+            listeningLabel="Listening…"
+            className="flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.06] py-4 font-medium text-indigo-200 active:scale-[0.98] transition-transform"
+          >
+            Dictate
+          </MicButton>
+        </div>
+
+        {/* Ask Recall */}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            onAsk();
+          }}
+          className="nebula-glass flex items-center rounded-full px-4 py-2.5"
+        >
+          {aiPending ? (
+            <Loader2 className="mr-3 h-5 w-5 flex-shrink-0 animate-spin text-indigo-300" />
+          ) : (
+            <Search className="mr-3 h-5 w-5 flex-shrink-0 text-zinc-400" />
+          )}
+          <input
+            type="text"
+            placeholder="Ask Recall anything…"
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            disabled={aiPending}
+            className="w-full min-w-0 border-none bg-transparent text-sm font-medium text-zinc-200 outline-none placeholder:text-zinc-500"
+          />
+        </form>
+
+        {(aiPending || aiReply) && (
+          <div className="nebula-glass rounded-2xl border border-indigo-500/20 px-4 py-3">
+            <div className="flex items-start gap-2.5">
+              <Sparkles className="mt-0.5 h-4 w-4 flex-shrink-0 text-indigo-400" />
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-200">
+                {aiPending ? "Thinking…" : aiReply}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Right now — merged ranked feed */}
+        <section className="space-y-2">
+          <div className="flex items-center justify-between px-1">
+            <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-white/50">
+              <AlertCircle className="h-4 w-4 text-pink-400" /> Right now
+            </h2>
+            <Link href={tasksPath()} className="text-xs text-indigo-300 no-underline">
+              See all
+            </Link>
+          </div>
+
+          {pressing.length === 0 ? (
+            <div className="nebula-glass rounded-2xl p-4 text-sm text-white/40">
+              You&apos;re all caught up — nothing pressing right now.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {pressing.map((item) => (
+                <Link
+                  key={item.key}
+                  href={pressingHref(item)}
+                  className="nebula-glass flex items-center gap-3 rounded-2xl p-3.5 no-underline active:scale-[0.99] transition-transform"
+                >
+                  <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-white/[0.06] text-white/70">
+                    {pressingIcon(item.kind)}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm text-zinc-100">{item.title}</span>
+                  <span className={`flex-shrink-0 rounded-full border px-2 py-1 text-[10px] font-medium uppercase tracking-wide ${reasonStyle(item.reason)}`}>
+                    {item.reason}
+                  </span>
+                </Link>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Up next — tasks */}
+        <section className="space-y-2">
+          <div className="flex items-center justify-between px-1">
+            <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-white/50">
+              <CheckCircle2 className="h-4 w-4 text-emerald-400" /> Up next
+            </h2>
+            <Link href={tasksPath()} className="text-xs text-indigo-300 no-underline">
+              Tasks
+            </Link>
+          </div>
+
+          {upcoming.length === 0 ? (
+            <div className="nebula-glass rounded-2xl p-4 text-sm text-white/40">No open tasks. Nice.</div>
+          ) : (
+            <div className="space-y-2">
+              {upcoming.map((task) => (
+                <Link
+                  key={task.id}
+                  href={tasksPath({ taskId: task.id })}
+                  className="nebula-glass flex items-center gap-3 rounded-2xl p-3.5 no-underline active:scale-[0.99] transition-transform"
+                >
+                  <Circle className="h-5 w-5 flex-shrink-0 text-zinc-500" />
+                  <span className="min-w-0 flex-1 truncate text-sm text-zinc-200">{task.title}</span>
+                  <ChevronRight className="h-4 w-4 flex-shrink-0 text-white/25" />
+                </Link>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Jump back in — recent notes */}
+        {recentNotes.length > 0 && (
+          <section className="space-y-2">
+            <div className="flex items-center justify-between px-1">
+              <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-white/50">
+                <FileText className="h-4 w-4 text-indigo-300" /> Jump back in
+              </h2>
+              <Link href={notesPath()} className="text-xs text-indigo-300 no-underline">
+                Notes
+              </Link>
+            </div>
+            <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-1 dashboard-hide-scrollbar">
+              {recentNotes.map((note) => (
+                <Link
+                  key={note.id}
+                  href={notesPath({ noteId: note.id })}
+                  className="nebula-glass flex w-40 flex-none flex-col gap-2 rounded-2xl p-3.5 no-underline"
+                >
+                  <FileText className="h-4 w-4 text-zinc-400" />
+                  <span className="line-clamp-2 text-sm font-medium text-zinc-200">{note.title}</span>
+                  <span className="mt-auto text-[11px] text-zinc-500">{note.date}</span>
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Morning digest — secondary */}
+        <button
+          type="button"
+          onClick={onDigest}
+          disabled={digestPending}
+          className="nebula-glass flex w-full items-center gap-3 rounded-2xl p-4 text-left disabled:opacity-60"
+        >
+          {digestPending ? (
+            <Loader2 className="h-5 w-5 flex-shrink-0 animate-spin text-indigo-300" />
+          ) : (
+            <Sparkles className="h-5 w-5 flex-shrink-0 text-indigo-300" />
+          )}
+          <span className="min-w-0 flex-1 text-sm text-zinc-300">
+            {digestPending
+              ? "Preparing your digest…"
+              : digestText
+                ? digestText
+                : "Generate today's digest"}
+          </span>
+        </button>
+      </div>
+    </div>
   );
 }
 

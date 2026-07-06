@@ -9,6 +9,8 @@ interface MicButtonProps {
   className?: string;
   iconSize?: number;
   title?: string;
+  children?: React.ReactNode;
+  listeningLabel?: string;
 }
 
 function showSpeechError(error: SpeechInputError) {
@@ -21,6 +23,8 @@ export function MicButton({
   className = "",
   iconSize = 16,
   title = "Voice input",
+  children,
+  listeningLabel,
 }: MicButtonProps) {
   const onError = useCallback((error: SpeechInputError) => {
     showSpeechError(error);
@@ -61,6 +65,9 @@ export function MicButton({
       className={`${className} ${listening ? "text-red-400 bg-red-500/20 animate-pulse" : ""}`}
     >
       <Mic size={iconSize} className={listening ? "scale-110" : undefined} />
+      {children != null && (
+        <span>{listening ? listeningLabel ?? "Listening…" : children}</span>
+      )}
     </button>
   );
 }

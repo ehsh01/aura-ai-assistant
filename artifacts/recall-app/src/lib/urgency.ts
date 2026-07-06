@@ -73,3 +73,77 @@ export function personalProjects(projects: RecallProject[], limit = 5): RecallPr
     .sort((a, b) => b.taskCount + b.captureCount - (a.taskCount + a.captureCount))
     .slice(0, limit);
 }
+
+export type PressingKind = "task" | "capture" | "note";
+
+export interface PressingItem {
+  key: string;
+  id: string;
+  title: string;
+  kind: PressingKind;
+  reason: string;
+  score: number;
+}
+
+const WAITING_RE = /\b(waiting|follow up|follow-up|call|email|reply|response|ticket)\b/i;
+const FORGET_RE = /\b(permit|inspection|renew|renewal|appointment|deadline|expire|expires|due)\b/i;
+
+function taskReason(task: RecallTask): string {
+  if (isDueNow(task.time)) return "Due";
+  if (task.priority === "high") return "High";
+  if (KEYWORDS.test(task.title)) return "Follow-up";
+  return "Task";
+}
+
+/** One ranked list merging urgent tasks, pending captures, and time-sensitive notes. */
+export function pressingFeed(
+  tasks: RecallTask[],
+  notes: RecallNote[],
+  captures: RecallCaptureItem[],
+  limit = 6,
+): PressingItem[] {
+  const items: PressingItem[] = [];
+
+  for (const task of tasks) {
+    const score = scoreTaskUrgency(task);
+    if (score <= 0) continue;
+    items.push({
+      key: `task-${task.id}`,
+      id: task.id,
+      title: task.title,
+      kind: "task",
+      reason: taskReason(task),
+      score,
+    });
+  }
+
+  for (const item of captures) {
+    const score = scoreCaptureUrgency(item);
+    if (score <= 0) continue;
+    items.push({
+      key: `capture-${item.id}`,
+      id: item.id,
+      title: item.cleanedTitle,
+      kind: "capture",
+      reason: "Inbox",
+      score,
+    });
+  }
+
+  for (const note of notes) {
+    const hay = `${note.title} ${note.preview}`;
+    let score = 0;
+    let reason = "";
+    if (WAITING_RE.test(hay)) {
+      score = 28;
+      reason = "Waiting";
+    } else if (FORGET_RE.test(hay)) {
+      score = 24;
+      reason = "Don't forget";
+    }
+    if (score <= 0) continue;
+    items.push({ key: `note-${note.id}`, id: note.id, title: note.title, kind: "note", reason, score });
+  }
+
+  return items.sort((a, b) => b.score - a.score).slice(0, limit);
+}
