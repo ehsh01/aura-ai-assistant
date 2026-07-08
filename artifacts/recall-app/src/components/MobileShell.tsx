@@ -37,7 +37,7 @@ const primaryTabs: TabItem[] = [
   },
   {
     href: notesPath(),
-    label: "Notes",
+    label: "Memory",
     icon: <FileText size={22} strokeWidth={1.8} />,
     match: (path) => path === "/notes",
   },
@@ -186,7 +186,7 @@ export function MobileMoreSheet({
           </Link>
           <Link href="/tasks" onClick={close} className={linkClass(location === "/tasks")}>
             <LayoutGrid size={18} />
-            <span className="flex-1 text-sm font-medium">Tasks</span>
+            <span className="flex-1 text-sm font-medium">Today</span>
           </Link>
           <Link href="/canvas" onClick={close} className={linkClass(location === "/canvas")}>
             <PenLine size={18} />

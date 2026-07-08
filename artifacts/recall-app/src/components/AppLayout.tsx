@@ -50,7 +50,7 @@ const staticNavItems = [
   },
   {
     id: "/notes",
-    label: "Notes",
+    label: "Memory",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
@@ -77,7 +77,7 @@ const staticNavItems = [
   },
   {
     id: "/tasks",
-    label: "Tasks",
+    label: "Today",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <path d="M9 11l3 3L22 4"/>
@@ -190,7 +190,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         entry: {
           key: "/notes",
           href: notesPath(),
-          label: "Notes",
+          label: "Memory",
           icon: item.icon,
           isActive: onNotesPage && activeNotebook === "all",
           count: notes.length,
@@ -418,7 +418,9 @@ export function AppLayout({ children }: AppLayoutProps) {
       <button
         type="button"
         onClick={() => setCaptureOpen(true)}
-        className="hidden md:flex fixed bottom-6 right-6 z-40 items-center gap-2 rounded-full bg-indigo-500 px-5 py-3 text-sm font-semibold text-white shadow-2xl shadow-indigo-500/25 hover:bg-indigo-400"
+        className={`fixed bottom-6 right-6 z-40 items-center gap-2 rounded-full bg-indigo-500 px-5 py-3 text-sm font-semibold text-white shadow-2xl shadow-indigo-500/25 hover:bg-indigo-400 ${
+          location === "/" ? "hidden" : "hidden md:flex"
+        }`}
       >
         <Plus size={18} />
         Capture
