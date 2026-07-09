@@ -109,12 +109,27 @@ export function Ask() {
           {answer && (
             <div className="mt-6 space-y-5">
               <section className="rounded-2xl border border-indigo-500/20 bg-white/[0.04] p-5">
-                <div className="mb-3 flex items-center gap-2">
+                <div className="mb-3 flex flex-wrap items-center gap-2">
                   {conf && (
                     <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${conf.className}`}>
                       {conf.label} · {Math.round(answer.confidence * 100)}%
                     </span>
                   )}
+                  {(() => {
+                    const methods = answer.evidence
+                      .map((e) => e.evidenceMetadata?.retrievalMethod)
+                      .filter((m): m is string => typeof m === "string");
+                    const usedSemantic = methods.some((m) => m === "semantic" || m === "hybrid");
+                    return usedSemantic ? (
+                      <span className="rounded-full bg-violet-500/10 px-2.5 py-1 text-xs font-medium text-violet-200">
+                        Semantic match
+                      </span>
+                    ) : methods.length > 0 ? (
+                      <span className="rounded-full bg-white/5 px-2.5 py-1 text-xs font-medium text-white/50">
+                        Keyword match
+                      </span>
+                    ) : null;
+                  })()}
                 </div>
                 <p className="whitespace-pre-wrap text-base leading-relaxed text-white/90">
                   {answer.answer}
@@ -151,6 +166,9 @@ export function Ask() {
                       >
                         <p className="text-xs uppercase tracking-wider text-indigo-300/80">
                           {ev.claimType.replace(/_/g, " ")}
+                          {typeof ev.evidenceMetadata?.retrievalMethod === "string"
+                            ? ` · ${ev.evidenceMetadata.retrievalMethod}`
+                            : ""}
                         </p>
                         {ev.evidenceText && (
                           <p className="mt-2 whitespace-pre-wrap text-sm text-white/75">

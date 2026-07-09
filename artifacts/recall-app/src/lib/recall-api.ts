@@ -80,6 +80,22 @@ export async function listPeople(): Promise<{ people: PersonRecord[] }> {
   return apiFetch("/people");
 }
 
+export type WaitingOnRecord = {
+  id: string;
+  person: string;
+  personId: string | null;
+  item: string;
+  days: number;
+  href: string;
+  followUp: string;
+  sourceType: "note" | "knowledge" | "task";
+  evidenceText: string;
+};
+
+export async function listWaitingOn(): Promise<{ items: WaitingOnRecord[] }> {
+  return apiFetch("/people/waiting-on");
+}
+
 export async function createPerson(input: {
   displayName: string;
   email?: string | null;

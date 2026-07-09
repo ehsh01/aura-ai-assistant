@@ -17,6 +17,7 @@ import { listNoteMetadataForUser, type RecallNoteMetadataDto } from "./notes";
 import { listProjectsForUser, type RecallProjectDto } from "./projects";
 import { listTasksForUser, type RecallTaskDto } from "./tasks";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
+import { listWaitingOnForUser } from "./waiting-on";
 import { todayIso } from "./query-utils";
 import { aiService } from "./ai";
 
@@ -316,28 +317,16 @@ function buildTimeline(
   return entries;
 }
 
-function extractPerson(text: string): string {
-  const near = text.match(/\b(?:from|for|with|on|by)\s+([A-Z][a-z]+)/);
-  if (near) return near[1]!;
-  const dash = text.match(/^([A-Z][a-z]+)\s*[—:-]/);
-  if (dash) return dash[1]!;
-  const cap = text.match(/\b([A-Z][a-z]{2,})\b/);
-  if (cap && !/^(The|This|That|Follow|Waiting|Email|Call)$/.test(cap[1]!)) return cap[1]!;
-  return "Someone";
-}
-
-function buildWaitingOn(notes: RecallNoteMetadataDto[], limit = 4): WaitingItem[] {
-  return notes
-    .filter((n) => WAITING_RE.test(`${n.title} ${n.preview}`))
-    .slice(0, limit)
-    .map((n) => ({
-      id: n.id,
-      person: extractPerson(`${n.title} ${n.preview}`),
-      item: n.title,
-      days: daysSince(n.updatedAt ?? n.createdAt),
-      href: notesPath({ noteId: n.id }),
-      followUp: "Follow up",
-    }));
+async function buildWaitingOn(userId: string, limit = 4): Promise<WaitingItem[]> {
+  const items = await listWaitingOnForUser(userId, limit);
+  return items.map((w) => ({
+    id: w.id,
+    person: w.person,
+    item: w.item,
+    days: w.days,
+    href: w.href,
+    followUp: w.followUp,
+  }));
 }
 
 function buildDontForget(
@@ -583,6 +572,8 @@ export async function buildHomeBriefing(
     highlights,
   };
 
+  const waiting = await buildWaitingOn(userId);
+
   return {
     date: new Date().toLocaleDateString("en-US", {
       weekday: "long",
@@ -592,7 +583,7 @@ export async function buildHomeBriefing(
     briefing,
     focus,
     timeline: buildTimeline(tasks, captures, today),
-    waiting: buildWaitingOn(notes),
+    waiting,
     dontForget: buildDontForget(notes, captures),
     insights: buildInsights(tasks, notes, captures, projects),
     contextAreas: buildContextAreas(notes, tasks, captures, projects),

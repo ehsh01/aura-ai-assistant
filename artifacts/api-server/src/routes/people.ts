@@ -8,6 +8,7 @@ import {
   listPeopleForUser,
   updatePersonForUser,
 } from "../services/people";
+import { listWaitingOnForUser } from "../services/waiting-on";
 
 const CreatePersonBody = z.object({
   displayName: z.string().min(1).max(255),
@@ -30,6 +31,16 @@ router.get("/people", async (req, res, next) => {
   try {
     const people = await listPeopleForUser(req.user!.id);
     res.json({ people });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Must be registered before /people/:personId so "waiting-on" is not treated as an id. */
+router.get("/people/waiting-on", async (req, res, next) => {
+  try {
+    const items = await listWaitingOnForUser(req.user!.id);
+    res.json({ items });
   } catch (err) {
     next(err);
   }
