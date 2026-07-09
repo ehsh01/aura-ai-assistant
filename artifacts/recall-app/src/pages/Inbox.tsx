@@ -40,10 +40,14 @@ export function Inbox() {
     try {
       const res = await acceptCapture(item.id, {});
       await Promise.all([load(), reloadNotes(), reloadTasks()]);
+      const linked =
+        res.personName != null && res.personName !== ""
+          ? ` Linked to ${res.personName}.`
+          : "";
       if (res.task?.id) {
         toast({
           title: "Task created",
-          description: `${res.task.title}. Opening it now.`,
+          description: `${res.task.title}.${linked} Opening it now.`,
         });
         navigate(`/tasks?task=${encodeURIComponent(res.task.id)}`);
         return;
@@ -51,14 +55,14 @@ export function Inbox() {
       if (res.note?.id) {
         toast({
           title: "Note created",
-          description: `${res.note.title}. Opening it now.`,
+          description: `${res.note.title}.${linked} Opening it now.`,
         });
         navigate(notesPath({ noteId: res.note.id }));
         return;
       }
       toast({
         title: "Capture accepted",
-        description: "Moved into notes or tasks. Logged in Activity.",
+        description: `Moved into notes or tasks.${linked} Logged in Activity.`,
       });
     } catch {
       toast({ title: "Could not accept capture", variant: "destructive" });

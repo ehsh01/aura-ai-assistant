@@ -4,6 +4,7 @@ import { AppLayout } from "@/components/AppLayout";
 import {
   createPerson,
   createWaitingFollowUp,
+  getPersonRelated,
   listPeople,
   listWaitingOn,
   type PersonRecord,
@@ -11,10 +12,13 @@ import {
 } from "@/lib/recall-api";
 import { toast } from "@/hooks/use-toast";
 
+type OpenTask = { id: string; title: string; time: string | null };
+
 export function People() {
   const [, navigate] = useLocation();
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [waiting, setWaiting] = useState<WaitingOnRecord[]>([]);
+  const [openByPerson, setOpenByPerson] = useState<Record<string, OpenTask[]>>({});
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -26,6 +30,17 @@ export function People() {
       const [peopleRes, waitingRes] = await Promise.all([listPeople(), listWaitingOn()]);
       setPeople(peopleRes.people);
       setWaiting(waitingRes.items);
+      const related = await Promise.all(
+        peopleRes.people.map(async (p) => {
+          try {
+            const r = await getPersonRelated(p.id);
+            return [p.id, r.openTasks] as const;
+          } catch {
+            return [p.id, [] as OpenTask[]] as const;
+          }
+        }),
+      );
+      setOpenByPerson(Object.fromEntries(related));
     } finally {
       setLoading(false);
     }
@@ -76,7 +91,8 @@ export function People() {
           <p className="text-sm uppercase tracking-[0.3em] text-indigo-300/70">Network</p>
           <h1 className="mt-2 text-3xl font-semibold">People</h1>
           <p className="mt-2 text-white/50">
-            Contacts plus what you&apos;re waiting on from them — one tap creates a follow-up task.
+            Contacts plus what you&apos;re waiting on from them — accepting Inbox items with a name
+            links tasks here automatically.
           </p>
 
           <section className="mt-8">
@@ -149,25 +165,44 @@ export function People() {
           <div className="mt-6 space-y-3">
             {!loading && people.length === 0 && (
               <p className="text-white/45">
-                No people yet. They will also appear when AI resolves names from captures.
+                No people yet. Accept an Inbox item that mentions someone, or add a contact above.
               </p>
             )}
-            {people.map((person) => (
-              <article key={person.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                <h2 className="text-lg font-semibold">{person.displayName}</h2>
-                <div className="mt-1 space-y-0.5 text-sm text-white/50">
-                  {person.email && <p>{person.email}</p>}
-                  {person.organization && <p>{person.organization}</p>}
-                  {person.role && <p>{person.role}</p>}
-                </div>
-                {waiting.some((w) => w.personId === person.id) && (
-                  <p className="mt-2 text-xs text-amber-200/80">
-                    {waiting.filter((w) => w.personId === person.id).length} open follow-up
-                    {waiting.filter((w) => w.personId === person.id).length === 1 ? "" : "s"}
-                  </p>
-                )}
-              </article>
-            ))}
+            {people.map((person) => {
+              const openTasks = openByPerson[person.id] ?? [];
+              const waitingCount = waiting.filter((w) => w.personId === person.id).length;
+              return (
+                <article key={person.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                  <h2 className="text-lg font-semibold">{person.displayName}</h2>
+                  <div className="mt-1 space-y-0.5 text-sm text-white/50">
+                    {person.email && <p>{person.email}</p>}
+                    {person.organization && <p>{person.organization}</p>}
+                    {person.role && <p>{person.role}</p>}
+                  </div>
+                  {(waitingCount > 0 || openTasks.length > 0) && (
+                    <div className="mt-3 space-y-1.5 border-t border-white/10 pt-3">
+                      {waitingCount > 0 && (
+                        <p className="text-xs text-amber-200/80">
+                          {waitingCount} open follow-up{waitingCount === 1 ? "" : "s"} in Waiting on
+                        </p>
+                      )}
+                      {openTasks.slice(0, 3).map((t) => (
+                        <Link
+                          key={t.id}
+                          href={`/tasks?task=${encodeURIComponent(t.id)}`}
+                          className="block truncate text-sm text-indigo-200 no-underline hover:underline"
+                        >
+                          {t.title}
+                        </Link>
+                      ))}
+                      {openTasks.length > 3 && (
+                        <p className="text-xs text-white/35">+{openTasks.length - 3} more open tasks</p>
+                      )}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
           </div>
         </div>
       </div>

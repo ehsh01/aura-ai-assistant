@@ -15,4 +15,8 @@ export interface AcceptCaptureRequest {
   projectId?: string | null;
   notebookId?: string | null;
   tags?: string[];
+  /** Link the created task/note to this person when known. */
+  personId?: string | null;
+  /** Resolve or create a person by display name on accept. */
+  personName?: string | null;
 }

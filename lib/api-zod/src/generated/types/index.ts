@@ -49,6 +49,7 @@ export * from './meResponse';
 export * from './notebookListResponse';
 export * from './noteContextItem';
 export * from './noteListResponse';
+export * from './openNoteAction';
 export * from './projectDetailResponse';
 export * from './projectListResponse';
 export * from './recallCaptureItem';

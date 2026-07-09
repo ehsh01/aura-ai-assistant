@@ -7,8 +7,11 @@
  */
 import type { AiDegradedMeta } from './aiDegradedMeta';
 import type { ChatMessage } from './chatMessage';
+import type { OpenNoteAction } from './openNoteAction';
 
 export type ChatResponse = AiDegradedMeta & ({
   message: ChatMessage;
   model?: string | null;
+  /** When set, the client should navigate to this note instead of only showing the text reply. */
+  openNote?: OpenNoteAction | null;
 });

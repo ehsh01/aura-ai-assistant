@@ -1346,6 +1346,14 @@ components:
           type: array
           items:
             type: string
+        personId:
+          type: string
+          nullable: true
+          description: Link the created task/note to this person when known.
+        personName:
+          type: string
+          nullable: true
+          description: Resolve or create a person by display name on accept.
     AcceptCaptureResponse:
       type: object
       properties:
@@ -1355,6 +1363,12 @@ components:
           $ref: "#/components/schemas/RecallNote"
         task:
           $ref: "#/components/schemas/RecallTask"
+        personId:
+          type: string
+          nullable: true
+        personName:
+          type: string
+          nullable: true
       required:
         - item
     RecallNoteMetadata:

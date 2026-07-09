@@ -13,4 +13,6 @@ export interface AcceptCaptureResponse {
   item: RecallCaptureItem;
   note?: RecallNote;
   task?: RecallTask;
+  personId?: string | null;
+  personName?: string | null;
 }

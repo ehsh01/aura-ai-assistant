@@ -28,7 +28,7 @@ function daysSince(iso?: string | null): number {
 }
 
 const NON_NAME =
-  /^(Still|Need|Needs|Waiting|Follow|Pending|Quote|Reply|Response|Call|Email|The|This|That|Before|After|Until|About|From|With|For)$/;
+  /^(Still|Need|Needs|Waiting|Follow|Pending|Quote|Reply|Response|Call|Email|Text|Ask|Tell|Buy|Get|Send|Check|Review|Open|Close|The|This|That|Before|After|Until|About|From|With|For|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|January|February|March|April|May|June|July|August|September|October|November|December)$/;
 
 /** Exported for unit tests — prefer known people, then from/with/for names. */
 export function extractPerson(text: string, peopleNames: string[]): string {
@@ -53,12 +53,29 @@ export function extractPerson(text: string, peopleNames: string[]): string {
     if (from[2] && !NON_NAME.test(from[2])) return `${from[1]} ${from[2]}`;
     return from[1];
   }
-  const bare = text.match(/\b([A-Z][a-z]{2,})\b/);
-  if (bare?.[1] && !NON_NAME.test(bare[1])) return bare[1];
+  // "Call Mike…", "Email Jane…", "Ask Bob…"
+  const verb = text.match(
+    /\b(?:call|email|text|ask|tell|ping|message)\s+([A-Z][a-z]+)(?:\s+([A-Z][a-z]+))?/i,
+  );
+  if (verb?.[1] && !NON_NAME.test(verb[1])) {
+    // Preserve original capitalization from the match source when possible.
+    const nameMatch = text.match(
+      /\b(?:[Cc]all|[Ee]mail|[Tt]ext|[Aa]sk|[Tt]ell|[Pp]ing|[Mm]essage)\s+([A-Z][a-z]+)(?:\s+([A-Z][a-z]+))?/,
+    );
+    const first = nameMatch?.[1] ?? verb[1];
+    const second = nameMatch?.[2];
+    if (second && !NON_NAME.test(second)) return `${first} ${second}`;
+    return first;
+  }
+  // Skip action words / days; take the first remaining capitalized token.
+  const tokens = text.match(/\b([A-Z][a-z]{2,})\b/g) ?? [];
+  for (const token of tokens) {
+    if (!NON_NAME.test(token)) return token;
+  }
   return "Someone";
 }
 
-function matchPersonId(
+export function matchPersonId(
   personName: string,
   people: { id: string; displayName: string }[],
 ): string | null {

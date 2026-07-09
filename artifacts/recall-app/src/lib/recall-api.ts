@@ -137,6 +137,15 @@ export async function createPerson(input: {
   return apiFetch("/people", { method: "POST", body: JSON.stringify(input) });
 }
 
+export type PersonRelated = {
+  person: PersonRecord;
+  openTasks: { id: string; title: string; time: string | null }[];
+};
+
+export async function getPersonRelated(personId: string): Promise<PersonRelated> {
+  return apiFetch(`/people/${encodeURIComponent(personId)}/related`);
+}
+
 export async function fetchToday(): Promise<TodayResponse> {
   return apiFetch("/today");
 }

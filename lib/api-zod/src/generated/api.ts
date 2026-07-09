@@ -124,7 +124,7 @@ export const AiChatResponse = zod.object({
   "openNote": zod.object({
   "id": zod.string(),
   "title": zod.string()
-}).nullish()
+}).nullish().describe('When set, the client should navigate to this note instead of only showing the text reply.')
 }))
 
 
@@ -573,7 +573,9 @@ export const AcceptCaptureBody = zod.object({
   "dueDate": zod.string().nullish(),
   "projectId": zod.string().nullish(),
   "notebookId": zod.string().nullish(),
-  "tags": zod.array(zod.string()).optional()
+  "tags": zod.array(zod.string()).optional(),
+  "personId": zod.string().nullish().describe('Link the created task\/note to this person when known.'),
+  "personName": zod.string().nullish().describe('Resolve or create a person by display name on accept.')
 })
 
 export const AcceptCaptureResponse = zod.object({
@@ -617,7 +619,9 @@ export const AcceptCaptureResponse = zod.object({
   "tags": zod.array(zod.string()).optional(),
   "completed": zod.boolean(),
   "projectId": zod.string().nullish()
-}).optional()
+}).optional(),
+  "personId": zod.string().nullish(),
+  "personName": zod.string().nullish()
 })
 
 

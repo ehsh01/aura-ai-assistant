@@ -4,8 +4,15 @@ import { getDb } from "../lib/db";
 import { newCaptureId } from "../lib/recall-format";
 import { createEvidenceForUser } from "./evidence";
 import { createNoteForUser, type RecallNoteDto } from "./notes";
+import {
+  getPersonForUser,
+  listPeopleForUser,
+  resolvePersonByName,
+  type PersonDto,
+} from "./people";
 import { recordUserCorrection } from "./user-corrections";
 import { createTaskForUser, type RecallTaskDto } from "./tasks";
+import { extractPerson, matchPersonId } from "./waiting-on";
 import { writeAuditLog } from "./audit";
 
 export type CaptureSuggestedType =
@@ -71,13 +78,60 @@ export type AcceptCaptureInput = {
   projectId?: string | null;
   notebookId?: string | null;
   tags?: string[];
+  personId?: string | null;
+  personName?: string | null;
 };
 
 export type AcceptCaptureResult = {
   item: RecallCaptureItemDto;
   note?: RecallNoteDto;
   task?: RecallTaskDto;
+  personId?: string | null;
+  personName?: string | null;
 };
+
+/**
+ * Resolve a person for inbox accept: explicit id/name, else extract from text.
+ * Creates the person when a confident name is found and none exists yet.
+ */
+export async function resolvePersonForAccept(
+  userId: string,
+  input: {
+    personId?: string | null;
+    personName?: string | null;
+    title: string;
+    rawText: string;
+  },
+): Promise<PersonDto | null> {
+  if (input.personId) {
+    const byId = await getPersonForUser(userId, input.personId);
+    if (byId) return byId;
+  }
+
+  const people = await listPeopleForUser(userId);
+  const peopleNames = people.map((p) => p.displayName);
+
+  const explicit = input.personName?.trim();
+  if (explicit && explicit.toLowerCase() !== "someone") {
+    const matched = matchPersonId(explicit, people);
+    if (matched) {
+      const hit = people.find((p) => p.id === matched);
+      if (hit) return hit;
+    }
+    return resolvePersonByName(userId, explicit);
+  }
+
+  const blob = `${input.title}\n${input.rawText}`;
+  const extracted = extractPerson(blob, peopleNames);
+  if (!extracted || extracted === "Someone") return null;
+
+  const matched = matchPersonId(extracted, people);
+  if (matched) {
+    const hit = people.find((p) => p.id === matched);
+    if (hit) return hit;
+  }
+  return resolvePersonByName(userId, extracted);
+}
 
 function normalizeType(type?: string): CaptureSuggestedType {
   if (
@@ -282,9 +336,22 @@ export async function acceptCaptureForUser(
   const type = normalizeType(input.type ?? item.suggestedType);
   const title = input.title?.trim() || item.cleanedTitle;
   const content = input.content ?? item.rawText;
-  const tags = input.tags ?? item.suggestedTags;
+  const tags = [...(input.tags ?? item.suggestedTags)];
   const projectId = input.projectId ?? item.projectId;
   const notebookId = input.notebookId ?? item.notebookId;
+
+  const person = await resolvePersonForAccept(userId, {
+    personId: input.personId,
+    personName: input.personName,
+    title,
+    rawText: item.rawText,
+  });
+  if (person) {
+    const personTag = `person:${person.displayName}`;
+    if (!tags.some((t) => t.toLowerCase() === personTag.toLowerCase())) {
+      tags.push(personTag);
+    }
+  }
 
   let note: RecallNoteDto | undefined;
   let task: RecallTaskDto | undefined;
@@ -297,7 +364,9 @@ export async function acceptCaptureForUser(
       tags,
       projectId,
       sourceCaptureId: item.rawCaptureId,
+      requesterPersonId: person?.id ?? null,
       aiGenerated: Boolean(item.rawCaptureId),
+      userConfirmed: true,
     });
     if (task && item.rawCaptureId) {
       await createEvidenceForUser(userId, {
@@ -306,6 +375,9 @@ export async function acceptCaptureForUser(
         claimType: "task_created_from",
         sourceCaptureId: item.rawCaptureId,
         evidenceText: item.rawText.slice(0, 500),
+        evidenceMetadata: person
+          ? { personId: person.id, personName: person.displayName }
+          : undefined,
       });
     }
   } else {
@@ -323,6 +395,9 @@ export async function acceptCaptureForUser(
         claimType: "summary_based_on",
         sourceCaptureId: item.rawCaptureId,
         evidenceText: item.rawText.slice(0, 500),
+        evidenceMetadata: person
+          ? { personId: person.id, personName: person.displayName }
+          : undefined,
       });
     }
   }
@@ -341,8 +416,18 @@ export async function acceptCaptureForUser(
         createdTaskId: task?.id ?? null,
         createdNoteId: note?.id ?? null,
         sourceCaptureId: item.rawCaptureId,
+        personId: person?.id ?? null,
+        personName: person?.displayName ?? null,
       },
     });
   }
-  return updated ? { item: updated, note, task } : null;
+  return updated
+    ? {
+        item: updated,
+        note,
+        task,
+        personId: person?.id ?? null,
+        personName: person?.displayName ?? null,
+      }
+    : null;
 }

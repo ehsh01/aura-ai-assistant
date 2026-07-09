@@ -19,4 +19,12 @@ describe("extractPerson (waiting-on)", () => {
       extractPerson("Still need the quote from Mike", ["Mike Hernandez"]),
     ).toBe("Mike Hernandez");
   });
+
+  it("extracts the person after Call/Email verbs", () => {
+    expect(extractPerson("Call Mike about the quote", [])).toBe("Mike");
+  });
+
+  it("ignores imperative verbs without a person", () => {
+    expect(extractPerson("Buy groceries", [])).toBe("Someone");
+  });
 });

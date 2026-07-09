@@ -71,6 +71,11 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface OpenNoteAction {
+  id: string;
+  title: string;
+}
+
 export type TaskContextItemPriority = typeof TaskContextItemPriority[keyof typeof TaskContextItemPriority];
 
 
@@ -114,7 +119,8 @@ export interface ChatRequest {
 export type ChatResponse = AiDegradedMeta & ({
   message: ChatMessage;
   model?: string | null;
-  openNote?: { id: string; title: string } | null;
+  /** When set, the client should navigate to this note instead of only showing the text reply. */
+  openNote?: OpenNoteAction | null;
 });
 
 export interface SummarizeNoteRequest {
@@ -436,6 +442,10 @@ export interface AcceptCaptureRequest {
   projectId?: string | null;
   notebookId?: string | null;
   tags?: string[];
+  /** Link the created task/note to this person when known. */
+  personId?: string | null;
+  /** Resolve or create a person by display name on accept. */
+  personName?: string | null;
 }
 
 export type RecallNoteContentFormat = typeof RecallNoteContentFormat[keyof typeof RecallNoteContentFormat];
@@ -466,6 +476,8 @@ export interface AcceptCaptureResponse {
   item: RecallCaptureItem;
   note?: RecallNote;
   task?: RecallTask;
+  personId?: string | null;
+  personName?: string | null;
 }
 
 export interface RecallNotebook {
