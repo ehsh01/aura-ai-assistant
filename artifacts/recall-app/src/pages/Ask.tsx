@@ -213,7 +213,19 @@ export function Ask() {
                   </p>
                 ) : (
                   <div className="space-y-2">
-                    {answer.evidence.map((ev) => (
+                    {answer.evidence.map((ev) => {
+                      const href = entityPath(ev.entityType, ev.entityId);
+                      const personId =
+                        typeof ev.evidenceMetadata?.personId === "string"
+                          ? ev.evidenceMetadata.personId
+                          : null;
+                      const personName =
+                        typeof ev.evidenceMetadata?.personName === "string"
+                          ? ev.evidenceMetadata.personName
+                          : typeof ev.evidenceMetadata?.person === "string"
+                            ? ev.evidenceMetadata.person
+                            : null;
+                      return (
                       <article
                         key={ev.id}
                         className="rounded-xl border border-white/10 bg-white/[0.03] p-4"
@@ -223,24 +235,48 @@ export function Ask() {
                           {typeof ev.evidenceMetadata?.retrievalMethod === "string"
                             ? ` · ${ev.evidenceMetadata.retrievalMethod}`
                             : ""}
+                          {` · ${ev.entityType}`}
                         </p>
                         {ev.evidenceText && (
                           <p className="mt-2 whitespace-pre-wrap text-sm text-white/75">
                             {ev.evidenceText}
                           </p>
                         )}
-                        {ev.url && (
-                          <a
-                            href={ev.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="mt-2 inline-block text-xs text-indigo-300 hover:underline"
-                          >
-                            View source
-                          </a>
-                        )}
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          {href && (
+                            <Link
+                              href={href}
+                              className="text-xs text-indigo-300 no-underline hover:underline"
+                            >
+                              Open {ev.entityType}
+                            </Link>
+                          )}
+                          {personName && (
+                            <Link
+                              href={
+                                personId
+                                  ? entityPath("person", personId) ?? "/people"
+                                  : "/people"
+                              }
+                              className="text-xs text-sky-300 no-underline hover:underline"
+                            >
+                              {personName}
+                            </Link>
+                          )}
+                          {ev.url && (
+                            <a
+                              href={ev.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs text-indigo-300 hover:underline"
+                            >
+                              View source
+                            </a>
+                          )}
+                        </div>
                       </article>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </section>
