@@ -1,10 +1,9 @@
 import { listTasksForUser } from "./tasks";
-import { listNotesForUser } from "./notes";
-import { listPeopleForUser } from "./people";
 import type { EvidenceDto } from "./evidence";
-import { listConnectorsForUser, queryFinanceSummaryForUser } from "./connectors";
 import { aiService, type QueryFinanceAggregate } from "./ai";
-import { aggregateFinance, FINANCE_INTENT, parseDateRange, todayIso } from "./query-utils";
+import { FINANCE_INTENT, todayIso } from "./query-utils";
+import { loadSyncedFinanceAggregate } from "./finance-sync";
+import { retrieveRelevantRecords } from "./retrieval";
 import { QUERY_ANSWER_PROMPT_VERSION } from "../prompts/queryAnswer.v1";
 import { newEvidenceId } from "../lib/recall-format";
 
@@ -18,55 +17,6 @@ export type QueryAnswer = {
   promptVersion: string;
   degraded: boolean;
 };
-
-type ContextRecord = { entityType: string; entityId: string; title: string; text: string };
-
-function buildContextRecords(
-  tasks: Awaited<ReturnType<typeof listTasksForUser>>,
-  notes: Awaited<ReturnType<typeof listNotesForUser>>,
-  people: Awaited<ReturnType<typeof listPeopleForUser>>,
-): ContextRecord[] {
-  const records: ContextRecord[] = [];
-  for (const t of tasks.slice(0, 40)) {
-    records.push({
-      entityType: "task",
-      entityId: t.id,
-      title: t.title,
-      text: `${t.title} priority=${t.priority} due=${t.time ?? "none"} completed=${t.completed}`,
-    });
-  }
-  for (const n of notes.slice(0, 30)) {
-    records.push({
-      entityType: "note",
-      entityId: n.id,
-      title: n.title,
-      text: `${n.title}\n${(n.preview ?? n.content ?? "").slice(0, 400)}`,
-    });
-  }
-  for (const p of people.slice(0, 20)) {
-    records.push({
-      entityType: "person",
-      entityId: p.id,
-      title: p.displayName,
-      text: `${p.displayName} ${p.organization ?? ""} ${p.email ?? ""}`.trim(),
-    });
-  }
-  return records;
-}
-
-function keywordRank(question: string, records: ContextRecord[]): ContextRecord[] {
-  const terms = question.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
-  if (terms.length === 0) return records.slice(0, 10);
-  return records
-    .map((r) => ({
-      r,
-      score: terms.reduce((s, t) => (r.text.toLowerCase().includes(t) ? s + 1 : s), 0),
-    }))
-    .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 12)
-    .map((x) => x.r);
-}
 
 function makeEvidence(input: {
   claimType: string;
@@ -96,51 +46,49 @@ function makeEvidence(input: {
 /**
  * Natural-language query with evidence-backed assembly.
  *
- * Reads are side-effect free: evidence is assembled in-memory (not persisted).
- * When AI is enabled, answers are synthesized from the grounded context;
- * otherwise a deterministic rule-based answer is returned.
+ * Retrieval is hybrid (keyword + cached embeddings). Finance answers use
+ * already-synced source_records rather than a live external API call.
+ * Reads are side-effect free: evidence is assembled in-memory.
  */
 export async function queryRecallForUser(
   userId: string,
   question: string,
 ): Promise<QueryAnswer> {
   const today = todayIso();
-  const [tasks, notes, people] = await Promise.all([
-    listTasksForUser(userId),
-    listNotesForUser(userId),
-    listPeopleForUser(userId),
-  ]);
-
-  const allRecords = buildContextRecords(tasks, notes, people);
-  const relevant = keywordRank(question, allRecords);
-  const openTasks = tasks.filter((t) => !t.completed);
   const degraded = aiService.getStatus().degraded;
 
-  // Finance awareness: aggregate real transactions when the question is about money.
+  const [{ records: relevant, usedSemantic }, tasks] = await Promise.all([
+    retrieveRelevantRecords(userId, question, 12),
+    listTasksForUser(userId),
+  ]);
+  const openTasks = tasks.filter((t) => !t.completed);
+
   let finance: QueryFinanceAggregate | null = null;
+  let financeNeedsSync = false;
   const evidence: EvidenceDto[] = [];
+
   if (FINANCE_INTENT.test(question)) {
     try {
-      const connectors = await listConnectorsForUser(userId);
-      const financeConn = connectors.find((c) => c.type === "finance_api");
-      if (financeConn) {
-        const range = parseDateRange(question, today);
-        const summary = await queryFinanceSummaryForUser(userId, financeConn.id, {
-          startDate: range.startDate,
-          endDate: range.endDate,
-        });
-        finance = aggregateFinance(summary.transactions, range.label);
+      const synced = await loadSyncedFinanceAggregate(userId, question, today);
+      if (synced) {
+        finance = synced.finance;
+        financeNeedsSync = synced.needsSync;
         evidence.push(
           makeEvidence({
             claimType: "amount_calculated_from",
-            evidenceText: `Net total ${finance.total} across ${finance.count} transaction(s)${
-              finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""
-            }. Source: MyFamilyBudget finance app (source of truth).`,
+            evidenceText: synced.needsSync
+              ? "Finance connector is configured but no transactions are synced yet. Sync on Connectors first."
+              : `Net total ${finance.total} across ${finance.count} transaction(s)${
+                  finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""
+                }. Source: synced MyFamilyBudget records in Recall.`,
             metadata: {
               rangeLabel: finance.rangeLabel,
               topPayees: finance.topPayees.slice(0, 5),
               topCategories: finance.topCategories.slice(0, 5),
-              connectorId: financeConn.id,
+              connectorId: synced.connectorId,
+              payeeFilter: synced.payeeFilter,
+              needsSync: synced.needsSync,
+              source: "synced_source_records",
             },
           }),
         );
@@ -155,7 +103,13 @@ export async function queryRecallForUser(
       makeEvidence({
         claimType: "summary_based_on",
         evidenceText: rec.text.slice(0, 500),
-        metadata: { relatedEntityType: rec.entityType, relatedEntityId: rec.entityId },
+        metadata: {
+          relatedEntityType: rec.entityType,
+          relatedEntityId: rec.entityId,
+          retrievalScore: Number(rec.score.toFixed(4)),
+          retrievalMethod: rec.method,
+          usedSemantic,
+        },
       }),
     );
   }
@@ -166,14 +120,32 @@ export async function queryRecallForUser(
     title: r.title,
   }));
 
+  const contextRecords = relevant.map((r) => ({
+    entityType: r.entityType,
+    entityId: r.entityId,
+    title: r.title,
+    text: r.text,
+  }));
+
   // AI synthesis when available.
   if (!degraded) {
     try {
-      const ai = await aiService.answerQuery({ question, today, records: relevant, finance });
+      const ai = await aiService.answerQuery({
+        question,
+        today,
+        records: contextRecords,
+        finance: financeNeedsSync ? null : finance,
+      });
+      let caveats = ai.caveats;
+      if (financeNeedsSync) {
+        caveats = [caveats, "Finance data needs a sync on Connectors before totals are reliable."]
+          .filter(Boolean)
+          .join(" ");
+      }
       return {
         answer: ai.answer,
         confidence: ai.confidence,
-        caveats: ai.caveats,
+        caveats,
         evidence,
         relatedRecords,
         suggestedNextAction: ai.suggestedNextAction,
@@ -187,17 +159,24 @@ export async function queryRecallForUser(
 
   // Deterministic fallback.
   let answer: string;
-  let confidence = relevant.length > 0 || finance ? 0.6 : 0.3;
-  let caveats: string | null = relevant.length === 0 && !finance ? "Limited matching records found." : null;
+  let confidence = relevant.length > 0 || (finance && !financeNeedsSync) ? 0.6 : 0.3;
+  let caveats: string | null =
+    relevant.length === 0 && !finance ? "Limited matching records found." : null;
   let suggestedNextAction: string | null = null;
 
-  if (finance) {
+  if (financeNeedsSync) {
+    answer =
+      "Your finance connector is set up, but no transactions are synced yet. Open Connectors and sync Finance, then ask again.";
+    confidence = 0.4;
+    caveats = "No synced finance records.";
+    suggestedNextAction = "Open Connectors → Sync Finance";
+  } else if (finance) {
     const topPayee = finance.topPayees[0];
     answer =
       `Net total is $${finance.total.toFixed(2)} across ${finance.count} transaction(s)` +
       `${finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""}.` +
       (topPayee ? ` Largest: ${topPayee.payee} ($${topPayee.total.toFixed(2)}).` : "");
-    confidence = 0.8;
+    confidence = 0.85;
     suggestedNextAction = "Open Connectors → Finance for the full breakdown";
   } else if (/attention|today|focus|do today/i.test(question)) {
     const dueToday = openTasks.filter((t) => t.time && t.time.startsWith(today));
@@ -209,7 +188,9 @@ export async function queryRecallForUser(
     confidence = 0.85;
     suggestedNextAction = focus ? `Open task: ${focus.title}` : "Review your task list";
   } else if (relevant.length > 0) {
-    answer = `I found ${relevant.length} related record(s). Top match: "${relevant[0]!.title}". ${relevant[0]!.text.slice(0, 200)}`;
+    answer = `I found ${relevant.length} related record(s)${
+      usedSemantic ? " (semantic match)" : ""
+    }. Top match: "${relevant[0]!.title}". ${relevant[0]!.text.slice(0, 200)}`;
     suggestedNextAction = `Review ${relevant[0]!.entityType}: ${relevant[0]!.title}`;
   } else {
     answer =

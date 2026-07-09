@@ -213,6 +213,8 @@ export interface AiService {
   classifyCapture(request: ClassifyCaptureRequest): Promise<ClassifyCaptureResponse>;
   generateWorkNote(request: GenerateWorkNoteRequest): Promise<GenerateWorkNoteResponse>;
   answerQuery(request: AnswerQueryRequest): Promise<AnswerQueryResponse>;
+  /** Optional: only OpenAI-backed services implement real embeddings. */
+  embedTexts?(texts: string[]): Promise<number[][]>;
 }
 
 const DISABLED_REASON =

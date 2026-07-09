@@ -1,0 +1,199 @@
+import { listTasksForUser } from "./tasks";
+import { listNotesForUser } from "./notes";
+import { listPeopleForUser } from "./people";
+import { listKnowledgeForUser } from "./knowledge";
+import { listDocumentsForUser } from "./documents";
+import { listCapturesForUser } from "./captures";
+import {
+  cosineSimilarity,
+  embedItemsCached,
+  embedQuery,
+} from "./embedding-cache";
+
+export type RetrievedRecord = {
+  entityType: string;
+  entityId: string;
+  title: string;
+  text: string;
+  score: number;
+  method: "keyword" | "semantic" | "hybrid";
+};
+
+type ContextRecord = {
+  entityType: string;
+  entityId: string;
+  title: string;
+  text: string;
+};
+
+function keywordScore(question: string, text: string): number {
+  const terms = question.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
+  if (terms.length === 0) return 0;
+  const hay = text.toLowerCase();
+  return terms.reduce((s, t) => (hay.includes(t) ? s + 1 : s), 0) / terms.length;
+}
+
+async function collectCorpus(userId: string): Promise<ContextRecord[]> {
+  const [tasks, notes, people, knowledge, documents, captures] = await Promise.all([
+    listTasksForUser(userId),
+    listNotesForUser(userId),
+    listPeopleForUser(userId),
+    listKnowledgeForUser(userId),
+    listDocumentsForUser(userId),
+    listCapturesForUser(userId, { limit: 40 }),
+  ]);
+
+  const records: ContextRecord[] = [];
+
+  for (const t of tasks.slice(0, 80)) {
+    records.push({
+      entityType: "task",
+      entityId: t.id,
+      title: t.title,
+      text: `${t.title} priority=${t.priority} due=${t.time ?? "none"} completed=${t.completed}`,
+    });
+  }
+  for (const n of notes.slice(0, 80)) {
+    records.push({
+      entityType: "note",
+      entityId: n.id,
+      title: n.title,
+      text: `${n.title}\n${(n.preview ?? n.content ?? "").slice(0, 600)}`,
+    });
+  }
+  for (const p of people.slice(0, 40)) {
+    records.push({
+      entityType: "person",
+      entityId: p.id,
+      title: p.displayName,
+      text: `${p.displayName} ${p.organization ?? ""} ${p.email ?? ""}`.trim(),
+    });
+  }
+  for (const k of knowledge.slice(0, 40)) {
+    records.push({
+      entityType: "knowledge",
+      entityId: k.id,
+      title: k.title,
+      text: `${k.title}\n${k.content.slice(0, 600)}\ntags=${k.tags.join(",")}`,
+    });
+  }
+  for (const d of documents.slice(0, 30)) {
+    records.push({
+      entityType: "document",
+      entityId: d.id,
+      title: d.fileName,
+      text: `${d.fileName}\n${(d.summary ?? d.extractedText ?? "").slice(0, 600)}`,
+    });
+  }
+  for (const c of captures) {
+    records.push({
+      entityType: "capture",
+      entityId: c.id,
+      title: c.title || "Capture",
+      text: `${c.title ?? ""}\n${(c.rawText ?? "").slice(0, 500)}`,
+    });
+  }
+
+  return records;
+}
+
+/**
+ * Hybrid retrieval: keyword + semantic embeddings (when available).
+ * Semantic vectors are cached in-process by content hash.
+ */
+export async function retrieveRelevantRecords(
+  userId: string,
+  question: string,
+  limit = 12,
+): Promise<{ records: RetrievedRecord[]; usedSemantic: boolean }> {
+  const corpus = await collectCorpus(userId);
+  if (corpus.length === 0) return { records: [], usedSemantic: false };
+
+  const keywordHits = corpus
+    .map((r) => ({ r, kw: keywordScore(question, `${r.title}\n${r.text}`) }))
+    .filter((x) => x.kw > 0)
+    .sort((a, b) => b.kw - a.kw);
+
+  let usedSemantic = false;
+  const semanticScores = new Map<string, number>();
+
+  try {
+    const queryVec = await embedQuery(question);
+    if (queryVec) {
+      // Prefer embedding the keyword shortlist + a broader sample for recall.
+      const shortlistIds = new Set(
+        keywordHits.slice(0, 40).map((x) => `${x.r.entityType}:${x.r.entityId}`),
+      );
+      const candidates: ContextRecord[] = [];
+      for (const hit of keywordHits.slice(0, 40)) candidates.push(hit.r);
+      for (const r of corpus) {
+        const id = `${r.entityType}:${r.entityId}`;
+        if (shortlistIds.has(id)) continue;
+        candidates.push(r);
+        if (candidates.length >= 120) break;
+      }
+
+      const vectors = await embedItemsCached(
+        userId,
+        candidates.map((r) => ({
+          entityType: r.entityType,
+          entityId: r.entityId,
+          text: `${r.title}\n${r.text}`,
+        })),
+      );
+
+      if (vectors) {
+        usedSemantic = true;
+        for (const r of candidates) {
+          const vec = vectors.get(`${r.entityType}:${r.entityId}`);
+          if (!vec) continue;
+          semanticScores.set(`${r.entityType}:${r.entityId}`, cosineSimilarity(queryVec, vec));
+        }
+      }
+    }
+  } catch {
+    // Semantic unavailable — keyword-only is fine.
+  }
+
+  const scored = corpus.map((r) => {
+    const id = `${r.entityType}:${r.entityId}`;
+    const kw = keywordScore(question, `${r.title}\n${r.text}`);
+    const sem = semanticScores.get(id) ?? 0;
+    // Blend: semantic dominates when present; keyword still boosts exact matches.
+    const score = usedSemantic ? sem * 0.75 + kw * 0.25 : kw;
+    const method: RetrievedRecord["method"] =
+      usedSemantic && sem > 0 && kw > 0 ? "hybrid" : usedSemantic && sem > 0 ? "semantic" : "keyword";
+    return { r, score, method };
+  });
+
+  const minScore = usedSemantic ? 0.18 : 0;
+  const top = scored
+    .filter((x) => x.score > minScore)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(({ r, score, method }) => ({
+      entityType: r.entityType,
+      entityId: r.entityId,
+      title: r.title,
+      text: r.text,
+      score,
+      method,
+    }));
+
+  // If semantic threshold filtered everything, fall back to keyword hits.
+  if (top.length === 0 && keywordHits.length > 0) {
+    return {
+      records: keywordHits.slice(0, limit).map(({ r, kw }) => ({
+        entityType: r.entityType,
+        entityId: r.entityId,
+        title: r.title,
+        text: r.text,
+        score: kw,
+        method: "keyword" as const,
+      })),
+      usedSemantic: false,
+    };
+  }
+
+  return { records: top, usedSemantic };
+}

@@ -12,16 +12,13 @@
  * The returned shapes mirror the props the existing home components expect,
  * including ready-to-use hrefs, so the frontend can render them directly.
  */
-import { and, desc, eq } from "drizzle-orm";
-import { sourceRecords } from "@workspace/db/schema";
 import { listCaptureInboxForUser, type RecallCaptureItemDto } from "./capture-items";
 import { listNoteMetadataForUser, type RecallNoteMetadataDto } from "./notes";
 import { listProjectsForUser, type RecallProjectDto } from "./projects";
 import { listTasksForUser, type RecallTaskDto } from "./tasks";
-import { listConnectorsForUser } from "./connectors";
-import { aggregateFinance, parseDateRange, todayIso } from "./query-utils";
+import { loadSyncedFinanceAggregate } from "./finance-sync";
+import { todayIso } from "./query-utils";
 import { aiService } from "./ai";
-import { getDb } from "../lib/db";
 
 // ---------------------------------------------------------------------------
 // Response shapes (kept in sync with recall-app home components)
@@ -485,71 +482,18 @@ function fallbackSummary(attentionCount: number, parts: string[]): string {
   } that need your attention today — ${phrase}.`;
 }
 
-/**
- * This-month finance snapshot from already-synced source_records.
- * Avoids a live external API call on every home load.
- */
+/** This-month finance snapshot from already-synced source_records. */
 async function buildFinanceSnapshot(userId: string, today: string): Promise<FinanceSnapshot | null> {
-  const connectors = await listConnectorsForUser(userId);
-  const financeConn = connectors.find((c) => c.type === "finance_api");
-  if (!financeConn) return null;
-
-  const range = parseDateRange("this month", today);
-  const rows = await getDb()
-    .select({
-      recordMetadata: sourceRecords.recordMetadata,
-      sourceCreatedAt: sourceRecords.sourceCreatedAt,
-    })
-    .from(sourceRecords)
-    .where(
-      and(
-        eq(sourceRecords.userId, userId),
-        eq(sourceRecords.connectorId, financeConn.id),
-        eq(sourceRecords.recordType, "finance_transaction"),
-      ),
-    )
-    .orderBy(desc(sourceRecords.sourceCreatedAt))
-    .limit(5000);
-
-  if (rows.length === 0) {
-    return {
-      total: 0,
-      transactionCount: 0,
-      rangeLabel: "this month",
-      topPayee: null,
-      href: "/connectors",
-      needsSync: true,
-    };
-  }
-
-  const start = range.startDate ?? `${today.slice(0, 7)}-01`;
-  const end = range.endDate ?? today;
-  const txns = rows
-    .map((row) => {
-      const meta = row.recordMetadata ?? {};
-      const amount = typeof meta.amount === "number" ? meta.amount : Number(meta.amount);
-      if (!Number.isFinite(amount)) return null;
-      const date =
-        (typeof meta.date === "string" && meta.date) ||
-        (row.sourceCreatedAt ? row.sourceCreatedAt.toISOString().slice(0, 10) : "");
-      if (!date || date < start || date > end) return null;
-      return {
-        amount,
-        payee: typeof meta.payee === "string" ? meta.payee : null,
-        category: typeof meta.category === "string" ? meta.category : null,
-      };
-    })
-    .filter((t): t is NonNullable<typeof t> => t != null);
-
-  const agg = aggregateFinance(txns, "this month");
-  const top = agg.topPayees[0] ?? null;
+  const synced = await loadSyncedFinanceAggregate(userId, "this month", today);
+  if (!synced) return null;
+  const top = synced.finance.topPayees[0] ?? null;
   return {
-    total: agg.total,
-    transactionCount: agg.count,
+    total: synced.finance.total,
+    transactionCount: synced.finance.count,
     rangeLabel: "this month",
     topPayee: top ? { payee: top.payee, total: top.total } : null,
     href: "/connectors",
-    needsSync: false,
+    needsSync: synced.needsSync,
   };
 }
 
