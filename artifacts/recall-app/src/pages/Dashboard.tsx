@@ -1,13 +1,13 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { Sparkles } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import {
-  createCapture,
   listCaptureInbox,
   listProjects,
   useAiChat,
 } from "@workspace/api-client-react";
+import { fetchHome, ingestCapture, type HomeBriefingResponse } from "@/lib/recall-api";
 import { useAuth } from "@/context/AuthContext";
 import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
@@ -50,6 +50,7 @@ export function Dashboard() {
   const [aiReply, setAiReply] = useState<string | null>(null);
   const [captures, setCaptures] = useState<RecallCaptureItem[]>([]);
   const [projects, setProjects] = useState<RecallProject[]>([]);
+  const [home, setHome] = useState<HomeBriefingResponse | null>(null);
   const aiChat = useAiChat();
 
   const refreshCaptures = () =>
@@ -57,10 +58,19 @@ export function Dashboard() {
       .then((res) => setCaptures(res.items as RecallCaptureItem[]))
       .catch(() => {});
 
+  // Server-computed daily briefing (real data + AI hero). Falls back to the
+  // client heuristics below if the request fails (e.g. offline).
+  const refreshHome = useCallback(() => {
+    void fetchHome()
+      .then(setHome)
+      .catch(() => setHome(null));
+  }, []);
+
   useEffect(() => {
+    refreshHome();
     refreshCaptures();
     void listProjects().then((res) => setProjects(res.projects as RecallProject[])).catch(() => {});
-  }, []);
+  }, [refreshHome]);
 
   const handleAskRecall = async (text: string) => {
     const q = text.trim();
@@ -100,22 +110,25 @@ export function Dashboard() {
     if (!body) return;
     addTask(firstLineTitle(body));
     toast({ title: "Task added", description: "Added to your tasks." });
+    refreshHome();
   };
 
   const handleSendInbox = async (text: string) => {
     const body = text.trim();
     if (!body) return;
     try {
-      await createCapture({
+      // Async capture pipeline: stores the raw capture and queues AI extraction.
+      await ingestCapture({
         rawText: body,
-        mode: "inbox",
-        dueDate: null,
-        notebookId: null,
-        projectId: null,
-        tags: ["capture"],
+        sourceType: "manual",
+        title: firstLineTitle(body),
       });
-      toast({ title: "Sent to AI Inbox", description: "Recall will suggest how to organize it." });
+      toast({
+        title: "Sent to AI Inbox",
+        description: "Recall is analyzing it — check the inbox in a moment.",
+      });
       refreshCaptures();
+      refreshHome();
     } catch {
       toast({ title: "Could not send to inbox", variant: "destructive" });
     }
@@ -127,13 +140,15 @@ export function Dashboard() {
     day: "numeric",
   });
 
-  const briefing = buildDailyBriefing(userName, tasks, notes, captures, projects);
-  const focus = buildFocusNow(tasks, projects);
-  const timeline = buildTimeline(tasks, captures);
-  const waiting = buildWaitingOn(notes);
-  const dontForget = buildDontForget(notes, captures);
-  const insights = buildInsights(tasks, notes, captures, projects);
-  const contextAreas = buildContextAreas(notes, tasks, captures, projects);
+  // Prefer the server-computed briefing; fall back to client heuristics offline.
+  const date = home?.date ?? currentDate;
+  const briefing = home?.briefing ?? buildDailyBriefing(userName, tasks, notes, captures, projects);
+  const focus = home?.focus ?? buildFocusNow(tasks, projects);
+  const timeline = home?.timeline ?? buildTimeline(tasks, captures);
+  const waiting = home?.waiting ?? buildWaitingOn(notes);
+  const dontForget = home?.dontForget ?? buildDontForget(notes, captures);
+  const insights = home?.insights ?? buildInsights(tasks, notes, captures, projects);
+  const contextAreas = home?.contextAreas ?? buildContextAreas(notes, tasks, captures, projects);
 
   return (
     <AppLayout>
@@ -142,7 +157,7 @@ export function Dashboard() {
         <div className="orb-3 nebula-orb" />
 
         <div className="relative z-10 mx-auto w-full max-w-5xl space-y-6 px-4 pb-44 pt-6 md:px-8 md:pt-8">
-          <DailyBriefingCard briefing={briefing} date={currentDate} />
+          <DailyBriefingCard briefing={briefing} date={date} />
 
           {(aiChat.isPending || aiReply) && (
             <div className="nebula-glass rounded-2xl border border-indigo-500/20 px-5 py-4">

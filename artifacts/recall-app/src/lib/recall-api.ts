@@ -92,6 +92,68 @@ export async function fetchToday(): Promise<TodayResponse> {
   return apiFetch("/today");
 }
 
+export interface HomeBriefingItem {
+  id: string;
+  label: string;
+  href: string;
+}
+
+export interface HomeBriefingResponse {
+  date: string;
+  briefing: {
+    greeting: string;
+    attentionCount: number;
+    summary: string;
+    critical: HomeBriefingItem[];
+    waiting: HomeBriefingItem[];
+    reminders: HomeBriefingItem[];
+    suggestedAction: { label: string; href: string } | null;
+    degraded: boolean;
+    highlights: string[];
+  };
+  focus: {
+    title: string;
+    reason: string;
+    estimatedTime: string;
+    actionLabel: string;
+    href: string;
+  } | null;
+  timeline: {
+    id: string;
+    title: string;
+    bucket: "Now" | "Next" | "Today" | "This Week";
+    kind: "task" | "reminder" | "note";
+    href: string;
+    meta?: string;
+  }[];
+  waiting: {
+    id: string;
+    person: string;
+    item: string;
+    days: number;
+    href: string;
+    followUp: string;
+  }[];
+  dontForget: HomeBriefingItem[];
+  insights: {
+    id: string;
+    kind: "no-task" | "stale" | "follow-up" | "related";
+    text: string;
+    href?: string;
+  }[];
+  contextAreas: {
+    id: string;
+    name: string;
+    count: number;
+    href: string;
+    accent: string;
+  }[];
+}
+
+export async function fetchHome(): Promise<HomeBriefingResponse> {
+  return apiFetch("/home");
+}
+
 export async function queryRecall(question: string): Promise<{
   answer: string;
   confidence: number;

@@ -22,8 +22,10 @@ import {
   MoreHorizontal,
   Calendar,
   Clock,
+  FileSearch,
 } from "lucide-react";
 import { MicButton } from "@/components/MicButton";
+import { EvidenceDrawer } from "@/components/EvidenceDrawer";
 
 type Priority = RecallTask["priority"];
 
@@ -41,11 +43,13 @@ const PRIORITY_COLORS: Record<Priority, string> = {
 function TaskItem({
   task,
   onToggle,
+  onShowEvidence,
   highlighted,
   itemRef,
 }: {
   task: Task;
   onToggle: (id: string) => void;
+  onShowEvidence: (task: Task) => void;
   highlighted?: boolean;
   itemRef?: (el: HTMLDivElement | null) => void;
 }) {
@@ -94,6 +98,16 @@ function TaskItem({
         )}
       </div>
 
+      <button
+        type="button"
+        onClick={() => onShowEvidence(task)}
+        title="Show evidence"
+        aria-label="Show evidence"
+        className="w-8 h-8 flex items-center justify-center rounded-lg text-white/0 group-hover:text-white/40 hover:bg-white/10 hover:text-indigo-300 transition-all"
+      >
+        <FileSearch size={16} />
+      </button>
+
       <button className="w-8 h-8 flex items-center justify-center rounded-lg text-white/0 group-hover:text-white/40 hover:bg-white/10 transition-all">
         <MoreHorizontal size={16} />
       </button>
@@ -110,6 +124,7 @@ export function Tasks() {
   const [draft, setDraft] = useState("");
   const [quickAdd, setQuickAdd] = useState("");
   const [highlightedTaskId, setHighlightedTaskId] = useState<string | null>(null);
+  const [evidenceTask, setEvidenceTask] = useState<Task | null>(null);
   const quickAddRef = useRef<HTMLInputElement>(null);
   const taskRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const aiChat = useAiChat();
@@ -236,6 +251,7 @@ export function Tasks() {
                     key={task.id}
                     task={task}
                     onToggle={toggleTask}
+                    onShowEvidence={setEvidenceTask}
                     highlighted={highlightedTaskId === task.id}
                     itemRef={(el) => {
                       taskRefs.current[task.id] = el;
@@ -254,6 +270,7 @@ export function Tasks() {
                     key={task.id}
                     task={task}
                     onToggle={toggleTask}
+                    onShowEvidence={setEvidenceTask}
                     highlighted={highlightedTaskId === task.id}
                     itemRef={(el) => {
                       taskRefs.current[task.id] = el;
@@ -416,6 +433,13 @@ export function Tasks() {
           
         </div>
       </div>
+      <EvidenceDrawer
+        open={evidenceTask != null}
+        onClose={() => setEvidenceTask(null)}
+        entityType="task"
+        entityId={evidenceTask?.id ?? ""}
+        title={evidenceTask?.title}
+      />
     </AppLayout>
   );
 }
