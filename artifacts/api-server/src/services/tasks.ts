@@ -205,6 +205,21 @@ export async function updateTaskForUser(
   if (!existing[0]) return null;
 
   const wasCompleted = existing[0].completed;
+
+  // When the linked person changes, keep person: tags aligned unless the
+  // caller already sent an explicit tags array.
+  let tagsToWrite = input.tags;
+  if (input.requesterPersonId !== undefined && input.tags === undefined) {
+    const base = [...(existing[0].tags ?? [])].filter((t) => !/^person:/i.test(t));
+    if (input.requesterPersonId) {
+      const names = await personNamesById(userId, [input.requesterPersonId]);
+      const name = names.get(input.requesterPersonId);
+      tagsToWrite = name ? [...base, `person:${name}`] : base;
+    } else {
+      tagsToWrite = base;
+    }
+  }
+
   const [row] = await db
     .update(tasks)
     .set({
@@ -213,7 +228,7 @@ export async function updateTaskForUser(
       ...(input.priority !== undefined
         ? { priority: normalizePriority(input.priority) }
         : {}),
-      ...(input.tags !== undefined ? { tags: input.tags } : {}),
+      ...(tagsToWrite !== undefined ? { tags: tagsToWrite } : {}),
       ...(input.completed !== undefined ? { completed: input.completed } : {}),
       ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
       ...(input.requesterPersonId !== undefined

@@ -212,18 +212,10 @@ export function Tasks() {
     taskId: string,
     next: { personId: string | null; personName: string | null },
   ) => {
-    const task = tasks.find((t) => t.id === taskId);
-    const tags = [...(task?.tags ?? [])];
-    // Keep person: tags aligned with the assigned contact.
-    const withoutPerson = tags.filter((t) => !/^person:/i.test(t));
-    const nextTags =
-      next.personName && next.personName.trim()
-        ? [...withoutPerson, `person:${next.personName.trim()}`]
-        : withoutPerson;
+    // Server syncs person: tags when requesterPersonId changes.
     updateTask(taskId, {
       requesterPersonId: next.personId,
       requesterPersonName: next.personName,
-      tags: nextTags,
     });
   };
 
