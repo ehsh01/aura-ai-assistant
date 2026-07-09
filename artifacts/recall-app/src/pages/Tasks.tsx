@@ -9,7 +9,7 @@ import {
 } from "@/lib/recall-context";
 import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
-import { notesPath, peoplePath, readSearchParam, tasksPath } from "@/lib/recall-nav";
+import { askPath, notesPath, peoplePath, readSearchParam, tasksPath } from "@/lib/recall-nav";
 import {
   Check,
   Circle,
@@ -298,13 +298,37 @@ export function Tasks() {
                 Showing tasks linked to{" "}
                 <span className="font-medium">{personFilterName ?? "this person"}</span>
               </p>
-              <button
-                type="button"
-                onClick={clearPersonFilter}
-                className="flex-shrink-0 rounded-lg px-2 py-1 text-xs text-sky-200 hover:bg-sky-500/20"
-              >
-                Clear
-              </button>
+              <div className="flex flex-shrink-0 items-center gap-1.5">
+                {personFilterName && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigate(
+                        askPath({
+                          q: `What do I know about ${personFilterName}? What am I waiting on from them?`,
+                        }),
+                      )
+                    }
+                    className="rounded-lg px-2 py-1 text-xs text-sky-200 hover:bg-sky-500/20"
+                  >
+                    Ask
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => navigate(peoplePath({ personId: personFilterId }))}
+                  className="rounded-lg px-2 py-1 text-xs text-sky-200 hover:bg-sky-500/20"
+                >
+                  People
+                </button>
+                <button
+                  type="button"
+                  onClick={clearPersonFilter}
+                  className="rounded-lg px-2 py-1 text-xs text-sky-200 hover:bg-sky-500/20"
+                >
+                  Clear
+                </button>
+              </div>
             </div>
           )}
 
