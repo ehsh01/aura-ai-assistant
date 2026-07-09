@@ -55,9 +55,10 @@ export function documentsPath(opts?: { documentId?: string }): string {
   return q ? `/documents?${q}` : "/documents";
 }
 
-export function knowledgePath(opts?: { knowledgeId?: string }): string {
+export function knowledgePath(opts?: { knowledgeId?: string; person?: string }): string {
   const params = new URLSearchParams();
   if (opts?.knowledgeId) params.set("item", opts.knowledgeId);
+  if (opts?.person?.trim()) params.set("person", opts.person.trim());
   const q = params.toString();
   return q ? `/knowledge?${q}` : "/knowledge";
 }

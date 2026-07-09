@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation } from "wouter";
 import { BookMarked, Plus, X } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import {
@@ -7,10 +8,10 @@ import {
   updateKnowledge,
   type KnowledgeRecord,
 } from "@/lib/recall-api";
-import { NoteTagList } from "@/components/PersonTagLink";
+import { NoteTagList, parsePersonTag } from "@/components/PersonTagLink";
 import { PersonTagger } from "@/components/PersonTagger";
 import { toast } from "@/hooks/use-toast";
-import { readSearchParam } from "@/lib/recall-nav";
+import { knowledgePath, readSearchParam } from "@/lib/recall-nav";
 
 const ITEM_TYPES = ["note", "procedure", "reference", "snippet", "contact"] as const;
 
@@ -23,10 +24,12 @@ const TYPE_STYLES: Record<string, string> = {
 };
 
 export function Knowledge() {
+  const [location, navigate] = useLocation();
   const [items, setItems] = useState<KnowledgeRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [filter, setFilter] = useState<string>("all");
+  const [personFilter, setPersonFilter] = useState<string | null>(null);
   const [selected, setSelected] = useState<KnowledgeRecord | null>(null);
 
   const [title, setTitle] = useState("");
@@ -51,6 +54,10 @@ export function Knowledge() {
   }, []);
 
   useEffect(() => {
+    setPersonFilter(readSearchParam("person")?.trim() || null);
+  }, [location]);
+
+  useEffect(() => {
     if (loading || openedFromQuery.current || items.length === 0) return;
     const itemId = readSearchParam("item");
     if (!itemId) return;
@@ -62,10 +69,19 @@ export function Knowledge() {
     }
   }, [loading, items]);
 
-  const filtered = useMemo(
-    () => (filter === "all" ? items : items.filter((i) => i.itemType === filter)),
-    [items, filter],
-  );
+  const filtered = useMemo(() => {
+    const byType = filter === "all" ? items : items.filter((i) => i.itemType === filter);
+    if (!personFilter) return byType;
+    const lower = personFilter.toLowerCase();
+    return byType.filter((item) =>
+      item.tags.some((tag) => {
+        const name = parsePersonTag(tag);
+        if (!name) return false;
+        const n = name.toLowerCase();
+        return n === lower || n.includes(lower) || lower.includes(n);
+      }),
+    );
+  }, [items, filter, personFilter]);
 
   const save = async () => {
     if (!title.trim()) {
@@ -156,10 +172,32 @@ export function Knowledge() {
             ))}
           </div>
 
+          {personFilter && (
+            <div className="mt-4 flex items-center justify-between gap-2 rounded-xl border border-sky-500/25 bg-sky-500/10 px-3 py-2 text-xs text-sky-100">
+              <span>
+                Showing knowledge tagged{" "}
+                <span className="font-medium">{personFilter}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setPersonFilter(null);
+                  navigate(knowledgePath());
+                }}
+                className="inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
+              >
+                <X size={12} />
+                Clear
+              </button>
+            </div>
+          )}
+
           {loading && <p className="mt-8 text-white/40">Loading…</p>}
           {!loading && filtered.length === 0 && (
             <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-8 text-center text-white/45">
-              Nothing here yet. Capture a procedure or reference you want to reuse.
+              {personFilter
+                ? `No knowledge tagged to ${personFilter}.`
+                : "Nothing here yet. Capture a procedure or reference you want to reuse."}
             </div>
           )}
 

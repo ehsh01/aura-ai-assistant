@@ -547,6 +547,12 @@ export function People() {
                               </li>
                             ))}
                           </ul>
+                          <Link
+                            href={knowledgePath({ person: person.displayName })}
+                            className="mt-2 inline-block text-xs text-sky-300 no-underline hover:underline"
+                          >
+                            View all knowledge for {person.displayName.split(" ")[0]}
+                          </Link>
                         </div>
                       )}
 
