@@ -300,19 +300,28 @@ export function Tasks() {
               </p>
               <div className="flex flex-shrink-0 items-center gap-1.5">
                 {personFilterName && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      navigate(
-                        askPath({
-                          q: `What do I know about ${personFilterName}? What am I waiting on from them?`,
-                        }),
-                      )
-                    }
-                    className="rounded-lg px-2 py-1 text-xs text-sky-200 hover:bg-sky-500/20"
-                  >
-                    Ask
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        navigate(
+                          askPath({
+                            q: `What do I know about ${personFilterName}? What am I waiting on from them?`,
+                          }),
+                        )
+                      }
+                      className="rounded-lg px-2 py-1 text-xs text-sky-200 hover:bg-sky-500/20"
+                    >
+                      Ask
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate(notesPath({ person: personFilterName }))}
+                      className="rounded-lg px-2 py-1 text-xs text-sky-200 hover:bg-sky-500/20"
+                    >
+                      Notes
+                    </button>
+                  </>
                 )}
                 <button
                   type="button"
