@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { X, FileSearch } from "lucide-react";
+import { Link } from "wouter";
+import { X, FileSearch, User } from "lucide-react";
 import { listEntityEvidence, type EvidenceRecord } from "@/lib/recall-api";
+import { peoplePath } from "@/lib/recall-nav";
 
 type Props = {
   open: boolean;
@@ -56,11 +58,38 @@ export function EvidenceDrawer({ open, onClose, entityType, entityId, title }: P
           {!loading && items.length === 0 && (
             <p className="text-white/45">No evidence linked yet for this item.</p>
           )}
-          {items.map((item) => (
+          {items.map((item) => {
+            const meta = item.evidenceMetadata ?? {};
+            const personId = typeof meta.personId === "string" ? meta.personId : null;
+            const personName =
+              typeof meta.personName === "string"
+                ? meta.personName
+                : typeof meta.person === "string"
+                  ? meta.person
+                  : null;
+            return (
             <article key={item.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
               <p className="text-xs uppercase tracking-wider text-indigo-300/80">{item.claimType.replace(/_/g, " ")}</p>
               {item.evidenceText && (
                 <p className="mt-2 whitespace-pre-wrap text-sm text-white/80">{item.evidenceText}</p>
+              )}
+              {personName && (
+                <div className="mt-3">
+                  {personId ? (
+                    <Link
+                      href={peoplePath({ personId })}
+                      className="inline-flex items-center gap-1 rounded-md border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-xs text-sky-200 no-underline hover:bg-sky-500/20"
+                    >
+                      <User size={11} />
+                      {personName}
+                    </Link>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded-md border border-sky-500/20 bg-sky-500/10 px-2 py-0.5 text-xs text-sky-200/80">
+                      <User size={11} />
+                      {personName}
+                    </span>
+                  )}
+                </div>
               )}
               {item.url && (
                 <a
@@ -72,13 +101,14 @@ export function EvidenceDrawer({ open, onClose, entityType, entityId, title }: P
                   View source
                 </a>
               )}
-              {typeof item.evidenceMetadata?.confidence === "number" && (
+              {typeof meta.confidence === "number" && (
                 <p className="mt-2 text-xs text-white/40">
-                  Confidence: {Math.round(item.evidenceMetadata.confidence * 100)}%
+                  Confidence: {Math.round(meta.confidence * 100)}%
                 </p>
               )}
             </article>
-          ))}
+            );
+          })}
         </div>
       </aside>
     </div>
