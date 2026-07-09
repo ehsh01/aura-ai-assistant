@@ -1,4 +1,5 @@
 import { index, jsonb, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { people } from "./people";
 import { projects } from "./projects";
 import { users } from "./users";
 
@@ -16,11 +17,17 @@ export const knowledgeItems = pgTable(
     projectId: varchar("project_id", { length: 64 }).references(() => projects.id, {
       onDelete: "set null",
     }),
+    primaryPersonId: varchar("primary_person_id", { length: 64 }).references(() => people.id, {
+      onDelete: "set null",
+    }),
     sourceCaptureId: varchar("source_capture_id", { length: 64 }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
-  (table) => [index("knowledge_items_user_id_idx").on(table.userId)],
+  (table) => [
+    index("knowledge_items_user_id_idx").on(table.userId),
+    index("knowledge_items_primary_person_id_idx").on(table.primaryPersonId),
+  ],
 );
 
 export type KnowledgeItem = typeof knowledgeItems.$inferSelect;

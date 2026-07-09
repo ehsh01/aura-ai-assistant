@@ -29,6 +29,7 @@ const CreateKnowledgeBody = z.object({
   itemType: z.string().max(32).optional(),
   tags: z.array(z.string()).optional(),
   projectId: z.string().nullish(),
+  primaryPersonId: z.string().nullish(),
   sourceCaptureId: z.string().nullish(),
 });
 
@@ -38,6 +39,7 @@ const UpdateKnowledgeBody = z.object({
   itemType: z.string().max(32).optional(),
   tags: z.array(z.string()).optional(),
   projectId: z.string().nullish(),
+  primaryPersonId: z.string().nullish(),
 });
 
 const router: IRouter = Router();

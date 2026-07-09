@@ -37,7 +37,8 @@ if [ -n "${DATABASE_URL:-}" ] && command -v psql >/dev/null; then
   for mig in \
     lib/db/migrations/0002_capture_layer.sql \
     lib/db/migrations/0003_evidence_and_platform.sql \
-    lib/db/migrations/0004_entity_embeddings.sql
+    lib/db/migrations/0004_entity_embeddings.sql \
+    lib/db/migrations/0005_note_knowledge_person.sql
   do
     echo "--> Applying $mig"
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$mig"

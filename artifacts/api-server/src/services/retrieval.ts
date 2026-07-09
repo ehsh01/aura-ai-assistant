@@ -131,11 +131,14 @@ async function collectCorpus(
   }
   for (const n of notes.slice(0, CORPUS.notes)) {
     const tags = Array.isArray(n.tags) ? n.tags.join(",") : "";
+    const personBits = [n.primaryPersonName, n.primaryPersonId].filter(Boolean).join(" ");
     records.push({
       entityType: "note",
       entityId: n.id,
       title: n.title,
-      text: `${n.title}\n${(n.preview ?? n.content ?? "").slice(0, 600)}\ntags=${tags}`,
+      text: `${n.title}\n${(n.preview ?? n.content ?? "").slice(0, 600)}\ntags=${tags}${
+        personBits ? ` person=${personBits}` : ""
+      }`,
     });
   }
   for (const p of people.slice(0, CORPUS.people)) {
@@ -147,11 +150,14 @@ async function collectCorpus(
     });
   }
   for (const k of knowledge.slice(0, CORPUS.knowledge)) {
+    const personBits = [k.primaryPersonName, k.primaryPersonId].filter(Boolean).join(" ");
     records.push({
       entityType: "knowledge",
       entityId: k.id,
       title: k.title,
-      text: `${k.title}\n${k.content.slice(0, 600)}\ntags=${k.tags.join(",")}`,
+      text: `${k.title}\n${k.content.slice(0, 600)}\ntags=${k.tags.join(",")}${
+        personBits ? ` person=${personBits}` : ""
+      }`,
     });
   }
   for (const d of documents.slice(0, CORPUS.documents)) {

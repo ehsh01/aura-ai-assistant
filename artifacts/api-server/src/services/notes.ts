@@ -12,6 +12,11 @@ import {
 } from "./note-attachments";
 import { writeAuditLog } from "./audit";
 import { warmEntityEmbedding } from "./embedding-cache";
+import {
+  personNamesById,
+  resolvePersonIdFromTags,
+  syncPersonTag,
+} from "./person-tags";
 
 export type RecallNoteDto = {
   id: string;
@@ -24,6 +29,8 @@ export type RecallNoteDto = {
   pinned: boolean;
   notebookId: string | null;
   projectId: string | null;
+  primaryPersonId: string | null;
+  primaryPersonName: string | null;
   attachmentCount: number;
   createdAt: string;
   updatedAt: string;
@@ -40,6 +47,7 @@ export type CreateNoteInput = {
   pinned?: boolean;
   notebookId?: string | null;
   projectId?: string | null;
+  primaryPersonId?: string | null;
   pendingAttachments?: PendingNoteAttachment[];
 };
 
@@ -51,9 +59,14 @@ export type UpdateNoteInput = {
   pinned?: boolean;
   notebookId?: string | null;
   projectId?: string | null;
+  primaryPersonId?: string | null;
 };
 
-function toDto(row: Note, attachmentCount = 0): RecallNoteDto {
+function toDto(
+  row: Note,
+  attachmentCount = 0,
+  personName: string | null = null,
+): RecallNoteDto {
   const format = row.contentFormat === "html" ? "html" : "plain";
   return {
     id: row.id,
@@ -66,6 +79,8 @@ function toDto(row: Note, attachmentCount = 0): RecallNoteDto {
     pinned: row.pinned,
     notebookId: row.notebookId ?? null,
     projectId: row.projectId ?? null,
+    primaryPersonId: row.primaryPersonId ?? null,
+    primaryPersonName: personName,
     attachmentCount,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -98,7 +113,17 @@ export async function listNotesForUser(userId: string): Promise<RecallNoteDto[]>
     .where(eq(notes.userId, userId))
     .orderBy(desc(notes.updatedAt));
   const counts = await attachmentCountsForNotes(rows.map((row) => row.id));
-  return rows.map((row) => toDto(row, counts.get(row.id) ?? 0));
+  const names = await personNamesById(
+    userId,
+    rows.map((r) => r.primaryPersonId).filter((id): id is string => Boolean(id)),
+  );
+  return rows.map((row) =>
+    toDto(
+      row,
+      counts.get(row.id) ?? 0,
+      row.primaryPersonId ? names.get(row.primaryPersonId) ?? null : null,
+    ),
+  );
 }
 
 export async function listNoteMetadataForUser(userId: string): Promise<RecallNoteMetadataDto[]> {
@@ -172,7 +197,19 @@ export async function searchNotesForUser(
     .limit(limit);
 
   const counts = await attachmentCountsForNotes(rows.map((row) => row.id));
-  return rows.map((row) => toMetadata(toDto(row, counts.get(row.id) ?? 0)));
+  const names = await personNamesById(
+    userId,
+    rows.map((r) => r.primaryPersonId).filter((id): id is string => Boolean(id)),
+  );
+  return rows.map((row) =>
+    toMetadata(
+      toDto(
+        row,
+        counts.get(row.id) ?? 0,
+        row.primaryPersonId ? names.get(row.primaryPersonId) ?? null : null,
+      ),
+    ),
+  );
 }
 
 export async function getNoteForUser(
@@ -186,7 +223,12 @@ export async function getNoteForUser(
     .limit(1);
   if (!row[0]) return null;
   const counts = await attachmentCountsForNotes([noteId]);
-  return toDto(row[0], counts.get(noteId) ?? 0);
+  let personName: string | null = null;
+  if (row[0].primaryPersonId) {
+    const names = await personNamesById(userId, [row[0].primaryPersonId]);
+    personName = names.get(row[0].primaryPersonId) ?? null;
+  }
+  return toDto(row[0], counts.get(noteId) ?? 0, personName);
 }
 
 export async function createNoteForUser(
@@ -199,6 +241,23 @@ export async function createNoteForUser(
   const now = new Date();
   const id = input.id?.trim() || newNoteId();
 
+  let tags = [...(input.tags ?? [])];
+  let primaryPersonId: string | null;
+  if (input.primaryPersonId === null) {
+    primaryPersonId = null;
+    tags = syncPersonTag(tags, null);
+  } else if (input.primaryPersonId) {
+    primaryPersonId = input.primaryPersonId;
+  } else {
+    primaryPersonId = await resolvePersonIdFromTags(userId, tags);
+  }
+  let personName: string | null = null;
+  if (primaryPersonId) {
+    const names = await personNamesById(userId, [primaryPersonId]);
+    personName = names.get(primaryPersonId) ?? null;
+    if (personName) tags = syncPersonTag(tags, personName);
+  }
+
   const [row] = await db
     .insert(notes)
     .values({
@@ -206,31 +265,38 @@ export async function createNoteForUser(
       userId,
       notebookId: input.notebookId ?? null,
       projectId: input.projectId ?? null,
+      primaryPersonId,
       title: input.title?.trim() || "Untitled",
       content,
       contentFormat,
       preview: previewFromContent(
         contentFormat === "html" ? content.replace(/<[^>]+>/g, " ") : content,
       ),
-      tags: input.tags ?? [],
+      tags,
       pinned: input.pinned ?? false,
       createdAt: now,
       updatedAt: now,
     })
     .returning();
 
-  const dto = toDto(row!, 0);
+  const dto = toDto(row!, 0, personName);
   await writeAuditLog({
     userId,
     action: "note_created",
     entityType: "note",
     entityId: dto.id,
-    metadata: { title: dto.title },
+    metadata: {
+      title: dto.title,
+      primaryPersonId: dto.primaryPersonId,
+      primaryPersonName: dto.primaryPersonName,
+    },
   });
   warmEntityEmbedding(userId, {
     entityType: "note",
     entityId: dto.id,
-    text: `${dto.title}\n${dto.preview}\ntags=${dto.tags.join(",")}`,
+    text: `${dto.title}\n${dto.preview}\ntags=${dto.tags.join(",")}${
+      personName ? ` person=${personName}` : ""
+    }`,
   });
   return dto;
 }
@@ -348,6 +414,7 @@ export async function bulkUpsertNotesForUser(
         contentFormat: item.contentFormat,
         projectId: item.projectId,
         notebookId: item.notebookId,
+        primaryPersonId: item.primaryPersonId,
       });
       if (updated) results.push(updated);
     } else {
@@ -372,6 +439,22 @@ export async function updateNoteForUser(
 
   if (!existing[0]) return null;
 
+  let tagsToWrite = input.tags;
+  let primaryPersonIdToWrite = input.primaryPersonId;
+
+  if (input.primaryPersonId !== undefined && input.tags === undefined) {
+    const base = [...(existing[0].tags ?? [])].filter((t) => !/^person:/i.test(t));
+    if (input.primaryPersonId) {
+      const names = await personNamesById(userId, [input.primaryPersonId]);
+      const name = names.get(input.primaryPersonId);
+      tagsToWrite = name ? [...base, `person:${name}`] : base;
+    } else {
+      tagsToWrite = base;
+    }
+  } else if (input.tags !== undefined && input.primaryPersonId === undefined) {
+    primaryPersonIdToWrite = await resolvePersonIdFromTags(userId, input.tags);
+  }
+
   const nextContent = input.content ?? existing[0].content;
   const nextFormat = input.contentFormat ?? existing[0].contentFormat ?? "plain";
   const [row] = await db
@@ -387,10 +470,13 @@ export async function updateNoteForUser(
             ),
           }
         : {}),
-      ...(input.tags !== undefined ? { tags: input.tags } : {}),
+      ...(tagsToWrite !== undefined ? { tags: tagsToWrite } : {}),
       ...(input.pinned !== undefined ? { pinned: input.pinned } : {}),
       ...(input.notebookId !== undefined ? { notebookId: input.notebookId } : {}),
       ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      ...(primaryPersonIdToWrite !== undefined
+        ? { primaryPersonId: primaryPersonIdToWrite }
+        : {}),
       updatedAt: new Date(),
     })
     .where(and(eq(notes.id, noteId), eq(notes.userId, userId)))
@@ -398,17 +484,25 @@ export async function updateNoteForUser(
 
   if (!row) return null;
   const counts = await attachmentCountsForNotes([row.id]);
-  const dto = toDto(row, counts.get(row.id) ?? 0);
+  let personName: string | null = null;
+  if (row.primaryPersonId) {
+    const names = await personNamesById(userId, [row.primaryPersonId]);
+    personName = names.get(row.primaryPersonId) ?? null;
+  }
+  const dto = toDto(row, counts.get(row.id) ?? 0, personName);
   if (
     input.title !== undefined ||
     input.content !== undefined ||
     input.contentFormat !== undefined ||
-    input.tags !== undefined
+    input.tags !== undefined ||
+    input.primaryPersonId !== undefined
   ) {
     warmEntityEmbedding(userId, {
       entityType: "note",
       entityId: dto.id,
-      text: `${dto.title}\n${dto.preview}\ntags=${dto.tags.join(",")}`,
+      text: `${dto.title}\n${dto.preview}\ntags=${dto.tags.join(",")}${
+        personName ? ` person=${personName}` : ""
+      }`,
     });
   }
   return dto;

@@ -419,6 +419,7 @@ export async function acceptCaptureForUser(
       tags,
       projectId,
       notebookId,
+      primaryPersonId: person?.id ?? null,
     });
     if (note && item.rawCaptureId) {
       await createEvidenceForUser(userId, {

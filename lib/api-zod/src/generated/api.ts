@@ -310,6 +310,8 @@ export const ListNotesResponse = zod.object({
   "pinned": zod.boolean(),
   "notebookId": zod.string().nullish(),
   "projectId": zod.string().nullish(),
+  "primaryPersonId": zod.string().nullish().describe('Primary person linked to this note.'),
+  "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
   "createdAt": zod.string(),
@@ -329,7 +331,8 @@ export const CreateNoteBody = zod.object({
   "tags": zod.array(zod.string()).optional(),
   "pinned": zod.boolean().optional(),
   "notebookId": zod.string().nullish(),
-  "projectId": zod.string().nullish()
+  "projectId": zod.string().nullish(),
+  "primaryPersonId": zod.string().nullish().describe('Primary person linked to this note.')
 })
 
 
@@ -349,7 +352,8 @@ export const BulkUpsertNotesBody = zod.object({
   "tags": zod.array(zod.string()).optional(),
   "pinned": zod.boolean().optional(),
   "notebookId": zod.string().nullish(),
-  "projectId": zod.string().nullish()
+  "projectId": zod.string().nullish(),
+  "primaryPersonId": zod.string().nullish().describe('Primary person linked to this note.')
 })).max(bulkUpsertNotesBodyNotesMax)
 })
 
@@ -363,6 +367,8 @@ export const BulkUpsertNotesResponse = zod.object({
   "pinned": zod.boolean(),
   "notebookId": zod.string().nullish(),
   "projectId": zod.string().nullish(),
+  "primaryPersonId": zod.string().nullish().describe('Primary person linked to this note.'),
+  "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
   "createdAt": zod.string(),
@@ -404,6 +410,8 @@ export const ImportEnexNotesResponse = zod.object({
   "pinned": zod.boolean(),
   "notebookId": zod.string().nullish(),
   "projectId": zod.string().nullish(),
+  "primaryPersonId": zod.string().nullish().describe('Primary person linked to this note.'),
+  "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
   "createdAt": zod.string(),
@@ -430,6 +438,8 @@ export const GetNoteResponse = zod.object({
   "pinned": zod.boolean(),
   "notebookId": zod.string().nullish(),
   "projectId": zod.string().nullish(),
+  "primaryPersonId": zod.string().nullish().describe('Primary person linked to this note.'),
+  "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
   "createdAt": zod.string(),
@@ -451,7 +461,8 @@ export const UpdateNoteBody = zod.object({
   "tags": zod.array(zod.string()).optional(),
   "pinned": zod.boolean().optional(),
   "notebookId": zod.string().nullish(),
-  "projectId": zod.string().nullish()
+  "projectId": zod.string().nullish(),
+  "primaryPersonId": zod.string().nullish().describe('Primary person linked to this note. Pass null to clear.')
 })
 
 export const UpdateNoteResponse = zod.object({
@@ -464,6 +475,8 @@ export const UpdateNoteResponse = zod.object({
   "pinned": zod.boolean(),
   "notebookId": zod.string().nullish(),
   "projectId": zod.string().nullish(),
+  "primaryPersonId": zod.string().nullish().describe('Primary person linked to this note.'),
+  "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
   "createdAt": zod.string(),
@@ -610,6 +623,8 @@ export const AcceptCaptureResponse = zod.object({
   "pinned": zod.boolean(),
   "notebookId": zod.string().nullish(),
   "projectId": zod.string().nullish(),
+  "primaryPersonId": zod.string().nullish().describe('Primary person linked to this note.'),
+  "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
   "createdAt": zod.string(),
@@ -696,6 +711,8 @@ export const GetProjectResponse = zod.object({
   "pinned": zod.boolean(),
   "notebookId": zod.string().nullish(),
   "projectId": zod.string().nullish(),
+  "primaryPersonId": zod.string().nullish().describe('Primary person linked to this note.'),
+  "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
   "createdAt": zod.string(),

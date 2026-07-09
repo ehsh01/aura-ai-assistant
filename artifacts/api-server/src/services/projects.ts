@@ -188,6 +188,8 @@ export async function getProjectDetailForUser(
       pinned: note.pinned,
       notebookId: note.notebookId ?? null,
       projectId: note.projectId ?? null,
+      primaryPersonId: note.primaryPersonId ?? null,
+      primaryPersonName: null,
       contentFormat: note.contentFormat === "html" ? "html" : "plain",
       attachmentCount: 0,
       createdAt: note.createdAt.toISOString(),

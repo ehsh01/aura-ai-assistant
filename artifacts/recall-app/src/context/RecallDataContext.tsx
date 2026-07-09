@@ -174,6 +174,7 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
         notebookId: patch.notebookId,
         projectId: patch.projectId,
         contentFormat: patch.contentFormat,
+        primaryPersonId: patch.primaryPersonId,
       });
       setNotes((prev) => prev.map((n) => (n.id === id ? (updated as RecallNote) : n)));
       if (patch.notebookId !== undefined) {

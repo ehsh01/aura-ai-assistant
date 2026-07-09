@@ -16,4 +16,6 @@ export interface CreateNoteRequest {
   pinned?: boolean;
   notebookId?: string | null;
   projectId?: string | null;
+  /** Primary person linked to this note. */
+  primaryPersonId?: string | null;
 }

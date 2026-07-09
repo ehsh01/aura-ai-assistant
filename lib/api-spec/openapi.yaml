@@ -1401,6 +1401,14 @@ components:
         projectId:
           type: string
           nullable: true
+        primaryPersonId:
+          type: string
+          nullable: true
+          description: Primary person linked to this note.
+        primaryPersonName:
+          type: string
+          nullable: true
+          description: Display name for primaryPersonId when resolved.
         contentFormat:
           type: string
           enum: [plain, html]
@@ -1446,6 +1454,14 @@ components:
         projectId:
           type: string
           nullable: true
+        primaryPersonId:
+          type: string
+          nullable: true
+          description: Primary person linked to this note.
+        primaryPersonName:
+          type: string
+          nullable: true
+          description: Display name for primaryPersonId when resolved.
         contentFormat:
           type: string
           enum: [plain, html]
@@ -1528,6 +1544,10 @@ components:
         projectId:
           type: string
           nullable: true
+        primaryPersonId:
+          type: string
+          nullable: true
+          description: Primary person linked to this note.
     UpdateNoteRequest:
       type: object
       properties:
@@ -1550,6 +1570,10 @@ components:
         projectId:
           type: string
           nullable: true
+        primaryPersonId:
+          type: string
+          nullable: true
+          description: Primary person linked to this note. Pass null to clear.
     BulkNotesRequest:
       type: object
       properties:

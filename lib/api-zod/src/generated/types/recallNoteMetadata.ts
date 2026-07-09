@@ -16,6 +16,10 @@ export interface RecallNoteMetadata {
   pinned: boolean;
   notebookId?: string | null;
   projectId?: string | null;
+  /** Primary person linked to this note. */
+  primaryPersonId?: string | null;
+  /** Display name for primaryPersonId when resolved. */
+  primaryPersonName?: string | null;
   contentFormat: RecallNoteMetadataContentFormat;
   attachmentCount: number;
   createdAt: string;

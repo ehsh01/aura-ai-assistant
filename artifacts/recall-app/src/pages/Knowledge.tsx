@@ -84,14 +84,18 @@ export function Knowledge() {
     const byType = filter === "all" ? items : items.filter((i) => i.itemType === filter);
     if (!personFilter) return byType;
     const lower = personFilter.toLowerCase();
-    return byType.filter((item) =>
-      item.tags.some((tag) => {
+    return byType.filter((item) => {
+      if (item.primaryPersonName) {
+        const n = item.primaryPersonName.toLowerCase();
+        if (n === lower || n.includes(lower) || lower.includes(n)) return true;
+      }
+      return item.tags.some((tag) => {
         const name = parsePersonTag(tag);
         if (!name) return false;
         const n = name.toLowerCase();
         return n === lower || n.includes(lower) || lower.includes(n);
-      }),
-    );
+      });
+    });
   }, [items, filter, personFilter]);
 
   const save = async () => {

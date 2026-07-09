@@ -17,6 +17,10 @@ export interface RecallNote {
   pinned: boolean;
   notebookId?: string | null;
   projectId?: string | null;
+  /** Primary person linked to this note. */
+  primaryPersonId?: string | null;
+  /** Display name for primaryPersonId when resolved. */
+  primaryPersonName?: string | null;
   contentFormat: RecallNoteContentFormat;
   attachmentCount: number;
   createdAt: string;

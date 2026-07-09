@@ -4,6 +4,11 @@ import { getDb } from "../lib/db";
 import { newKnowledgeId } from "../lib/recall-format";
 import { writeAuditLog } from "./audit";
 import { warmEntityEmbedding } from "./embedding-cache";
+import {
+  personNamesById,
+  resolvePersonIdFromTags,
+  syncPersonTag,
+} from "./person-tags";
 
 export type KnowledgeDto = {
   id: string;
@@ -12,12 +17,14 @@ export type KnowledgeDto = {
   itemType: string;
   tags: string[];
   projectId: string | null;
+  primaryPersonId: string | null;
+  primaryPersonName: string | null;
   sourceCaptureId: string | null;
   createdAt: string;
   updatedAt: string;
 };
 
-function toDto(row: KnowledgeItem): KnowledgeDto {
+function toDto(row: KnowledgeItem, personName: string | null = null): KnowledgeDto {
   return {
     id: row.id,
     title: row.title,
@@ -25,6 +32,8 @@ function toDto(row: KnowledgeItem): KnowledgeDto {
     itemType: row.itemType,
     tags: row.tags ?? [],
     projectId: row.projectId ?? null,
+    primaryPersonId: row.primaryPersonId ?? null,
+    primaryPersonName: personName,
     sourceCaptureId: row.sourceCaptureId ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -37,7 +46,13 @@ export async function listKnowledgeForUser(userId: string): Promise<KnowledgeDto
     .from(knowledgeItems)
     .where(eq(knowledgeItems.userId, userId))
     .orderBy(desc(knowledgeItems.updatedAt));
-  return rows.map(toDto);
+  const names = await personNamesById(
+    userId,
+    rows.map((r) => r.primaryPersonId).filter((id): id is string => Boolean(id)),
+  );
+  return rows.map((row) =>
+    toDto(row, row.primaryPersonId ? names.get(row.primaryPersonId) ?? null : null),
+  );
 }
 
 export async function createKnowledgeForUser(
@@ -48,9 +63,27 @@ export async function createKnowledgeForUser(
     itemType?: string;
     tags?: string[];
     projectId?: string | null;
+    primaryPersonId?: string | null;
     sourceCaptureId?: string | null;
   },
 ): Promise<KnowledgeDto> {
+  let tags = [...(input.tags ?? [])];
+  let primaryPersonId: string | null;
+  if (input.primaryPersonId === null) {
+    primaryPersonId = null;
+    tags = syncPersonTag(tags, null);
+  } else if (input.primaryPersonId) {
+    primaryPersonId = input.primaryPersonId;
+  } else {
+    primaryPersonId = await resolvePersonIdFromTags(userId, tags);
+  }
+  let personName: string | null = null;
+  if (primaryPersonId) {
+    const names = await personNamesById(userId, [primaryPersonId]);
+    personName = names.get(primaryPersonId) ?? null;
+    if (personName) tags = syncPersonTag(tags, personName);
+  }
+
   const now = new Date();
   const [row] = await getDb()
     .insert(knowledgeItems)
@@ -60,25 +93,33 @@ export async function createKnowledgeForUser(
       title: input.title.trim(),
       content: input.content ?? "",
       itemType: input.itemType ?? "note",
-      tags: input.tags ?? [],
+      tags,
       projectId: input.projectId ?? null,
+      primaryPersonId,
       sourceCaptureId: input.sourceCaptureId ?? null,
       createdAt: now,
       updatedAt: now,
     })
     .returning();
-  const dto = toDto(row!);
+  const dto = toDto(row!, personName);
   await writeAuditLog({
     userId,
     action: "knowledge_created",
     entityType: "knowledge",
     entityId: dto.id,
-    metadata: { title: dto.title, itemType: dto.itemType },
+    metadata: {
+      title: dto.title,
+      itemType: dto.itemType,
+      primaryPersonId: dto.primaryPersonId,
+      primaryPersonName: dto.primaryPersonName,
+    },
   });
   warmEntityEmbedding(userId, {
     entityType: "knowledge",
     entityId: dto.id,
-    text: `${dto.title}\n${dto.content.slice(0, 600)}\ntags=${dto.tags.join(",")}`,
+    text: `${dto.title}\n${dto.content.slice(0, 600)}\ntags=${dto.tags.join(",")}${
+      personName ? ` person=${personName}` : ""
+    }`,
   });
   return dto;
 }
@@ -92,7 +133,13 @@ export async function getKnowledgeForUser(
     .from(knowledgeItems)
     .where(and(eq(knowledgeItems.id, itemId), eq(knowledgeItems.userId, userId)))
     .limit(1);
-  return rows[0] ? toDto(rows[0]) : null;
+  if (!rows[0]) return null;
+  let personName: string | null = null;
+  if (rows[0].primaryPersonId) {
+    const names = await personNamesById(userId, [rows[0].primaryPersonId]);
+    personName = names.get(rows[0].primaryPersonId) ?? null;
+  }
+  return toDto(rows[0], personName);
 }
 
 export async function updateKnowledgeForUser(
@@ -104,10 +151,31 @@ export async function updateKnowledgeForUser(
     itemType?: string;
     tags?: string[];
     projectId?: string | null;
+    primaryPersonId?: string | null;
   },
 ): Promise<KnowledgeDto | null> {
-  const existing = await getKnowledgeForUser(userId, itemId);
-  if (!existing) return null;
+  const existingRow = await getDb()
+    .select()
+    .from(knowledgeItems)
+    .where(and(eq(knowledgeItems.id, itemId), eq(knowledgeItems.userId, userId)))
+    .limit(1);
+  if (!existingRow[0]) return null;
+
+  let tagsToWrite = input.tags;
+  let primaryPersonIdToWrite = input.primaryPersonId;
+
+  if (input.primaryPersonId !== undefined && input.tags === undefined) {
+    const base = [...(existingRow[0].tags ?? [])].filter((t) => !/^person:/i.test(t));
+    if (input.primaryPersonId) {
+      const names = await personNamesById(userId, [input.primaryPersonId]);
+      const name = names.get(input.primaryPersonId);
+      tagsToWrite = name ? [...base, `person:${name}`] : base;
+    } else {
+      tagsToWrite = base;
+    }
+  } else if (input.tags !== undefined && input.primaryPersonId === undefined) {
+    primaryPersonIdToWrite = await resolvePersonIdFromTags(userId, input.tags);
+  }
 
   const [row] = await getDb()
     .update(knowledgeItems)
@@ -115,19 +183,29 @@ export async function updateKnowledgeForUser(
       ...(input.title !== undefined ? { title: input.title.trim() } : {}),
       ...(input.content !== undefined ? { content: input.content } : {}),
       ...(input.itemType !== undefined ? { itemType: input.itemType } : {}),
-      ...(input.tags !== undefined ? { tags: input.tags } : {}),
+      ...(tagsToWrite !== undefined ? { tags: tagsToWrite } : {}),
       ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      ...(primaryPersonIdToWrite !== undefined
+        ? { primaryPersonId: primaryPersonIdToWrite }
+        : {}),
       updatedAt: new Date(),
     })
     .where(and(eq(knowledgeItems.id, itemId), eq(knowledgeItems.userId, userId)))
     .returning();
 
   if (!row) return null;
-  const dto = toDto(row);
+  let personName: string | null = null;
+  if (row.primaryPersonId) {
+    const names = await personNamesById(userId, [row.primaryPersonId]);
+    personName = names.get(row.primaryPersonId) ?? null;
+  }
+  const dto = toDto(row, personName);
   warmEntityEmbedding(userId, {
     entityType: "knowledge",
     entityId: dto.id,
-    text: `${dto.title}\n${dto.content.slice(0, 600)}\ntags=${dto.tags.join(",")}`,
+    text: `${dto.title}\n${dto.content.slice(0, 600)}\ntags=${dto.tags.join(",")}${
+      personName ? ` person=${personName}` : ""
+    }`,
   });
   return dto;
 }

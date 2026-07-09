@@ -23,6 +23,8 @@ export interface RecallNote {
   pinned: boolean;
   notebookId?: string | null;
   projectId?: string | null;
+  primaryPersonId?: string | null;
+  primaryPersonName?: string | null;
   attachmentCount?: number;
   createdAt?: string;
   updatedAt?: string;

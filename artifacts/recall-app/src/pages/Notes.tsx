@@ -233,6 +233,10 @@ export function Notes() {
   const matchesPerson = (note: RecallNote) => {
     if (!personFilter) return true;
     const lower = personFilter.toLowerCase();
+    if (note.primaryPersonName) {
+      const n = note.primaryPersonName.toLowerCase();
+      if (n === lower || n.includes(lower) || lower.includes(n)) return true;
+    }
     return note.tags.some((tag) => {
       const name = parsePersonTag(tag);
       if (!name) return false;

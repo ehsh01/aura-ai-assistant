@@ -1,5 +1,6 @@
 import { boolean, jsonb, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { notebooks } from "./notebooks";
+import { people } from "./people";
 import { projects } from "./projects";
 import { users } from "./users";
 
@@ -12,6 +13,9 @@ export const notes = pgTable("notes", {
     onDelete: "set null",
   }),
   projectId: varchar("project_id", { length: 64 }).references(() => projects.id, {
+    onDelete: "set null",
+  }),
+  primaryPersonId: varchar("primary_person_id", { length: 64 }).references(() => people.id, {
     onDelete: "set null",
   }),
   title: varchar("title", { length: 500 }).notNull().default("Untitled"),

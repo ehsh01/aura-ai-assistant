@@ -280,6 +280,10 @@ export interface RecallNoteMetadata {
   pinned: boolean;
   notebookId?: string | null;
   projectId?: string | null;
+  /** Primary person linked to this note. */
+  primaryPersonId?: string | null;
+  /** Display name for primaryPersonId when resolved. */
+  primaryPersonName?: string | null;
   contentFormat: RecallNoteMetadataContentFormat;
   attachmentCount: number;
   createdAt: string;
@@ -474,6 +478,10 @@ export interface RecallNote {
   pinned: boolean;
   notebookId?: string | null;
   projectId?: string | null;
+  /** Primary person linked to this note. */
+  primaryPersonId?: string | null;
+  /** Display name for primaryPersonId when resolved. */
+  primaryPersonName?: string | null;
   contentFormat: RecallNoteContentFormat;
   attachmentCount: number;
   createdAt: string;
@@ -521,6 +529,8 @@ export interface CreateNoteRequest {
   pinned?: boolean;
   notebookId?: string | null;
   projectId?: string | null;
+  /** Primary person linked to this note. */
+  primaryPersonId?: string | null;
 }
 
 export type UpdateNoteRequestContentFormat = typeof UpdateNoteRequestContentFormat[keyof typeof UpdateNoteRequestContentFormat];
@@ -539,6 +549,8 @@ export interface UpdateNoteRequest {
   pinned?: boolean;
   notebookId?: string | null;
   projectId?: string | null;
+  /** Primary person linked to this note. Pass null to clear. */
+  primaryPersonId?: string | null;
 }
 
 export interface BulkNotesRequest {

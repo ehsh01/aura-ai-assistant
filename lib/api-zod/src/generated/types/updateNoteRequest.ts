@@ -15,4 +15,6 @@ export interface UpdateNoteRequest {
   pinned?: boolean;
   notebookId?: string | null;
   projectId?: string | null;
+  /** Primary person linked to this note. Pass null to clear. */
+  primaryPersonId?: string | null;
 }

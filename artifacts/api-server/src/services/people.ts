@@ -314,7 +314,7 @@ export async function getPersonRelatedForUser(
       ),
     );
 
-  // Notes / knowledge linked via person:DisplayName tags (written on Inbox accept).
+  // Prefer FK; fall back to person: tags for rows not yet backfilled.
   const tagNeedle = `%person:${person.displayName}%`;
   const [taggedNotes, taggedKnowledge] = await Promise.all([
     getDb()
@@ -325,7 +325,13 @@ export async function getPersonRelatedForUser(
       })
       .from(notes)
       .where(
-        and(eq(notes.userId, userId), sql`${notes.tags}::text ilike ${tagNeedle}`),
+        and(
+          eq(notes.userId, userId),
+          or(
+            eq(notes.primaryPersonId, personId),
+            sql`${notes.tags}::text ilike ${tagNeedle}`,
+          ),
+        ),
       )
       .orderBy(desc(notes.updatedAt))
       .limit(12),
@@ -339,7 +345,10 @@ export async function getPersonRelatedForUser(
       .where(
         and(
           eq(knowledgeItems.userId, userId),
-          sql`${knowledgeItems.tags}::text ilike ${tagNeedle}`,
+          or(
+            eq(knowledgeItems.primaryPersonId, personId),
+            sql`${knowledgeItems.tags}::text ilike ${tagNeedle}`,
+          ),
         ),
       )
       .orderBy(desc(knowledgeItems.updatedAt))

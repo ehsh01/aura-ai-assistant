@@ -338,6 +338,8 @@ export type KnowledgeRecord = {
   itemType: string;
   tags: string[];
   projectId: string | null;
+  primaryPersonId: string | null;
+  primaryPersonName: string | null;
   sourceCaptureId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -352,6 +354,7 @@ export async function createKnowledge(input: {
   content?: string;
   itemType?: string;
   tags?: string[];
+  primaryPersonId?: string | null;
 }): Promise<KnowledgeRecord> {
   return apiFetch("/knowledge", { method: "POST", body: JSON.stringify(input) });
 }
@@ -364,6 +367,7 @@ export async function updateKnowledge(
     itemType?: string;
     tags?: string[];
     projectId?: string | null;
+    primaryPersonId?: string | null;
   },
 ): Promise<KnowledgeRecord> {
   return apiFetch(`/knowledge/${encodeURIComponent(itemId)}`, {
