@@ -7,7 +7,7 @@ import { useRecallData } from "@/context/RecallDataContext";
 import { toast } from "@/hooks/use-toast";
 import type { RecallCaptureItem } from "@/lib/recall-context";
 import { listPeople, type PersonRecord } from "@/lib/recall-api";
-import { notesPath } from "@/lib/recall-nav";
+import { notesPath, readSearchParam } from "@/lib/recall-nav";
 
 const priorityClass: Record<RecallCaptureItem["suggestedPriority"], string> = {
   low: "text-blue-300 bg-blue-500/10",
@@ -45,6 +45,24 @@ export function Inbox() {
       .then((res) => setPeople(res.people))
       .catch(() => {});
   }, []);
+
+  // Deep link: /inbox?capture=<id> — scroll the matching card into view.
+  useEffect(() => {
+    if (loading) return;
+    const captureId = readSearchParam("capture");
+    if (!captureId) return;
+    const el = document.getElementById(`capture-${captureId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("ring-2", "ring-indigo-400/60");
+      window.setTimeout(() => {
+        el.classList.remove("ring-2", "ring-indigo-400/60");
+      }, 2500);
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete("capture");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [loading, items]);
 
   const personFor = (item: RecallCaptureItem): string | null => {
     const override = personOverride[item.id]?.trim();
@@ -155,7 +173,11 @@ export function Inbox() {
               const person = personFor(item);
               const picking = pickerFor === item.id;
               return (
-              <article key={item.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+              <article
+                id={`capture-${item.id}`}
+                key={item.id}
+                className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 transition ring-offset-2 ring-offset-[#0a0a0f]"
+              >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-semibold text-white">{item.cleanedTitle}</h2>

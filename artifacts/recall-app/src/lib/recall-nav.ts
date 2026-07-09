@@ -26,8 +26,18 @@ export function tasksPath(opts?: { taskId?: string; personId?: string }): string
   return q ? `/tasks?${q}` : "/tasks";
 }
 
-export function inboxPath(): string {
-  return "/inbox";
+export function homePath(opts?: { capture?: string }): string {
+  const params = new URLSearchParams();
+  if (opts?.capture?.trim()) params.set("capture", opts.capture.trim());
+  const q = params.toString();
+  return q ? `/?${q}` : "/";
+}
+
+export function inboxPath(opts?: { captureId?: string }): string {
+  const params = new URLSearchParams();
+  if (opts?.captureId) params.set("capture", opts.captureId);
+  const q = params.toString();
+  return q ? `/inbox?${q}` : "/inbox";
 }
 
 export function projectsPath(projectId?: string): string {
@@ -78,7 +88,7 @@ export function entityPath(entityType: string, entityId: string): string | null 
       return knowledgePath({ knowledgeId: entityId });
     case "capture":
     case "capture_item":
-      return inboxPath();
+      return inboxPath({ captureId: entityId });
     case "project":
       return projectsPath(entityId);
     default:

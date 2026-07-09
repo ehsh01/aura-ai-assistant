@@ -1,17 +1,32 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Sparkles, Loader2, ArrowUp, FileText, CheckSquare, Inbox } from "lucide-react";
 import { MicButton } from "@/components/MicButton";
 
 type Props = {
   aiPending?: boolean;
+  /** Prefill from deep link (?capture=…) or share target. */
+  initialText?: string | null;
   onAsk: (text: string) => void;
   onSaveNote: (text: string) => void;
   onSaveTask: (text: string) => void;
   onSendInbox: (text: string) => void;
 };
 
-export function BrainDumpInput({ aiPending, onAsk, onSaveNote, onSaveTask, onSendInbox }: Props) {
-  const [text, setText] = useState("");
+export function BrainDumpInput({
+  aiPending,
+  initialText,
+  onAsk,
+  onSaveNote,
+  onSaveTask,
+  onSendInbox,
+}: Props) {
+  const [text, setText] = useState(initialText?.trim() ?? "");
+
+  useEffect(() => {
+    const next = initialText?.trim();
+    if (next) setText(next);
+  }, [initialText]);
+
   const trimmed = text.trim();
 
   const run = (fn: (value: string) => void) => {

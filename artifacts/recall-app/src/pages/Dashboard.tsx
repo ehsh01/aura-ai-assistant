@@ -18,7 +18,7 @@ import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
 import { toast } from "@/hooks/use-toast";
 import { type RecallCaptureItem, type RecallProject } from "@/lib/recall-context";
-import { askPath, entityPath, notesPath } from "@/lib/recall-nav";
+import { askPath, entityPath, notesPath, readSearchParam } from "@/lib/recall-nav";
 import {
   buildContextAreas,
   buildDailyBriefing,
@@ -70,6 +70,9 @@ export function Dashboard() {
   const [projects, setProjects] = useState<RecallProject[]>([]);
   const [home, setHome] = useState<HomeBriefingResponse | null>(null);
   const [activity, setActivity] = useState<ActivityRecord[]>([]);
+  const [capturePrefill, setCapturePrefill] = useState<string | null>(() =>
+    readSearchParam("capture"),
+  );
 
   const refreshCaptures = () =>
     void listCaptureInbox()
@@ -92,6 +95,17 @@ export function Dashboard() {
       .then((res) => setActivity(res.items))
       .catch(() => setActivity([]));
   }, [refreshHome]);
+
+  // Deep link: /?capture=text — prefill the brain-dump bar, then strip the param.
+  useEffect(() => {
+    const raw = readSearchParam("capture");
+    if (!raw?.trim()) return;
+    setCapturePrefill(raw);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("capture");
+    const next = `${url.pathname}${url.search}${url.hash}`;
+    window.history.replaceState({}, "", next);
+  }, []);
 
   const handleAskRecall = async (text: string) => {
     const q = text.trim();
@@ -348,6 +362,7 @@ export function Dashboard() {
 
       <BrainDumpInput
         aiPending={askPending}
+        initialText={capturePrefill}
         onAsk={(text) => void handleAskRecall(text)}
         onSaveNote={handleSaveNote}
         onSaveTask={handleSaveTask}
