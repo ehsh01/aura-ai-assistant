@@ -187,6 +187,7 @@ export interface HomeBriefingResponse {
   waiting: {
     id: string;
     person: string;
+    personId?: string | null;
     item: string;
     days: number;
     href: string;

@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { Hourglass } from "lucide-react";
 import type { WaitingItem } from "@/lib/home-briefing";
 import { createWaitingFollowUp } from "@/lib/recall-api";
+import { peoplePath } from "@/lib/recall-nav";
 import { toast } from "@/hooks/use-toast";
 
 type Props = {
@@ -43,7 +44,7 @@ export function WaitingOnSection({ items }: Props) {
         <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-white/50">
           <Hourglass className="h-4 w-4 text-sky-400" /> Waiting on
         </h2>
-        <Link href="/people" className="text-xs text-indigo-300 no-underline hover:underline">
+        <Link href={peoplePath()} className="text-xs text-indigo-300 no-underline hover:underline">
           All people
         </Link>
       </div>
@@ -59,7 +60,14 @@ export function WaitingOnSection({ items }: Props) {
               key={item.id}
               className="nebula-glass flex items-center gap-3 rounded-2xl p-4"
             >
-              <Link href={item.href} className="flex min-w-0 flex-1 items-center gap-4 no-underline">
+              <Link
+                href={
+                  item.personId
+                    ? peoplePath({ personId: item.personId })
+                    : item.href
+                }
+                className="flex min-w-0 flex-1 items-center gap-4 no-underline"
+              >
                 <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-sky-500/15 text-sm font-semibold text-sky-300">
                   {item.person.charAt(0).toUpperCase()}
                 </div>

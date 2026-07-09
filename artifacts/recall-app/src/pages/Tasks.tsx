@@ -9,7 +9,7 @@ import {
 } from "@/lib/recall-context";
 import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
-import { readSearchParam } from "@/lib/recall-nav";
+import { peoplePath, readSearchParam } from "@/lib/recall-nav";
 import {
   Check,
   Circle,
@@ -92,7 +92,11 @@ function TaskItem({
             )}
             {task.requesterPersonName && (
               <Link
-                href="/people"
+                href={
+                  task.requesterPersonId
+                    ? peoplePath({ personId: task.requesterPersonId })
+                    : peoplePath()
+                }
                 className="flex items-center gap-1 rounded-md border border-sky-500/20 bg-sky-500/10 px-1.5 py-0.5 text-sky-200 no-underline hover:bg-sky-500/20"
                 onClick={(e) => e.stopPropagation()}
               >

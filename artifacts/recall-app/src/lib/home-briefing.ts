@@ -52,6 +52,7 @@ export interface TimelineEntry {
 export interface WaitingItem {
   id: string;
   person: string;
+  personId?: string | null;
   item: string;
   days: number;
   href: string;

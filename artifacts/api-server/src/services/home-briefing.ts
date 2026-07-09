@@ -67,6 +67,7 @@ export interface TimelineEntry {
 export interface WaitingItem {
   id: string;
   person: string;
+  personId: string | null;
   item: string;
   days: number;
   href: string;
@@ -323,6 +324,7 @@ async function buildWaitingOn(userId: string, limit = 4): Promise<WaitingItem[]>
   return items.map((w) => ({
     id: w.id,
     person: w.person,
+    personId: w.personId,
     item: w.item,
     days: w.days,
     href: w.href,

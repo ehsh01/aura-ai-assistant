@@ -30,6 +30,13 @@ export function projectsPath(projectId?: string): string {
   return projectId ? `/projects/${encodeURIComponent(projectId)}` : "/projects";
 }
 
+export function peoplePath(opts?: { personId?: string }): string {
+  const params = new URLSearchParams();
+  if (opts?.personId) params.set("person", opts.personId);
+  const q = params.toString();
+  return q ? `/people?${q}` : "/people";
+}
+
 export function readSearchParam(key: string): string | null {
   return new URLSearchParams(window.location.search).get(key);
 }
