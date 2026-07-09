@@ -12,11 +12,16 @@
  * The returned shapes mirror the props the existing home components expect,
  * including ready-to-use hrefs, so the frontend can render them directly.
  */
+import { and, desc, eq } from "drizzle-orm";
+import { sourceRecords } from "@workspace/db/schema";
 import { listCaptureInboxForUser, type RecallCaptureItemDto } from "./capture-items";
 import { listNoteMetadataForUser, type RecallNoteMetadataDto } from "./notes";
 import { listProjectsForUser, type RecallProjectDto } from "./projects";
 import { listTasksForUser, type RecallTaskDto } from "./tasks";
+import { listConnectorsForUser } from "./connectors";
+import { aggregateFinance, parseDateRange, todayIso } from "./query-utils";
 import { aiService } from "./ai";
+import { getDb } from "../lib/db";
 
 // ---------------------------------------------------------------------------
 // Response shapes (kept in sync with recall-app home components)
@@ -86,6 +91,16 @@ export interface ContextArea {
   accent: string;
 }
 
+export interface FinanceSnapshot {
+  total: number;
+  transactionCount: number;
+  rangeLabel: string;
+  topPayee: { payee: string; total: number } | null;
+  href: string;
+  /** True when a finance connector exists but no synced rows yet. */
+  needsSync: boolean;
+}
+
 export interface HomeBriefingResponse {
   date: string;
   briefing: DailyBriefing;
@@ -95,6 +110,7 @@ export interface HomeBriefingResponse {
   dontForget: BriefingItem[];
   insights: InsightItem[];
   contextAreas: ContextArea[];
+  finance: FinanceSnapshot | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -126,20 +142,6 @@ function projectsPath(projectId?: string): string {
 const ACTION_PHRASE = /\b(need to|needs to|should|have to|must|remember to|todo|to-do|follow up|follow-up)\b/i;
 const WAITING_RE = /\b(waiting|follow up|follow-up|call|email|reply|response|return|pending)\b/i;
 const URGENCY_KEYWORDS = /\b(urgent|follow up|waiting|call|email|permit|inspection|ticket|asap|deadline|blocked)\b/i;
-
-function todayIso(): string {
-  const tz = process.env.RECALL_TIMEZONE?.trim() || "America/New_York";
-  try {
-    return new Intl.DateTimeFormat("en-CA", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(new Date());
-  } catch {
-    return new Date().toISOString().slice(0, 10);
-  }
-}
 
 function daysSince(iso?: string | null): number {
   if (!iso) return 0;
@@ -483,6 +485,74 @@ function fallbackSummary(attentionCount: number, parts: string[]): string {
   } that need your attention today — ${phrase}.`;
 }
 
+/**
+ * This-month finance snapshot from already-synced source_records.
+ * Avoids a live external API call on every home load.
+ */
+async function buildFinanceSnapshot(userId: string, today: string): Promise<FinanceSnapshot | null> {
+  const connectors = await listConnectorsForUser(userId);
+  const financeConn = connectors.find((c) => c.type === "finance_api");
+  if (!financeConn) return null;
+
+  const range = parseDateRange("this month", today);
+  const rows = await getDb()
+    .select({
+      recordMetadata: sourceRecords.recordMetadata,
+      sourceCreatedAt: sourceRecords.sourceCreatedAt,
+    })
+    .from(sourceRecords)
+    .where(
+      and(
+        eq(sourceRecords.userId, userId),
+        eq(sourceRecords.connectorId, financeConn.id),
+        eq(sourceRecords.recordType, "finance_transaction"),
+      ),
+    )
+    .orderBy(desc(sourceRecords.sourceCreatedAt))
+    .limit(5000);
+
+  if (rows.length === 0) {
+    return {
+      total: 0,
+      transactionCount: 0,
+      rangeLabel: "this month",
+      topPayee: null,
+      href: "/connectors",
+      needsSync: true,
+    };
+  }
+
+  const start = range.startDate ?? `${today.slice(0, 7)}-01`;
+  const end = range.endDate ?? today;
+  const txns = rows
+    .map((row) => {
+      const meta = row.recordMetadata ?? {};
+      const amount = typeof meta.amount === "number" ? meta.amount : Number(meta.amount);
+      if (!Number.isFinite(amount)) return null;
+      const date =
+        (typeof meta.date === "string" && meta.date) ||
+        (row.sourceCreatedAt ? row.sourceCreatedAt.toISOString().slice(0, 10) : "");
+      if (!date || date < start || date > end) return null;
+      return {
+        amount,
+        payee: typeof meta.payee === "string" ? meta.payee : null,
+        category: typeof meta.category === "string" ? meta.category : null,
+      };
+    })
+    .filter((t): t is NonNullable<typeof t> => t != null);
+
+  const agg = aggregateFinance(txns, "this month");
+  const top = agg.topPayees[0] ?? null;
+  return {
+    total: agg.total,
+    transactionCount: agg.count,
+    rangeLabel: "this month",
+    topPayee: top ? { payee: top.payee, total: top.total } : null,
+    href: "/connectors",
+    needsSync: false,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -493,11 +563,12 @@ export async function buildHomeBriefing(
 ): Promise<HomeBriefingResponse> {
   const today = todayIso();
 
-  const [tasks, notes, captures, projects] = await Promise.all([
+  const [tasks, notes, captures, projects, finance] = await Promise.all([
     listTasksForUser(userId),
     listNoteMetadataForUser(userId),
     listCaptureInboxForUser(userId),
     listProjectsForUser(userId),
+    buildFinanceSnapshot(userId, today),
   ]);
 
   const critical: BriefingItem[] = rankedTasks(tasks, today)
@@ -581,5 +652,6 @@ export async function buildHomeBriefing(
     dontForget: buildDontForget(notes, captures),
     insights: buildInsights(tasks, notes, captures, projects),
     contextAreas: buildContextAreas(notes, tasks, captures, projects),
+    finance,
   };
 }

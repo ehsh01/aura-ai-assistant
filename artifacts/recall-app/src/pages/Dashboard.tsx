@@ -1,23 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
-import { useLocation } from "wouter";
-import { Sparkles } from "lucide-react";
+import { Link, useLocation } from "wouter";
+import { ArrowRight, ShieldCheck, Sparkles } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
+import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
-  listCaptureInbox,
-  listProjects,
-  useAiChat,
-} from "@workspace/api-client-react";
-import { fetchHome, ingestCapture, type HomeBriefingResponse } from "@/lib/recall-api";
+  fetchHome,
+  ingestCapture,
+  queryRecall,
+  type EvidenceRecord,
+  type HomeBriefingResponse,
+} from "@/lib/recall-api";
 import { useAuth } from "@/context/AuthContext";
 import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
 import { toast } from "@/hooks/use-toast";
-import {
-  resolveNotesForAi,
-  tasksForAiContext,
-  type RecallCaptureItem,
-  type RecallProject,
-} from "@/lib/recall-context";
+import { type RecallCaptureItem, type RecallProject } from "@/lib/recall-context";
 import { notesPath } from "@/lib/recall-nav";
 import {
   buildContextAreas,
@@ -35,6 +32,7 @@ import { WaitingOnSection } from "@/components/home/WaitingOnSection";
 import { DontForgetSection } from "@/components/home/DontForgetSection";
 import { RecallInsightsSection } from "@/components/home/RecallInsightsSection";
 import { CurrentContextSection } from "@/components/home/CurrentContextSection";
+import { FinanceSnapshotCard } from "@/components/home/FinanceSnapshotCard";
 import { BrainDumpInput } from "@/components/home/BrainDumpInput";
 
 function firstLineTitle(text: string, fallback = "Quick capture"): string {
@@ -42,16 +40,31 @@ function firstLineTitle(text: string, fallback = "Quick capture"): string {
   return line.length > 80 ? `${line.slice(0, 77)}…` : line;
 }
 
+type AskResult = {
+  question: string;
+  answer: string;
+  confidence: number;
+  caveats: string | null;
+  evidence: EvidenceRecord[];
+  suggestedNextAction: string | null;
+};
+
+function confidenceLabel(score: number): { label: string; className: string } {
+  if (score >= 0.8) return { label: "High confidence", className: "text-emerald-300 bg-emerald-500/10" };
+  if (score >= 0.5) return { label: "Needs review", className: "text-amber-300 bg-amber-500/10" };
+  return { label: "Low confidence", className: "text-red-300 bg-red-500/10" };
+}
+
 export function Dashboard() {
   const { user } = useAuth();
   const { notes, tasks, addNote, addTask } = useRecallData();
   const [, navigate] = useLocation();
   const userName = firstName(user?.name);
-  const [aiReply, setAiReply] = useState<string | null>(null);
+  const [askResult, setAskResult] = useState<AskResult | null>(null);
+  const [askPending, setAskPending] = useState(false);
   const [captures, setCaptures] = useState<RecallCaptureItem[]>([]);
   const [projects, setProjects] = useState<RecallProject[]>([]);
   const [home, setHome] = useState<HomeBriefingResponse | null>(null);
-  const aiChat = useAiChat();
 
   const refreshCaptures = () =>
     void listCaptureInbox()
@@ -74,26 +87,30 @@ export function Dashboard() {
 
   const handleAskRecall = async (text: string) => {
     const q = text.trim();
-    if (!q || aiChat.isPending) return;
-    setAiReply(null);
+    if (!q || askPending) return;
+    setAskPending(true);
+    setAskResult(null);
     try {
-      const res = await aiChat.mutateAsync({
-        data: {
-          messages: [{ role: "user", content: q }],
-          context: {
-            userName,
-            tasks: tasksForAiContext(tasks),
-            notes: resolveNotesForAi({ notes, searchQuery: q }),
-          },
-        },
+      const res = await queryRecall(q);
+      setAskResult({
+        question: q,
+        answer: res.answer,
+        confidence: res.confidence,
+        caveats: res.caveats,
+        evidence: res.evidence,
+        suggestedNextAction: res.suggestedNextAction,
       });
-      if (res.openNote?.id) {
-        navigate(notesPath({ noteId: res.openNote.id }));
-        return;
-      }
-      setAiReply(res.message.content);
     } catch {
-      setAiReply("Could not reach Recall AI. Check that you are signed in and try again.");
+      setAskResult({
+        question: q,
+        answer: "Could not reach Recall AI. Check that you are signed in and try again.",
+        confidence: 0,
+        caveats: null,
+        evidence: [],
+        suggestedNextAction: null,
+      });
+    } finally {
+      setAskPending(false);
     }
   };
 
@@ -149,6 +166,8 @@ export function Dashboard() {
   const dontForget = home?.dontForget ?? buildDontForget(notes, captures);
   const insights = home?.insights ?? buildInsights(tasks, notes, captures, projects);
   const contextAreas = home?.contextAreas ?? buildContextAreas(notes, tasks, captures, projects);
+  const finance = home?.finance ?? null;
+  const conf = askResult ? confidenceLabel(askResult.confidence) : null;
 
   return (
     <AppLayout>
@@ -159,15 +178,81 @@ export function Dashboard() {
         <div className="relative z-10 mx-auto w-full max-w-5xl space-y-6 px-4 pb-44 pt-6 md:px-8 md:pt-8">
           <DailyBriefingCard briefing={briefing} date={date} />
 
-          {(aiChat.isPending || aiReply) && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href="/ask"
+              className="inline-flex items-center gap-2 rounded-full border border-indigo-500/25 bg-indigo-500/10 px-3 py-1.5 text-xs font-medium text-indigo-200 no-underline hover:bg-indigo-500/20"
+            >
+              <Sparkles size={14} />
+              Open Ask Recall
+              <ArrowRight size={12} />
+            </Link>
+            <Link
+              href="/documents"
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/55 no-underline hover:bg-white/5 hover:text-white/80"
+            >
+              Documents
+            </Link>
+            <Link
+              href="/knowledge"
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/55 no-underline hover:bg-white/5 hover:text-white/80"
+            >
+              Knowledge
+            </Link>
+          </div>
+
+          <FinanceSnapshotCard finance={finance} />
+
+          {(askPending || askResult) && (
             <div className="nebula-glass rounded-2xl border border-indigo-500/20 px-5 py-4">
               <div className="flex items-start gap-3">
                 <Sparkles className="mt-0.5 h-5 w-5 flex-shrink-0 text-indigo-400" />
-                <div className="min-w-0">
-                  <p className="mb-1 text-xs font-medium text-indigo-300/80">Recall</p>
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <p className="text-xs font-medium text-indigo-300/80">Recall</p>
+                    {conf && askResult && askResult.confidence > 0 && (
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${conf.className}`}>
+                        {conf.label} · {Math.round(askResult.confidence * 100)}%
+                      </span>
+                    )}
+                  </div>
+                  {askResult?.question && (
+                    <p className="mb-2 text-xs text-white/40">“{askResult.question}”</p>
+                  )}
                   <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-200">
-                    {aiChat.isPending ? "Thinking…" : aiReply}
+                    {askPending ? "Thinking…" : askResult?.answer}
                   </p>
+                  {askResult?.caveats && (
+                    <p className="mt-2 text-xs text-amber-200/80">⚠ {askResult.caveats}</p>
+                  )}
+                  {askResult && askResult.evidence.length > 0 && (
+                    <div className="mt-3 border-t border-white/10 pt-3">
+                      <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/40">
+                        <ShieldCheck size={12} className="text-indigo-300" />
+                        Evidence ({askResult.evidence.length})
+                      </p>
+                      <div className="space-y-1.5">
+                        {askResult.evidence.slice(0, 3).map((ev) => (
+                          <p key={ev.id} className="line-clamp-2 text-xs text-white/50">
+                            {ev.evidenceText}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {askResult?.suggestedNextAction && (
+                    <p className="mt-3 flex items-center gap-1.5 text-xs text-indigo-200">
+                      <ArrowRight size={12} />
+                      {askResult.suggestedNextAction}
+                    </p>
+                  )}
+                  <Link
+                    href="/ask"
+                    className="mt-3 inline-flex items-center gap-1 text-xs text-indigo-300 no-underline hover:underline"
+                  >
+                    Open full Ask page
+                    <ArrowRight size={11} />
+                  </Link>
                 </div>
               </div>
             </div>
@@ -189,7 +274,7 @@ export function Dashboard() {
       </div>
 
       <BrainDumpInput
-        aiPending={aiChat.isPending}
+        aiPending={askPending}
         onAsk={(text) => void handleAskRecall(text)}
         onSaveNote={handleSaveNote}
         onSaveTask={handleSaveTask}

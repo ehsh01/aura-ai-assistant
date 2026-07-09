@@ -148,6 +148,14 @@ export interface HomeBriefingResponse {
     href: string;
     accent: string;
   }[];
+  finance: {
+    total: number;
+    transactionCount: number;
+    rangeLabel: string;
+    topPayee: { payee: string; total: number } | null;
+    href: string;
+    needsSync: boolean;
+  } | null;
 }
 
 export async function fetchHome(): Promise<HomeBriefingResponse> {

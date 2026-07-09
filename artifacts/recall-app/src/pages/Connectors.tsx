@@ -6,6 +6,7 @@ import {
   syncConnector,
   type FinanceSummary,
 } from "@/lib/recall-api";
+import { getStoredToken } from "@/lib/auth-storage";
 import { toast } from "@/hooks/use-toast";
 
 type ConnectorRow = {
@@ -202,6 +203,33 @@ export function Connectors() {
               placeholder="title,vendor,amount,date&#10;Drywall,ABC Drywall,4200,2025-05-12"
               className="mt-3 w-full rounded-xl border border-white/10 bg-black/20 p-3 text-sm font-mono"
             />
+          </div>
+
+          <div className="mt-8 rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-5">
+            <h2 className="text-lg font-semibold">Browser extension</h2>
+            <p className="mt-2 text-sm text-white/55">
+              Load the unpacked extension from <code className="text-indigo-200">artifacts/recall-extension</code>,
+              then paste your session token into the popup. One click captures the current tab into AI Inbox.
+            </p>
+            <button
+              type="button"
+              onClick={async () => {
+                const token = getStoredToken();
+                if (!token) {
+                  toast({ title: "No session token found — sign in again", variant: "destructive" });
+                  return;
+                }
+                try {
+                  await navigator.clipboard.writeText(token);
+                  toast({ title: "Extension token copied" });
+                } catch {
+                  toast({ title: "Could not copy token", variant: "destructive" });
+                }
+              }}
+              className="mt-4 rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400"
+            >
+              Copy extension token
+            </button>
           </div>
         </div>
       </div>

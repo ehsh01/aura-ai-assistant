@@ -1,4 +1,4 @@
-# Recall Browser Extension (Phase 7 scaffold)
+# Recall Browser Extension
 
 Lightweight collector per `docs/17_Browser_Extension_Spec.md`. Sends raw page context to `POST /api/captures`; Recall performs normalization and AI extraction server-side.
 
@@ -7,11 +7,13 @@ Lightweight collector per `docs/17_Browser_Extension_Spec.md`. Sends raw page co
 1. Open `chrome://extensions`
 2. Enable Developer mode
 3. Load unpacked → select `artifacts/recall-extension`
-4. Paste your Recall JWT from the web app login into the popup token field
+4. In Recall → **Connectors**, click **Copy extension token**
+5. Paste the token into the extension popup Settings and Save
+6. Click **Capture current tab** on any page
 
 ## Permissions
 
-- `activeTab` only — capture is user-initiated on click
+- `activeTab` + `scripting` — capture is user-initiated on click
 - No background scraping
 
 ## API

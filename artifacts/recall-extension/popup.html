@@ -5,19 +5,93 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Recall Capture</title>
     <style>
-      body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; width: 320px; background: #0a0a0f; color: #fff; }
-      textarea, input { width: 100%; box-sizing: border-box; margin-top: 8px; border-radius: 8px; border: 1px solid #333; background: #111; color: #fff; padding: 8px; }
-      button { margin-top: 12px; width: 100%; padding: 10px; border: 0; border-radius: 8px; background: #6366f1; color: white; font-weight: 600; cursor: pointer; }
+      body {
+        font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+        margin: 0;
+        padding: 16px;
+        width: 340px;
+        background: #0a0a0f;
+        color: #fff;
+      }
+      h1 { font-size: 16px; margin: 0; }
+      .sub { font-size: 12px; color: #888; margin: 6px 0 0; line-height: 1.4; }
+      label { display: block; font-size: 11px; color: #aaa; margin-top: 12px; }
+      textarea, input {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 6px;
+        border-radius: 8px;
+        border: 1px solid #333;
+        background: #111;
+        color: #fff;
+        padding: 8px;
+        font-size: 12px;
+      }
+      button {
+        margin-top: 12px;
+        width: 100%;
+        padding: 10px;
+        border: 0;
+        border-radius: 8px;
+        background: #6366f1;
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.45; cursor: default; }
+      button.secondary {
+        background: transparent;
+        border: 1px solid #333;
+        color: #ccc;
+        font-weight: 500;
+        margin-top: 8px;
+      }
       .status { margin-top: 10px; font-size: 12px; color: #aaa; min-height: 16px; }
+      .ok { color: #6ee7b7; }
+      .err { color: #fca5a5; }
+      .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: rgba(99, 102, 241, 0.15);
+        color: #c7d2fe;
+      }
+      .dot { width: 6px; height: 6px; border-radius: 999px; background: #34d399; }
+      .dot.off { background: #f87171; }
+      details { margin-top: 10px; }
+      summary { font-size: 12px; color: #888; cursor: pointer; }
     </style>
   </head>
   <body>
-    <h1 style="font-size: 16px; margin: 0;">Recall Capture</h1>
-    <p style="font-size: 12px; color: #888;">Collector only — sends raw context to Recall API.</p>
-    <label>API token<input id="token" type="password" placeholder="Bearer token from Recall login" /></label>
-    <label>API base URL<input id="apiBase" value="https://recall-app.net/api" /></label>
-    <button id="capture">Capture current tab</button>
+    <h1>Recall Capture</h1>
+    <p class="sub">One click sends this tab’s title, URL, and selected text into Recall’s AI Inbox.</p>
+
+    <div class="row">
+      <span class="pill"><span id="authDot" class="dot off"></span><span id="authLabel">Not signed in</span></span>
+    </div>
+
+    <button id="capture" disabled>Capture current tab</button>
+    <button id="openApp" class="secondary" type="button">Open Recall</button>
     <div id="status" class="status"></div>
+
+    <details id="settings">
+      <summary>Settings / sign in</summary>
+      <label>API token
+        <input id="token" type="password" placeholder="Paste JWT from Recall → Connectors" autocomplete="off" />
+      </label>
+      <label>API base URL
+        <input id="apiBase" value="https://recall-app.net/api" />
+      </label>
+      <button id="save" class="secondary" type="button">Save</button>
+      <p class="sub" style="margin-top:8px">
+        In Recall, open <strong>Connectors</strong> and copy your extension token, or paste the value of <code>recall_auth_token</code> from DevTools → Application → Local Storage.
+      </p>
+    </details>
+
     <script src="popup.js"></script>
   </body>
 </html>
