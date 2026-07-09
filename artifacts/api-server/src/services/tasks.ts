@@ -3,6 +3,7 @@ import { people, tasks, type Task } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newTaskId } from "../lib/recall-format";
 import { writeAuditLog } from "./audit";
+import { warmEntityEmbedding } from "./embedding-cache";
 
 export type RecallTaskDto = {
   id: string;
@@ -143,6 +144,16 @@ export async function createTaskForUser(
       requesterPersonId: dto.requesterPersonId,
       requesterPersonName: dto.requesterPersonName,
     },
+  });
+  const personBits = [dto.requesterPersonName, dto.requesterPersonId]
+    .filter(Boolean)
+    .join(" ");
+  warmEntityEmbedding(userId, {
+    entityType: "task",
+    entityId: dto.id,
+    text: `${dto.title} priority=${dto.priority} due=${dto.time ?? "none"} completed=${dto.completed}${
+      personBits ? ` person=${personBits}` : ""
+    }`,
   });
   return dto;
 }

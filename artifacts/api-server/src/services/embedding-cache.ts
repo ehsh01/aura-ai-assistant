@@ -208,6 +208,19 @@ export async function embedQuery(text: string): Promise<number[] | null> {
   return vec ?? null;
 }
 
+/**
+ * Fire-and-forget: warm L1+L2 embedding cache when an entity is written so
+ * the next Ask doesn't pay the first-hit embed cost for that record.
+ */
+export function warmEntityEmbedding(
+  userId: string,
+  item: EmbeddableItem,
+): void {
+  void embedItemsCached(userId, [item]).catch(() => {
+    // Warming is best-effort; Ask still works without it.
+  });
+}
+
 export function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0;
   let na = 0;

@@ -3,6 +3,7 @@ import { knowledgeItems, type KnowledgeItem } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newKnowledgeId } from "../lib/recall-format";
 import { writeAuditLog } from "./audit";
+import { warmEntityEmbedding } from "./embedding-cache";
 
 export type KnowledgeDto = {
   id: string;
@@ -73,6 +74,11 @@ export async function createKnowledgeForUser(
     entityType: "knowledge",
     entityId: dto.id,
     metadata: { title: dto.title, itemType: dto.itemType },
+  });
+  warmEntityEmbedding(userId, {
+    entityType: "knowledge",
+    entityId: dto.id,
+    text: `${dto.title}\n${dto.content.slice(0, 600)}\ntags=${dto.tags.join(",")}`,
   });
   return dto;
 }

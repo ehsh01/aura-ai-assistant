@@ -157,6 +157,7 @@ export async function updatePerson(
 export type PersonRelated = {
   person: PersonRecord;
   openTasks: { id: string; title: string; time: string | null }[];
+  taggedNotes?: { id: string; title: string; preview: string }[];
 };
 
 export async function getPersonRelated(personId: string): Promise<PersonRelated> {

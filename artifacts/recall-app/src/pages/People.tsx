@@ -11,11 +11,12 @@ import {
   type PersonRecord,
   type WaitingOnRecord,
 } from "@/lib/recall-api";
-import { askPath, peoplePath, readSearchParam, tasksPath } from "@/lib/recall-nav";
+import { askPath, notesPath, peoplePath, readSearchParam, tasksPath } from "@/lib/recall-nav";
 import { toast } from "@/hooks/use-toast";
 import { Pencil, Sparkles } from "lucide-react";
 
 type OpenTask = { id: string; title: string; time: string | null };
+type TaggedNote = { id: string; title: string; preview: string };
 
 function waitingForPerson(
   waiting: WaitingOnRecord[],
@@ -36,6 +37,7 @@ export function People() {
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [waiting, setWaiting] = useState<WaitingOnRecord[]>([]);
   const [openByPerson, setOpenByPerson] = useState<Record<string, OpenTask[]>>({});
+  const [notesByPerson, setNotesByPerson] = useState<Record<string, TaggedNote[]>>({});
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -65,13 +67,20 @@ export function People() {
         peopleRes.people.map(async (p) => {
           try {
             const r = await getPersonRelated(p.id);
-            return [p.id, r.openTasks] as const;
+            return [
+              p.id,
+              r.openTasks,
+              r.taggedNotes ?? ([] as TaggedNote[]),
+            ] as const;
           } catch {
-            return [p.id, [] as OpenTask[]] as const;
+            return [p.id, [] as OpenTask[], [] as TaggedNote[]] as const;
           }
         }),
       );
-      setOpenByPerson(Object.fromEntries(related));
+      setOpenByPerson(Object.fromEntries(related.map(([id, tasks]) => [id, tasks])));
+      setNotesByPerson(
+        Object.fromEntries(related.map(([id, , notes]) => [id, notes])),
+      );
     } finally {
       setLoading(false);
     }
@@ -306,6 +315,7 @@ export function People() {
             )}
             {filteredPeople.map((person) => {
               const openTasks = openByPerson[person.id] ?? [];
+              const taggedNotes = notesByPerson[person.id] ?? [];
               const personWaiting = waitingForPerson(waiting, person);
               const isSelected = selected?.id === person.id;
               const isHighlighted = highlightedId === person.id;
@@ -333,13 +343,24 @@ export function People() {
                       {person.email && <p>{person.email}</p>}
                       {person.organization && <p>{person.organization}</p>}
                       {person.role && <p>{person.role}</p>}
-                      {!isSelected && (personWaiting.length > 0 || openTasks.length > 0) && (
+                      {!isSelected &&
+                        (personWaiting.length > 0 ||
+                          openTasks.length > 0 ||
+                          taggedNotes.length > 0) && (
                         <p className="pt-1 text-xs text-white/35">
-                          {openTasks.length > 0 &&
-                            `${openTasks.length} open task${openTasks.length === 1 ? "" : "s"}`}
-                          {openTasks.length > 0 && personWaiting.length > 0 && " · "}
-                          {personWaiting.length > 0 &&
-                            `${personWaiting.length} waiting`}
+                          {[
+                            openTasks.length > 0
+                              ? `${openTasks.length} open task${openTasks.length === 1 ? "" : "s"}`
+                              : null,
+                            taggedNotes.length > 0
+                              ? `${taggedNotes.length} note${taggedNotes.length === 1 ? "" : "s"}`
+                              : null,
+                            personWaiting.length > 0
+                              ? `${personWaiting.length} waiting`
+                              : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
                           {" · tap to expand"}
                         </p>
                       )}
@@ -442,6 +463,37 @@ export function People() {
                                   {t.time ? (
                                     <span className="ml-2 text-white/35">{t.time}</span>
                                   ) : null}
+                                </Link>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+
+                      <div>
+                        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/40">
+                          Tagged notes
+                        </h3>
+                        {taggedNotes.length === 0 ? (
+                          <p className="text-sm text-white/35">
+                            No notes tagged to this person yet.
+                          </p>
+                        ) : (
+                          <ul className="space-y-1.5">
+                            {taggedNotes.map((n) => (
+                              <li key={n.id}>
+                                <Link
+                                  href={notesPath({ noteId: n.id })}
+                                  className="block no-underline"
+                                >
+                                  <p className="truncate text-sm text-indigo-200 hover:underline">
+                                    {n.title}
+                                  </p>
+                                  {n.preview && (
+                                    <p className="mt-0.5 line-clamp-1 text-xs text-white/40">
+                                      {n.preview}
+                                    </p>
+                                  )}
                                 </Link>
                               </li>
                             ))}

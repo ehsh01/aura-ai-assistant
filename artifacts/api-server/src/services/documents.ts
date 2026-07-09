@@ -3,6 +3,7 @@ import { documents, type Document } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newDocumentId } from "../lib/recall-format";
 import { writeAuditLog } from "./audit";
+import { warmEntityEmbedding } from "./embedding-cache";
 
 export type DocumentDto = {
   id: string;
@@ -80,6 +81,11 @@ export async function createDocumentForUser(
     entityType: "document",
     entityId: dto.id,
     metadata: { fileName: dto.fileName },
+  });
+  warmEntityEmbedding(userId, {
+    entityType: "document",
+    entityId: dto.id,
+    text: `${dto.fileName}\n${(dto.summary ?? dto.extractedText ?? "").slice(0, 600)}`,
   });
   return dto;
 }

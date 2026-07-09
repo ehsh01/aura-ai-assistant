@@ -11,6 +11,7 @@ import {
   type PendingNoteAttachment,
 } from "./note-attachments";
 import { writeAuditLog } from "./audit";
+import { warmEntityEmbedding } from "./embedding-cache";
 
 export type RecallNoteDto = {
   id: string;
@@ -225,6 +226,11 @@ export async function createNoteForUser(
     entityType: "note",
     entityId: dto.id,
     metadata: { title: dto.title },
+  });
+  warmEntityEmbedding(userId, {
+    entityType: "note",
+    entityId: dto.id,
+    text: `${dto.title}\n${dto.preview}\ntags=${dto.tags.join(",")}`,
   });
   return dto;
 }
