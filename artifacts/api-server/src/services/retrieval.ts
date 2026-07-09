@@ -17,6 +17,8 @@ export type RetrievedRecord = {
   text: string;
   score: number;
   method: "keyword" | "semantic" | "hybrid";
+  matchedPersonId?: string | null;
+  matchedPersonName?: string | null;
 };
 
 type ContextRecord = {
@@ -27,7 +29,7 @@ type ContextRecord = {
 };
 
 /** Detect known people named in the question for retrieval boost. */
-function mentionedPeople(
+export function mentionedPeople(
   question: string,
   people: { id: string; displayName: string }[],
 ): { id: string; displayName: string }[] {
@@ -49,6 +51,25 @@ function mentionedPeople(
     }
   }
   return hits;
+}
+
+function personMatchOnRecord(
+  r: ContextRecord,
+  named: { id: string; displayName: string }[],
+): { id: string; displayName: string } | null {
+  if (named.length === 0) return null;
+  if (r.entityType === "person") {
+    const hit = named.find((p) => p.id === r.entityId);
+    return hit ?? null;
+  }
+  const hay = `${r.title}\n${r.text}`.toLowerCase();
+  for (const p of named) {
+    const full = p.displayName.toLowerCase();
+    if (hay.includes(full) || hay.includes(`person:${full}`)) return p;
+    const first = full.split(/\s+/)[0] ?? "";
+    if (first.length >= 3 && hay.includes(first)) return p;
+  }
+  return null;
 }
 
 function keywordScore(question: string, text: string): number {
@@ -248,30 +269,36 @@ export async function retrieveRelevantRecords(
   });
 
   const minScore = usedSemantic ? 0.18 : 0;
-  const top = scored
-    .filter((x) => x.score > minScore)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map(({ r, score, method }) => ({
+  const toRetrieved = (
+    r: ContextRecord,
+    score: number,
+    method: RetrievedRecord["method"],
+  ): RetrievedRecord => {
+    const match = personMatchOnRecord(r, named);
+    return {
       entityType: r.entityType,
       entityId: r.entityId,
       title: r.title,
       text: r.text,
       score,
       method,
-    }));
+      matchedPersonId: match?.id ?? null,
+      matchedPersonName: match?.displayName ?? null,
+    };
+  };
+
+  const top = scored
+    .filter((x) => x.score > minScore)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(({ r, score, method }) => toRetrieved(r, score, method));
 
   // If semantic threshold filtered everything, fall back to keyword hits.
   if (top.length === 0 && keywordHits.length > 0) {
     return {
-      records: keywordHits.slice(0, limit).map(({ r, kw }) => ({
-        entityType: r.entityType,
-        entityId: r.entityId,
-        title: r.title,
-        text: r.text,
-        score: kw,
-        method: "keyword" as const,
-      })),
+      records: keywordHits
+        .slice(0, limit)
+        .map(({ r, kw }) => toRetrieved(r, kw, "keyword")),
       usedSemantic: false,
     };
   }

@@ -147,7 +147,13 @@ export async function queryRecallForUser(
       const personMeta =
         rec.entityType === "person"
           ? { personId: rec.entityId, personName: rec.title, person: rec.title }
-          : {};
+          : rec.matchedPersonId || rec.matchedPersonName
+            ? {
+                personId: rec.matchedPersonId ?? null,
+                personName: rec.matchedPersonName ?? null,
+                person: rec.matchedPersonName ?? null,
+              }
+            : {};
       evidence.push(
         makeEvidence({
           claimType: "summary_based_on",
