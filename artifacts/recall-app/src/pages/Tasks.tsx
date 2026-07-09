@@ -9,7 +9,7 @@ import {
 } from "@/lib/recall-context";
 import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
-import { peoplePath, readSearchParam, tasksPath } from "@/lib/recall-nav";
+import { notesPath, peoplePath, readSearchParam, tasksPath } from "@/lib/recall-nav";
 import {
   Check,
   Circle,
@@ -18,7 +18,6 @@ import {
   Plus,
   Send,
   Sparkles,
-  Tag,
   MoreHorizontal,
   Calendar,
   Clock,
@@ -27,6 +26,7 @@ import {
 import { MicButton } from "@/components/MicButton";
 import { EvidenceDrawer } from "@/components/EvidenceDrawer";
 import { TaskPersonPicker } from "@/components/TaskPersonPicker";
+import { NoteTagList } from "@/components/PersonTagLink";
 
 type Priority = RecallTask["priority"];
 
@@ -46,6 +46,7 @@ function TaskItem({
   onToggle,
   onShowEvidence,
   onAssignPerson,
+  onPersonTagClick,
   highlighted,
   itemRef,
 }: {
@@ -56,6 +57,7 @@ function TaskItem({
     taskId: string,
     next: { personId: string | null; personName: string | null },
   ) => void;
+  onPersonTagClick?: (name: string) => void;
   highlighted?: boolean;
   itemRef?: (el: HTMLDivElement | null) => void;
 }) {
@@ -99,11 +101,13 @@ function TaskItem({
             personName={task.requesterPersonName}
             onChange={(next) => onAssignPerson(task.id, next)}
           />
-          {task.tags && task.tags.map(tag => (
-            <span key={tag} className="flex items-center gap-1 bg-white/5 px-1.5 py-0.5 rounded-md">
-              <Tag size={10} /> {tag}
-            </span>
-          ))}
+          {task.tags && task.tags.length > 0 && (
+            <NoteTagList
+              tags={task.tags}
+              limit={4}
+              onPersonClick={onPersonTagClick}
+            />
+          )}
         </div>
       </div>
 
@@ -303,6 +307,7 @@ export function Tasks() {
                     onToggle={toggleTask}
                     onShowEvidence={setEvidenceTask}
                     onAssignPerson={assignPerson}
+                    onPersonTagClick={(name) => navigate(notesPath({ person: name }))}
                     highlighted={highlightedTaskId === task.id}
                     itemRef={(el) => {
                       taskRefs.current[task.id] = el;
@@ -323,6 +328,7 @@ export function Tasks() {
                     onToggle={toggleTask}
                     onShowEvidence={setEvidenceTask}
                     onAssignPerson={assignPerson}
+                    onPersonTagClick={(name) => navigate(notesPath({ person: name }))}
                     highlighted={highlightedTaskId === task.id}
                     itemRef={(el) => {
                       taskRefs.current[task.id] = el;
