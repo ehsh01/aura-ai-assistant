@@ -308,6 +308,14 @@ export async function queryFinanceSummaryForUser(
   }
   const apiKey = process.env.FINANCE_API_KEY ?? null;
   let transactions = await fetchFinanceTransactions(conn.baseUrl, apiKey, params);
+  // Apply filters client-side too, so summaries are correct even if the
+  // external API ignores the query params.
+  if (params?.startDate) {
+    transactions = transactions.filter((t) => (t.date ?? "") >= params.startDate!);
+  }
+  if (params?.endDate) {
+    transactions = transactions.filter((t) => (t.date ?? "") <= params.endDate!);
+  }
   if (params?.payee) {
     const needle = params.payee.toLowerCase();
     transactions = transactions.filter((t) => (t.payee ?? "").toLowerCase().includes(needle));
@@ -321,22 +329,43 @@ export async function queryFinanceSummaryForUser(
   };
 }
 
+/**
+ * Idempotently ensure the finance connector exists when FINANCE_API_URL is
+ * configured. Runs on every login so existing accounts get backfilled the
+ * first time the finance app is connected.
+ */
+export async function ensureFinanceConnector(userId: string): Promise<void> {
+  const financeUrl = process.env.FINANCE_API_URL?.trim();
+  if (!financeUrl) return;
+  const existing = await listConnectorsForUser(userId);
+  const finance = existing.find((c) => c.type === "finance_api");
+  if (finance) {
+    // Keep the stored base URL in sync with the current configuration.
+    if (finance.baseUrl !== financeUrl) {
+      await getDb()
+        .update(connectors)
+        .set({ baseUrl: financeUrl, updatedAt: new Date() })
+        .where(eq(connectors.id, finance.id));
+    }
+    return;
+  }
+  await createConnectorForUser(userId, {
+    name: "Finance API",
+    type: "finance_api",
+    description: "Read-only connection to your MyFamilyBudget finance app.",
+    baseUrl: financeUrl,
+    authType: "bearer",
+  });
+}
+
 export async function ensureDefaultConnectors(userId: string): Promise<void> {
   const existing = await listConnectorsForUser(userId);
-  if (existing.length > 0) return;
-  await createConnectorForUser(userId, {
-    name: "Manual Capture",
-    type: "manual",
-    description: "Paste and capture text directly into Recall.",
-  });
-  const financeUrl = process.env.FINANCE_API_URL?.trim();
-  if (financeUrl) {
+  if (!existing.some((c) => c.type === "manual")) {
     await createConnectorForUser(userId, {
-      name: "Finance API",
-      type: "finance_api",
-      description: "Read-only connection to external finance app.",
-      baseUrl: financeUrl,
-      authType: "bearer",
+      name: "Manual Capture",
+      type: "manual",
+      description: "Paste and capture text directly into Recall.",
     });
   }
+  await ensureFinanceConnector(userId);
 }

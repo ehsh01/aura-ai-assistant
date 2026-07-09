@@ -39,7 +39,9 @@ export async function fetchFinanceTransactions(
   apiKey: string | null,
   params?: { startDate?: string; endDate?: string },
 ): Promise<FinanceTransaction[]> {
-  const url = new URL("/transactions", baseUrl.replace(/\/$/, ""));
+  // Append to the base path (e.g. https://host/api/v1) rather than replacing
+  // it — a leading-slash URL argument would drop the "/api/v1" prefix.
+  const url = new URL(`${baseUrl.replace(/\/$/, "")}/transactions`);
   if (params?.startDate) url.searchParams.set("startDate", params.startDate);
   if (params?.endDate) url.searchParams.set("endDate", params.endDate);
 

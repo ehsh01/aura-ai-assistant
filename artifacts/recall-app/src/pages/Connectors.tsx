@@ -1,6 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { AppLayout } from "@/components/AppLayout";
-import { listConnectors, syncConnector } from "@/lib/recall-api";
+import {
+  getFinanceSummary,
+  listConnectors,
+  syncConnector,
+  type FinanceSummary,
+} from "@/lib/recall-api";
 import { toast } from "@/hooks/use-toast";
 
 type ConnectorRow = {
@@ -11,10 +16,24 @@ type ConnectorRow = {
   enabled: boolean;
 };
 
+const STATUS_STYLES: Record<string, string> = {
+  connected: "text-emerald-300 bg-emerald-500/10",
+  partial_success: "text-amber-300 bg-amber-500/10",
+  sync_failed: "text-red-300 bg-red-500/10",
+  disconnected: "text-white/50 bg-white/5",
+};
+
+function formatUsd(value: number): string {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
+}
+
 export function Connectors() {
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
   const [csvText, setCsvText] = useState("");
   const [loading, setLoading] = useState(true);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [summary, setSummary] = useState<{ connectorId: string; data: FinanceSummary } | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -31,19 +50,44 @@ export function Connectors() {
   }, []);
 
   const runSync = async (connector: ConnectorRow) => {
+    setSyncingId(connector.id);
     try {
-      await syncConnector(
+      const res = await syncConnector(
         connector.id,
         connector.type === "csv_import" && csvText.trim() ? { csvText } : undefined,
       );
-      toast({ title: "Sync started", description: connector.name });
+      toast({
+        title: "Sync complete",
+        description: `${connector.name}: ${res.result.recordsFetched ?? 0} fetched, ${
+          res.result.recordsCreated ?? 0
+        } new`,
+      });
       await load();
+      if (connector.type === "finance_api") await loadSummary(connector.id);
     } catch (err) {
       toast({
         title: "Sync failed",
         description: err instanceof Error ? err.message : "Could not sync connector",
         variant: "destructive",
       });
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
+  const loadSummary = async (connectorId: string) => {
+    setSummaryLoading(true);
+    try {
+      const data = await getFinanceSummary(connectorId);
+      setSummary({ connectorId, data });
+    } catch (err) {
+      toast({
+        title: "Could not load spending summary",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setSummaryLoading(false);
     }
   };
 
@@ -58,21 +102,96 @@ export function Connectors() {
           {loading && <p className="mt-8 text-white/40">Loading connectors…</p>}
           <div className="mt-8 space-y-3">
             {connectors.map((c) => (
-              <article key={c.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 flex items-center justify-between gap-4">
+              <article
+                key={c.id}
+                className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 flex items-center justify-between gap-4"
+              >
                 <div>
                   <h2 className="font-semibold">{c.name}</h2>
-                  <p className="text-sm text-white/45">{c.type} · {c.syncStatus}</p>
+                  <div className="mt-1 flex items-center gap-2 text-sm text-white/45">
+                    <span>{c.type.replace(/_/g, " ")}</span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs ${
+                        STATUS_STYLES[c.syncStatus] ?? "text-white/50 bg-white/5"
+                      }`}
+                    >
+                      {c.syncStatus.replace(/_/g, " ")}
+                    </span>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void runSync(c)}
-                  className="rounded-xl bg-indigo-500/20 px-3 py-2 text-sm text-indigo-200 hover:bg-indigo-500/30"
-                >
-                  Sync
-                </button>
+                <div className="flex gap-2">
+                  {c.type === "finance_api" && (
+                    <button
+                      type="button"
+                      onClick={() => void loadSummary(c.id)}
+                      className="rounded-xl border border-white/10 px-3 py-2 text-sm text-white/70 hover:bg-white/5"
+                    >
+                      Spending
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void runSync(c)}
+                    disabled={syncingId === c.id}
+                    className="rounded-xl bg-indigo-500/20 px-3 py-2 text-sm text-indigo-200 hover:bg-indigo-500/30 disabled:opacity-50"
+                  >
+                    {syncingId === c.id ? "Syncing…" : "Sync"}
+                  </button>
+                </div>
               </article>
             ))}
           </div>
+
+          {(summaryLoading || summary) && (
+            <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+              <h2 className="text-lg font-semibold">Spending summary</h2>
+              {summaryLoading && <p className="mt-3 text-white/40">Loading from your finance app…</p>}
+              {summary && !summaryLoading && (
+                <>
+                  <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
+                    <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                      <p className="text-xs uppercase tracking-wider text-white/40">Net total</p>
+                      <p
+                        className={`mt-1 text-2xl font-semibold ${
+                          summary.data.total < 0 ? "text-red-300" : "text-emerald-300"
+                        }`}
+                      >
+                        {formatUsd(summary.data.total)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                      <p className="text-xs uppercase tracking-wider text-white/40">Transactions</p>
+                      <p className="mt-1 text-2xl font-semibold">{summary.data.transactionCount}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-5 space-y-1.5">
+                    {summary.data.transactions.slice(0, 10).map((tx) => (
+                      <div
+                        key={tx.id}
+                        className="flex items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm hover:bg-white/5"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-white/85">{tx.payee ?? "Unknown"}</p>
+                          <p className="text-xs text-white/40">
+                            {tx.date}
+                            {tx.category ? ` · ${tx.category}` : ""}
+                          </p>
+                        </div>
+                        <span className={tx.amount < 0 ? "text-red-300" : "text-emerald-300"}>
+                          {formatUsd(tx.amount)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <p className="mt-4 border-t border-white/10 pt-3 text-xs text-white/40">
+                    {summary.data.evidenceNote}
+                  </p>
+                </>
+              )}
+            </div>
+          )}
 
           <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
             <p className="text-sm font-medium text-white/70">CSV import payload (for csv_import connectors)</p>

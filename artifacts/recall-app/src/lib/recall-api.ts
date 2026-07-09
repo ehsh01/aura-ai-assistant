@@ -189,3 +189,30 @@ export async function syncConnector(
     body: JSON.stringify(body ?? {}),
   });
 }
+
+export type FinanceTransaction = {
+  id: string;
+  date: string;
+  amount: number;
+  payee?: string | null;
+  category?: string | null;
+  notes?: string | null;
+};
+
+export type FinanceSummary = {
+  total: number;
+  transactionCount: number;
+  transactions: FinanceTransaction[];
+  evidenceNote: string;
+};
+
+export async function getFinanceSummary(
+  connectorId: string,
+  params?: { startDate?: string; endDate?: string; payee?: string },
+): Promise<FinanceSummary> {
+  const search = new URLSearchParams({ connectorId });
+  if (params?.startDate) search.set("startDate", params.startDate);
+  if (params?.endDate) search.set("endDate", params.endDate);
+  if (params?.payee) search.set("payee", params.payee);
+  return apiFetch(`/finance/summary?${search.toString()}`);
+}
