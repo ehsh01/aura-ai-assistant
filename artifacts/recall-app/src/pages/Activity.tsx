@@ -126,25 +126,39 @@ export function Activity() {
             {items.map((item) => {
               const detail = detailLine(item);
               const person = personFromActivity(item);
-              const body = (
-                <article className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 transition-colors hover:border-white/20">
+              return (
+                <article
+                  key={item.id}
+                  className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 transition-colors hover:border-white/20"
+                >
                   <div className="flex items-start gap-3">
                     <span className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-indigo-500/15 text-indigo-300">
                       <ActivityIcon size={16} />
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="font-semibold">{item.label}</h2>
-                        <span className="text-xs text-white/35">{formatWhen(item.createdAt)}</span>
-                      </div>
-                      {detail && <p className="mt-1 text-sm text-white/60">{detail}</p>}
+                      {item.href ? (
+                        <Link href={item.href} className="block no-underline">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h2 className="font-semibold text-white">{item.label}</h2>
+                            <span className="text-xs text-white/35">{formatWhen(item.createdAt)}</span>
+                          </div>
+                          {detail && <p className="mt-1 text-sm text-white/60">{detail}</p>}
+                        </Link>
+                      ) : (
+                        <>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h2 className="font-semibold">{item.label}</h2>
+                            <span className="text-xs text-white/35">{formatWhen(item.createdAt)}</span>
+                          </div>
+                          {detail && <p className="mt-1 text-sm text-white/60">{detail}</p>}
+                        </>
+                      )}
                       {person.name && (
                         <div className="mt-2">
                           {person.id ? (
                             <Link
                               href={peoplePath({ personId: person.id })}
                               className="inline-flex items-center gap-1 rounded-md border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-xs text-sky-200 no-underline hover:bg-sky-500/20"
-                              onClick={(e) => e.stopPropagation()}
                             >
                               <User size={11} />
                               {person.name}
@@ -163,18 +177,12 @@ export function Activity() {
                       </p>
                     </div>
                     {item.href && (
-                      <ArrowRight size={16} className="mt-1 flex-shrink-0 text-white/30" />
+                      <Link href={item.href} className="mt-1 flex-shrink-0 text-white/30 no-underline hover:text-white/60">
+                        <ArrowRight size={16} />
+                      </Link>
                     )}
                   </div>
                 </article>
-              );
-
-              return item.href ? (
-                <Link key={item.id} href={item.href} className="block no-underline">
-                  {body}
-                </Link>
-              ) : (
-                <div key={item.id}>{body}</div>
               );
             })}
           </div>

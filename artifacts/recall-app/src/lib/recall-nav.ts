@@ -45,6 +45,29 @@ export function askPath(opts?: { q?: string }): string {
   return q ? `/ask?${q}` : "/ask";
 }
 
+/** Best-effort deep link for Ask related records / evidence entities. */
+export function entityPath(entityType: string, entityId: string): string | null {
+  switch (entityType) {
+    case "task":
+      return tasksPath({ taskId: entityId });
+    case "note":
+      return notesPath({ noteId: entityId });
+    case "person":
+      return peoplePath({ personId: entityId });
+    case "document":
+      return "/documents";
+    case "knowledge":
+      return "/knowledge";
+    case "capture":
+    case "capture_item":
+      return inboxPath();
+    case "project":
+      return projectsPath(entityId);
+    default:
+      return null;
+  }
+}
+
 export function readSearchParam(key: string): string | null {
   return new URLSearchParams(window.location.search).get(key);
 }

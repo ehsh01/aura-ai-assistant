@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { Link } from "wouter";
 import { Sparkles, Search, ShieldCheck, ArrowRight } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import {
@@ -7,7 +8,7 @@ import {
   queryRecall,
   type EvidenceRecord,
 } from "@/lib/recall-api";
-import { readSearchParam } from "@/lib/recall-nav";
+import { entityPath, readSearchParam } from "@/lib/recall-nav";
 
 type Answer = {
   answer: string;
@@ -250,14 +251,24 @@ export function Ask() {
                     Related
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {answer.relatedRecords.map((r) => (
-                      <span
-                        key={`${r.entityType}-${r.entityId}`}
-                        className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60"
-                      >
-                        {r.title}
-                      </span>
-                    ))}
+                    {answer.relatedRecords.map((r) => {
+                      const href = entityPath(r.entityType, r.entityId);
+                      const className =
+                        "rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 no-underline hover:border-indigo-500/30 hover:text-indigo-200";
+                      return href ? (
+                        <Link
+                          key={`${r.entityType}-${r.entityId}`}
+                          href={href}
+                          className={className}
+                        >
+                          {r.title}
+                        </Link>
+                      ) : (
+                        <span key={`${r.entityType}-${r.entityId}`} className={className}>
+                          {r.title}
+                        </span>
+                      );
+                    })}
                   </div>
                 </section>
               )}
