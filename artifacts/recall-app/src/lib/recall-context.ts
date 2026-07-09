@@ -58,6 +58,7 @@ export interface RecallCaptureItem {
   suggestedProject?: string | null;
   suggestedTags: string[];
   suggestedActions: string[];
+  suggestedPersonName?: string | null;
   status: "pending" | "accepted" | "dismissed";
   projectId?: string | null;
   notebookId?: string | null;

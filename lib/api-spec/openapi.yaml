@@ -1231,6 +1231,10 @@ components:
           type: array
           items:
             type: string
+        suggestedPersonName:
+          type: string
+          nullable: true
+          description: Person name detected in the capture text (preview before accept).
         status:
           $ref: "#/components/schemas/CaptureStatus"
         projectId:

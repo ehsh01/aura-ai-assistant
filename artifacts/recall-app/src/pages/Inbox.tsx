@@ -36,9 +36,13 @@ export function Inbox() {
     void load();
   }, []);
 
-  const accept = async (item: RecallCaptureItem) => {
+  const accept = async (item: RecallCaptureItem, linkPerson = true) => {
     try {
-      const res = await acceptCapture(item.id, {});
+      const body =
+        linkPerson && item.suggestedPersonName
+          ? { personName: item.suggestedPersonName }
+          : {};
+      const res = await acceptCapture(item.id, body);
       await Promise.all([load(), reloadNotes(), reloadTasks()]);
       const linked =
         res.personName != null && res.personName !== ""
@@ -123,6 +127,11 @@ export function Inbox() {
                           due {item.suggestedDueDate}
                         </span>
                       )}
+                      {item.suggestedPersonName && (
+                        <span className="rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-1 text-sky-200">
+                          → {item.suggestedPersonName}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex gap-2">
@@ -145,10 +154,18 @@ export function Inbox() {
                       onClick={() => void accept(item)}
                       className="rounded-xl bg-indigo-500 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-400"
                     >
-                      Accept
+                      {item.suggestedPersonName
+                        ? `Accept · ${item.suggestedPersonName}`
+                        : "Accept"}
                     </button>
                   </div>
                 </div>
+                {item.suggestedPersonName && (
+                  <p className="mt-3 text-xs text-sky-200/70">
+                    Will link to <span className="font-medium text-sky-100">{item.suggestedPersonName}</span> on
+                    accept.
+                  </p>
+                )}
                 <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-white/70">{item.rawText}</p>
                 {item.suggestedActions.length > 0 && (
                   <div className="mt-4 flex flex-wrap gap-2">

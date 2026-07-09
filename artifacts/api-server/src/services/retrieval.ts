@@ -33,6 +33,18 @@ function keywordScore(question: string, text: string): number {
   return terms.reduce((s, t) => (hay.includes(t) ? s + 1 : s), 0) / terms.length;
 }
 
+/** Soft caps — embeddings are persisted, so a larger corpus is affordable. */
+const CORPUS = {
+  tasks: 150,
+  notes: 150,
+  people: 80,
+  knowledge: 80,
+  documents: 60,
+  captures: 80,
+  keywordShortlist: 60,
+  semanticCandidates: 200,
+} as const;
+
 async function collectCorpus(userId: string): Promise<ContextRecord[]> {
   const [tasks, notes, people, knowledge, documents, captures] = await Promise.all([
     listTasksForUser(userId),
@@ -40,12 +52,12 @@ async function collectCorpus(userId: string): Promise<ContextRecord[]> {
     listPeopleForUser(userId),
     listKnowledgeForUser(userId),
     listDocumentsForUser(userId),
-    listCapturesForUser(userId, { limit: 40 }),
+    listCapturesForUser(userId, { limit: CORPUS.captures }),
   ]);
 
   const records: ContextRecord[] = [];
 
-  for (const t of tasks.slice(0, 80)) {
+  for (const t of tasks.slice(0, CORPUS.tasks)) {
     records.push({
       entityType: "task",
       entityId: t.id,
@@ -53,7 +65,7 @@ async function collectCorpus(userId: string): Promise<ContextRecord[]> {
       text: `${t.title} priority=${t.priority} due=${t.time ?? "none"} completed=${t.completed}`,
     });
   }
-  for (const n of notes.slice(0, 80)) {
+  for (const n of notes.slice(0, CORPUS.notes)) {
     records.push({
       entityType: "note",
       entityId: n.id,
@@ -61,7 +73,7 @@ async function collectCorpus(userId: string): Promise<ContextRecord[]> {
       text: `${n.title}\n${(n.preview ?? n.content ?? "").slice(0, 600)}`,
     });
   }
-  for (const p of people.slice(0, 40)) {
+  for (const p of people.slice(0, CORPUS.people)) {
     records.push({
       entityType: "person",
       entityId: p.id,
@@ -69,7 +81,7 @@ async function collectCorpus(userId: string): Promise<ContextRecord[]> {
       text: `${p.displayName} ${p.organization ?? ""} ${p.email ?? ""}`.trim(),
     });
   }
-  for (const k of knowledge.slice(0, 40)) {
+  for (const k of knowledge.slice(0, CORPUS.knowledge)) {
     records.push({
       entityType: "knowledge",
       entityId: k.id,
@@ -77,7 +89,7 @@ async function collectCorpus(userId: string): Promise<ContextRecord[]> {
       text: `${k.title}\n${k.content.slice(0, 600)}\ntags=${k.tags.join(",")}`,
     });
   }
-  for (const d of documents.slice(0, 30)) {
+  for (const d of documents.slice(0, CORPUS.documents)) {
     records.push({
       entityType: "document",
       entityId: d.id,
@@ -99,12 +111,12 @@ async function collectCorpus(userId: string): Promise<ContextRecord[]> {
 
 /**
  * Hybrid retrieval: keyword + semantic embeddings (when available).
- * Semantic vectors are cached in-process by content hash.
+ * Vectors are L1 (memory) + L2 (entity_embeddings) cached by content hash.
  */
 export async function retrieveRelevantRecords(
   userId: string,
   question: string,
-  limit = 12,
+  limit = 16,
 ): Promise<{ records: RetrievedRecord[]; usedSemantic: boolean }> {
   const corpus = await collectCorpus(userId);
   if (corpus.length === 0) return { records: [], usedSemantic: false };
@@ -122,15 +134,17 @@ export async function retrieveRelevantRecords(
     if (queryVec) {
       // Prefer embedding the keyword shortlist + a broader sample for recall.
       const shortlistIds = new Set(
-        keywordHits.slice(0, 40).map((x) => `${x.r.entityType}:${x.r.entityId}`),
+        keywordHits
+          .slice(0, CORPUS.keywordShortlist)
+          .map((x) => `${x.r.entityType}:${x.r.entityId}`),
       );
       const candidates: ContextRecord[] = [];
-      for (const hit of keywordHits.slice(0, 40)) candidates.push(hit.r);
+      for (const hit of keywordHits.slice(0, CORPUS.keywordShortlist)) candidates.push(hit.r);
       for (const r of corpus) {
         const id = `${r.entityType}:${r.entityId}`;
         if (shortlistIds.has(id)) continue;
         candidates.push(r);
-        if (candidates.length >= 120) break;
+        if (candidates.length >= CORPUS.semanticCandidates) break;
       }
 
       const vectors = await embedItemsCached(

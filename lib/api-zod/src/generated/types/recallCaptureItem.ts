@@ -19,6 +19,8 @@ export interface RecallCaptureItem {
   suggestedProject?: string | null;
   suggestedTags: string[];
   suggestedActions: string[];
+  /** Person name detected in the capture text (preview before accept). */
+  suggestedPersonName?: string | null;
   status: CaptureStatus;
   projectId?: string | null;
   notebookId?: string | null;

@@ -213,6 +213,7 @@ export async function getProjectDetailForUser(
       suggestedProject: item.suggestedProject ?? null,
       suggestedTags: item.suggestedTags ?? [],
       suggestedActions: item.suggestedActions ?? [],
+      suggestedPersonName: null,
       status: item.status as RecallCaptureItemDto["status"],
       projectId: item.projectId ?? null,
       notebookId: item.notebookId ?? null,

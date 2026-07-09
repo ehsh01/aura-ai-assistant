@@ -37,6 +37,8 @@ export type RecallCaptureItemDto = {
   suggestedProject: string | null;
   suggestedTags: string[];
   suggestedActions: string[];
+  /** Computed at read time from capture text + known people. */
+  suggestedPersonName: string | null;
   status: CaptureStatus;
   projectId: string | null;
   notebookId: string | null;
@@ -200,7 +202,16 @@ export function classifyCaptureDeterministically(
   };
 }
 
-function toDto(row: CaptureItem): RecallCaptureItemDto {
+function suggestPersonName(
+  title: string,
+  rawText: string,
+  peopleNames: string[],
+): string | null {
+  const name = extractPerson(`${title}\n${rawText}`, peopleNames);
+  return !name || name === "Someone" ? null : name;
+}
+
+function toDto(row: CaptureItem, peopleNames: string[] = []): RecallCaptureItemDto {
   return {
     id: row.id,
     rawCaptureId: row.rawCaptureId ?? null,
@@ -212,6 +223,7 @@ function toDto(row: CaptureItem): RecallCaptureItemDto {
     suggestedProject: row.suggestedProject ?? null,
     suggestedTags: row.suggestedTags ?? [],
     suggestedActions: row.suggestedActions ?? [],
+    suggestedPersonName: suggestPersonName(row.cleanedTitle, row.rawText, peopleNames),
     status: row.status === "accepted" || row.status === "dismissed" ? row.status : "pending",
     projectId: row.projectId ?? null,
     notebookId: row.notebookId ?? null,
@@ -219,6 +231,11 @@ function toDto(row: CaptureItem): RecallCaptureItemDto {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+async function peopleNamesForUser(userId: string): Promise<string[]> {
+  const people = await listPeopleForUser(userId);
+  return people.map((p) => p.displayName);
 }
 
 export async function createCaptureForUser(
@@ -250,16 +267,20 @@ export async function createCaptureForUser(
     })
     .returning();
 
-  return toDto(row!);
+  const peopleNames = await peopleNamesForUser(userId);
+  return toDto(row!, peopleNames);
 }
 
 export async function listCaptureInboxForUser(userId: string): Promise<RecallCaptureItemDto[]> {
-  const rows = await getDb()
-    .select()
-    .from(captureItems)
-    .where(and(eq(captureItems.userId, userId), eq(captureItems.status, "pending")))
-    .orderBy(desc(captureItems.updatedAt));
-  return rows.map(toDto);
+  const [rows, peopleNames] = await Promise.all([
+    getDb()
+      .select()
+      .from(captureItems)
+      .where(and(eq(captureItems.userId, userId), eq(captureItems.status, "pending")))
+      .orderBy(desc(captureItems.updatedAt)),
+    peopleNamesForUser(userId),
+  ]);
+  return rows.map((row) => toDto(row, peopleNames));
 }
 
 export async function updateCaptureForUser(
@@ -316,7 +337,7 @@ export async function updateCaptureForUser(
     });
   }
 
-  return row ? toDto(row) : null;
+  return row ? toDto(row, await peopleNamesForUser(userId)) : null;
 }
 
 export async function acceptCaptureForUser(
@@ -332,7 +353,8 @@ export async function acceptCaptureForUser(
   const existing = rows[0];
   if (!existing) return null;
 
-  const item = toDto(existing);
+  const peopleNames = await peopleNamesForUser(userId);
+  const item = toDto(existing, peopleNames);
   const type = normalizeType(input.type ?? item.suggestedType);
   const title = input.title?.trim() || item.cleanedTitle;
   const content = input.content ?? item.rawText;
