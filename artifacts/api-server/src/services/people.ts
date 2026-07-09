@@ -166,12 +166,89 @@ export async function updatePersonForUser(
     .returning();
   if (!row) return null;
   const dto = toDto(row);
+
+  // Keep person: tags in sync when the display name changes.
+  const oldName = existing.displayName.trim();
+  const newName = dto.displayName.trim();
+  if (
+    input.displayName !== undefined &&
+    oldName &&
+    newName &&
+    oldName.toLowerCase() !== newName.toLowerCase()
+  ) {
+    void rewritePersonTagsForUser(userId, oldName, newName).catch(() => {
+      // Best-effort; People page still works if tag rewrite fails.
+    });
+  }
+
   warmEntityEmbedding(userId, {
     entityType: "person",
     entityId: dto.id,
     text: `${dto.displayName} ${dto.organization ?? ""} ${dto.email ?? ""}`.trim(),
   });
   return dto;
+}
+
+/** Rewrite person:OldName tags to person:NewName on notes + knowledge. */
+async function rewritePersonTagsForUser(
+  userId: string,
+  oldName: string,
+  newName: string,
+): Promise<void> {
+  const oldTag = `person:${oldName}`;
+  const newTag = `person:${newName}`;
+  const needle = `%person:${oldName}%`;
+
+  const noteRows = await getDb()
+    .select({ id: notes.id, tags: notes.tags })
+    .from(notes)
+    .where(and(eq(notes.userId, userId), sql`${notes.tags}::text ilike ${needle}`));
+
+  for (const n of noteRows) {
+    const tags = Array.isArray(n.tags) ? [...n.tags] : [];
+    let changed = false;
+    const next = tags.map((t) => {
+      if (typeof t !== "string") return t;
+      if (t.toLowerCase() === oldTag.toLowerCase()) {
+        changed = true;
+        return newTag;
+      }
+      return t;
+    });
+    if (!changed) continue;
+    await getDb()
+      .update(notes)
+      .set({ tags: next, updatedAt: new Date() })
+      .where(and(eq(notes.id, n.id), eq(notes.userId, userId)));
+  }
+
+  const knowledgeRows = await getDb()
+    .select({ id: knowledgeItems.id, tags: knowledgeItems.tags })
+    .from(knowledgeItems)
+    .where(
+      and(
+        eq(knowledgeItems.userId, userId),
+        sql`${knowledgeItems.tags}::text ilike ${needle}`,
+      ),
+    );
+
+  for (const k of knowledgeRows) {
+    const tags = Array.isArray(k.tags) ? [...k.tags] : [];
+    let changed = false;
+    const next = tags.map((t) => {
+      if (typeof t !== "string") return t;
+      if (t.toLowerCase() === oldTag.toLowerCase()) {
+        changed = true;
+        return newTag;
+      }
+      return t;
+    });
+    if (!changed) continue;
+    await getDb()
+      .update(knowledgeItems)
+      .set({ tags: next, updatedAt: new Date() })
+      .where(and(eq(knowledgeItems.id, k.id), eq(knowledgeItems.userId, userId)));
+  }
 }
 
 /** Resolve or create a person by display name (conservative dedup). */
