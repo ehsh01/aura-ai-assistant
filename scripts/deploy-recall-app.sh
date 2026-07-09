@@ -21,6 +21,22 @@ fi
 echo "==> Install & build"
 command -v pnpm >/dev/null || npm install -g pnpm@9
 pnpm install
+
+echo "==> Database migrations (idempotent)"
+ENV_FILE="artifacts/api-server/.env"
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+if [ -n "${DATABASE_URL:-}" ] && command -v psql >/dev/null; then
+  psql "$DATABASE_URL" -f lib/db/migrations/0002_capture_layer.sql
+  psql "$DATABASE_URL" -f lib/db/migrations/0003_evidence_and_platform.sql
+else
+  echo "WARN: Skipping migrations (DATABASE_URL unset or psql missing)"
+fi
+
 pnpm run build:prod
 
 echo "==> API .env"
