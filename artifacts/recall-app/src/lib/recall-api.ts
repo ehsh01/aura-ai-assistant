@@ -356,6 +356,22 @@ export async function createKnowledge(input: {
   return apiFetch("/knowledge", { method: "POST", body: JSON.stringify(input) });
 }
 
+export async function updateKnowledge(
+  itemId: string,
+  input: {
+    title?: string;
+    content?: string;
+    itemType?: string;
+    tags?: string[];
+    projectId?: string | null;
+  },
+): Promise<KnowledgeRecord> {
+  return apiFetch(`/knowledge/${encodeURIComponent(itemId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function summarizeText(
   content: string,
   maxLength = 400,

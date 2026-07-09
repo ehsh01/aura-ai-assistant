@@ -10,6 +10,7 @@ import {
   createKnowledgeForUser,
   getKnowledgeForUser,
   listKnowledgeForUser,
+  updateKnowledgeForUser,
 } from "../services/knowledge";
 
 const CreateDocumentBody = z.object({
@@ -29,6 +30,14 @@ const CreateKnowledgeBody = z.object({
   tags: z.array(z.string()).optional(),
   projectId: z.string().nullish(),
   sourceCaptureId: z.string().nullish(),
+});
+
+const UpdateKnowledgeBody = z.object({
+  title: z.string().min(1).max(500).optional(),
+  content: z.string().optional(),
+  itemType: z.string().max(32).optional(),
+  tags: z.array(z.string()).optional(),
+  projectId: z.string().nullish(),
 });
 
 const router: IRouter = Router();
@@ -88,6 +97,20 @@ router.post("/knowledge", async (req, res, next) => {
 router.get("/knowledge/:itemId", async (req, res, next) => {
   try {
     const item = await getKnowledgeForUser(req.user!.id, req.params.itemId);
+    if (!item) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Knowledge item not found" });
+      return;
+    }
+    res.json(item);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/knowledge/:itemId", async (req, res, next) => {
+  try {
+    const body = UpdateKnowledgeBody.parse(req.body);
+    const item = await updateKnowledgeForUser(req.user!.id, req.params.itemId, body);
     if (!item) {
       res.status(404).json({ error: "NOT_FOUND", message: "Knowledge item not found" });
       return;

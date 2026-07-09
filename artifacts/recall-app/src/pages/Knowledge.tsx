@@ -1,8 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { BookMarked, Plus, X } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
-import { createKnowledge, listKnowledge, type KnowledgeRecord } from "@/lib/recall-api";
+import {
+  createKnowledge,
+  listKnowledge,
+  updateKnowledge,
+  type KnowledgeRecord,
+} from "@/lib/recall-api";
 import { NoteTagList } from "@/components/PersonTagLink";
+import { PersonTagger } from "@/components/PersonTagger";
 import { toast } from "@/hooks/use-toast";
 import { readSearchParam } from "@/lib/recall-nav";
 
@@ -92,6 +98,24 @@ export function Knowledge() {
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const saveSelectedTags = async (tags: string[]) => {
+    if (!selected) return;
+    const prev = selected;
+    setSelected({ ...selected, tags });
+    setItems((items) =>
+      items.map((i) => (i.id === prev.id ? { ...i, tags } : i)),
+    );
+    try {
+      const updated = await updateKnowledge(prev.id, { tags });
+      setSelected(updated);
+      setItems((items) => items.map((i) => (i.id === updated.id ? updated : i)));
+    } catch {
+      setSelected(prev);
+      setItems((items) => items.map((i) => (i.id === prev.id ? prev : i)));
+      toast({ title: "Could not update tags", variant: "destructive" });
     }
   };
 
@@ -243,11 +267,9 @@ export function Knowledge() {
                 <X size={18} />
               </button>
             </div>
-            {selected.tags.length > 0 && (
-              <div className="mt-3">
-                <NoteTagList tags={selected.tags} limit={10} />
-              </div>
-            )}
+            <div className="mt-3">
+              <PersonTagger tags={selected.tags} onChange={(tags) => void saveSelectedTags(tags)} />
+            </div>
             <div className="mt-3 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-white/75">
               {selected.content || "No content."}
             </div>
