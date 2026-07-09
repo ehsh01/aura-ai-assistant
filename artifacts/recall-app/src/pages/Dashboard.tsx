@@ -32,6 +32,7 @@ import { DailyBriefingCard } from "@/components/home/DailyBriefingCard";
 import { FocusNowCard } from "@/components/home/FocusNowCard";
 import { TimelineSection } from "@/components/home/TimelineSection";
 import { WaitingOnSection } from "@/components/home/WaitingOnSection";
+import { MorningActions } from "@/components/home/MorningActions";
 import { DontForgetSection } from "@/components/home/DontForgetSection";
 import { RecallInsightsSection } from "@/components/home/RecallInsightsSection";
 import { CurrentContextSection } from "@/components/home/CurrentContextSection";
@@ -191,26 +192,28 @@ export function Dashboard() {
         <div className="relative z-10 mx-auto w-full max-w-5xl space-y-6 px-4 pb-44 pt-6 md:px-8 md:pt-8">
           <DailyBriefingCard briefing={briefing} date={date} />
 
+          <MorningActions focus={focus} waiting={waiting} briefing={briefing} />
+
           <div className="flex flex-wrap items-center gap-2">
             <Link
               href="/ask"
               className="inline-flex items-center gap-2 rounded-full border border-indigo-500/25 bg-indigo-500/10 px-3 py-1.5 text-xs font-medium text-indigo-200 no-underline hover:bg-indigo-500/20"
             >
               <Sparkles size={14} />
-              Open Ask Recall
+              Ask Recall
               <ArrowRight size={12} />
             </Link>
             <Link
-              href="/documents"
+              href="/inbox"
               className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/55 no-underline hover:bg-white/5 hover:text-white/80"
             >
-              Documents
+              Inbox
             </Link>
             <Link
-              href="/knowledge"
+              href="/people"
               className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/55 no-underline hover:bg-white/5 hover:text-white/80"
             >
-              Knowledge
+              People
             </Link>
             <Link
               href="/activity"
@@ -219,10 +222,6 @@ export function Dashboard() {
               Activity
             </Link>
           </div>
-
-          <FinanceSnapshotCard finance={finance} />
-
-          <RecentActivityCard items={activity} />
 
           {(askPending || askResult) && (
             <div className="nebula-glass rounded-2xl border border-indigo-500/20 px-5 py-4">
@@ -281,12 +280,16 @@ export function Dashboard() {
 
           <FocusNowCard focus={focus} />
 
-          <TimelineSection entries={timeline} />
+          <FinanceSnapshotCard finance={finance} />
 
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <WaitingOnSection items={waiting} />
-            <RecallInsightsSection insights={insights} />
+            <RecentActivityCard items={activity} />
           </div>
+
+          <TimelineSection entries={timeline} />
+
+          <RecallInsightsSection insights={insights} />
 
           <DontForgetSection items={dontForget} />
 
