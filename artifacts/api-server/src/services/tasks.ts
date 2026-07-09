@@ -2,6 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { tasks, type Task } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newTaskId } from "../lib/recall-format";
+import { writeAuditLog } from "./audit";
 
 export type RecallTaskDto = {
   id: string;
@@ -97,7 +98,19 @@ export async function createTaskForUser(
     })
     .returning();
 
-  return toDto(row!);
+  const dto = toDto(row!);
+  await writeAuditLog({
+    userId,
+    action: "task_created",
+    entityType: "task",
+    entityId: dto.id,
+    metadata: {
+      title: dto.title,
+      aiGenerated: input.aiGenerated ?? false,
+      sourceCaptureId: input.sourceCaptureId ?? null,
+    },
+  });
+  return dto;
 }
 
 export async function bulkUpsertTasksForUser(
@@ -145,6 +158,7 @@ export async function updateTaskForUser(
 
   if (!existing[0]) return null;
 
+  const wasCompleted = existing[0].completed;
   const [row] = await db
     .update(tasks)
     .set({
@@ -161,7 +175,20 @@ export async function updateTaskForUser(
     .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId)))
     .returning();
 
-  return row ? toDto(row) : null;
+  if (!row) return null;
+  const dto = toDto(row);
+
+  if (input.completed !== undefined && input.completed !== wasCompleted) {
+    await writeAuditLog({
+      userId,
+      action: input.completed ? "task_completed" : "task_reopened",
+      entityType: "task",
+      entityId: dto.id,
+      metadata: { title: dto.title },
+    });
+  }
+
+  return dto;
 }
 
 export async function deleteTaskForUser(

@@ -2,6 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { knowledgeItems, type KnowledgeItem } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newKnowledgeId } from "../lib/recall-format";
+import { writeAuditLog } from "./audit";
 
 export type KnowledgeDto = {
   id: string;
@@ -65,7 +66,15 @@ export async function createKnowledgeForUser(
       updatedAt: now,
     })
     .returning();
-  return toDto(row!);
+  const dto = toDto(row!);
+  await writeAuditLog({
+    userId,
+    action: "knowledge_created",
+    entityType: "knowledge",
+    entityId: dto.id,
+    metadata: { title: dto.title, itemType: dto.itemType },
+  });
+  return dto;
 }
 
 export async function getKnowledgeForUser(

@@ -205,6 +205,12 @@ export function Dashboard() {
             >
               Knowledge
             </Link>
+            <Link
+              href="/activity"
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/55 no-underline hover:bg-white/5 hover:text-white/80"
+            >
+              Activity
+            </Link>
           </div>
 
           <FinanceSnapshotCard finance={finance} />

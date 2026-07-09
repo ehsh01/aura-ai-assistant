@@ -96,6 +96,28 @@ export async function listWaitingOn(): Promise<{ items: WaitingOnRecord[] }> {
   return apiFetch("/people/waiting-on");
 }
 
+export type ActivityRecord = {
+  id: string;
+  action: string;
+  label: string;
+  entityType: string | null;
+  entityId: string | null;
+  href: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export async function listActivity(params?: {
+  limit?: number;
+  action?: string;
+}): Promise<{ items: ActivityRecord[] }> {
+  const search = new URLSearchParams();
+  if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.action) search.set("action", params.action);
+  const q = search.toString();
+  return apiFetch(q ? `/activity?${q}` : "/activity");
+}
+
 export async function createPerson(input: {
   displayName: string;
   email?: string | null;

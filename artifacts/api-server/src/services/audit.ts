@@ -1,6 +1,76 @@
-import { auditLog } from "@workspace/db/schema";
+import { and, desc, eq } from "drizzle-orm";
+import { auditLog, type AuditLogEntry } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newAuditId } from "../lib/recall-format";
+
+export type AuditEntryDto = {
+  id: string;
+  action: string;
+  label: string;
+  entityType: string | null;
+  entityId: string | null;
+  href: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+const ACTION_LABELS: Record<string, string> = {
+  capture_created: "Capture created",
+  capture_extracted: "AI extracted a capture",
+  capture_accepted: "Inbox item accepted",
+  capture_dismissed: "Inbox item dismissed",
+  task_created: "Task created",
+  task_completed: "Task completed",
+  task_reopened: "Task reopened",
+  note_created: "Note created",
+  connector_sync: "Connector synced",
+  query_answered: "Ask Recall answered a question",
+  knowledge_created: "Knowledge item added",
+  document_created: "Document added",
+  person_created: "Person added",
+};
+
+function labelFor(action: string): string {
+  return ACTION_LABELS[action] ?? action.replace(/_/g, " ");
+}
+
+function hrefFor(entityType: string | null, entityId: string | null): string | null {
+  if (!entityType || !entityId) return null;
+  switch (entityType) {
+    case "task":
+      return `/tasks?task=${encodeURIComponent(entityId)}`;
+    case "note":
+      return `/notes?note=${encodeURIComponent(entityId)}`;
+    case "capture":
+    case "capture_item":
+      return "/inbox";
+    case "connector":
+      return "/connectors";
+    case "person":
+      return "/people";
+    case "knowledge":
+      return "/knowledge";
+    case "document":
+      return "/documents";
+    case "query":
+      return "/ask";
+    default:
+      return null;
+  }
+}
+
+function toDto(row: AuditLogEntry): AuditEntryDto {
+  return {
+    id: row.id,
+    action: row.action,
+    label: labelFor(row.action),
+    entityType: row.entityType ?? null,
+    entityId: row.entityId ?? null,
+    href: hrefFor(row.entityType ?? null, row.entityId ?? null),
+    metadata: row.metadata ?? {},
+    createdAt: row.createdAt.toISOString(),
+  };
+}
 
 export async function writeAuditLog(input: {
   userId?: string | null;
@@ -22,4 +92,23 @@ export async function writeAuditLog(input: {
   } catch {
     // Audit must never break primary flows.
   }
+}
+
+export async function listAuditLogForUser(
+  userId: string,
+  opts?: { limit?: number; action?: string },
+): Promise<AuditEntryDto[]> {
+  const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 200);
+  const where = opts?.action
+    ? and(eq(auditLog.userId, userId), eq(auditLog.action, opts.action))
+    : eq(auditLog.userId, userId);
+
+  const rows = await getDb()
+    .select()
+    .from(auditLog)
+    .where(where)
+    .orderBy(desc(auditLog.createdAt))
+    .limit(limit);
+
+  return rows.map(toDto);
 }

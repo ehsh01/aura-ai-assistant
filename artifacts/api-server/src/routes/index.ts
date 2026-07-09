@@ -14,6 +14,7 @@ import peopleRouter from "./people";
 import projectsRouter from "./projects";
 import tasksRouter from "./tasks";
 import todayRouter from "./today";
+import auditRouter from "./audit";
 import { requireAuth } from "../middleware/auth";
 import { aiRateLimiter } from "../middleware/security";
 
@@ -33,6 +34,7 @@ router.use(todayRouter);
 router.use(connectorsRouter);
 router.use(documentsRouter);
 router.use(tasksRouter);
+router.use(auditRouter);
 router.use(aiRateLimiter, requireAuth, aiRouter);
 
 export default router;

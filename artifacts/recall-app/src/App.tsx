@@ -19,6 +19,7 @@ import { ProjectDetail } from "@/pages/ProjectDetail";
 import { Ask } from "@/pages/Ask";
 import { Documents } from "@/pages/Documents";
 import { Knowledge } from "@/pages/Knowledge";
+import { Activity } from "@/pages/Activity";
 import { normalizeBrowserPath, pathnameOnly } from "@/lib/app-path";
 
 const queryClient = new QueryClient();
@@ -63,6 +64,7 @@ function Router() {
         <Route path="/documents" component={Documents} />
         <Route path="/knowledge" component={Knowledge} />
         <Route path="/people" component={People} />
+        <Route path="/activity" component={Activity} />
         <Route path="/connectors" component={Connectors} />
         <Route path="/projects" component={Projects} />
         <Route path="/projects/:projectId" component={ProjectDetail} />

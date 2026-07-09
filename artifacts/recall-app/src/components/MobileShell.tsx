@@ -1,6 +1,7 @@
 import React from "react";
 import { Link } from "wouter";
 import {
+  Activity,
   BookMarked,
   Cable,
   FileText,
@@ -195,6 +196,10 @@ export function MobileMoreSheet({
           <Link href="/people" onClick={close} className={linkClass(location === "/people")}>
             <Users size={18} />
             <span className="flex-1 text-sm font-medium">People</span>
+          </Link>
+          <Link href="/activity" onClick={close} className={linkClass(location === "/activity")}>
+            <Activity size={18} />
+            <span className="flex-1 text-sm font-medium">Activity</span>
           </Link>
           <Link href="/connectors" onClick={close} className={linkClass(location === "/connectors")}>
             <Cable size={18} />

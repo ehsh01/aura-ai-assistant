@@ -3,6 +3,7 @@ import { people, tasks, type Person } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newPersonId } from "../lib/recall-format";
 import { recordUserCorrection } from "./user-corrections";
+import { writeAuditLog } from "./audit";
 
 export type PersonDto = {
   id: string;
@@ -73,7 +74,15 @@ export async function createPersonForUser(
       updatedAt: now,
     })
     .returning();
-  return toDto(row!);
+  const dto = toDto(row!);
+  await writeAuditLog({
+    userId,
+    action: "person_created",
+    entityType: "person",
+    entityId: dto.id,
+    metadata: { displayName: dto.displayName },
+  });
+  return dto;
 }
 
 export async function listPeopleForUser(userId: string): Promise<PersonDto[]> {

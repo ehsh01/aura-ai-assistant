@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { BookOpen, Inbox, Library, Plus, FolderKanban, Sparkles, FileText, BookMarked } from "lucide-react";
+import { BookOpen, Inbox, Library, Plus, FolderKanban, Sparkles, FileText, BookMarked, Activity } from "lucide-react";
 import { CaptureModal } from "@/components/CaptureModal";
 import { MobileBottomNav, MobileMoreSheet } from "@/components/MobileShell";
 import { RecallLogo } from "@/components/RecallLogo";
@@ -96,6 +96,11 @@ const staticNavItems = [
         <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
       </svg>
     ),
+  },
+  {
+    id: "/activity",
+    label: "Activity",
+    icon: <Activity width={18} height={18} strokeWidth={1.8} />,
   },
   {
     id: "/connectors",
@@ -284,6 +289,7 @@ export function AppLayout({ children }: AppLayoutProps) {
     location === "/documents" ||
     location === "/knowledge" ||
     location === "/people" ||
+    location === "/activity" ||
     location === "/connectors" ||
     location === "/projects" ||
     location.startsWith("/projects/");

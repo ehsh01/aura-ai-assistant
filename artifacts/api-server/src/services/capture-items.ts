@@ -6,6 +6,7 @@ import { createEvidenceForUser } from "./evidence";
 import { createNoteForUser, type RecallNoteDto } from "./notes";
 import { recordUserCorrection } from "./user-corrections";
 import { createTaskForUser, type RecallTaskDto } from "./tasks";
+import { writeAuditLog } from "./audit";
 
 export type CaptureSuggestedType =
   | "note"
@@ -250,6 +251,17 @@ export async function updateCaptureForUser(
     })
     .where(and(eq(captureItems.id, captureId), eq(captureItems.userId, userId)))
     .returning();
+
+  if (row && input.status === "dismissed" && existing.status !== "dismissed") {
+    await writeAuditLog({
+      userId,
+      action: "capture_dismissed",
+      entityType: "capture_item",
+      entityId: captureId,
+      metadata: { title: row.cleanedTitle },
+    });
+  }
+
   return row ? toDto(row) : null;
 }
 
@@ -316,5 +328,21 @@ export async function acceptCaptureForUser(
   }
 
   const updated = await updateCaptureForUser(userId, captureId, { status: "accepted" });
+  if (updated) {
+    await writeAuditLog({
+      userId,
+      action: "capture_accepted",
+      entityType: task ? "task" : "note",
+      entityId: task?.id ?? note?.id ?? captureId,
+      metadata: {
+        captureItemId: captureId,
+        type,
+        title,
+        createdTaskId: task?.id ?? null,
+        createdNoteId: note?.id ?? null,
+        sourceCaptureId: item.rawCaptureId,
+      },
+    });
+  }
   return updated ? { item: updated, note, task } : null;
 }

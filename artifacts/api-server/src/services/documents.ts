@@ -2,6 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { documents, type Document } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newDocumentId } from "../lib/recall-format";
+import { writeAuditLog } from "./audit";
 
 export type DocumentDto = {
   id: string;
@@ -72,7 +73,15 @@ export async function createDocumentForUser(
       updatedAt: now,
     })
     .returning();
-  return toDto(row!);
+  const dto = toDto(row!);
+  await writeAuditLog({
+    userId,
+    action: "document_created",
+    entityType: "document",
+    entityId: dto.id,
+    metadata: { fileName: dto.fileName },
+  });
+  return dto;
 }
 
 export async function getDocumentForUser(

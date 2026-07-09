@@ -6,6 +6,7 @@ import { loadSyncedFinanceAggregate } from "./finance-sync";
 import { ensureUserFinanceFresh } from "./finance-auto-sync";
 import { retrieveRelevantRecords } from "./retrieval";
 import { listWaitingOnForUser } from "./waiting-on";
+import { writeAuditLog } from "./audit";
 import { QUERY_ANSWER_PROMPT_VERSION } from "../prompts/queryAnswer.v1";
 import { newEvidenceId } from "../lib/recall-format";
 
@@ -170,6 +171,24 @@ export async function queryRecallForUser(
           text: r.text,
         }));
 
+  const finish = async (result: QueryAnswer): Promise<QueryAnswer> => {
+    await writeAuditLog({
+      userId,
+      action: "query_answered",
+      entityType: "query",
+      entityId: null,
+      metadata: {
+        question: question.slice(0, 240),
+        confidence: result.confidence,
+        evidenceCount: result.evidence.length,
+        usedSemantic,
+        waitingCount: waitingItems.length,
+        hasFinance: Boolean(finance && !financeNeedsSync),
+      },
+    });
+    return result;
+  };
+
   // AI synthesis when available.
   if (!degraded) {
     try {
@@ -185,7 +204,7 @@ export async function queryRecallForUser(
           .filter(Boolean)
           .join(" ");
       }
-      return {
+      return finish({
         answer: ai.answer,
         confidence: ai.confidence,
         caveats,
@@ -196,7 +215,7 @@ export async function queryRecallForUser(
           (waitingItems.length > 0 ? "Open People → Waiting on" : null),
         promptVersion: QUERY_ANSWER_PROMPT_VERSION,
         degraded: ai.degraded,
-      };
+      });
     } catch {
       // Fall through to rule-based answer.
     }
@@ -252,7 +271,7 @@ export async function queryRecallForUser(
     confidence = 0.2;
   }
 
-  return {
+  return finish({
     answer,
     confidence,
     caveats,
@@ -261,5 +280,5 @@ export async function queryRecallForUser(
     suggestedNextAction,
     promptVersion: QUERY_ANSWER_PROMPT_VERSION,
     degraded,
-  };
+  });
 }
