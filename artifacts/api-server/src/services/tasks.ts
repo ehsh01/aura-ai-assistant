@@ -104,6 +104,19 @@ export async function createTaskForUser(
   const now = new Date();
   const id = input.id?.trim() || newTaskId();
 
+  let tags = [...(input.tags ?? [])];
+  let personName: string | null = null;
+  if (input.requesterPersonId) {
+    const names = await personNamesById(userId, [input.requesterPersonId]);
+    personName = names.get(input.requesterPersonId) ?? null;
+    if (
+      personName &&
+      !tags.some((t) => t.toLowerCase() === `person:${personName}`.toLowerCase())
+    ) {
+      tags = [...tags.filter((t) => !/^person:/i.test(t)), `person:${personName}`];
+    }
+  }
+
   const [row] = await db
     .insert(tasks)
     .values({
@@ -118,15 +131,14 @@ export async function createTaskForUser(
       title: input.title.trim(),
       time: input.time ?? null,
       priority: normalizePriority(input.priority),
-      tags: input.tags ?? [],
+      tags,
       completed: input.completed ?? false,
       createdAt: now,
       updatedAt: now,
     })
     .returning();
 
-  let personName: string | null = null;
-  if (row?.requesterPersonId) {
+  if (!personName && row?.requesterPersonId) {
     const names = await personNamesById(userId, [row.requesterPersonId]);
     personName = names.get(row.requesterPersonId) ?? null;
   }
