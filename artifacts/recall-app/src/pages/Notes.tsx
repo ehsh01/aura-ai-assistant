@@ -19,9 +19,9 @@ import {
 import { readSearchParam, notesPath } from "@/lib/recall-nav";
 import { importEvernoteFiles } from "@/lib/evernote-import-ui";
 import { NoteRichContent } from "@/components/NoteRichContent";
-import { NoteTagList } from "@/components/PersonTagLink";
+import { NoteTagList, parsePersonTag } from "@/components/PersonTagLink";
 import { PersonTagger } from "@/components/PersonTagger";
-import { Download, Loader2, BookOpen, ChevronDown, Sparkles, ChevronLeft } from "lucide-react";
+import { Download, Loader2, BookOpen, ChevronDown, Sparkles, ChevronLeft, X } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 
 function notebookIdFromFilter(filter: NotebookFilter): string | null {
@@ -40,6 +40,7 @@ export function Notes() {
   const [activeNotebook, setActiveNotebook] = useState<NotebookFilter>("all");
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [personFilter, setPersonFilter] = useState<string | null>(null);
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
   const [toolbarDraft, setToolbarDraft] = useState("");
   const [importing, setImporting] = useState(false);
@@ -63,6 +64,7 @@ export function Notes() {
     const noteId = readSearchParam("note");
     const notebookParam = readSearchParam("notebook");
     const qParam = readSearchParam("q");
+    const personParam = readSearchParam("person");
     const pinned = readSearchParam("pinned") === "1";
     const isNew = readSearchParam("new") === "1";
 
@@ -70,6 +72,8 @@ export function Notes() {
       setSearchQuery(qParam);
       setSemanticMatchIds(null);
     }
+
+    setPersonFilter(personParam?.trim() || null);
 
     if (notebookParam) {
       setActiveNotebook(notebookParam);
@@ -215,8 +219,20 @@ export function Notes() {
 
   const notebookScopedNotes = filterNotesByNotebook(notes, activeNotebook);
 
+  const matchesPerson = (note: RecallNote) => {
+    if (!personFilter) return true;
+    const lower = personFilter.toLowerCase();
+    return note.tags.some((tag) => {
+      const name = parsePersonTag(tag);
+      if (!name) return false;
+      const n = name.toLowerCase();
+      return n === lower || n.includes(lower) || lower.includes(n);
+    });
+  };
+
   const filteredNotes = notebookScopedNotes.filter((note) => {
     const matchesTag = activeTag === "All" || note.tags.includes(activeTag);
+    if (!matchesPerson(note)) return false;
     if (semanticMatchIds !== null) {
       return matchesTag && semanticMatchIds.includes(note.id);
     }
@@ -226,6 +242,7 @@ export function Notes() {
   const keywordOnlyMatches = notebookScopedNotes.filter(
     (note) =>
       (activeTag === "All" || note.tags.includes(activeTag)) &&
+      matchesPerson(note) &&
       noteMatchesQuery(note, searchQuery),
   );
 
@@ -320,6 +337,26 @@ export function Notes() {
                 className="w-full bg-white/[0.03] border border-white/[0.08] rounded-xl pl-9 pr-4 py-2.5 text-sm text-white/90 placeholder:text-white/30 focus:outline-none focus:border-indigo-500/50 focus:bg-white/[0.05] transition-all"
               />
             </div>
+
+            {personFilter && (
+              <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-sky-500/25 bg-sky-500/10 px-3 py-2 text-xs text-sky-100">
+                <span>
+                  Showing notes tagged{" "}
+                  <span className="font-medium">{personFilter}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPersonFilter(null);
+                    navigate(notesPath({ notebook: activeNotebook === "all" ? undefined : activeNotebook, q: searchQuery || undefined }));
+                  }}
+                  className="inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
+                >
+                  <X size={12} />
+                  Clear
+                </button>
+              </div>
+            )}
 
             <div className="flex overflow-x-auto recall-scrollbar pb-2 -mb-2 gap-2">
               {TAGS.map((tag) => (

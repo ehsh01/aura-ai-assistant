@@ -4,6 +4,8 @@ export function notesPath(opts?: {
   newNote?: boolean;
   notebook?: "all" | "unfiled" | string;
   q?: string;
+  /** Filter notes tagged person:Name (display name). */
+  person?: string;
 }): string {
   const params = new URLSearchParams();
   if (opts?.noteId) params.set("note", opts.noteId);
@@ -11,6 +13,7 @@ export function notesPath(opts?: {
   if (opts?.newNote) params.set("new", "1");
   if (opts?.notebook && opts.notebook !== "all") params.set("notebook", opts.notebook);
   if (opts?.q?.trim()) params.set("q", opts.q.trim());
+  if (opts?.person?.trim()) params.set("person", opts.person.trim());
   const q = params.toString();
   return q ? `/notes?${q}` : "/notes";
 }

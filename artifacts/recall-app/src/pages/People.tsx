@@ -499,25 +499,33 @@ export function People() {
                             No notes tagged to this person yet.
                           </p>
                         ) : (
-                          <ul className="space-y-1.5">
-                            {taggedNotes.map((n) => (
-                              <li key={n.id}>
-                                <Link
-                                  href={notesPath({ noteId: n.id })}
-                                  className="block no-underline"
-                                >
-                                  <p className="truncate text-sm text-indigo-200 hover:underline">
-                                    {n.title}
-                                  </p>
-                                  {n.preview && (
-                                    <p className="mt-0.5 line-clamp-1 text-xs text-white/40">
-                                      {n.preview}
+                          <>
+                            <ul className="space-y-1.5">
+                              {taggedNotes.map((n) => (
+                                <li key={n.id}>
+                                  <Link
+                                    href={notesPath({ noteId: n.id })}
+                                    className="block no-underline"
+                                  >
+                                    <p className="truncate text-sm text-indigo-200 hover:underline">
+                                      {n.title}
                                     </p>
-                                  )}
-                                </Link>
-                              </li>
-                            ))}
-                          </ul>
+                                    {n.preview && (
+                                      <p className="mt-0.5 line-clamp-1 text-xs text-white/40">
+                                        {n.preview}
+                                      </p>
+                                    )}
+                                  </Link>
+                                </li>
+                              ))}
+                            </ul>
+                            <Link
+                              href={notesPath({ person: person.displayName })}
+                              className="mt-2 inline-block text-xs text-sky-300 no-underline hover:underline"
+                            >
+                              View all notes for {person.displayName.split(" ")[0]}
+                            </Link>
+                          </>
                         )}
                       </div>
 

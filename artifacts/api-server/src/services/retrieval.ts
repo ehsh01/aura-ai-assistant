@@ -81,14 +81,14 @@ function keywordScore(question: string, text: string): number {
 
 /** Soft caps — embeddings are persisted, so a larger corpus is affordable. */
 const CORPUS = {
-  tasks: 150,
-  notes: 150,
-  people: 80,
-  knowledge: 80,
-  documents: 60,
-  captures: 80,
-  keywordShortlist: 60,
-  semanticCandidates: 200,
+  tasks: 250,
+  notes: 250,
+  people: 120,
+  knowledge: 120,
+  documents: 100,
+  captures: 100,
+  keywordShortlist: 80,
+  semanticCandidates: 280,
 } as const;
 
 async function collectCorpus(
