@@ -7,12 +7,13 @@ import {
   getPersonRelated,
   listPeople,
   listWaitingOn,
+  updatePerson,
   type PersonRecord,
   type WaitingOnRecord,
 } from "@/lib/recall-api";
 import { askPath, peoplePath, readSearchParam, tasksPath } from "@/lib/recall-nav";
 import { toast } from "@/hooks/use-toast";
-import { Sparkles } from "lucide-react";
+import { Pencil, Sparkles } from "lucide-react";
 
 type OpenTask = { id: string; title: string; time: string | null };
 
@@ -41,6 +42,16 @@ export function People() {
   const [creatingId, setCreatingId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState({
+    displayName: "",
+    email: "",
+    phone: "",
+    organization: "",
+    role: "",
+    notes: "",
+  });
+  const [savingEdit, setSavingEdit] = useState(false);
   const personRefs = useRef<Record<string, HTMLElement | null>>({});
 
   const load = async () => {
@@ -124,11 +135,46 @@ export function People() {
   };
 
   const selectPerson = (personId: string) => {
+    setEditing(false);
     setSelectedId((prev) => {
       const next = prev === personId ? null : personId;
       navigate(next ? peoplePath({ personId: next }) : peoplePath(), { replace: true });
       return next;
     });
+  };
+
+  const startEdit = (person: PersonRecord) => {
+    setEditForm({
+      displayName: person.displayName,
+      email: person.email ?? "",
+      phone: person.phone ?? "",
+      organization: person.organization ?? "",
+      role: person.role ?? "",
+      notes: person.notes ?? "",
+    });
+    setEditing(true);
+  };
+
+  const saveEdit = async (personId: string) => {
+    if (!editForm.displayName.trim() || savingEdit) return;
+    setSavingEdit(true);
+    try {
+      await updatePerson(personId, {
+        displayName: editForm.displayName.trim(),
+        email: editForm.email.trim() || null,
+        phone: editForm.phone.trim() || null,
+        organization: editForm.organization.trim() || null,
+        role: editForm.role.trim() || null,
+        notes: editForm.notes.trim() || null,
+      });
+      setEditing(false);
+      await load();
+      toast({ title: "Contact updated" });
+    } catch {
+      toast({ title: "Could not update contact", variant: "destructive" });
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   const selected = people.find((p) => p.id === selectedId) ?? null;
@@ -293,7 +339,63 @@ export function People() {
                             View on Today
                           </Link>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => (editing ? setEditing(false) : startEdit(person))}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs text-white/60 hover:bg-white/5 hover:text-white/80"
+                        >
+                          <Pencil size={12} />
+                          {editing ? "Cancel" : "Edit"}
+                        </button>
                       </div>
+
+                      {editing && (
+                        <div className="space-y-2 rounded-xl border border-white/10 bg-black/20 p-3">
+                          {(
+                            [
+                              ["displayName", "Name"],
+                              ["email", "Email"],
+                              ["phone", "Phone"],
+                              ["organization", "Organization"],
+                              ["role", "Role"],
+                            ] as const
+                          ).map(([key, label]) => (
+                            <label key={key} className="block">
+                              <span className="text-[11px] uppercase tracking-wider text-white/35">
+                                {label}
+                              </span>
+                              <input
+                                value={editForm[key]}
+                                onChange={(e) =>
+                                  setEditForm((prev) => ({ ...prev, [key]: e.target.value }))
+                                }
+                                className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none focus:border-indigo-500/40"
+                              />
+                            </label>
+                          ))}
+                          <label className="block">
+                            <span className="text-[11px] uppercase tracking-wider text-white/35">
+                              Notes
+                            </span>
+                            <textarea
+                              value={editForm.notes}
+                              onChange={(e) =>
+                                setEditForm((prev) => ({ ...prev, notes: e.target.value }))
+                              }
+                              rows={2}
+                              className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none focus:border-indigo-500/40"
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => void saveEdit(person.id)}
+                            disabled={savingEdit || !editForm.displayName.trim()}
+                            className="rounded-xl bg-indigo-500 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
+                          >
+                            {savingEdit ? "Saving…" : "Save contact"}
+                          </button>
+                        </div>
+                      )}
 
                       <div>
                         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/40">

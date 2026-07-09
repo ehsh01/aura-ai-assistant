@@ -137,6 +137,23 @@ export async function createPerson(input: {
   return apiFetch("/people", { method: "POST", body: JSON.stringify(input) });
 }
 
+export async function updatePerson(
+  personId: string,
+  input: {
+    displayName?: string;
+    email?: string | null;
+    phone?: string | null;
+    organization?: string | null;
+    role?: string | null;
+    notes?: string | null;
+  },
+): Promise<PersonRecord> {
+  return apiFetch(`/people/${encodeURIComponent(personId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
 export type PersonRelated = {
   person: PersonRecord;
   openTasks: { id: string; title: string; time: string | null }[];

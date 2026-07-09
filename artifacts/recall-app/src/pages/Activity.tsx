@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
-import { Activity as ActivityIcon, ArrowRight, Filter } from "lucide-react";
+import { Activity as ActivityIcon, ArrowRight, Filter, User } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { listActivity, type ActivityRecord } from "@/lib/recall-api";
+import { peoplePath } from "@/lib/recall-nav";
 
 const FILTERS = [
   { id: "all", label: "All" },
@@ -10,6 +11,7 @@ const FILTERS = [
   { id: "capture_accepted", label: "Accepted" },
   { id: "task_created", label: "Tasks" },
   { id: "follow_up_created", label: "Follow-ups" },
+  { id: "person_created", label: "People" },
   { id: "task_completed", label: "Completed" },
   { id: "connector_sync", label: "Syncs" },
   { id: "query_answered", label: "Ask" },
@@ -41,6 +43,25 @@ function detailLine(item: ActivityRecord): string | null {
     return `Confidence ${Math.round(m.confidence * 100)}%`;
   }
   return null;
+}
+
+function personFromActivity(item: ActivityRecord): {
+  id: string | null;
+  name: string | null;
+} {
+  const m = item.metadata;
+  const id = typeof m.personId === "string" ? m.personId : null;
+  const name =
+    typeof m.personName === "string"
+      ? m.personName
+      : typeof m.person === "string"
+        ? m.person
+        : typeof m.requesterPersonName === "string"
+          ? m.requesterPersonName
+          : typeof m.displayName === "string" && item.entityType === "person"
+            ? m.displayName
+            : null;
+  return { id, name };
 }
 
 export function Activity() {
@@ -104,6 +125,7 @@ export function Activity() {
           <div className="mt-6 space-y-2">
             {items.map((item) => {
               const detail = detailLine(item);
+              const person = personFromActivity(item);
               const body = (
                 <article className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 transition-colors hover:border-white/20">
                   <div className="flex items-start gap-3">
@@ -116,6 +138,25 @@ export function Activity() {
                         <span className="text-xs text-white/35">{formatWhen(item.createdAt)}</span>
                       </div>
                       {detail && <p className="mt-1 text-sm text-white/60">{detail}</p>}
+                      {person.name && (
+                        <div className="mt-2">
+                          {person.id ? (
+                            <Link
+                              href={peoplePath({ personId: person.id })}
+                              className="inline-flex items-center gap-1 rounded-md border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-xs text-sky-200 no-underline hover:bg-sky-500/20"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <User size={11} />
+                              {person.name}
+                            </Link>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-md border border-sky-500/20 bg-sky-500/10 px-2 py-0.5 text-xs text-sky-200/80">
+                              <User size={11} />
+                              {person.name}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <p className="mt-1 text-[11px] uppercase tracking-wider text-white/30">
                         {item.action}
                         {item.entityType ? ` · ${item.entityType}` : ""}
