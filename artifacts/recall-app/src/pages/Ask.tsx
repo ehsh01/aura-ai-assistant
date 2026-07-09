@@ -1,7 +1,12 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Sparkles, Search, ShieldCheck, ArrowRight } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
-import { queryRecall, type EvidenceRecord } from "@/lib/recall-api";
+import {
+  fetchHome,
+  listWaitingOn,
+  queryRecall,
+  type EvidenceRecord,
+} from "@/lib/recall-api";
 
 type Answer = {
   answer: string;
@@ -12,10 +17,10 @@ type Answer = {
   suggestedNextAction: string | null;
 };
 
-const SUGGESTIONS = [
-  "How much did I spend at Publix last month?",
+const FALLBACK_SUGGESTIONS = [
   "What am I waiting on from other people?",
   "Summarize what's most pressing today",
+  "How much did I spend this month?",
   "What permits or inspections are coming up?",
 ];
 
@@ -30,6 +35,35 @@ export function Ask() {
   const [loading, setLoading] = useState(false);
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>(FALLBACK_SUGGESTIONS);
+
+  useEffect(() => {
+    void Promise.all([
+      listWaitingOn().catch(() => ({ items: [] })),
+      fetchHome().catch(() => null),
+    ]).then(([waiting, home]) => {
+      const next: string[] = [];
+      const topWait = waiting.items[0];
+      if (topWait) {
+        next.push(`What am I waiting on from ${topWait.person}?`);
+      } else {
+        next.push("What am I waiting on from other people?");
+      }
+      next.push("Summarize what's most pressing today");
+      if (home?.finance && !home.finance.needsSync) {
+        const payee = home.finance.topPayee?.payee;
+        next.push(
+          payee
+            ? `How much did I spend at ${payee} this month?`
+            : "How much did I spend this month?",
+        );
+      } else {
+        next.push("How much did I spend this month?");
+      }
+      next.push("What permits or inspections are coming up?");
+      setSuggestions(next.slice(0, 4));
+    });
+  }, []);
 
   const ask = async (q: string) => {
     const trimmed = q.trim();
@@ -87,7 +121,7 @@ export function Ask() {
 
           {!answer && !loading && (
             <div className="mt-4 flex flex-wrap gap-2">
-              {SUGGESTIONS.map((s) => (
+              {suggestions.map((s) => (
                 <button
                   key={s}
                   type="button"
