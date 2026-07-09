@@ -1,5 +1,5 @@
-import { and, desc, eq } from "drizzle-orm";
-import { tasks, type Task } from "@workspace/db/schema";
+import { and, desc, eq, inArray } from "drizzle-orm";
+import { people, tasks, type Task } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newTaskId } from "../lib/recall-format";
 import { writeAuditLog } from "./audit";
@@ -12,6 +12,8 @@ export type RecallTaskDto = {
   tags?: string[];
   completed: boolean;
   projectId: string | null;
+  requesterPersonId: string | null;
+  requesterPersonName: string | null;
 };
 
 export type CreateTaskInput = {
@@ -36,6 +38,7 @@ export type UpdateTaskInput = {
   tags?: string[];
   completed?: boolean;
   projectId?: string | null;
+  requesterPersonId?: string | null;
 };
 
 function normalizePriority(
@@ -47,7 +50,7 @@ function normalizePriority(
   return "none";
 }
 
-function toDto(row: Task): RecallTaskDto {
+function toDto(row: Task, personName: string | null = null): RecallTaskDto {
   return {
     id: row.id,
     title: row.title,
@@ -56,7 +59,24 @@ function toDto(row: Task): RecallTaskDto {
     tags: row.tags ?? [],
     completed: row.completed,
     projectId: row.projectId ?? null,
+    requesterPersonId: row.requesterPersonId ?? null,
+    requesterPersonName: personName,
   };
+}
+
+async function personNamesById(
+  userId: string,
+  personIds: string[],
+): Promise<Map<string, string>> {
+  const unique = [...new Set(personIds.filter(Boolean))];
+  const map = new Map<string, string>();
+  if (unique.length === 0) return map;
+  const rows = await getDb()
+    .select({ id: people.id, displayName: people.displayName })
+    .from(people)
+    .where(and(eq(people.userId, userId), inArray(people.id, unique)));
+  for (const row of rows) map.set(row.id, row.displayName);
+  return map;
 }
 
 export async function listTasksForUser(userId: string): Promise<RecallTaskDto[]> {
@@ -66,7 +86,13 @@ export async function listTasksForUser(userId: string): Promise<RecallTaskDto[]>
     .from(tasks)
     .where(eq(tasks.userId, userId))
     .orderBy(desc(tasks.updatedAt));
-  return rows.map(toDto);
+  const names = await personNamesById(
+    userId,
+    rows.map((r) => r.requesterPersonId).filter((id): id is string => Boolean(id)),
+  );
+  return rows.map((row) =>
+    toDto(row, row.requesterPersonId ? names.get(row.requesterPersonId) ?? null : null),
+  );
 }
 
 export async function createTaskForUser(
@@ -98,7 +124,13 @@ export async function createTaskForUser(
     })
     .returning();
 
-  const dto = toDto(row!);
+  let personName: string | null = null;
+  if (row?.requesterPersonId) {
+    const names = await personNamesById(userId, [row.requesterPersonId]);
+    personName = names.get(row.requesterPersonId) ?? null;
+  }
+
+  const dto = toDto(row!, personName);
   await writeAuditLog({
     userId,
     action: "task_created",
@@ -108,6 +140,8 @@ export async function createTaskForUser(
       title: dto.title,
       aiGenerated: input.aiGenerated ?? false,
       sourceCaptureId: input.sourceCaptureId ?? null,
+      requesterPersonId: dto.requesterPersonId,
+      requesterPersonName: dto.requesterPersonName,
     },
   });
   return dto;
@@ -134,6 +168,7 @@ export async function bulkUpsertTasksForUser(
         tags: item.tags,
         completed: item.completed,
         projectId: item.projectId,
+        requesterPersonId: item.requesterPersonId,
       });
       if (updated) results.push(updated);
     } else {
@@ -170,13 +205,22 @@ export async function updateTaskForUser(
       ...(input.tags !== undefined ? { tags: input.tags } : {}),
       ...(input.completed !== undefined ? { completed: input.completed } : {}),
       ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      ...(input.requesterPersonId !== undefined
+        ? { requesterPersonId: input.requesterPersonId }
+        : {}),
       updatedAt: new Date(),
     })
     .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId)))
     .returning();
 
   if (!row) return null;
-  const dto = toDto(row);
+
+  let personName: string | null = null;
+  if (row.requesterPersonId) {
+    const names = await personNamesById(userId, [row.requesterPersonId]);
+    personName = names.get(row.requesterPersonId) ?? null;
+  }
+  const dto = toDto(row, personName);
 
   if (input.completed !== undefined && input.completed !== wasCompleted) {
     await writeAuditLog({

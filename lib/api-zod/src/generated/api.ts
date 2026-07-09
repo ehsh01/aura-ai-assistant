@@ -622,7 +622,9 @@ export const AcceptCaptureResponse = zod.object({
   "priority": zod.enum(['high', 'med', 'medium', 'low', 'none']),
   "tags": zod.array(zod.string()).optional(),
   "completed": zod.boolean(),
-  "projectId": zod.string().nullish()
+  "projectId": zod.string().nullish(),
+  "requesterPersonId": zod.string().nullish().describe('Person this task is linked to (Inbox accept \/ follow-up).'),
+  "requesterPersonName": zod.string().nullish().describe('Display name for requesterPersonId when resolved.')
 }).optional(),
   "personId": zod.string().nullish(),
   "personName": zod.string().nullish()
@@ -706,7 +708,9 @@ export const GetProjectResponse = zod.object({
   "priority": zod.enum(['high', 'med', 'medium', 'low', 'none']),
   "tags": zod.array(zod.string()).optional(),
   "completed": zod.boolean(),
-  "projectId": zod.string().nullish()
+  "projectId": zod.string().nullish(),
+  "requesterPersonId": zod.string().nullish().describe('Person this task is linked to (Inbox accept \/ follow-up).'),
+  "requesterPersonName": zod.string().nullish().describe('Display name for requesterPersonId when resolved.')
 })),
   "captures": zod.array(zod.object({
   "id": zod.string(),
@@ -769,7 +773,9 @@ export const ListTasksResponse = zod.object({
   "priority": zod.enum(['high', 'med', 'medium', 'low', 'none']),
   "tags": zod.array(zod.string()).optional(),
   "completed": zod.boolean(),
-  "projectId": zod.string().nullish()
+  "projectId": zod.string().nullish(),
+  "requesterPersonId": zod.string().nullish().describe('Person this task is linked to (Inbox accept \/ follow-up).'),
+  "requesterPersonName": zod.string().nullish().describe('Display name for requesterPersonId when resolved.')
 }))
 })
 
@@ -815,7 +821,9 @@ export const BulkUpsertTasksResponse = zod.object({
   "priority": zod.enum(['high', 'med', 'medium', 'low', 'none']),
   "tags": zod.array(zod.string()).optional(),
   "completed": zod.boolean(),
-  "projectId": zod.string().nullish()
+  "projectId": zod.string().nullish(),
+  "requesterPersonId": zod.string().nullish().describe('Person this task is linked to (Inbox accept \/ follow-up).'),
+  "requesterPersonName": zod.string().nullish().describe('Display name for requesterPersonId when resolved.')
 }))
 })
 
@@ -843,7 +851,9 @@ export const UpdateTaskResponse = zod.object({
   "priority": zod.enum(['high', 'med', 'medium', 'low', 'none']),
   "tags": zod.array(zod.string()).optional(),
   "completed": zod.boolean(),
-  "projectId": zod.string().nullish()
+  "projectId": zod.string().nullish(),
+  "requesterPersonId": zod.string().nullish().describe('Person this task is linked to (Inbox accept \/ follow-up).'),
+  "requesterPersonName": zod.string().nullish().describe('Display name for requesterPersonId when resolved.')
 })
 
 

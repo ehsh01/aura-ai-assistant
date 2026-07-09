@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { AppLayout } from "@/components/AppLayout";
 import { useAiChat, useGetAiStatus } from "@workspace/api-client-react";
 import { useAuth } from "@/context/AuthContext";
@@ -23,6 +23,7 @@ import {
   Calendar,
   Clock,
   FileSearch,
+  User,
 } from "lucide-react";
 import { MicButton } from "@/components/MicButton";
 import { EvidenceDrawer } from "@/components/EvidenceDrawer";
@@ -82,12 +83,21 @@ function TaskItem({
         </div>
         
         {/* Meta row */}
-        {(task.time || task.tags) && (
+        {(task.time || task.requesterPersonName || (task.tags && task.tags.length > 0)) && (
           <div className="flex items-center gap-3 mt-1 text-[12px] text-white/40">
             {task.time && (
               <span className="flex items-center gap-1">
                 <Clock size={12} /> {task.time}
               </span>
+            )}
+            {task.requesterPersonName && (
+              <Link
+                href="/people"
+                className="flex items-center gap-1 rounded-md border border-sky-500/20 bg-sky-500/10 px-1.5 py-0.5 text-sky-200 no-underline hover:bg-sky-500/20"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <User size={10} /> {task.requesterPersonName}
+              </Link>
             )}
             {task.tags && task.tags.map(tag => (
               <span key={tag} className="flex items-center gap-1 bg-white/5 px-1.5 py-0.5 rounded-md">

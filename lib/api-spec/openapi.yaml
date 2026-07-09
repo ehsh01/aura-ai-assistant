@@ -1621,6 +1621,14 @@ components:
         projectId:
           type: string
           nullable: true
+        requesterPersonId:
+          type: string
+          nullable: true
+          description: Person this task is linked to (Inbox accept / follow-up).
+        requesterPersonName:
+          type: string
+          nullable: true
+          description: Display name for requesterPersonId when resolved.
       required:
         - id
         - title

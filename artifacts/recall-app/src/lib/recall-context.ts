@@ -8,6 +8,8 @@ export interface RecallTask {
   tags?: string[];
   completed: boolean;
   projectId?: string | null;
+  requesterPersonId?: string | null;
+  requesterPersonName?: string | null;
 }
 
 export interface RecallNote {

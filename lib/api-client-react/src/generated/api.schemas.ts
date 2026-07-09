@@ -305,6 +305,10 @@ export interface RecallTask {
   tags?: string[];
   completed: boolean;
   projectId?: string | null;
+  /** Person this task is linked to (Inbox accept / follow-up). */
+  requesterPersonId?: string | null;
+  /** Display name for requesterPersonId when resolved. */
+  requesterPersonName?: string | null;
 }
 
 export type CaptureSuggestedType = typeof CaptureSuggestedType[keyof typeof CaptureSuggestedType];

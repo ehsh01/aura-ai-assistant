@@ -201,6 +201,8 @@ export async function getProjectDetailForUser(
       tags: task.tags ?? [],
       completed: task.completed,
       projectId: task.projectId ?? null,
+      requesterPersonId: task.requesterPersonId ?? null,
+      requesterPersonName: null,
     })),
     captures: captureRows.map((item) => ({
       id: item.id,
