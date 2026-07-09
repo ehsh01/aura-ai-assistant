@@ -26,7 +26,8 @@ import {
 import { MicButton } from "@/components/MicButton";
 import { EvidenceDrawer } from "@/components/EvidenceDrawer";
 import { TaskPersonPicker } from "@/components/TaskPersonPicker";
-import { NoteTagList } from "@/components/PersonTagLink";
+import { NoteTagList, parsePersonTag } from "@/components/PersonTagLink";
+import { listPeople } from "@/lib/recall-api";
 
 type Priority = RecallTask["priority"];
 
@@ -138,6 +139,7 @@ export function Tasks() {
   const [quickAdd, setQuickAdd] = useState("");
   const [highlightedTaskId, setHighlightedTaskId] = useState<string | null>(null);
   const [personFilterId, setPersonFilterId] = useState<string | null>(null);
+  const [personFilterName, setPersonFilterName] = useState<string | null>(null);
   const [evidenceTask, setEvidenceTask] = useState<Task | null>(null);
   const quickAddRef = useRef<HTMLInputElement>(null);
   const taskRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -145,8 +147,24 @@ export function Tasks() {
   const { data: aiStatus } = useGetAiStatus();
 
   useEffect(() => {
-    setPersonFilterId(readSearchParam("person"));
-  }, [location]);
+    const id = readSearchParam("person");
+    setPersonFilterId(id);
+    if (!id) {
+      setPersonFilterName(null);
+      return;
+    }
+    const fromTask = tasks.find((t) => t.requesterPersonId === id)?.requesterPersonName;
+    if (fromTask) {
+      setPersonFilterName(fromTask);
+      return;
+    }
+    void listPeople()
+      .then((res) => {
+        const hit = res.people.find((p) => p.id === id);
+        setPersonFilterName(hit?.displayName ?? null);
+      })
+      .catch(() => setPersonFilterName(null));
+  }, [location, tasks]);
 
   useEffect(() => {
     const taskId = readSearchParam("task");
@@ -223,16 +241,24 @@ export function Tasks() {
     setDraft((prev) => (prev ? `${prev} ${text}` : text));
   };
 
-  const personFilterName =
-    personFilterId != null
-      ? tasks.find((t) => t.requesterPersonId === personFilterId)?.requesterPersonName ?? null
-      : null;
-  const matchesPerson = (t: Task) =>
-    !personFilterId || t.requesterPersonId === personFilterId;
+  const matchesPerson = (t: Task) => {
+    if (!personFilterId) return true;
+    if (t.requesterPersonId === personFilterId) return true;
+    // Also include tasks that only have a person: tag (no FK yet).
+    if (!personFilterName) return false;
+    const lower = personFilterName.toLowerCase();
+    return (t.tags ?? []).some((tag) => {
+      const name = parsePersonTag(tag);
+      if (!name) return false;
+      const n = name.toLowerCase();
+      return n === lower || n.includes(lower) || lower.includes(n);
+    });
+  };
   const openTasks = tasks.filter((t) => !t.completed && matchesPerson(t));
   const completed = tasks.filter((t) => t.completed && matchesPerson(t));
   const clearPersonFilter = () => {
     setPersonFilterId(null);
+    setPersonFilterName(null);
     navigate(tasksPath(), { replace: true });
   };
 
