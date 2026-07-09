@@ -195,7 +195,25 @@ export async function updatePersonForUser(
   return dto;
 }
 
-/** Rewrite person:OldName tags to person:NewName on notes + knowledge. */
+function replacePersonTag(
+  tags: unknown,
+  oldTag: string,
+  newTag: string,
+): string[] | null {
+  if (!Array.isArray(tags)) return null;
+  let changed = false;
+  const next = tags.map((t) => {
+    if (typeof t !== "string") return String(t);
+    if (t.toLowerCase() === oldTag.toLowerCase()) {
+      changed = true;
+      return newTag;
+    }
+    return t;
+  });
+  return changed ? next : null;
+}
+
+/** Rewrite person:OldName tags to person:NewName on notes, knowledge, and tasks. */
 async function rewritePersonTagsForUser(
   userId: string,
   oldName: string,
@@ -204,31 +222,22 @@ async function rewritePersonTagsForUser(
   const oldTag = `person:${oldName}`;
   const newTag = `person:${newName}`;
   const needle = `%person:${oldName}%`;
+  const db = getDb();
 
-  const noteRows = await getDb()
+  const noteRows = await db
     .select({ id: notes.id, tags: notes.tags })
     .from(notes)
     .where(and(eq(notes.userId, userId), sql`${notes.tags}::text ilike ${needle}`));
-
   for (const n of noteRows) {
-    const tags = Array.isArray(n.tags) ? [...n.tags] : [];
-    let changed = false;
-    const next = tags.map((t) => {
-      if (typeof t !== "string") return t;
-      if (t.toLowerCase() === oldTag.toLowerCase()) {
-        changed = true;
-        return newTag;
-      }
-      return t;
-    });
-    if (!changed) continue;
-    await getDb()
+    const next = replacePersonTag(n.tags, oldTag, newTag);
+    if (!next) continue;
+    await db
       .update(notes)
       .set({ tags: next, updatedAt: new Date() })
       .where(and(eq(notes.id, n.id), eq(notes.userId, userId)));
   }
 
-  const knowledgeRows = await getDb()
+  const knowledgeRows = await db
     .select({ id: knowledgeItems.id, tags: knowledgeItems.tags })
     .from(knowledgeItems)
     .where(
@@ -237,43 +246,23 @@ async function rewritePersonTagsForUser(
         sql`${knowledgeItems.tags}::text ilike ${needle}`,
       ),
     );
-
   for (const k of knowledgeRows) {
-    const tags = Array.isArray(k.tags) ? [...k.tags] : [];
-    let changed = false;
-    const next = tags.map((t) => {
-      if (typeof t !== "string") return t;
-      if (t.toLowerCase() === oldTag.toLowerCase()) {
-        changed = true;
-        return newTag;
-      }
-      return t;
-    });
-    if (!changed) continue;
-    await getDb()
+    const next = replacePersonTag(k.tags, oldTag, newTag);
+    if (!next) continue;
+    await db
       .update(knowledgeItems)
       .set({ tags: next, updatedAt: new Date() })
       .where(and(eq(knowledgeItems.id, k.id), eq(knowledgeItems.userId, userId)));
   }
 
-  const taskRows = await getDb()
+  const taskRows = await db
     .select({ id: tasks.id, tags: tasks.tags })
     .from(tasks)
     .where(and(eq(tasks.userId, userId), sql`${tasks.tags}::text ilike ${needle}`));
-
   for (const t of taskRows) {
-    const tags = Array.isArray(t.tags) ? [...t.tags] : [];
-    let changed = false;
-    const next = tags.map((tag) => {
-      if (typeof tag !== "string") return tag;
-      if (tag.toLowerCase() === oldTag.toLowerCase()) {
-        changed = true;
-        return newTag;
-      }
-      return tag;
-    });
-    if (!changed) continue;
-    await getDb()
+    const next = replacePersonTag(t.tags, oldTag, newTag);
+    if (!next) continue;
+    await db
       .update(tasks)
       .set({ tags: next, updatedAt: new Date() })
       .where(and(eq(tasks.id, t.id), eq(tasks.userId, userId)));
