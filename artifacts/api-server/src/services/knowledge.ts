@@ -164,8 +164,10 @@ export async function updateKnowledgeForUser(
   let tagsToWrite = input.tags;
   let primaryPersonIdToWrite = input.primaryPersonId;
 
-  if (input.primaryPersonId !== undefined && input.tags === undefined) {
-    const base = [...(existingRow[0].tags ?? [])].filter((t) => !/^person:/i.test(t));
+  if (input.primaryPersonId !== undefined) {
+    const base = [...(input.tags ?? existingRow[0].tags ?? [])].filter(
+      (t) => !/^person:/i.test(t),
+    );
     if (input.primaryPersonId) {
       const names = await personNamesById(userId, [input.primaryPersonId]);
       const name = names.get(input.primaryPersonId);
@@ -173,7 +175,7 @@ export async function updateKnowledgeForUser(
     } else {
       tagsToWrite = base;
     }
-  } else if (input.tags !== undefined && input.primaryPersonId === undefined) {
+  } else if (input.tags !== undefined) {
     primaryPersonIdToWrite = await resolvePersonIdFromTags(userId, input.tags);
   }
 

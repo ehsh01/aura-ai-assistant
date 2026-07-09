@@ -442,8 +442,10 @@ export async function updateNoteForUser(
   let tagsToWrite = input.tags;
   let primaryPersonIdToWrite = input.primaryPersonId;
 
-  if (input.primaryPersonId !== undefined && input.tags === undefined) {
-    const base = [...(existing[0].tags ?? [])].filter((t) => !/^person:/i.test(t));
+  if (input.primaryPersonId !== undefined) {
+    const base = [...(input.tags ?? existing[0].tags ?? [])].filter(
+      (t) => !/^person:/i.test(t),
+    );
     if (input.primaryPersonId) {
       const names = await personNamesById(userId, [input.primaryPersonId]);
       const name = names.get(input.primaryPersonId);
@@ -451,7 +453,7 @@ export async function updateNoteForUser(
     } else {
       tagsToWrite = base;
     }
-  } else if (input.tags !== undefined && input.primaryPersonId === undefined) {
+  } else if (input.tags !== undefined) {
     primaryPersonIdToWrite = await resolvePersonIdFromTags(userId, input.tags);
   }
 

@@ -1,19 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "wouter";
 import { Plus, User, X } from "lucide-react";
 import { listPeople, type PersonRecord } from "@/lib/recall-api";
 import { NoteTagList, parsePersonTag } from "@/components/PersonTagLink";
+import { peoplePath } from "@/lib/recall-nav";
 
-function personTag(name: string): string {
-  return `person:${name.trim()}`;
-}
+export type PersonTaggerChange = {
+  tags: string[];
+  personId: string | null;
+  personName: string | null;
+};
 
-/** Edit person: tags on a note (or any tag list). */
+/** Link a primary person (FK) and show remaining non-person tags. */
 export function PersonTagger({
   tags,
+  personId,
+  personName,
   onChange,
 }: {
   tags: string[];
-  onChange: (tags: string[]) => void;
+  personId?: string | null;
+  personName?: string | null;
+  onChange: (next: PersonTaggerChange) => void;
 }) {
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [open, setOpen] = useState(false);
@@ -25,79 +33,71 @@ export function PersonTagger({
       .catch(() => {});
   }, []);
 
-  const personTags = useMemo(
-    () => tags.filter((t) => parsePersonTag(t)),
-    [tags],
-  );
   const otherTags = useMemo(
     () => tags.filter((t) => !parsePersonTag(t)),
     [tags],
   );
 
+  const displayName =
+    personName?.trim() ||
+    tags.map((t) => parsePersonTag(t)).find(Boolean) ||
+    null;
+
   const suggestions = useMemo(() => {
     const q = draft.trim().toLowerCase();
-    const linked = new Set(
-      personTags.map((t) => parsePersonTag(t)?.toLowerCase()).filter(Boolean),
-    );
     return people
       .filter((p) => {
-        if (linked.has(p.displayName.toLowerCase())) return false;
+        if (personId && p.id === personId) return false;
         if (!q) return true;
         return p.displayName.toLowerCase().includes(q);
       })
       .slice(0, 8);
-  }, [people, draft, personTags]);
+  }, [people, draft, personId]);
 
-  const addName = (name: string) => {
-    const tag = personTag(name);
-    if (!tag.slice("person:".length)) return;
-    const lower = tag.toLowerCase();
-    if (tags.some((t) => t.toLowerCase() === lower)) {
-      setDraft("");
-      setOpen(false);
-      return;
-    }
-    onChange([...tags, tag]);
+  const assign = (nextId: string | null, nextName: string | null) => {
+    onChange({
+      tags: otherTags,
+      personId: nextId,
+      personName: nextName,
+    });
     setDraft("");
     setOpen(false);
-  };
-
-  const removePersonTag = (tag: string) => {
-    onChange(tags.filter((t) => t !== tag));
   };
 
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-1.5">
-        {personTags.map((tag) => {
-          const name = parsePersonTag(tag) ?? tag;
-          return (
-            <span
-              key={tag}
-              className="inline-flex items-center gap-1 rounded-md border border-sky-500/25 bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-200"
+        {displayName && !open ? (
+          <span className="inline-flex items-center gap-1 rounded-md border border-sky-500/25 bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-200">
+            <Link
+              href={personId ? peoplePath({ personId }) : peoplePath()}
+              className="inline-flex items-center gap-1 text-sky-200 no-underline hover:text-white"
             >
               <User size={10} />
-              {name}
-              <button
-                type="button"
-                aria-label={`Remove ${name}`}
-                onClick={() => removePersonTag(tag)}
-                className="ml-0.5 text-sky-200/70 hover:text-white"
-              >
-                <X size={10} />
-              </button>
-            </span>
-          );
-        })}
+              {displayName}
+            </Link>
+            <button
+              type="button"
+              aria-label={`Remove ${displayName}`}
+              onClick={() => assign(null, null)}
+              className="ml-0.5 text-sky-200/70 hover:text-white"
+            >
+              <X size={10} />
+            </button>
+          </span>
+        ) : null}
         {otherTags.length > 0 && <NoteTagList tags={otherTags} limit={6} />}
         {!open ? (
           <button
             type="button"
-            onClick={() => setOpen(true)}
+            onClick={() => {
+              setOpen(true);
+              if (displayName) setDraft(displayName);
+            }}
             className="inline-flex items-center gap-1 rounded-md border border-white/10 px-1.5 py-0.5 text-[10px] text-white/45 hover:border-sky-400/40 hover:text-sky-200"
           >
             <Plus size={10} />
-            Person
+            {displayName ? "Change person" : "Person"}
           </button>
         ) : null}
       </div>
@@ -110,8 +110,8 @@ export function PersonTagger({
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
-                const name = draft.trim() || suggestions[0]?.displayName;
-                if (name) addName(name);
+                const hit = suggestions[0];
+                if (hit) assign(hit.id, hit.displayName);
               }
               if (e.key === "Escape") {
                 setOpen(false);
@@ -127,7 +127,7 @@ export function PersonTagger({
                 <button
                   key={p.id}
                   type="button"
-                  onClick={() => addName(p.displayName)}
+                  onClick={() => assign(p.id, p.displayName)}
                   className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-white/70 hover:border-sky-400/40 hover:text-sky-100"
                 >
                   {p.displayName}
@@ -136,19 +136,6 @@ export function PersonTagger({
             </div>
           )}
           <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                if (draft.trim()) addName(draft.trim());
-                else {
-                  setOpen(false);
-                  setDraft("");
-                }
-              }}
-              className="rounded-lg bg-sky-500/20 px-2 py-1 text-[11px] text-sky-100 hover:bg-sky-500/30"
-            >
-              {draft.trim() ? "Add" : "Done"}
-            </button>
             <button
               type="button"
               onClick={() => {

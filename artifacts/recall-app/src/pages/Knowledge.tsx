@@ -132,21 +132,34 @@ export function Knowledge() {
     }
   };
 
-  const saveSelectedTags = async (tags: string[]) => {
+  const saveSelectedPerson = async (next: {
+    tags: string[];
+    personId: string | null;
+    personName: string | null;
+  }) => {
     if (!selected) return;
     const prev = selected;
-    setSelected({ ...selected, tags });
+    const optimistic = {
+      ...selected,
+      tags: next.tags,
+      primaryPersonId: next.personId,
+      primaryPersonName: next.personName,
+    };
+    setSelected(optimistic);
     setItems((items) =>
-      items.map((i) => (i.id === prev.id ? { ...i, tags } : i)),
+      items.map((i) => (i.id === prev.id ? optimistic : i)),
     );
     try {
-      const updated = await updateKnowledge(prev.id, { tags });
+      const updated = await updateKnowledge(prev.id, {
+        tags: next.tags,
+        primaryPersonId: next.personId,
+      });
       setSelected(updated);
       setItems((items) => items.map((i) => (i.id === updated.id ? updated : i)));
     } catch {
       setSelected(prev);
       setItems((items) => items.map((i) => (i.id === prev.id ? prev : i)));
-      toast({ title: "Could not update tags", variant: "destructive" });
+      toast({ title: "Could not update person", variant: "destructive" });
     }
   };
 
@@ -371,7 +384,12 @@ export function Knowledge() {
               </button>
             </div>
             <div className="mt-3">
-              <PersonTagger tags={selected.tags} onChange={(tags) => void saveSelectedTags(tags)} />
+              <PersonTagger
+                tags={selected.tags}
+                personId={selected.primaryPersonId}
+                personName={selected.primaryPersonName}
+                onChange={(next) => void saveSelectedPerson(next)}
+              />
             </div>
             <div className="mt-3 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-white/75">
               {selected.content || "No content."}

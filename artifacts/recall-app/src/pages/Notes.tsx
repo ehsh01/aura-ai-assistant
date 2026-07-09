@@ -578,7 +578,15 @@ export function Notes() {
                 <div className="mb-4 sm:mb-6">
                   <PersonTagger
                     tags={activeNote.tags}
-                    onChange={(tags) => updateNote(activeNote.id, { tags })}
+                    personId={activeNote.primaryPersonId}
+                    personName={activeNote.primaryPersonName}
+                    onChange={(next) =>
+                      updateNote(activeNote.id, {
+                        tags: next.tags,
+                        primaryPersonId: next.personId,
+                        primaryPersonName: next.personName,
+                      })
+                    }
                   />
                 </div>
 
