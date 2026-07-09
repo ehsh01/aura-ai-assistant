@@ -9,6 +9,8 @@ set -euo pipefail
 DEPLOY_PATH="${DEPLOY_PATH:-/var/www/recall-app}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/recall}"
 RETENTION="${RETENTION:-14}"
+# Used when the host pg_dump is older than the managed Postgres major version.
+PG_DUMP_IMAGE="${PG_DUMP_IMAGE:-postgres:18}"
 
 ENV_FILE="$DEPLOY_PATH/artifacts/api-server/.env"
 if [ -f "$ENV_FILE" ]; then
@@ -22,14 +24,31 @@ if [ -z "${DATABASE_URL:-}" ]; then
   echo "ERROR: DATABASE_URL is not set (checked $ENV_FILE)" >&2
   exit 1
 fi
-command -v pg_dump >/dev/null || { echo "ERROR: pg_dump not found" >&2; exit 1; }
 
 mkdir -p "$BACKUP_DIR"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 OUT="$BACKUP_DIR/recall-$STAMP.sql.gz"
 
+run_pg_dump() {
+  if command -v docker >/dev/null 2>&1; then
+    # Prefer Docker so the client major matches DigitalOcean managed Postgres 18
+    # even when the host only has older postgresql-client packages.
+    echo "==> Dumping via docker $PG_DUMP_IMAGE"
+    docker run --rm "$PG_DUMP_IMAGE" \
+      pg_dump "$DATABASE_URL" --no-owner --no-privileges
+    return
+  fi
+  if command -v pg_dump >/dev/null 2>&1; then
+    echo "==> Dumping via host pg_dump"
+    pg_dump "$DATABASE_URL" --no-owner --no-privileges
+    return
+  fi
+  echo "ERROR: neither docker nor pg_dump is available" >&2
+  exit 1
+}
+
 echo "==> Dumping database to $OUT"
-pg_dump "$DATABASE_URL" --no-owner --no-privileges | gzip -9 > "$OUT"
+run_pg_dump | gzip -9 > "$OUT"
 echo "==> Wrote $(du -h "$OUT" | cut -f1)"
 
 echo "==> Pruning backups older than the newest $RETENTION"

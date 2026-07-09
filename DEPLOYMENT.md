@@ -149,7 +149,9 @@ Frontend uses same-origin `/api/...` (no `VITE_API_BASE_URL` needed when nginx p
 
 ## Database backups
 
-`scripts/backup-recall-db.sh` writes a compressed, timestamped `pg_dump` to `/var/backups/recall/` and keeps the newest 14. Schedule it via cron on the droplet:
+`scripts/backup-recall-db.sh` writes a compressed, timestamped `pg_dump` to `/var/backups/recall/` and keeps the newest 14. It prefers `docker run postgres:18 pg_dump` so the client major matches DigitalOcean managed Postgres 18 (host `postgresql-client-17` is too old).
+
+Schedule it via cron on the droplet:
 
 ```bash
 15 3 * * * bash /var/www/recall-app/scripts/backup-recall-db.sh >> /var/log/recall-backup.log 2>&1
