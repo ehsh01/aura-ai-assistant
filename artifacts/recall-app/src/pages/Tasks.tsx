@@ -9,7 +9,7 @@ import {
 } from "@/lib/recall-context";
 import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
-import { peoplePath, readSearchParam } from "@/lib/recall-nav";
+import { peoplePath, readSearchParam, tasksPath } from "@/lib/recall-nav";
 import {
   Check,
   Circle,
@@ -130,7 +130,7 @@ function TaskItem({
 }
 
 export function Tasks() {
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
   const { user } = useAuth();
   const userName = firstName(user?.name);
   const { tasks, addTask, toggleTask } = useRecallData();
@@ -138,11 +138,16 @@ export function Tasks() {
   const [draft, setDraft] = useState("");
   const [quickAdd, setQuickAdd] = useState("");
   const [highlightedTaskId, setHighlightedTaskId] = useState<string | null>(null);
+  const [personFilterId, setPersonFilterId] = useState<string | null>(null);
   const [evidenceTask, setEvidenceTask] = useState<Task | null>(null);
   const quickAddRef = useRef<HTMLInputElement>(null);
   const taskRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const aiChat = useAiChat();
   const { data: aiStatus } = useGetAiStatus();
+
+  useEffect(() => {
+    setPersonFilterId(readSearchParam("person"));
+  }, [location]);
 
   useEffect(() => {
     const taskId = readSearchParam("task");
@@ -208,8 +213,18 @@ export function Tasks() {
     setDraft((prev) => (prev ? `${prev} ${text}` : text));
   };
 
-  const openTasks = tasks.filter((t) => !t.completed);
-  const completed = tasks.filter((t) => t.completed);
+  const personFilterName =
+    personFilterId != null
+      ? tasks.find((t) => t.requesterPersonId === personFilterId)?.requesterPersonName ?? null
+      : null;
+  const matchesPerson = (t: Task) =>
+    !personFilterId || t.requesterPersonId === personFilterId;
+  const openTasks = tasks.filter((t) => !t.completed && matchesPerson(t));
+  const completed = tasks.filter((t) => t.completed && matchesPerson(t));
+  const clearPersonFilter = () => {
+    setPersonFilterId(null);
+    navigate(tasksPath(), { replace: true });
+  };
 
   return (
     <AppLayout>
@@ -223,7 +238,7 @@ export function Tasks() {
               <div className="flex items-center gap-3 mb-2">
                 <h1 className="text-3xl font-semibold tracking-tight">Today</h1>
                 <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-xs font-medium border border-indigo-500/20">
-                  {tasks.filter(t => !t.completed).length} remaining
+                  {openTasks.length} remaining
                 </span>
               </div>
               <p className="text-white/40 text-sm flex items-center gap-2">
@@ -240,6 +255,22 @@ export function Tasks() {
               Add task
             </button>
           </header>
+
+          {personFilterId && (
+            <div className="mx-4 mt-3 flex items-center justify-between gap-3 rounded-xl border border-sky-500/25 bg-sky-500/10 px-3 py-2 md:mx-10">
+              <p className="text-sm text-sky-100">
+                Showing tasks linked to{" "}
+                <span className="font-medium">{personFilterName ?? "this person"}</span>
+              </p>
+              <button
+                type="button"
+                onClick={clearPersonFilter}
+                className="flex-shrink-0 rounded-lg px-2 py-1 text-xs text-sky-200 hover:bg-sky-500/20"
+              >
+                Clear
+              </button>
+            </div>
+          )}
 
           {/* Filters */}
           <div className="px-4 md:px-10 py-3 flex gap-4 md:gap-6 text-sm font-medium border-b border-white/[0.04] overflow-x-auto">

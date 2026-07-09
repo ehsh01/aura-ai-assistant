@@ -10,8 +10,9 @@ import {
   type PersonRecord,
   type WaitingOnRecord,
 } from "@/lib/recall-api";
-import { peoplePath, readSearchParam } from "@/lib/recall-nav";
+import { askPath, peoplePath, readSearchParam, tasksPath } from "@/lib/recall-nav";
 import { toast } from "@/hooks/use-toast";
+import { Sparkles } from "lucide-react";
 
 type OpenTask = { id: string; title: string; time: string | null };
 
@@ -274,6 +275,26 @@ export function People() {
 
                   {isSelected && (
                     <div className="mt-4 space-y-4 border-t border-white/10 pt-4">
+                      <div className="flex flex-wrap gap-2">
+                        <Link
+                          href={askPath({
+                            q: `What do I know about ${person.displayName}? What am I waiting on from them?`,
+                          })}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-500/20 px-3 py-1.5 text-xs font-medium text-indigo-200 no-underline hover:bg-indigo-500/30"
+                        >
+                          <Sparkles size={12} />
+                          Ask about {person.displayName.split(" ")[0]}
+                        </Link>
+                        {openTasks.length > 0 && (
+                          <Link
+                            href={tasksPath({ personId: person.id })}
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs text-white/60 no-underline hover:bg-white/5 hover:text-white/80"
+                          >
+                            View on Today
+                          </Link>
+                        )}
+                      </div>
+
                       <div>
                         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/40">
                           Open tasks
@@ -285,7 +306,7 @@ export function People() {
                             {openTasks.map((t) => (
                               <li key={t.id}>
                                 <Link
-                                  href={`/tasks?task=${encodeURIComponent(t.id)}`}
+                                  href={tasksPath({ taskId: t.id })}
                                   className="block truncate text-sm text-indigo-200 no-underline hover:underline"
                                 >
                                   {t.title}

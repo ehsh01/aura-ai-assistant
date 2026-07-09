@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Sparkles, Search, ShieldCheck, ArrowRight } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import {
@@ -7,6 +7,7 @@ import {
   queryRecall,
   type EvidenceRecord,
 } from "@/lib/recall-api";
+import { readSearchParam } from "@/lib/recall-nav";
 
 type Answer = {
   answer: string;
@@ -36,6 +37,24 @@ export function Ask() {
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>(FALLBACK_SUGGESTIONS);
+  const autoAsked = useRef<string | null>(null);
+
+  const ask = async (q: string) => {
+    const trimmed = q.trim();
+    if (!trimmed || loading) return;
+    setQuestion(trimmed);
+    setLoading(true);
+    setError(null);
+    setAnswer(null);
+    try {
+      const res = await queryRecall(trimmed);
+      setAnswer(res);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reach Recall AI.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     void Promise.all([
@@ -65,22 +84,22 @@ export function Ask() {
     });
   }, []);
 
-  const ask = async (q: string) => {
-    const trimmed = q.trim();
-    if (!trimmed || loading) return;
-    setQuestion(trimmed);
+  // Deep-link from People: /ask?q=What do I know about Mike?
+  useEffect(() => {
+    const q = readSearchParam("q")?.trim();
+    if (!q || autoAsked.current === q) return;
+    autoAsked.current = q;
+    setQuestion(q);
     setLoading(true);
     setError(null);
     setAnswer(null);
-    try {
-      const res = await queryRecall(trimmed);
-      setAnswer(res);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not reach Recall AI.");
-    } finally {
-      setLoading(false);
-    }
-  };
+    void queryRecall(q)
+      .then((res) => setAnswer(res))
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : "Could not reach Recall AI."),
+      )
+      .finally(() => setLoading(false));
+  }, []);
 
   const conf = answer ? confidenceLabel(answer.confidence) : null;
 

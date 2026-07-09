@@ -15,9 +15,10 @@ export function notesPath(opts?: {
   return q ? `/notes?${q}` : "/notes";
 }
 
-export function tasksPath(opts?: { taskId?: string }): string {
+export function tasksPath(opts?: { taskId?: string; personId?: string }): string {
   const params = new URLSearchParams();
   if (opts?.taskId) params.set("task", opts.taskId);
+  if (opts?.personId) params.set("person", opts.personId);
   const q = params.toString();
   return q ? `/tasks?${q}` : "/tasks";
 }
@@ -35,6 +36,13 @@ export function peoplePath(opts?: { personId?: string }): string {
   if (opts?.personId) params.set("person", opts.personId);
   const q = params.toString();
   return q ? `/people?${q}` : "/people";
+}
+
+export function askPath(opts?: { q?: string }): string {
+  const params = new URLSearchParams();
+  if (opts?.q?.trim()) params.set("q", opts.q.trim());
+  const q = params.toString();
+  return q ? `/ask?${q}` : "/ask";
 }
 
 export function readSearchParam(key: string): string | null {
