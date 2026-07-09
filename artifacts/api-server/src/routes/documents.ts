@@ -1,0 +1,101 @@
+import { Router, type IRouter } from "express";
+import { z } from "zod";
+import { requireAuth } from "../middleware/auth";
+import {
+  createDocumentForUser,
+  getDocumentForUser,
+  listDocumentsForUser,
+} from "../services/documents";
+import {
+  createKnowledgeForUser,
+  getKnowledgeForUser,
+  listKnowledgeForUser,
+} from "../services/knowledge";
+
+const CreateDocumentBody = z.object({
+  fileName: z.string().min(1).max(500),
+  fileType: z.string().max(64).nullish(),
+  storagePath: z.string().nullish(),
+  sourceCaptureId: z.string().nullish(),
+  extractedText: z.string().nullish(),
+  summary: z.string().nullish(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+const CreateKnowledgeBody = z.object({
+  title: z.string().min(1).max(500),
+  content: z.string().optional(),
+  itemType: z.string().max(32).optional(),
+  tags: z.array(z.string()).optional(),
+  projectId: z.string().nullish(),
+  sourceCaptureId: z.string().nullish(),
+});
+
+const router: IRouter = Router();
+router.use(requireAuth);
+
+router.get("/documents", async (req, res, next) => {
+  try {
+    const documents = await listDocumentsForUser(req.user!.id);
+    res.json({ documents });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/documents", async (req, res, next) => {
+  try {
+    const body = CreateDocumentBody.parse(req.body);
+    const doc = await createDocumentForUser(req.user!.id, body);
+    res.status(201).json(doc);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/documents/:documentId", async (req, res, next) => {
+  try {
+    const doc = await getDocumentForUser(req.user!.id, req.params.documentId);
+    if (!doc) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Document not found" });
+      return;
+    }
+    res.json(doc);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/knowledge", async (req, res, next) => {
+  try {
+    const items = await listKnowledgeForUser(req.user!.id);
+    res.json({ items });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/knowledge", async (req, res, next) => {
+  try {
+    const body = CreateKnowledgeBody.parse(req.body);
+    const item = await createKnowledgeForUser(req.user!.id, body);
+    res.status(201).json(item);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/knowledge/:itemId", async (req, res, next) => {
+  try {
+    const item = await getKnowledgeForUser(req.user!.id, req.params.itemId);
+    if (!item) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Knowledge item not found" });
+      return;
+    }
+    res.json(item);
+  } catch (err) {
+    next(err);
+  }
+});
+
+export default router;

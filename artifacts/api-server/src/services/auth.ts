@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { users } from "@workspace/db/schema";
 import { getDb, isDatabaseConfigured } from "../lib/db";
+import { ensureDefaultConnectors } from "./connectors";
 
 const BCRYPT_ROUNDS = 12;
 const TOKEN_TTL = process.env.JWT_EXPIRES_IN ?? "7d";
@@ -72,6 +73,7 @@ export async function registerUser(input: {
   }
 
   const user = toPublicUser(created);
+  await ensureDefaultConnectors(user.id);
   return { user, token: signAccessToken(user) };
 }
 
@@ -96,6 +98,7 @@ export async function loginUser(input: {
   }
 
   const user = toPublicUser(row);
+  await ensureDefaultConnectors(user.id);
   return { user, token: signAccessToken(user) };
 }
 

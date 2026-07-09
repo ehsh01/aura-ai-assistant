@@ -12,6 +12,8 @@ import { Notebooks } from "@/pages/Notebooks";
 import { Tasks } from "@/pages/Tasks";
 import { Canvas } from "@/pages/Canvas";
 import { Inbox } from "@/pages/Inbox";
+import { People } from "@/pages/People";
+import { Connectors } from "@/pages/Connectors";
 import { Projects } from "@/pages/Projects";
 import { ProjectDetail } from "@/pages/ProjectDetail";
 import { normalizeBrowserPath, pathnameOnly } from "@/lib/app-path";
@@ -54,6 +56,8 @@ function Router() {
         <Route path="/notes" component={Notes} />
         <Route path="/notebooks" component={Notebooks} />
         <Route path="/inbox" component={Inbox} />
+        <Route path="/people" component={People} />
+        <Route path="/connectors" component={Connectors} />
         <Route path="/projects" component={Projects} />
         <Route path="/projects/:projectId" component={ProjectDetail} />
         <Route path="/tasks" component={Tasks} />

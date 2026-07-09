@@ -19,6 +19,55 @@ export function newCaptureId(): string {
   return `capture-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** Raw Capture Layer id. Distinct prefix (`cap-`) from `capture_items` (`capture-`). */
+export function newRawCaptureId(): string {
+  return `cap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function newProjectId(): string {
   return `project-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newEvidenceId(): string {
+  return `ev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newAiExtractionId(): string {
+  return `aix-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newPersonId(): string {
+  return `person-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newConnectorId(): string {
+  return `conn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newSyncRunId(): string {
+  return `sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newSourceRecordId(): string {
+  return `src-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newDocumentId(): string {
+  return `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newKnowledgeId(): string {
+  return `know-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newCorrectionId(): string {
+  return `corr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newAuditId(): string {
+  return `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newExtractionJobId(): string {
+  return `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

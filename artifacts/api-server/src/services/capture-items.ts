@@ -2,7 +2,9 @@ import { and, desc, eq } from "drizzle-orm";
 import { captureItems, type CaptureItem } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newCaptureId } from "../lib/recall-format";
+import { createEvidenceForUser } from "./evidence";
 import { createNoteForUser, type RecallNoteDto } from "./notes";
+import { recordUserCorrection } from "./user-corrections";
 import { createTaskForUser, type RecallTaskDto } from "./tasks";
 
 export type CaptureSuggestedType =
@@ -18,6 +20,7 @@ export type CaptureStatus = "pending" | "accepted" | "dismissed";
 
 export type RecallCaptureItemDto = {
   id: string;
+  rawCaptureId: string | null;
   rawText: string;
   cleanedTitle: string;
   suggestedType: CaptureSuggestedType;
@@ -145,6 +148,7 @@ export function classifyCaptureDeterministically(
 function toDto(row: CaptureItem): RecallCaptureItemDto {
   return {
     id: row.id,
+    rawCaptureId: row.rawCaptureId ?? null,
     rawText: row.rawText,
     cleanedTitle: row.cleanedTitle,
     suggestedType: normalizeType(row.suggestedType),
@@ -164,7 +168,7 @@ function toDto(row: CaptureItem): RecallCaptureItemDto {
 
 export async function createCaptureForUser(
   userId: string,
-  input: CreateCaptureInput,
+  input: CreateCaptureInput & { rawCaptureId?: string | null },
 ): Promise<RecallCaptureItemDto> {
   const fallback = classifyCaptureDeterministically(input.rawText, input);
   const classification = { ...fallback, ...input.classification };
@@ -174,6 +178,7 @@ export async function createCaptureForUser(
     .values({
       id: newCaptureId(),
       userId,
+      rawCaptureId: input.rawCaptureId ?? null,
       rawText: input.rawText,
       cleanedTitle: classification.cleanedTitle ?? fallback.cleanedTitle,
       suggestedType: normalizeType(classification.suggestedType),
@@ -207,6 +212,24 @@ export async function updateCaptureForUser(
   captureId: string,
   input: UpdateCaptureInput,
 ): Promise<RecallCaptureItemDto | null> {
+  const existingRows = await getDb()
+    .select()
+    .from(captureItems)
+    .where(and(eq(captureItems.id, captureId), eq(captureItems.userId, userId)))
+    .limit(1);
+  const existing = existingRows[0];
+  if (!existing) return null;
+
+  if (input.status !== undefined && input.status !== existing.status) {
+    await recordUserCorrection(userId, {
+      entityType: "capture_item",
+      entityId: captureId,
+      fieldName: "status",
+      oldValue: existing.status,
+      newValue: input.status,
+    });
+  }
+
   const [row] = await getDb()
     .update(captureItems)
     .set({
@@ -261,7 +284,18 @@ export async function acceptCaptureForUser(
       priority: item.suggestedPriority === "urgent" ? "high" : item.suggestedPriority,
       tags,
       projectId,
+      sourceCaptureId: item.rawCaptureId,
+      aiGenerated: Boolean(item.rawCaptureId),
     });
+    if (task && item.rawCaptureId) {
+      await createEvidenceForUser(userId, {
+        entityType: "task",
+        entityId: task.id,
+        claimType: "task_created_from",
+        sourceCaptureId: item.rawCaptureId,
+        evidenceText: item.rawText.slice(0, 500),
+      });
+    }
   } else {
     note = await createNoteForUser(userId, {
       title,
@@ -270,6 +304,15 @@ export async function acceptCaptureForUser(
       projectId,
       notebookId,
     });
+    if (note && item.rawCaptureId) {
+      await createEvidenceForUser(userId, {
+        entityType: "note",
+        entityId: note.id,
+        claimType: "summary_based_on",
+        sourceCaptureId: item.rawCaptureId,
+        evidenceText: item.rawText.slice(0, 500),
+      });
+    }
   }
 
   const updated = await updateCaptureForUser(userId, captureId, { status: "accepted" });

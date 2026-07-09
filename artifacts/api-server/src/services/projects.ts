@@ -204,6 +204,7 @@ export async function getProjectDetailForUser(
     })),
     captures: captureRows.map((item) => ({
       id: item.id,
+      rawCaptureId: item.rawCaptureId ?? null,
       rawText: item.rawText,
       cleanedTitle: item.cleanedTitle,
       suggestedType: item.suggestedType as RecallCaptureItemDto["suggestedType"],

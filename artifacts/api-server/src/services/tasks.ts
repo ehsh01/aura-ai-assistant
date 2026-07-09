@@ -21,6 +21,11 @@ export type CreateTaskInput = {
   tags?: string[];
   completed?: boolean;
   projectId?: string | null;
+  sourceCaptureId?: string | null;
+  requesterPersonId?: string | null;
+  aiGenerated?: boolean;
+  userConfirmed?: boolean;
+  confidenceScore?: number | null;
 };
 
 export type UpdateTaskInput = {
@@ -77,6 +82,11 @@ export async function createTaskForUser(
       id,
       userId,
       projectId: input.projectId ?? null,
+      sourceCaptureId: input.sourceCaptureId ?? null,
+      requesterPersonId: input.requesterPersonId ?? null,
+      aiGenerated: input.aiGenerated ?? false,
+      userConfirmed: input.userConfirmed ?? false,
+      confidenceScore: input.confidenceScore ?? null,
       title: input.title.trim(),
       time: input.time ?? null,
       priority: normalizePriority(input.priority),

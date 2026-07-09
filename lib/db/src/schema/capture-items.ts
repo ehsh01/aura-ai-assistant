@@ -1,4 +1,5 @@
 import { jsonb, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { captures } from "./captures";
 import { notebooks } from "./notebooks";
 import { projects } from "./projects";
 import { users } from "./users";
@@ -8,6 +9,9 @@ export const captureItems = pgTable("capture_items", {
   userId: uuid("user_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
+  rawCaptureId: varchar("raw_capture_id", { length: 64 }).references(() => captures.id, {
+    onDelete: "set null",
+  }),
   rawText: text("raw_text").notNull(),
   cleanedTitle: varchar("cleaned_title", { length: 500 }).notNull().default("Untitled capture"),
   suggestedType: varchar("suggested_type", { length: 32 }).notNull().default("note"),

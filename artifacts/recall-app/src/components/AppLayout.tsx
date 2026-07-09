@@ -71,6 +71,30 @@ const staticNavItems = [
     icon: <Inbox width={18} height={18} strokeWidth={1.8} />,
   },
   {
+    id: "/people",
+    label: "People",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+        <circle cx="9" cy="7" r="4"/>
+        <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+        <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+      </svg>
+    ),
+  },
+  {
+    id: "/connectors",
+    label: "Connectors",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 22v-5"/>
+        <path d="M9 8V2"/>
+        <path d="M15 8V2"/>
+        <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>
+      </svg>
+    ),
+  },
+  {
     id: "/projects",
     label: "Projects",
     icon: <FolderKanban width={18} height={18} strokeWidth={1.8} />,

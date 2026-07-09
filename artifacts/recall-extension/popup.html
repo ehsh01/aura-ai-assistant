@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Recall Capture</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; width: 320px; background: #0a0a0f; color: #fff; }
+      textarea, input { width: 100%; box-sizing: border-box; margin-top: 8px; border-radius: 8px; border: 1px solid #333; background: #111; color: #fff; padding: 8px; }
+      button { margin-top: 12px; width: 100%; padding: 10px; border: 0; border-radius: 8px; background: #6366f1; color: white; font-weight: 600; cursor: pointer; }
+      .status { margin-top: 10px; font-size: 12px; color: #aaa; min-height: 16px; }
+    </style>
+  </head>
+  <body>
+    <h1 style="font-size: 16px; margin: 0;">Recall Capture</h1>
+    <p style="font-size: 12px; color: #888;">Collector only — sends raw context to Recall API.</p>
+    <label>API token<input id="token" type="password" placeholder="Bearer token from Recall login" /></label>
+    <label>API base URL<input id="apiBase" value="https://recall-app.net/api" /></label>
+    <button id="capture">Capture current tab</button>
+    <div id="status" class="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

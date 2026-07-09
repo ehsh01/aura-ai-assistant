@@ -19,6 +19,9 @@ import {
 import { aiService, type AiContext, type NoteContextItem } from "../services/ai";
 import { searchNotesForUser } from "../services/notes";
 import { pickBestNoteToOpen, userWantsNoteOpened } from "../lib/note-open-intent";
+import { z } from "zod";
+import { queryRecallForUser } from "../services/query-engine";
+import { getExtractionJobStatus } from "../services/capture-pipeline";
 
 function mergeSearchHitsIntoContext(
   context: AiContext | undefined,
@@ -142,6 +145,33 @@ router.post("/ai/generate-work-note", async (req, res, next) => {
     const body = GenerateWorkNoteBody.parse(req.body);
     const result = await aiService.generateWorkNote(body);
     res.json(GenerateWorkNoteResponse.parse(result));
+  } catch (err) {
+    next(err);
+  }
+});
+
+const AiQueryBody = z.object({
+  question: z.string().min(1).max(4000),
+});
+
+router.post("/ai/query", async (req, res, next) => {
+  try {
+    const body = AiQueryBody.parse(req.body);
+    const result = await queryRecallForUser(req.user!.id, body.question);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/ai/runs/:jobId", async (req, res, next) => {
+  try {
+    const job = await getExtractionJobStatus(req.user!.id, req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Extraction job not found" });
+      return;
+    }
+    res.json(job);
   } catch (err) {
     next(err);
   }

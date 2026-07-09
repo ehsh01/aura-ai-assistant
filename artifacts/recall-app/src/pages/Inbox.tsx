@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { acceptCapture, listCaptureInbox, updateCapture } from "@workspace/api-client-react";
 import { AppLayout } from "@/components/AppLayout";
+import { EvidenceDrawer } from "@/components/EvidenceDrawer";
 import { useRecallData } from "@/context/RecallDataContext";
 import { toast } from "@/hooks/use-toast";
 import type { RecallCaptureItem } from "@/lib/recall-context";
@@ -16,6 +17,7 @@ export function Inbox() {
   const { reloadNotes, reloadTasks } = useRecallData();
   const [items, setItems] = useState<RecallCaptureItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [evidenceTarget, setEvidenceTarget] = useState<RecallCaptureItem | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -89,6 +91,13 @@ export function Inbox() {
                   <div className="flex gap-2">
                     <button
                       type="button"
+                      onClick={() => setEvidenceTarget(item)}
+                      className="rounded-xl border border-white/10 px-3 py-2 text-sm text-indigo-200 hover:bg-white/5"
+                    >
+                      Show Evidence
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => void dismiss(item)}
                       className="rounded-xl border border-white/10 px-3 py-2 text-sm text-white/55 hover:text-white"
                     >
@@ -118,6 +127,13 @@ export function Inbox() {
           </div>
         </div>
       </div>
+      <EvidenceDrawer
+        open={evidenceTarget != null}
+        onClose={() => setEvidenceTarget(null)}
+        entityType="capture_item"
+        entityId={evidenceTarget?.id ?? ""}
+        title={evidenceTarget?.cleanedTitle}
+      />
     </AppLayout>
   );
 }

@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Recall Capture",
+  "version": "0.1.0",
+  "description": "Capture browser context into Recall (collector only — Recall performs AI extraction).",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "action": {
+    "default_title": "Capture to Recall",
+    "default_popup": "popup.html"
+  },
+  "host_permissions": ["https://recall-app.net/*", "http://localhost:5173/*", "http://localhost:5008/*"]
+}
