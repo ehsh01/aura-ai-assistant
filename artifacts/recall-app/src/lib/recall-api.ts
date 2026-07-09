@@ -158,6 +158,7 @@ export type PersonRelated = {
   person: PersonRecord;
   openTasks: { id: string; title: string; time: string | null }[];
   taggedNotes?: { id: string; title: string; preview: string }[];
+  taggedKnowledge?: { id: string; title: string; itemType: string }[];
 };
 
 export async function getPersonRelated(personId: string): Promise<PersonRelated> {

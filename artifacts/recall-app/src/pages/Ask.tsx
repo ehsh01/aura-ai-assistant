@@ -4,6 +4,7 @@ import { Sparkles, Search, ShieldCheck, ArrowRight } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import {
   fetchHome,
+  listPeople,
   listWaitingOn,
   queryRecall,
   type EvidenceRecord,
@@ -61,13 +62,20 @@ export function Ask() {
     void Promise.all([
       listWaitingOn().catch(() => ({ items: [] })),
       fetchHome().catch(() => null),
-    ]).then(([waiting, home]) => {
+      listPeople().catch(() => ({ people: [] })),
+    ]).then(([waiting, home, peopleRes]) => {
       const next: string[] = [];
       const topWait = waiting.items[0];
       if (topWait) {
         next.push(`What am I waiting on from ${topWait.person}?`);
       } else {
         next.push("What am I waiting on from other people?");
+      }
+      const topPerson =
+        peopleRes.people.find((p) => p.displayName !== topWait?.person) ??
+        peopleRes.people[0];
+      if (topPerson) {
+        next.push(`What do I know about ${topPerson.displayName}?`);
       }
       next.push("Summarize what's most pressing today");
       if (home?.finance && !home.finance.needsSync) {
@@ -80,7 +88,9 @@ export function Ask() {
       } else {
         next.push("How much did I spend this month?");
       }
-      next.push("What permits or inspections are coming up?");
+      if (next.length < 4) {
+        next.push("What permits or inspections are coming up?");
+      }
       setSuggestions(next.slice(0, 4));
     });
   }, []);

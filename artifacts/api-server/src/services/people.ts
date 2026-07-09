@@ -1,5 +1,5 @@
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
-import { notes, people, tasks, type Person } from "@workspace/db/schema";
+import { knowledgeItems, notes, people, tasks, type Person } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newPersonId } from "../lib/recall-format";
 import { recordUserCorrection } from "./user-corrections";
@@ -164,7 +164,14 @@ export async function updatePersonForUser(
     })
     .where(and(eq(people.id, personId), eq(people.userId, userId)))
     .returning();
-  return row ? toDto(row) : null;
+  if (!row) return null;
+  const dto = toDto(row);
+  warmEntityEmbedding(userId, {
+    entityType: "person",
+    entityId: dto.id,
+    text: `${dto.displayName} ${dto.organization ?? ""} ${dto.email ?? ""}`.trim(),
+  });
+  return dto;
 }
 
 /** Resolve or create a person by display name (conservative dedup). */
@@ -197,6 +204,7 @@ export async function getPersonRelatedForUser(
   person: PersonDto;
   openTasks: { id: string; title: string; time: string | null }[];
   taggedNotes: { id: string; title: string; preview: string }[];
+  taggedKnowledge: { id: string; title: string; itemType: string }[];
 } | null> {
   const person = await getPersonForUser(userId, personId);
   if (!person) return null;
@@ -211,20 +219,37 @@ export async function getPersonRelatedForUser(
       ),
     );
 
-  // Notes linked via person:DisplayName tags (written on Inbox accept).
+  // Notes / knowledge linked via person:DisplayName tags (written on Inbox accept).
   const tagNeedle = `%person:${person.displayName}%`;
-  const taggedNotes = await getDb()
-    .select({
-      id: notes.id,
-      title: notes.title,
-      preview: notes.preview,
-    })
-    .from(notes)
-    .where(
-      and(eq(notes.userId, userId), sql`${notes.tags}::text ilike ${tagNeedle}`),
-    )
-    .orderBy(desc(notes.updatedAt))
-    .limit(12);
+  const [taggedNotes, taggedKnowledge] = await Promise.all([
+    getDb()
+      .select({
+        id: notes.id,
+        title: notes.title,
+        preview: notes.preview,
+      })
+      .from(notes)
+      .where(
+        and(eq(notes.userId, userId), sql`${notes.tags}::text ilike ${tagNeedle}`),
+      )
+      .orderBy(desc(notes.updatedAt))
+      .limit(12),
+    getDb()
+      .select({
+        id: knowledgeItems.id,
+        title: knowledgeItems.title,
+        itemType: knowledgeItems.itemType,
+      })
+      .from(knowledgeItems)
+      .where(
+        and(
+          eq(knowledgeItems.userId, userId),
+          sql`${knowledgeItems.tags}::text ilike ${tagNeedle}`,
+        ),
+      )
+      .orderBy(desc(knowledgeItems.updatedAt))
+      .limit(12),
+  ]);
 
   return {
     person,
@@ -237,6 +262,11 @@ export async function getPersonRelatedForUser(
       id: n.id,
       title: n.title,
       preview: n.preview,
+    })),
+    taggedKnowledge: taggedKnowledge.map((k) => ({
+      id: k.id,
+      title: k.title,
+      itemType: k.itemType,
     })),
   };
 }

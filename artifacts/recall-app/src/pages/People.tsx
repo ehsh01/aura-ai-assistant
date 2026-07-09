@@ -11,12 +11,20 @@ import {
   type PersonRecord,
   type WaitingOnRecord,
 } from "@/lib/recall-api";
-import { askPath, notesPath, peoplePath, readSearchParam, tasksPath } from "@/lib/recall-nav";
+import {
+  askPath,
+  knowledgePath,
+  notesPath,
+  peoplePath,
+  readSearchParam,
+  tasksPath,
+} from "@/lib/recall-nav";
 import { toast } from "@/hooks/use-toast";
 import { Pencil, Sparkles } from "lucide-react";
 
 type OpenTask = { id: string; title: string; time: string | null };
 type TaggedNote = { id: string; title: string; preview: string };
+type TaggedKnowledge = { id: string; title: string; itemType: string };
 
 function waitingForPerson(
   waiting: WaitingOnRecord[],
@@ -38,6 +46,9 @@ export function People() {
   const [waiting, setWaiting] = useState<WaitingOnRecord[]>([]);
   const [openByPerson, setOpenByPerson] = useState<Record<string, OpenTask[]>>({});
   const [notesByPerson, setNotesByPerson] = useState<Record<string, TaggedNote[]>>({});
+  const [knowledgeByPerson, setKnowledgeByPerson] = useState<
+    Record<string, TaggedKnowledge[]>
+  >({});
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -71,15 +82,24 @@ export function People() {
               p.id,
               r.openTasks,
               r.taggedNotes ?? ([] as TaggedNote[]),
+              r.taggedKnowledge ?? ([] as TaggedKnowledge[]),
             ] as const;
           } catch {
-            return [p.id, [] as OpenTask[], [] as TaggedNote[]] as const;
+            return [
+              p.id,
+              [] as OpenTask[],
+              [] as TaggedNote[],
+              [] as TaggedKnowledge[],
+            ] as const;
           }
         }),
       );
       setOpenByPerson(Object.fromEntries(related.map(([id, tasks]) => [id, tasks])));
       setNotesByPerson(
         Object.fromEntries(related.map(([id, , notes]) => [id, notes])),
+      );
+      setKnowledgeByPerson(
+        Object.fromEntries(related.map(([id, , , knowledge]) => [id, knowledge])),
       );
     } finally {
       setLoading(false);
@@ -316,6 +336,7 @@ export function People() {
             {filteredPeople.map((person) => {
               const openTasks = openByPerson[person.id] ?? [];
               const taggedNotes = notesByPerson[person.id] ?? [];
+              const taggedKnowledge = knowledgeByPerson[person.id] ?? [];
               const personWaiting = waitingForPerson(waiting, person);
               const isSelected = selected?.id === person.id;
               const isHighlighted = highlightedId === person.id;
@@ -346,7 +367,8 @@ export function People() {
                       {!isSelected &&
                         (personWaiting.length > 0 ||
                           openTasks.length > 0 ||
-                          taggedNotes.length > 0) && (
+                          taggedNotes.length > 0 ||
+                          taggedKnowledge.length > 0) && (
                         <p className="pt-1 text-xs text-white/35">
                           {[
                             openTasks.length > 0
@@ -354,6 +376,9 @@ export function People() {
                               : null,
                             taggedNotes.length > 0
                               ? `${taggedNotes.length} note${taggedNotes.length === 1 ? "" : "s"}`
+                              : null,
+                            taggedKnowledge.length > 0
+                              ? `${taggedKnowledge.length} knowledge`
                               : null,
                             personWaiting.length > 0
                               ? `${personWaiting.length} waiting`
@@ -500,6 +525,27 @@ export function People() {
                           </ul>
                         )}
                       </div>
+
+                      {taggedKnowledge.length > 0 && (
+                        <div>
+                          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/40">
+                            Knowledge
+                          </h3>
+                          <ul className="space-y-1.5">
+                            {taggedKnowledge.map((k) => (
+                              <li key={k.id}>
+                                <Link
+                                  href={knowledgePath({ knowledgeId: k.id })}
+                                  className="block truncate text-sm text-indigo-200 no-underline hover:underline"
+                                >
+                                  {k.title}
+                                  <span className="ml-2 text-white/35">{k.itemType}</span>
+                                </Link>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
 
                       <div>
                         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/40">

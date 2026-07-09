@@ -398,7 +398,20 @@ export async function updateNoteForUser(
 
   if (!row) return null;
   const counts = await attachmentCountsForNotes([row.id]);
-  return toDto(row, counts.get(row.id) ?? 0);
+  const dto = toDto(row, counts.get(row.id) ?? 0);
+  if (
+    input.title !== undefined ||
+    input.content !== undefined ||
+    input.contentFormat !== undefined ||
+    input.tags !== undefined
+  ) {
+    warmEntityEmbedding(userId, {
+      entityType: "note",
+      entityId: dto.id,
+      text: `${dto.title}\n${dto.preview}\ntags=${dto.tags.join(",")}`,
+    });
+  }
+  return dto;
 }
 
 export async function deleteNoteForUser(
