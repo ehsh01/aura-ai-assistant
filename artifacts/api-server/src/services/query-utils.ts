@@ -3,6 +3,13 @@ import type { QueryFinanceAggregate } from "./ai";
 export const FINANCE_INTENT =
   /\b(spend|spent|spending|cost|costs?|paid|pay(?:ing)?|budget|transactions?|expenses?|income|earn(?:ed)?|money|dollars?|grocer|restaurant|bought|purchase|bill|\$)\b/i;
 
+/** “What do I know about X?” / contact-focused questions. */
+export const PERSON_INTENT =
+  /\b(what do i know about|tell me about|who is|who'?s|about\s+[A-Z]|contact for|contact with)\b/i;
+
+export const WAITING_INTENT =
+  /\b(waiting|follow[- ]?up|awaiting|who.*(owe|owed|pending)|what.*(pending|waiting))\b/i;
+
 export function todayIso(now: Date = new Date()): string {
   const tz = process.env.RECALL_TIMEZONE?.trim() || "America/New_York";
   try {

@@ -1,7 +1,12 @@
 import { listTasksForUser } from "./tasks";
 import type { EvidenceDto } from "./evidence";
 import { aiService, type QueryFinanceAggregate } from "./ai";
-import { FINANCE_INTENT, todayIso } from "./query-utils";
+import {
+  FINANCE_INTENT,
+  PERSON_INTENT,
+  WAITING_INTENT,
+  todayIso,
+} from "./query-utils";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
 import { ensureUserFinanceFresh } from "./finance-auto-sync";
 import { retrieveRelevantRecords } from "./retrieval";
@@ -9,9 +14,6 @@ import { listWaitingOnForUser } from "./waiting-on";
 import { writeAuditLog } from "./audit";
 import { QUERY_ANSWER_PROMPT_VERSION } from "../prompts/queryAnswer.v1";
 import { newEvidenceId } from "../lib/recall-format";
-
-const WAITING_INTENT =
-  /\b(waiting|follow[- ]?up|awaiting|who.*(owe|owed|pending)|what.*(pending|waiting))\b/i;
 
 export type QueryAnswer = {
   answer: string;
@@ -74,20 +76,45 @@ export async function queryRecallForUser(
   const today = todayIso();
   const degraded = aiService.getStatus().degraded;
   const waitingIntent = WAITING_INTENT.test(question);
+  const personIntent = PERSON_INTENT.test(question);
 
-  const [{ records: relevant, usedSemantic }, tasks, waitingItems] = await Promise.all([
+  const [
+    { records: relevant, usedSemantic, namedPeople },
+    tasks,
+    waitingRaw,
+  ] = await Promise.all([
     retrieveRelevantRecords(userId, question, 12),
     listTasksForUser(userId),
-    waitingIntent ? listWaitingOnForUser(userId, 12) : Promise.resolve([]),
+    waitingIntent || personIntent
+      ? listWaitingOnForUser(userId, 12)
+      : Promise.resolve([]),
   ]);
   const openTasks = tasks.filter((t) => !t.completed);
+
+  // When asking about a specific person, only keep their waiting items.
+  const namedIds = new Set(namedPeople.map((p) => p.id));
+  const namedNames = namedPeople.map((p) => p.displayName.toLowerCase());
+  const waitingItems =
+    personIntent && namedPeople.length > 0
+      ? waitingRaw.filter((w) => {
+          if (w.personId && namedIds.has(w.personId)) return true;
+          const lower = w.person.toLowerCase();
+          return namedNames.some(
+            (n) => lower === n || lower.includes(n) || n.includes(lower),
+          );
+        })
+      : waitingRaw;
+
+  // Pure waiting questions can focus on waiting; person-about always keeps retrieval.
+  const waitingOnly = waitingIntent && !personIntent && waitingItems.length > 0;
+  const includeRetrieval = !waitingOnly;
 
   let finance: QueryFinanceAggregate | null = null;
   let financeNeedsSync = false;
   const evidence: EvidenceDto[] = [];
 
   if (waitingItems.length > 0) {
-    for (const w of waitingItems.slice(0, 6)) {
+    for (const w of waitingItems.slice(0, personIntent ? 3 : 6)) {
       // Waiting ids are "note:uuid" / "knowledge:uuid" / "task:uuid".
       const bareId = w.id.includes(":") ? w.id.slice(w.id.indexOf(":") + 1) : w.id;
       evidence.push(
@@ -142,8 +169,11 @@ export async function queryRecallForUser(
     }
   }
 
-  if (waitingItems.length === 0) {
-    for (const rec of relevant.slice(0, 5)) {
+  if (includeRetrieval) {
+    const retrievalSlots = personIntent
+      ? Math.max(3, 6 - Math.min(waitingItems.length, 3))
+      : 5;
+    for (const rec of relevant.slice(0, retrievalSlots)) {
       const personMeta =
         rec.entityType === "person"
           ? { personId: rec.entityId, personName: rec.title, person: rec.title }
@@ -173,39 +203,41 @@ export async function queryRecallForUser(
     }
   }
 
-  const relatedRecords =
-    waitingItems.length > 0
-      ? waitingItems.map((w) => {
-          const bareId = w.id.includes(":") ? w.id.slice(w.id.indexOf(":") + 1) : w.id;
-          return {
-            entityType: w.sourceType,
-            entityId: bareId,
-            title: `${w.person}: ${w.item}`,
-          };
-        })
-      : relevant.map((r) => ({
-          entityType: r.entityType,
-          entityId: r.entityId,
-          title: r.title,
-        }));
+  const waitingRelated = waitingItems.map((w) => {
+    const bareId = w.id.includes(":") ? w.id.slice(w.id.indexOf(":") + 1) : w.id;
+    return {
+      entityType: w.sourceType,
+      entityId: bareId,
+      title: `${w.person}: ${w.item}`,
+    };
+  });
+  const retrievalRelated = relevant.map((r) => ({
+    entityType: r.entityType,
+    entityId: r.entityId,
+    title: r.title,
+  }));
+  const relatedRecords = waitingOnly
+    ? waitingRelated
+    : [...waitingRelated, ...retrievalRelated].slice(0, 12);
 
-  const contextRecords =
-    waitingItems.length > 0
-      ? waitingItems.map((w) => {
-          const bareId = w.id.includes(":") ? w.id.slice(w.id.indexOf(":") + 1) : w.id;
-          return {
-            entityType: w.sourceType,
-            entityId: bareId,
-            title: `${w.person}: ${w.item}`,
-            text: `${w.followUp}. ${w.evidenceText}${w.days ? ` (${w.days}d)` : ""}`,
-          };
-        })
-      : relevant.map((r) => ({
-          entityType: r.entityType,
-          entityId: r.entityId,
-          title: r.title,
-          text: r.text,
-        }));
+  const waitingContext = waitingItems.map((w) => {
+    const bareId = w.id.includes(":") ? w.id.slice(w.id.indexOf(":") + 1) : w.id;
+    return {
+      entityType: w.sourceType,
+      entityId: bareId,
+      title: `${w.person}: ${w.item}`,
+      text: `${w.followUp}. ${w.evidenceText}${w.days ? ` (${w.days}d)` : ""}`,
+    };
+  });
+  const retrievalContext = relevant.map((r) => ({
+    entityType: r.entityType,
+    entityId: r.entityId,
+    title: r.title,
+    text: r.text,
+  }));
+  const contextRecords = waitingOnly
+    ? waitingContext
+    : [...waitingContext, ...retrievalContext].slice(0, 14);
 
   const finish = async (result: QueryAnswer): Promise<QueryAnswer> => {
     await writeAuditLog({
@@ -219,11 +251,20 @@ export async function queryRecallForUser(
         evidenceCount: result.evidence.length,
         usedSemantic,
         waitingCount: waitingItems.length,
+        personIntent,
+        namedPeople: namedPeople.map((p) => p.displayName).slice(0, 4),
         hasFinance: Boolean(finance && !financeNeedsSync),
       },
     });
     return result;
   };
+
+  const defaultNext =
+    namedPeople[0] != null
+      ? `Open People → ${namedPeople[0].displayName}`
+      : waitingItems.length > 0
+        ? "Open People → Waiting on"
+        : null;
 
   // AI synthesis when available.
   if (!degraded) {
@@ -246,9 +287,7 @@ export async function queryRecallForUser(
         caveats,
         evidence,
         relatedRecords,
-        suggestedNextAction:
-          ai.suggestedNextAction ??
-          (waitingItems.length > 0 ? "Open People → Waiting on" : null),
+        suggestedNextAction: ai.suggestedNextAction ?? defaultNext,
         promptVersion: QUERY_ANSWER_PROMPT_VERSION,
         degraded: ai.degraded,
       });
@@ -259,9 +298,14 @@ export async function queryRecallForUser(
 
   // Deterministic fallback.
   let answer: string;
-  let confidence = relevant.length > 0 || (finance && !financeNeedsSync) ? 0.6 : 0.3;
+  let confidence =
+    relevant.length > 0 || waitingItems.length > 0 || (finance && !financeNeedsSync)
+      ? 0.6
+      : 0.3;
   let caveats: string | null =
-    relevant.length === 0 && !finance ? "Limited matching records found." : null;
+    relevant.length === 0 && waitingItems.length === 0 && !finance
+      ? "Limited matching records found."
+      : null;
   let suggestedNextAction: string | null = null;
 
   if (financeNeedsSync) {
@@ -278,7 +322,23 @@ export async function queryRecallForUser(
       (topPayee ? ` Largest: ${topPayee.payee} ($${topPayee.total.toFixed(2)}).` : "");
     confidence = 0.85;
     suggestedNextAction = "Open Connectors → Finance for the full breakdown";
-  } else if (waitingItems.length > 0) {
+  } else if (personIntent && (relevant.length > 0 || waitingItems.length > 0)) {
+    const who = namedPeople[0]?.displayName ?? "them";
+    const bits: string[] = [];
+    if (relevant.length > 0) {
+      bits.push(
+        `Found ${relevant.length} related record(s). Top: "${relevant[0]!.title}".`,
+      );
+    }
+    if (waitingItems.length > 0) {
+      bits.push(
+        `Waiting on ${waitingItems.length} follow-up${waitingItems.length === 1 ? "" : "s"} from ${who}.`,
+      );
+    }
+    answer = bits.join(" ");
+    confidence = 0.8;
+    suggestedNextAction = defaultNext;
+  } else if (waitingOnly) {
     const lines = waitingItems
       .slice(0, 5)
       .map((w) => `• ${w.person}: ${w.item}${w.days ? ` (${w.days}d)` : ""}`);

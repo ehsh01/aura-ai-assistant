@@ -28,29 +28,40 @@ type ContextRecord = {
   text: string;
 };
 
+/** First names that collide with common English words / months. */
+const AMBIGUOUS_FIRST =
+  /^(May|April|June|July|August|Will|Bill|Grant|Chase|Hope|Faith|Joy|Ray|Pat|Chris|Alex|Sam|Max|Lee|Kim|Day|Week|Month|Year|Still|Need)$/i;
+
 /** Detect known people named in the question for retrieval boost. */
 export function mentionedPeople(
   question: string,
   people: { id: string; displayName: string }[],
 ): { id: string; displayName: string }[] {
   const lower = question.toLowerCase();
-  const hits: { id: string; displayName: string }[] = [];
+  const fullHits: { id: string; displayName: string }[] = [];
+  const firstHits: { id: string; displayName: string }[] = [];
+
   for (const p of people) {
     const name = p.displayName.trim();
     if (name.length < 2) continue;
     if (lower.includes(name.toLowerCase())) {
-      hits.push(p);
+      fullHits.push(p);
       continue;
     }
     const first = name.split(/\s+/)[0] ?? "";
+    if (first.length < 3 || AMBIGUOUS_FIRST.test(first)) continue;
     if (
-      first.length >= 3 &&
       new RegExp(`\\b${first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(question)
     ) {
-      hits.push(p);
+      firstHits.push(p);
     }
   }
-  return hits;
+
+  // Prefer full-name matches; only use first-name hits when unique.
+  if (fullHits.length > 0) return fullHits;
+  if (firstHits.length === 1) return firstHits;
+  // Multiple first-name collisions — skip rather than boost the wrong person.
+  return [];
 }
 
 function personMatchOnRecord(
@@ -174,9 +185,15 @@ export async function retrieveRelevantRecords(
   userId: string,
   question: string,
   limit = 16,
-): Promise<{ records: RetrievedRecord[]; usedSemantic: boolean }> {
+): Promise<{
+  records: RetrievedRecord[];
+  usedSemantic: boolean;
+  namedPeople: { id: string; displayName: string }[];
+}> {
   const { records: corpus, people } = await collectCorpus(userId);
-  if (corpus.length === 0) return { records: [], usedSemantic: false };
+  if (corpus.length === 0) {
+    return { records: [], usedSemantic: false, namedPeople: [] };
+  }
 
   const named = mentionedPeople(question, people);
   const namedIds = new Set(named.map((p) => p.id));
@@ -184,13 +201,17 @@ export async function retrieveRelevantRecords(
     const parts = p.displayName.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
     return [p.displayName.toLowerCase(), ...parts];
   });
+  const personTagNeedles = named.map((p) => `person:${p.displayName.toLowerCase()}`);
 
   const personBoost = (r: ContextRecord): number => {
     if (named.length === 0) return 0;
-    if (r.entityType === "person" && namedIds.has(r.entityId)) return 0.35;
+    if (r.entityType === "person" && namedIds.has(r.entityId)) return 0.45;
     const hay = `${r.title}\n${r.text}`.toLowerCase();
+    for (const needle of personTagNeedles) {
+      if (hay.includes(needle)) return 0.38;
+    }
     for (const token of namedTokens) {
-      if (hay.includes(token)) return 0.22;
+      if (hay.includes(token)) return 0.28;
     }
     return 0;
   };
@@ -217,14 +238,18 @@ export async function retrieveRelevantRecords(
       );
       const candidates: ContextRecord[] = [];
       for (const hit of keywordHits.slice(0, CORPUS.keywordShortlist)) candidates.push(hit.r);
-      // Always include named people cards in the semantic candidate set.
+      // Always include named people + person-tagged records in candidates.
       for (const r of corpus) {
+        const id = `${r.entityType}:${r.entityId}`;
+        if (shortlistIds.has(id)) continue;
         if (r.entityType === "person" && namedIds.has(r.entityId)) {
-          const id = `${r.entityType}:${r.entityId}`;
-          if (!shortlistIds.has(id)) {
-            shortlistIds.add(id);
-            candidates.push(r);
-          }
+          shortlistIds.add(id);
+          candidates.push(r);
+          continue;
+        }
+        if (named.length > 0 && personBoost(r) >= 0.28) {
+          shortlistIds.add(id);
+          candidates.push(r);
         }
       }
       for (const r of corpus) {
@@ -300,8 +325,9 @@ export async function retrieveRelevantRecords(
         .slice(0, limit)
         .map(({ r, kw }) => toRetrieved(r, kw, "keyword")),
       usedSemantic: false,
+      namedPeople: named,
     };
   }
 
-  return { records: top, usedSemantic };
+  return { records: top, usedSemantic, namedPeople: named };
 }
