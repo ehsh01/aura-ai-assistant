@@ -28,6 +28,7 @@ const ACTION_LABELS: Record<string, string> = {
   knowledge_created: "Knowledge item added",
   document_created: "Document added",
   person_created: "Person added",
+  follow_up_created: "Follow-up task created",
 };
 
 function labelFor(action: string): string {

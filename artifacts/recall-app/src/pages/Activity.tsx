@@ -9,6 +9,7 @@ const FILTERS = [
   { id: "capture_extracted", label: "AI extraction" },
   { id: "capture_accepted", label: "Accepted" },
   { id: "task_created", label: "Tasks" },
+  { id: "follow_up_created", label: "Follow-ups" },
   { id: "task_completed", label: "Completed" },
   { id: "connector_sync", label: "Syncs" },
   { id: "query_answered", label: "Ask" },

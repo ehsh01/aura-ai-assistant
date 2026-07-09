@@ -8,7 +8,10 @@ import {
   listPeopleForUser,
   updatePersonForUser,
 } from "../services/people";
-import { listWaitingOnForUser } from "../services/waiting-on";
+import {
+  createFollowUpFromWaitingOn,
+  listWaitingOnForUser,
+} from "../services/waiting-on";
 
 const CreatePersonBody = z.object({
   displayName: z.string().min(1).max(255),
@@ -41,6 +44,24 @@ router.get("/people/waiting-on", async (req, res, next) => {
   try {
     const items = await listWaitingOnForUser(req.user!.id);
     res.json({ items });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const FollowUpBody = z.object({
+  waitingItemId: z.string().min(1).max(128),
+});
+
+router.post("/people/waiting-on/follow-up", async (req, res, next) => {
+  try {
+    const body = FollowUpBody.parse(req.body);
+    const result = await createFollowUpFromWaitingOn(req.user!.id, body.waitingItemId);
+    if (!result) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Waiting-on item not found" });
+      return;
+    }
+    res.status(201).json(result);
   } catch (err) {
     next(err);
   }

@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { AppLayout } from "@/components/AppLayout";
 import {
   createPerson,
+  createWaitingFollowUp,
   listPeople,
   listWaitingOn,
   type PersonRecord,
@@ -11,11 +12,13 @@ import {
 import { toast } from "@/hooks/use-toast";
 
 export function People() {
+  const [, navigate] = useLocation();
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [waiting, setWaiting] = useState<WaitingOnRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [creatingId, setCreatingId] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -45,6 +48,27 @@ export function People() {
     }
   };
 
+  const followUp = async (item: WaitingOnRecord) => {
+    if (creatingId) return;
+    setCreatingId(item.id);
+    try {
+      const res = await createWaitingFollowUp(item.id);
+      toast({
+        title: "Follow-up task created",
+        description: res.task.title,
+      });
+      navigate(`/tasks?task=${encodeURIComponent(res.task.id)}`);
+    } catch (err) {
+      toast({
+        title: "Could not create follow-up",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setCreatingId(null);
+    }
+  };
+
   return (
     <AppLayout>
       <div className="h-full overflow-y-auto bg-[#0a0a0f] p-4 md:p-8 text-white">
@@ -52,7 +76,7 @@ export function People() {
           <p className="text-sm uppercase tracking-[0.3em] text-indigo-300/70">Network</p>
           <h1 className="mt-2 text-3xl font-semibold">People</h1>
           <p className="mt-2 text-white/50">
-            Contacts plus what you&apos;re waiting on from them — with the source evidence.
+            Contacts plus what you&apos;re waiting on from them — one tap creates a follow-up task.
           </p>
 
           <section className="mt-8">
@@ -71,13 +95,12 @@ export function People() {
             )}
             <div className="space-y-2">
               {waiting.map((w) => (
-                <Link
+                <article
                   key={w.id}
-                  href={w.href}
-                  className="block rounded-2xl border border-amber-500/15 bg-amber-500/5 p-4 no-underline transition-colors hover:border-amber-500/30"
+                  className="rounded-2xl border border-amber-500/15 bg-amber-500/5 p-4"
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
+                    <Link href={w.href} className="min-w-0 flex-1 no-underline">
                       <p className="text-xs uppercase tracking-wider text-amber-200/70">
                         {w.person}
                         {w.days > 0 ? ` · ${w.days}d` : ""}
@@ -86,12 +109,17 @@ export function People() {
                       </p>
                       <h3 className="mt-1 font-semibold text-white">{w.item}</h3>
                       <p className="mt-1 line-clamp-2 text-sm text-white/50">{w.evidenceText}</p>
-                    </div>
-                    <span className="flex-shrink-0 rounded-full bg-white/5 px-2.5 py-1 text-xs text-indigo-200">
-                      {w.followUp}
-                    </span>
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => void followUp(w)}
+                      disabled={creatingId === w.id}
+                      className="flex-shrink-0 rounded-xl bg-indigo-500 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
+                    >
+                      {creatingId === w.id ? "Creating…" : "Follow up"}
+                    </button>
                   </div>
-                </Link>
+                </article>
               ))}
             </div>
           </section>

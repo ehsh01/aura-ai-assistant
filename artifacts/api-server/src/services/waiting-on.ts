@@ -1,7 +1,9 @@
 import { listNoteMetadataForUser } from "./notes";
 import { listKnowledgeForUser } from "./knowledge";
-import { listPeopleForUser } from "./people";
-import { listTasksForUser } from "./tasks";
+import { createPersonForUser, listPeopleForUser } from "./people";
+import { createTaskForUser, listTasksForUser, type RecallTaskDto } from "./tasks";
+import { createEvidenceForUser } from "./evidence";
+import { writeAuditLog } from "./audit";
 
 const WAITING_RE =
   /\b(waiting|follow[- ]?up|awaiting|need(?:s)? (?:a |the )?(?:quote|reply|response|call|email)|still need|pending (?:from|on)|haven't heard|no response)\b/i;
@@ -120,4 +122,82 @@ export async function listWaitingOnForUser(
   return items
     .sort((a, b) => b.days - a.days)
     .slice(0, limit);
+}
+
+export type FollowUpResult = {
+  task: RecallTaskDto;
+  personId: string | null;
+  waitingItemId: string;
+};
+
+/**
+ * Turn a waiting-on item into an actionable follow-up task, linked to the
+ * person when known and backed by the source evidence text.
+ */
+export async function createFollowUpFromWaitingOn(
+  userId: string,
+  waitingItemId: string,
+): Promise<FollowUpResult | null> {
+  const items = await listWaitingOnForUser(userId, 50);
+  const item = items.find((w) => w.id === waitingItemId);
+  if (!item) return null;
+
+  // Source tasks already are tasks — don't duplicate; just return a pointer-style result
+  // by creating a dedicated "Follow up with X" task unless the item itself is already that.
+  let personId = item.personId;
+  if (!personId && item.person && item.person !== "Someone") {
+    const created = await createPersonForUser(userId, { displayName: item.person });
+    personId = created.id;
+  }
+
+  const title =
+    item.sourceType === "task" && /^follow up/i.test(item.item)
+      ? item.item
+      : `Follow up with ${item.person}: ${item.item}`.slice(0, 200);
+
+  // Avoid exact-title duplicates among open tasks.
+  const open = await listTasksForUser(userId);
+  const existing = open.find((t) => !t.completed && t.title === title);
+  if (existing) {
+    return { task: existing, personId, waitingItemId: item.id };
+  }
+
+  const task = await createTaskForUser(userId, {
+    title,
+    priority: "high",
+    tags: ["follow-up", "waiting-on"],
+    requesterPersonId: personId,
+    aiGenerated: false,
+    userConfirmed: true,
+  });
+
+  await createEvidenceForUser(userId, {
+    entityType: "task",
+    entityId: task.id,
+    claimType: "task_created_from",
+    evidenceText: item.evidenceText.slice(0, 500),
+    evidenceMetadata: {
+      waitingItemId: item.id,
+      sourceType: item.sourceType,
+      person: item.person,
+      personId,
+      sourceHref: item.href,
+    },
+  });
+
+  await writeAuditLog({
+    userId,
+    action: "follow_up_created",
+    entityType: "task",
+    entityId: task.id,
+    metadata: {
+      title: task.title,
+      waitingItemId: item.id,
+      person: item.person,
+      personId,
+      sourceType: item.sourceType,
+    },
+  });
+
+  return { task, personId, waitingItemId: item.id };
 }

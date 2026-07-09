@@ -96,6 +96,17 @@ export async function listWaitingOn(): Promise<{ items: WaitingOnRecord[] }> {
   return apiFetch("/people/waiting-on");
 }
 
+export async function createWaitingFollowUp(waitingItemId: string): Promise<{
+  task: { id: string; title: string };
+  personId: string | null;
+  waitingItemId: string;
+}> {
+  return apiFetch("/people/waiting-on/follow-up", {
+    method: "POST",
+    body: JSON.stringify({ waitingItemId }),
+  });
+}
+
 export type ActivityRecord = {
   id: string;
   action: string;
