@@ -5,11 +5,14 @@ import { AppLayout } from "@/components/AppLayout";
 import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
   fetchHome,
+  listActivity,
   queryRecall,
+  type ActivityRecord,
   type EvidenceRecord,
   type HomeBriefingResponse,
 } from "@/lib/recall-api";
 import { ingestCaptureReliable } from "@/lib/capture-queue";
+import { RecentActivityCard } from "@/components/home/RecentActivityCard";
 import { useAuth } from "@/context/AuthContext";
 import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
@@ -65,6 +68,7 @@ export function Dashboard() {
   const [captures, setCaptures] = useState<RecallCaptureItem[]>([]);
   const [projects, setProjects] = useState<RecallProject[]>([]);
   const [home, setHome] = useState<HomeBriefingResponse | null>(null);
+  const [activity, setActivity] = useState<ActivityRecord[]>([]);
 
   const refreshCaptures = () =>
     void listCaptureInbox()
@@ -83,6 +87,9 @@ export function Dashboard() {
     refreshHome();
     refreshCaptures();
     void listProjects().then((res) => setProjects(res.projects as RecallProject[])).catch(() => {});
+    void listActivity({ limit: 6 })
+      .then((res) => setActivity(res.items))
+      .catch(() => setActivity([]));
   }, [refreshHome]);
 
   const handleAskRecall = async (text: string) => {
@@ -214,6 +221,8 @@ export function Dashboard() {
           </div>
 
           <FinanceSnapshotCard finance={finance} />
+
+          <RecentActivityCard items={activity} />
 
           {(askPending || askResult) && (
             <div className="nebula-glass rounded-2xl border border-indigo-500/20 px-5 py-4">
