@@ -17,6 +17,7 @@ import { listNoteMetadataForUser, type RecallNoteMetadataDto } from "./notes";
 import { listProjectsForUser, type RecallProjectDto } from "./projects";
 import { listTasksForUser, type RecallTaskDto } from "./tasks";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
+import { ensureUserFinanceFresh } from "./finance-auto-sync";
 import { listWaitingOnForUser } from "./waiting-on";
 import { todayIso } from "./query-utils";
 import { aiService } from "./ai";
@@ -473,6 +474,8 @@ function fallbackSummary(attentionCount: number, parts: string[]): string {
 
 /** This-month finance snapshot from already-synced source_records. */
 async function buildFinanceSnapshot(userId: string, today: string): Promise<FinanceSnapshot | null> {
+  // Kick a background refresh if the connector is stale (non-blocking).
+  ensureUserFinanceFresh(userId);
   const synced = await loadSyncedFinanceAggregate(userId, "this month", today);
   if (!synced) return null;
   const top = synced.finance.topPayees[0] ?? null;

@@ -3,6 +3,7 @@ import type { EvidenceDto } from "./evidence";
 import { aiService, type QueryFinanceAggregate } from "./ai";
 import { FINANCE_INTENT, todayIso } from "./query-utils";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
+import { ensureUserFinanceFresh } from "./finance-auto-sync";
 import { retrieveRelevantRecords } from "./retrieval";
 import { listWaitingOnForUser } from "./waiting-on";
 import { QUERY_ANSWER_PROMPT_VERSION } from "../prompts/queryAnswer.v1";
@@ -92,6 +93,7 @@ export async function queryRecallForUser(
   }
 
   if (FINANCE_INTENT.test(question)) {
+    ensureUserFinanceFresh(userId);
     try {
       const synced = await loadSyncedFinanceAggregate(userId, question, today);
       if (synced) {
