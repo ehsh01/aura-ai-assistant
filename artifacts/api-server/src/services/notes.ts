@@ -10,6 +10,7 @@ import {
   registerNoteAttachments,
   type PendingNoteAttachment,
 } from "./note-attachments";
+import { writeAuditLog } from "./audit";
 
 export type RecallNoteDto = {
   id: string;
@@ -217,7 +218,15 @@ export async function createNoteForUser(
     })
     .returning();
 
-  return toDto(row!, 0);
+  const dto = toDto(row!, 0);
+  await writeAuditLog({
+    userId,
+    action: "note_created",
+    entityType: "note",
+    entityId: dto.id,
+    metadata: { title: dto.title },
+  });
+  return dto;
 }
 
 export async function listNoteIdsForUser(userId: string): Promise<Set<string>> {

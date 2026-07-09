@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { acceptCapture, listCaptureInbox, updateCapture } from "@workspace/api-client-react";
 import { AppLayout } from "@/components/AppLayout";
 import { EvidenceDrawer } from "@/components/EvidenceDrawer";
 import { useRecallData } from "@/context/RecallDataContext";
 import { toast } from "@/hooks/use-toast";
 import type { RecallCaptureItem } from "@/lib/recall-context";
+import { notesPath } from "@/lib/recall-nav";
 
 const priorityClass: Record<RecallCaptureItem["suggestedPriority"], string> = {
   low: "text-blue-300 bg-blue-500/10",
@@ -16,6 +17,7 @@ const priorityClass: Record<RecallCaptureItem["suggestedPriority"], string> = {
 
 export function Inbox() {
   const { reloadNotes, reloadTasks } = useRecallData();
+  const [, navigate] = useLocation();
   const [items, setItems] = useState<RecallCaptureItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [evidenceTarget, setEvidenceTarget] = useState<RecallCaptureItem | null>(null);
@@ -38,13 +40,25 @@ export function Inbox() {
     try {
       const res = await acceptCapture(item.id, {});
       await Promise.all([load(), reloadNotes(), reloadTasks()]);
-      const created =
-        res.task?.title ? `Task: ${res.task.title}` : res.note?.title ? `Note: ${res.note.title}` : null;
+      if (res.task?.id) {
+        toast({
+          title: "Task created",
+          description: `${res.task.title}. Opening it now.`,
+        });
+        navigate(`/tasks?task=${encodeURIComponent(res.task.id)}`);
+        return;
+      }
+      if (res.note?.id) {
+        toast({
+          title: "Note created",
+          description: `${res.note.title}. Opening it now.`,
+        });
+        navigate(notesPath({ noteId: res.note.id }));
+        return;
+      }
       toast({
         title: "Capture accepted",
-        description: created
-          ? `${created}. Logged in Activity.`
-          : "Moved into notes or tasks. Logged in Activity.",
+        description: "Moved into notes or tasks. Logged in Activity.",
       });
     } catch {
       toast({ title: "Could not accept capture", variant: "destructive" });
