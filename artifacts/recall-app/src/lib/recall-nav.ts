@@ -45,6 +45,20 @@ export function askPath(opts?: { q?: string }): string {
   return q ? `/ask?${q}` : "/ask";
 }
 
+export function documentsPath(opts?: { documentId?: string }): string {
+  const params = new URLSearchParams();
+  if (opts?.documentId) params.set("doc", opts.documentId);
+  const q = params.toString();
+  return q ? `/documents?${q}` : "/documents";
+}
+
+export function knowledgePath(opts?: { knowledgeId?: string }): string {
+  const params = new URLSearchParams();
+  if (opts?.knowledgeId) params.set("item", opts.knowledgeId);
+  const q = params.toString();
+  return q ? `/knowledge?${q}` : "/knowledge";
+}
+
 /** Best-effort deep link for Ask related records / evidence entities. */
 export function entityPath(entityType: string, entityId: string): string | null {
   switch (entityType) {
@@ -55,9 +69,9 @@ export function entityPath(entityType: string, entityId: string): string | null 
     case "person":
       return peoplePath({ personId: entityId });
     case "document":
-      return "/documents";
+      return documentsPath({ documentId: entityId });
     case "knowledge":
-      return "/knowledge";
+      return knowledgePath({ knowledgeId: entityId });
     case "capture":
     case "capture_item":
       return inboxPath();

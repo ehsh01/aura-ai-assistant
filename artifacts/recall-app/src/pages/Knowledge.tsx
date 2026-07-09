@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { BookMarked, Plus, X } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { createKnowledge, listKnowledge, type KnowledgeRecord } from "@/lib/recall-api";
 import { NoteTagList } from "@/components/PersonTagLink";
 import { toast } from "@/hooks/use-toast";
+import { readSearchParam } from "@/lib/recall-nav";
 
 const ITEM_TYPES = ["note", "procedure", "reference", "snippet", "contact"] as const;
 
@@ -27,6 +28,7 @@ export function Knowledge() {
   const [itemType, setItemType] = useState<string>("note");
   const [tagsText, setTagsText] = useState("");
   const [saving, setSaving] = useState(false);
+  const openedFromQuery = useRef(false);
 
   const load = async () => {
     setLoading(true);
@@ -41,6 +43,18 @@ export function Knowledge() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (loading || openedFromQuery.current || items.length === 0) return;
+    const itemId = readSearchParam("item");
+    if (!itemId) return;
+    const hit = items.find((i) => i.id === itemId);
+    if (hit) {
+      setSelected(hit);
+      setFilter("all");
+      openedFromQuery.current = true;
+    }
+  }, [loading, items]);
 
   const filtered = useMemo(
     () => (filter === "all" ? items : items.filter((i) => i.itemType === filter)),

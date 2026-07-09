@@ -14,6 +14,7 @@ import {
 } from "@/lib/document-import";
 import { EvidenceDrawer } from "@/components/EvidenceDrawer";
 import { toast } from "@/hooks/use-toast";
+import { readSearchParam } from "@/lib/recall-nav";
 
 export function Documents() {
   const [docs, setDocs] = useState<DocumentRecord[]>([]);
@@ -21,6 +22,7 @@ export function Documents() {
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<DocumentRecord | null>(null);
   const [evidenceFor, setEvidenceFor] = useState<DocumentRecord | null>(null);
+  const openedFromQuery = useRef(false);
 
   const [fileName, setFileName] = useState("");
   const [text, setText] = useState("");
@@ -45,6 +47,17 @@ export function Documents() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (loading || openedFromQuery.current || docs.length === 0) return;
+    const docId = readSearchParam("doc");
+    if (!docId) return;
+    const hit = docs.find((d) => d.id === docId);
+    if (hit) {
+      setSelected(hit);
+      openedFromQuery.current = true;
+    }
+  }, [loading, docs]);
 
   const resetForm = () => {
     setFileName("");
