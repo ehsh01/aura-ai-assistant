@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { BookOpen, Inbox, Library, Plus, FolderKanban } from "lucide-react";
+import { BookOpen, Inbox, Library, Plus, FolderKanban, Sparkles, FileText, BookMarked } from "lucide-react";
 import { CaptureModal } from "@/components/CaptureModal";
 import { MobileBottomNav, MobileMoreSheet } from "@/components/MobileShell";
 import { RecallLogo } from "@/components/RecallLogo";
@@ -49,6 +49,11 @@ const staticNavItems = [
     ),
   },
   {
+    id: "/ask",
+    label: "Ask Recall",
+    icon: <Sparkles width={18} height={18} strokeWidth={1.8} />,
+  },
+  {
     id: "/notes",
     label: "Memory",
     icon: (
@@ -69,6 +74,16 @@ const staticNavItems = [
     id: "/inbox",
     label: "AI Inbox",
     icon: <Inbox width={18} height={18} strokeWidth={1.8} />,
+  },
+  {
+    id: "/documents",
+    label: "Documents",
+    icon: <FileText width={18} height={18} strokeWidth={1.8} />,
+  },
+  {
+    id: "/knowledge",
+    label: "Knowledge",
+    icon: <BookMarked width={18} height={18} strokeWidth={1.8} />,
   },
   {
     id: "/people",
@@ -265,6 +280,11 @@ export function AppLayout({ children }: AppLayoutProps) {
     location === "/notebooks" ||
     location === "/tasks" ||
     location === "/canvas" ||
+    location === "/ask" ||
+    location === "/documents" ||
+    location === "/knowledge" ||
+    location === "/people" ||
+    location === "/connectors" ||
     location === "/projects" ||
     location.startsWith("/projects/");
 

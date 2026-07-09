@@ -4,6 +4,7 @@ import type {
   ChatCompletionTool,
 } from "openai/resources/chat/completions";
 import { searchNotesForUser } from "./notes";
+import { QUERY_ANSWER_SYSTEM_PROMPT } from "../prompts/queryAnswer.v1";
 
 // ---------------------------------------------------------------------------
 // Types (mirror OpenAPI / api-zod shapes)
@@ -149,6 +150,35 @@ export interface ClassifyCaptureResponse extends AiDegradedMeta {
   item: CaptureClassificationItem;
 }
 
+export interface QueryContextRecord {
+  entityType: string;
+  entityId: string;
+  title: string;
+  text: string;
+}
+
+export interface QueryFinanceAggregate {
+  total: number;
+  count: number;
+  rangeLabel: string | null;
+  topPayees: { payee: string; total: number; count: number }[];
+  topCategories: { category: string; total: number; count: number }[];
+}
+
+export interface AnswerQueryRequest {
+  question: string;
+  today: string;
+  records: QueryContextRecord[];
+  finance?: QueryFinanceAggregate | null;
+}
+
+export interface AnswerQueryResponse extends AiDegradedMeta {
+  answer: string;
+  confidence: number;
+  caveats: string | null;
+  suggestedNextAction: string | null;
+}
+
 export interface GenerateWorkNoteRequest {
   rawText: string;
   tone?: "concise" | "friendly" | "technical";
@@ -182,6 +212,7 @@ export interface AiService {
   ): Promise<DashboardDigestResponse>;
   classifyCapture(request: ClassifyCaptureRequest): Promise<ClassifyCaptureResponse>;
   generateWorkNote(request: GenerateWorkNoteRequest): Promise<GenerateWorkNoteResponse>;
+  answerQuery(request: AnswerQueryRequest): Promise<AnswerQueryResponse>;
 }
 
 const DISABLED_REASON =
@@ -430,6 +461,29 @@ class DisabledAiService implements AiService {
     request: GenerateWorkNoteRequest,
   ): Promise<GenerateWorkNoteResponse> {
     return { ...degradedMeta(), ...fallbackWorkNote(request.rawText) };
+  }
+
+  async answerQuery(request: AnswerQueryRequest): Promise<AnswerQueryResponse> {
+    // Deterministic fallback; the query engine has richer rule-based logic and
+    // will generally not call this when AI is disabled.
+    const parts: string[] = [];
+    if (request.finance) {
+      parts.push(
+        `Across ${request.finance.count} transaction(s)${
+          request.finance.rangeLabel ? ` (${request.finance.rangeLabel})` : ""
+        } the net total is ${request.finance.total.toFixed(2)}.`,
+      );
+    }
+    if (request.records.length) {
+      parts.push(`Top related record: "${request.records[0]!.title}".`);
+    }
+    return {
+      ...degradedMeta(),
+      answer: parts.join(" ") || "AI is offline; connect OPENAI_API_KEY for synthesized answers.",
+      confidence: request.records.length || request.finance ? 0.5 : 0.2,
+      caveats: "Generated without AI synthesis.",
+      suggestedNextAction: null,
+    };
   }
 }
 
@@ -957,6 +1011,62 @@ class OpenAiService implements AiService {
       };
     } catch {
       return { degraded: true, degradedReason: "work_note_parse_failed", ...fallback };
+    }
+  }
+
+  async answerQuery(request: AnswerQueryRequest): Promise<AnswerQueryResponse> {
+    const completion = await this.client.chat.completions.create({
+      model: this.model,
+      messages: [
+        { role: "system", content: QUERY_ANSWER_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: JSON.stringify({
+            today: request.today,
+            question: request.question,
+            finance: request.finance ?? null,
+            records: request.records.map((r) => ({
+              entityType: r.entityType,
+              entityId: r.entityId,
+              title: r.title,
+              text: r.text.slice(0, 500),
+            })),
+          }),
+        },
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 600,
+    });
+
+    const raw = completion.choices[0]?.message.content ?? "{}";
+    try {
+      const parsed = JSON.parse(raw) as {
+        answer?: string;
+        confidence?: number;
+        caveats?: string | null;
+        suggestedNextAction?: string | null;
+      };
+      const confidence =
+        typeof parsed.confidence === "number"
+          ? Math.min(1, Math.max(0, parsed.confidence))
+          : 0.6;
+      return {
+        degraded: false,
+        degradedReason: null,
+        answer: parsed.answer?.trim() || "I couldn't find enough to answer that confidently.",
+        confidence,
+        caveats: parsed.caveats ?? null,
+        suggestedNextAction: parsed.suggestedNextAction ?? null,
+      };
+    } catch {
+      return {
+        degraded: true,
+        degradedReason: "query_answer_parse_failed",
+        answer: raw.slice(0, 800),
+        confidence: 0.3,
+        caveats: "Answer could not be structured.",
+        suggestedNextAction: null,
+      };
     }
   }
 }

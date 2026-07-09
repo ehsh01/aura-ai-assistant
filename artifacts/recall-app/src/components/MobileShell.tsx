@@ -1,6 +1,8 @@
 import React from "react";
 import { Link } from "wouter";
 import {
+  BookMarked,
+  Cable,
   FileText,
   FolderKanban,
   Home,
@@ -12,6 +14,8 @@ import {
   PenLine,
   Plus,
   Search,
+  Sparkles,
+  Users,
 } from "lucide-react";
 import {
   Sheet,
@@ -176,6 +180,26 @@ export function MobileMoreSheet({
         </SheetHeader>
 
         <div className="mt-4 space-y-1">
+          <Link href="/ask" onClick={close} className={linkClass(location === "/ask")}>
+            <Sparkles size={18} />
+            <span className="flex-1 text-sm font-medium">Ask Recall</span>
+          </Link>
+          <Link href="/documents" onClick={close} className={linkClass(location === "/documents")}>
+            <FileText size={18} />
+            <span className="flex-1 text-sm font-medium">Documents</span>
+          </Link>
+          <Link href="/knowledge" onClick={close} className={linkClass(location === "/knowledge")}>
+            <BookMarked size={18} />
+            <span className="flex-1 text-sm font-medium">Knowledge</span>
+          </Link>
+          <Link href="/people" onClick={close} className={linkClass(location === "/people")}>
+            <Users size={18} />
+            <span className="flex-1 text-sm font-medium">People</span>
+          </Link>
+          <Link href="/connectors" onClick={close} className={linkClass(location === "/connectors")}>
+            <Cable size={18} />
+            <span className="flex-1 text-sm font-medium">Connectors</span>
+          </Link>
           <Link href="/projects" onClick={close} className={linkClass(location === "/projects" || location.startsWith("/projects/"))}>
             <FolderKanban size={18} />
             <span className="flex-1 text-sm font-medium">Projects</span>

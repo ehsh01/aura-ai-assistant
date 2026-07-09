@@ -16,6 +16,9 @@ import { People } from "@/pages/People";
 import { Connectors } from "@/pages/Connectors";
 import { Projects } from "@/pages/Projects";
 import { ProjectDetail } from "@/pages/ProjectDetail";
+import { Ask } from "@/pages/Ask";
+import { Documents } from "@/pages/Documents";
+import { Knowledge } from "@/pages/Knowledge";
 import { normalizeBrowserPath, pathnameOnly } from "@/lib/app-path";
 
 const queryClient = new QueryClient();
@@ -53,9 +56,12 @@ function Router() {
     <RequireAuth>
       <Switch>
         <Route path="/" component={Dashboard} />
+        <Route path="/ask" component={Ask} />
         <Route path="/notes" component={Notes} />
         <Route path="/notebooks" component={Notebooks} />
         <Route path="/inbox" component={Inbox} />
+        <Route path="/documents" component={Documents} />
+        <Route path="/knowledge" component={Knowledge} />
         <Route path="/people" component={People} />
         <Route path="/connectors" component={Connectors} />
         <Route path="/projects" component={Projects} />

@@ -216,3 +216,66 @@ export async function getFinanceSummary(
   if (params?.payee) search.set("payee", params.payee);
   return apiFetch(`/finance/summary?${search.toString()}`);
 }
+
+export type DocumentRecord = {
+  id: string;
+  fileName: string;
+  fileType: string | null;
+  storagePath: string | null;
+  sourceCaptureId: string | null;
+  extractedText: string | null;
+  summary: string | null;
+  metadata: Record<string, unknown>;
+  uploadedAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function listDocuments(): Promise<{ documents: DocumentRecord[] }> {
+  return apiFetch("/documents");
+}
+
+export async function createDocument(input: {
+  fileName: string;
+  fileType?: string | null;
+  extractedText?: string | null;
+  summary?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<DocumentRecord> {
+  return apiFetch("/documents", { method: "POST", body: JSON.stringify(input) });
+}
+
+export type KnowledgeRecord = {
+  id: string;
+  title: string;
+  content: string;
+  itemType: string;
+  tags: string[];
+  projectId: string | null;
+  sourceCaptureId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function listKnowledge(): Promise<{ items: KnowledgeRecord[] }> {
+  return apiFetch("/knowledge");
+}
+
+export async function createKnowledge(input: {
+  title: string;
+  content?: string;
+  itemType?: string;
+  tags?: string[];
+}): Promise<KnowledgeRecord> {
+  return apiFetch("/knowledge", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function summarizeText(
+  content: string,
+  maxLength = 400,
+): Promise<{ summary: string; degraded: boolean }> {
+  return apiFetch("/ai/notes/summarize", {
+    method: "POST",
+    body: JSON.stringify({ content, maxLength }),
+  });
+}
