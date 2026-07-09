@@ -4,8 +4,12 @@ import { aiService, type QueryFinanceAggregate } from "./ai";
 import { FINANCE_INTENT, todayIso } from "./query-utils";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
 import { retrieveRelevantRecords } from "./retrieval";
+import { listWaitingOnForUser } from "./waiting-on";
 import { QUERY_ANSWER_PROMPT_VERSION } from "../prompts/queryAnswer.v1";
 import { newEvidenceId } from "../lib/recall-format";
+
+const WAITING_INTENT =
+  /\b(waiting|follow[- ]?up|awaiting|who.*(owe|owed|pending)|what.*(pending|waiting))\b/i;
 
 export type QueryAnswer = {
   answer: string;
@@ -56,16 +60,36 @@ export async function queryRecallForUser(
 ): Promise<QueryAnswer> {
   const today = todayIso();
   const degraded = aiService.getStatus().degraded;
+  const waitingIntent = WAITING_INTENT.test(question);
 
-  const [{ records: relevant, usedSemantic }, tasks] = await Promise.all([
+  const [{ records: relevant, usedSemantic }, tasks, waitingItems] = await Promise.all([
     retrieveRelevantRecords(userId, question, 12),
     listTasksForUser(userId),
+    waitingIntent ? listWaitingOnForUser(userId, 12) : Promise.resolve([]),
   ]);
   const openTasks = tasks.filter((t) => !t.completed);
 
   let finance: QueryFinanceAggregate | null = null;
   let financeNeedsSync = false;
   const evidence: EvidenceDto[] = [];
+
+  if (waitingItems.length > 0) {
+    for (const w of waitingItems.slice(0, 6)) {
+      evidence.push(
+        makeEvidence({
+          claimType: "summary_based_on",
+          evidenceText: `${w.person}: ${w.item} — ${w.evidenceText}`,
+          metadata: {
+            relatedEntityType: w.sourceType,
+            relatedEntityId: w.id,
+            person: w.person,
+            days: w.days,
+            retrievalMethod: "waiting_on",
+          },
+        }),
+      );
+    }
+  }
 
   if (FINANCE_INTENT.test(question)) {
     try {
@@ -98,34 +122,51 @@ export async function queryRecallForUser(
     }
   }
 
-  for (const rec of relevant.slice(0, 5)) {
-    evidence.push(
-      makeEvidence({
-        claimType: "summary_based_on",
-        evidenceText: rec.text.slice(0, 500),
-        metadata: {
-          relatedEntityType: rec.entityType,
-          relatedEntityId: rec.entityId,
-          retrievalScore: Number(rec.score.toFixed(4)),
-          retrievalMethod: rec.method,
-          usedSemantic,
-        },
-      }),
-    );
+  if (waitingItems.length === 0) {
+    for (const rec of relevant.slice(0, 5)) {
+      evidence.push(
+        makeEvidence({
+          claimType: "summary_based_on",
+          evidenceText: rec.text.slice(0, 500),
+          metadata: {
+            relatedEntityType: rec.entityType,
+            relatedEntityId: rec.entityId,
+            retrievalScore: Number(rec.score.toFixed(4)),
+            retrievalMethod: rec.method,
+            usedSemantic,
+          },
+        }),
+      );
+    }
   }
 
-  const relatedRecords = relevant.map((r) => ({
-    entityType: r.entityType,
-    entityId: r.entityId,
-    title: r.title,
-  }));
+  const relatedRecords =
+    waitingItems.length > 0
+      ? waitingItems.map((w) => ({
+          entityType: w.sourceType,
+          entityId: w.id,
+          title: `${w.person}: ${w.item}`,
+        }))
+      : relevant.map((r) => ({
+          entityType: r.entityType,
+          entityId: r.entityId,
+          title: r.title,
+        }));
 
-  const contextRecords = relevant.map((r) => ({
-    entityType: r.entityType,
-    entityId: r.entityId,
-    title: r.title,
-    text: r.text,
-  }));
+  const contextRecords =
+    waitingItems.length > 0
+      ? waitingItems.map((w) => ({
+          entityType: w.sourceType,
+          entityId: w.id,
+          title: `${w.person}: ${w.item}`,
+          text: `${w.followUp}. ${w.evidenceText}${w.days ? ` (${w.days}d)` : ""}`,
+        }))
+      : relevant.map((r) => ({
+          entityType: r.entityType,
+          entityId: r.entityId,
+          title: r.title,
+          text: r.text,
+        }));
 
   // AI synthesis when available.
   if (!degraded) {
@@ -148,7 +189,9 @@ export async function queryRecallForUser(
         caveats,
         evidence,
         relatedRecords,
-        suggestedNextAction: ai.suggestedNextAction,
+        suggestedNextAction:
+          ai.suggestedNextAction ??
+          (waitingItems.length > 0 ? "Open People → Waiting on" : null),
         promptVersion: QUERY_ANSWER_PROMPT_VERSION,
         degraded: ai.degraded,
       };
@@ -178,6 +221,15 @@ export async function queryRecallForUser(
       (topPayee ? ` Largest: ${topPayee.payee} ($${topPayee.total.toFixed(2)}).` : "");
     confidence = 0.85;
     suggestedNextAction = "Open Connectors → Finance for the full breakdown";
+  } else if (waitingItems.length > 0) {
+    const lines = waitingItems
+      .slice(0, 5)
+      .map((w) => `• ${w.person}: ${w.item}${w.days ? ` (${w.days}d)` : ""}`);
+    answer = `You're waiting on ${waitingItems.length} follow-up${
+      waitingItems.length === 1 ? "" : "s"
+    }:\n${lines.join("\n")}`;
+    confidence = 0.85;
+    suggestedNextAction = "Open People → Waiting on";
   } else if (/attention|today|focus|do today/i.test(question)) {
     const dueToday = openTasks.filter((t) => t.time && t.time.startsWith(today));
     const high = openTasks.filter((t) => t.priority === "high");
