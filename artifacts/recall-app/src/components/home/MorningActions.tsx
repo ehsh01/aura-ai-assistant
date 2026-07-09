@@ -1,6 +1,7 @@
 import { Link } from "wouter";
 import { ArrowRight, CheckCircle2, Hourglass, Target } from "lucide-react";
 import type { DailyBriefing, FocusNow, WaitingItem } from "@/lib/home-briefing";
+import { peoplePath } from "@/lib/recall-nav";
 
 export type MorningAction = {
   id: string;
@@ -46,7 +47,7 @@ function buildActions(
       id: `wait:${w.id}`,
       label: `Follow up with ${w.person}`,
       detail: w.item,
-      href: w.href,
+      href: w.personId ? peoplePath({ personId: w.personId }) : w.href,
       kind: "waiting",
     });
   }

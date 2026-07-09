@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { BookMarked, Plus, X } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { createKnowledge, listKnowledge, type KnowledgeRecord } from "@/lib/recall-api";
+import { NoteTagList } from "@/components/PersonTagLink";
 import { toast } from "@/hooks/use-toast";
 
 const ITEM_TYPES = ["note", "procedure", "reference", "snippet", "contact"] as const;
@@ -142,12 +143,8 @@ export function Knowledge() {
                     </div>
                     <p className="mt-1 line-clamp-2 text-sm text-white/50">{item.content || "No content."}</p>
                     {item.tags.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {item.tags.map((tag) => (
-                          <span key={tag} className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-white/45">
-                            {tag}
-                          </span>
-                        ))}
+                      <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+                        <NoteTagList tags={item.tags} limit={6} />
                       </div>
                     )}
                   </div>
@@ -232,6 +229,11 @@ export function Knowledge() {
                 <X size={18} />
               </button>
             </div>
+            {selected.tags.length > 0 && (
+              <div className="mt-3">
+                <NoteTagList tags={selected.tags} limit={10} />
+              </div>
+            )}
             <div className="mt-3 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-white/75">
               {selected.content || "No content."}
             </div>
