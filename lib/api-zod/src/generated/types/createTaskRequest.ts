@@ -15,4 +15,6 @@ export interface CreateTaskRequest {
   tags?: string[];
   completed?: boolean;
   projectId?: string | null;
+  /** Person this task is linked to. */
+  requesterPersonId?: string | null;
 }

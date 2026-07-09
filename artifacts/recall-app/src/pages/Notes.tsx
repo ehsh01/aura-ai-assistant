@@ -20,6 +20,7 @@ import { readSearchParam, notesPath } from "@/lib/recall-nav";
 import { importEvernoteFiles } from "@/lib/evernote-import-ui";
 import { NoteRichContent } from "@/components/NoteRichContent";
 import { NoteTagList } from "@/components/PersonTagLink";
+import { PersonTagger } from "@/components/PersonTagger";
 import { Download, Loader2, BookOpen, ChevronDown, Sparkles, ChevronLeft } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 
@@ -458,11 +459,12 @@ export function Notes() {
                   placeholder="Note title"
                   className="w-full bg-transparent text-2xl sm:text-3xl font-semibold text-white/95 mb-3 outline-none border-none placeholder:text-white/20"
                 />
-                {activeNote.tags.length > 0 && (
-                  <div className="mb-4 sm:mb-6">
-                    <NoteTagList tags={activeNote.tags} limit={8} />
-                  </div>
-                )}
+                <div className="mb-4 sm:mb-6">
+                  <PersonTagger
+                    tags={activeNote.tags}
+                    onChange={(tags) => updateNote(activeNote.id, { tags })}
+                  />
+                </div>
 
                 {noteUsesRichViewer(activeNote) && !editingContent ? (
                   <div className="mb-6">

@@ -585,6 +585,8 @@ export interface CreateTaskRequest {
   tags?: string[];
   completed?: boolean;
   projectId?: string | null;
+  /** Person this task is linked to. */
+  requesterPersonId?: string | null;
 }
 
 export type UpdateTaskRequestPriority = typeof UpdateTaskRequestPriority[keyof typeof UpdateTaskRequestPriority];
@@ -605,6 +607,8 @@ export interface UpdateTaskRequest {
   tags?: string[];
   completed?: boolean;
   projectId?: string | null;
+  /** Person this task is linked to. Pass null to clear. */
+  requesterPersonId?: string | null;
 }
 
 export interface BulkTasksRequest {

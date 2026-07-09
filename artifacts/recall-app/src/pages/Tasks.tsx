@@ -23,10 +23,10 @@ import {
   Calendar,
   Clock,
   FileSearch,
-  User,
 } from "lucide-react";
 import { MicButton } from "@/components/MicButton";
 import { EvidenceDrawer } from "@/components/EvidenceDrawer";
+import { TaskPersonPicker } from "@/components/TaskPersonPicker";
 
 type Priority = RecallTask["priority"];
 
@@ -45,12 +45,17 @@ function TaskItem({
   task,
   onToggle,
   onShowEvidence,
+  onAssignPerson,
   highlighted,
   itemRef,
 }: {
   task: Task;
   onToggle: (id: string) => void;
   onShowEvidence: (task: Task) => void;
+  onAssignPerson: (
+    taskId: string,
+    next: { personId: string | null; personName: string | null },
+  ) => void;
   highlighted?: boolean;
   itemRef?: (el: HTMLDivElement | null) => void;
 }) {
@@ -83,33 +88,23 @@ function TaskItem({
         </div>
         
         {/* Meta row */}
-        {(task.time || task.requesterPersonName || (task.tags && task.tags.length > 0)) && (
-          <div className="flex items-center gap-3 mt-1 text-[12px] text-white/40">
-            {task.time && (
-              <span className="flex items-center gap-1">
-                <Clock size={12} /> {task.time}
-              </span>
-            )}
-            {task.requesterPersonName && (
-              <Link
-                href={
-                  task.requesterPersonId
-                    ? peoplePath({ personId: task.requesterPersonId })
-                    : peoplePath()
-                }
-                className="flex items-center gap-1 rounded-md border border-sky-500/20 bg-sky-500/10 px-1.5 py-0.5 text-sky-200 no-underline hover:bg-sky-500/20"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <User size={10} /> {task.requesterPersonName}
-              </Link>
-            )}
-            {task.tags && task.tags.map(tag => (
-              <span key={tag} className="flex items-center gap-1 bg-white/5 px-1.5 py-0.5 rounded-md">
-                <Tag size={10} /> {tag}
-              </span>
-            ))}
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-3 mt-1 text-[12px] text-white/40">
+          {task.time && (
+            <span className="flex items-center gap-1">
+              <Clock size={12} /> {task.time}
+            </span>
+          )}
+          <TaskPersonPicker
+            personId={task.requesterPersonId}
+            personName={task.requesterPersonName}
+            onChange={(next) => onAssignPerson(task.id, next)}
+          />
+          {task.tags && task.tags.map(tag => (
+            <span key={tag} className="flex items-center gap-1 bg-white/5 px-1.5 py-0.5 rounded-md">
+              <Tag size={10} /> {tag}
+            </span>
+          ))}
+        </div>
       </div>
 
       <button
@@ -133,7 +128,7 @@ export function Tasks() {
   const [location, navigate] = useLocation();
   const { user } = useAuth();
   const userName = firstName(user?.name);
-  const { tasks, addTask, toggleTask } = useRecallData();
+  const { tasks, addTask, updateTask, toggleTask } = useRecallData();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState("");
   const [quickAdd, setQuickAdd] = useState("");
@@ -207,6 +202,16 @@ export function Tasks() {
   const handleAddTask = (title: string) => {
     addTask(title);
     setQuickAdd("");
+  };
+
+  const assignPerson = (
+    taskId: string,
+    next: { personId: string | null; personName: string | null },
+  ) => {
+    updateTask(taskId, {
+      requesterPersonId: next.personId,
+      requesterPersonName: next.personName,
+    });
   };
 
   const appendToDraft = (text: string) => {
@@ -297,6 +302,7 @@ export function Tasks() {
                     task={task}
                     onToggle={toggleTask}
                     onShowEvidence={setEvidenceTask}
+                    onAssignPerson={assignPerson}
                     highlighted={highlightedTaskId === task.id}
                     itemRef={(el) => {
                       taskRefs.current[task.id] = el;
@@ -316,6 +322,7 @@ export function Tasks() {
                     task={task}
                     onToggle={toggleTask}
                     onShowEvidence={setEvidenceTask}
+                    onAssignPerson={assignPerson}
                     highlighted={highlightedTaskId === task.id}
                     itemRef={(el) => {
                       taskRefs.current[task.id] = el;

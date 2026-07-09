@@ -14,4 +14,6 @@ export interface UpdateTaskRequest {
   tags?: string[];
   completed?: boolean;
   projectId?: string | null;
+  /** Person this task is linked to. Pass null to clear. */
+  requesterPersonId?: string | null;
 }

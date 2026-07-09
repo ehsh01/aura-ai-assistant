@@ -790,7 +790,8 @@ export const CreateTaskBody = zod.object({
   "priority": zod.enum(['high', 'med', 'medium', 'low', 'none']).optional(),
   "tags": zod.array(zod.string()).optional(),
   "completed": zod.boolean().optional(),
-  "projectId": zod.string().nullish()
+  "projectId": zod.string().nullish(),
+  "requesterPersonId": zod.string().nullish().describe('Person this task is linked to.')
 })
 
 
@@ -809,7 +810,8 @@ export const BulkUpsertTasksBody = zod.object({
   "priority": zod.enum(['high', 'med', 'medium', 'low', 'none']).optional(),
   "tags": zod.array(zod.string()).optional(),
   "completed": zod.boolean().optional(),
-  "projectId": zod.string().nullish()
+  "projectId": zod.string().nullish(),
+  "requesterPersonId": zod.string().nullish().describe('Person this task is linked to.')
 })).max(bulkUpsertTasksBodyTasksMax)
 })
 
@@ -841,7 +843,8 @@ export const UpdateTaskBody = zod.object({
   "priority": zod.enum(['high', 'med', 'medium', 'low', 'none']).optional(),
   "tags": zod.array(zod.string()).optional(),
   "completed": zod.boolean().optional(),
-  "projectId": zod.string().nullish()
+  "projectId": zod.string().nullish(),
+  "requesterPersonId": zod.string().nullish().describe('Person this task is linked to. Pass null to clear.')
 })
 
 export const UpdateTaskResponse = zod.object({

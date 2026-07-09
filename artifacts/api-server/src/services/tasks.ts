@@ -243,6 +243,26 @@ export async function updateTaskForUser(
     });
   }
 
+  if (
+    input.title !== undefined ||
+    input.time !== undefined ||
+    input.priority !== undefined ||
+    input.tags !== undefined ||
+    input.requesterPersonId !== undefined ||
+    input.completed !== undefined
+  ) {
+    const personBits = [dto.requesterPersonName, dto.requesterPersonId]
+      .filter(Boolean)
+      .join(" ");
+    warmEntityEmbedding(userId, {
+      entityType: "task",
+      entityId: dto.id,
+      text: `${dto.title} priority=${dto.priority} due=${dto.time ?? "none"} completed=${dto.completed}${
+        personBits ? ` person=${personBits}` : ""
+      }`,
+    });
+  }
+
   return dto;
 }
 

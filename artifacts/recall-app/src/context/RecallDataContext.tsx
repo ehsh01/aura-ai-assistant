@@ -40,6 +40,7 @@ interface RecallDataContextValue {
   updateNote: (id: string, patch: Partial<RecallNote>) => void;
   deleteNote: (id: string) => void;
   addTask: (title: string) => void;
+  updateTask: (id: string, patch: Partial<RecallTask>) => void;
   toggleTask: (id: string) => void;
   deleteTask: (id: string) => void;
   importNotes: (incoming: Partial<RecallNote>[]) => Promise<{ imported: number; skipped: number }>;
@@ -291,6 +292,29 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
     })();
   }, []);
 
+  const updateTask = useCallback((id: string, patch: Partial<RecallTask>) => {
+    setTasks((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+    );
+    void apiUpdateTask(id, {
+      ...(patch.title !== undefined ? { title: patch.title } : {}),
+      ...(patch.time !== undefined ? { time: patch.time } : {}),
+      ...(patch.priority !== undefined ? { priority: patch.priority } : {}),
+      ...(patch.tags !== undefined ? { tags: patch.tags } : {}),
+      ...(patch.completed !== undefined ? { completed: patch.completed } : {}),
+      ...(patch.projectId !== undefined ? { projectId: patch.projectId } : {}),
+      ...(patch.requesterPersonId !== undefined
+        ? { requesterPersonId: patch.requesterPersonId }
+        : {}),
+    })
+      .then((saved) => {
+        setTasks((prev) =>
+          prev.map((t) => (t.id === id ? (saved as RecallTask) : t)),
+        );
+      })
+      .catch(() => {});
+  }, []);
+
   const toggleTask = useCallback((id: string) => {
     setTasks((prev) =>
       prev.map((t) => {
@@ -413,6 +437,7 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
       updateNote,
       deleteNote,
       addTask,
+      updateTask,
       toggleTask,
       deleteTask,
       importNotes,
@@ -432,6 +457,7 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
       updateNote,
       deleteNote,
       addTask,
+      updateTask,
       toggleTask,
       deleteTask,
       importNotes,

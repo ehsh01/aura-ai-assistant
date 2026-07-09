@@ -1665,6 +1665,10 @@ components:
         projectId:
           type: string
           nullable: true
+        requesterPersonId:
+          type: string
+          nullable: true
+          description: Person this task is linked to.
       required:
         - title
     UpdateTaskRequest:
@@ -1687,6 +1691,10 @@ components:
         projectId:
           type: string
           nullable: true
+        requesterPersonId:
+          type: string
+          nullable: true
+          description: Person this task is linked to. Pass null to clear.
     BulkTasksRequest:
       type: object
       properties:
