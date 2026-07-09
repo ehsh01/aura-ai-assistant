@@ -11,7 +11,7 @@ import {
 import { NoteTagList, parsePersonTag } from "@/components/PersonTagLink";
 import { PersonTagger } from "@/components/PersonTagger";
 import { toast } from "@/hooks/use-toast";
-import { knowledgePath, readSearchParam } from "@/lib/recall-nav";
+import { knowledgePath, peoplePath, readSearchParam } from "@/lib/recall-nav";
 
 const ITEM_TYPES = ["note", "procedure", "reference", "snippet", "contact"] as const;
 
@@ -178,17 +178,26 @@ export function Knowledge() {
                 Showing knowledge tagged{" "}
                 <span className="font-medium">{personFilter}</span>
               </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setPersonFilter(null);
-                  navigate(knowledgePath());
-                }}
-                className="inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
-              >
-                <X size={12} />
-                Clear
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => navigate(peoplePath())}
+                  className="rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
+                >
+                  People
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPersonFilter(null);
+                    navigate(knowledgePath());
+                  }}
+                  className="inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
+                >
+                  <X size={12} />
+                  Clear
+                </button>
+              </div>
             </div>
           )}
 

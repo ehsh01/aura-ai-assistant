@@ -16,7 +16,7 @@ import {
   type NotebookFilter,
   type RecallNote,
 } from "@/lib/recall-context";
-import { readSearchParam, notesPath } from "@/lib/recall-nav";
+import { notesPath, peoplePath, readSearchParam } from "@/lib/recall-nav";
 import { importEvernoteFiles } from "@/lib/evernote-import-ui";
 import { NoteRichContent } from "@/components/NoteRichContent";
 import { NoteTagList, parsePersonTag } from "@/components/PersonTagLink";
@@ -344,17 +344,31 @@ export function Notes() {
                   Showing notes tagged{" "}
                   <span className="font-medium">{personFilter}</span>
                 </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPersonFilter(null);
-                    navigate(notesPath({ notebook: activeNotebook === "all" ? undefined : activeNotebook, q: searchQuery || undefined }));
-                  }}
-                  className="inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
-                >
-                  <X size={12} />
-                  Clear
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => navigate(peoplePath())}
+                    className="rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
+                  >
+                    People
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPersonFilter(null);
+                      navigate(
+                        notesPath({
+                          notebook: activeNotebook === "all" ? undefined : activeNotebook,
+                          q: searchQuery || undefined,
+                        }),
+                      );
+                    }}
+                    className="inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
+                  >
+                    <X size={12} />
+                    Clear
+                  </button>
+                </div>
               </div>
             )}
 
