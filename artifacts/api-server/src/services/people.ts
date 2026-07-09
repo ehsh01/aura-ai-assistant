@@ -1,5 +1,11 @@
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
-import { knowledgeItems, notes, people, tasks, type Person } from "@workspace/db/schema";
+import {
+  knowledgeItems,
+  notes,
+  people,
+  tasks,
+  type Person,
+} from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newPersonId } from "../lib/recall-format";
 import { recordUserCorrection } from "./user-corrections";
@@ -248,6 +254,29 @@ async function rewritePersonTagsForUser(
       .update(knowledgeItems)
       .set({ tags: next, updatedAt: new Date() })
       .where(and(eq(knowledgeItems.id, k.id), eq(knowledgeItems.userId, userId)));
+  }
+
+  const taskRows = await getDb()
+    .select({ id: tasks.id, tags: tasks.tags })
+    .from(tasks)
+    .where(and(eq(tasks.userId, userId), sql`${tasks.tags}::text ilike ${needle}`));
+
+  for (const t of taskRows) {
+    const tags = Array.isArray(t.tags) ? [...t.tags] : [];
+    let changed = false;
+    const next = tags.map((tag) => {
+      if (typeof tag !== "string") return tag;
+      if (tag.toLowerCase() === oldTag.toLowerCase()) {
+        changed = true;
+        return newTag;
+      }
+      return tag;
+    });
+    if (!changed) continue;
+    await getDb()
+      .update(tasks)
+      .set({ tags: next, updatedAt: new Date() })
+      .where(and(eq(tasks.id, t.id), eq(tasks.userId, userId)));
   }
 }
 
