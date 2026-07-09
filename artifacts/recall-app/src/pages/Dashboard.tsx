@@ -18,7 +18,7 @@ import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
 import { toast } from "@/hooks/use-toast";
 import { type RecallCaptureItem, type RecallProject } from "@/lib/recall-context";
-import { notesPath } from "@/lib/recall-nav";
+import { askPath, entityPath, notesPath } from "@/lib/recall-nav";
 import {
   buildContextAreas,
   buildDailyBriefing,
@@ -252,11 +252,56 @@ export function Dashboard() {
                         Evidence ({askResult.evidence.length})
                       </p>
                       <div className="space-y-1.5">
-                        {askResult.evidence.slice(0, 3).map((ev) => (
-                          <p key={ev.id} className="line-clamp-2 text-xs text-white/50">
-                            {ev.evidenceText}
-                          </p>
-                        ))}
+                        {askResult.evidence.slice(0, 3).map((ev) => {
+                          const relatedType =
+                            typeof ev.evidenceMetadata?.relatedEntityType === "string"
+                              ? ev.evidenceMetadata.relatedEntityType
+                              : ev.entityType;
+                          const relatedId =
+                            typeof ev.evidenceMetadata?.relatedEntityId === "string"
+                              ? ev.evidenceMetadata.relatedEntityId
+                              : ev.entityId;
+                          const href = entityPath(relatedType, relatedId);
+                          const personName =
+                            typeof ev.evidenceMetadata?.personName === "string"
+                              ? ev.evidenceMetadata.personName
+                              : typeof ev.evidenceMetadata?.person === "string"
+                                ? ev.evidenceMetadata.person
+                                : null;
+                          const personId =
+                            typeof ev.evidenceMetadata?.personId === "string"
+                              ? ev.evidenceMetadata.personId
+                              : null;
+                          return (
+                            <div key={ev.id} className="space-y-0.5">
+                              <p className="line-clamp-2 text-xs text-white/50">
+                                {ev.evidenceText}
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                {href && (
+                                  <Link
+                                    href={href}
+                                    className="text-[11px] text-indigo-300 no-underline hover:underline"
+                                  >
+                                    Open {relatedType}
+                                  </Link>
+                                )}
+                                {personName && (
+                                  <Link
+                                    href={
+                                      personId
+                                        ? entityPath("person", personId) ?? "/people"
+                                        : "/people"
+                                    }
+                                    className="text-[11px] text-sky-300 no-underline hover:underline"
+                                  >
+                                    {personName}
+                                  </Link>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -267,7 +312,11 @@ export function Dashboard() {
                     </p>
                   )}
                   <Link
-                    href="/ask"
+                    href={
+                      askResult?.question
+                        ? askPath({ q: askResult.question })
+                        : "/ask"
+                    }
                     className="mt-3 inline-flex items-center gap-1 text-xs text-indigo-300 no-underline hover:underline"
                   >
                     Open full Ask page

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { acceptCapture, listCaptureInbox, updateCapture } from "@workspace/api-client-react";
 import { AppLayout } from "@/components/AppLayout";
@@ -6,6 +6,7 @@ import { EvidenceDrawer } from "@/components/EvidenceDrawer";
 import { useRecallData } from "@/context/RecallDataContext";
 import { toast } from "@/hooks/use-toast";
 import type { RecallCaptureItem } from "@/lib/recall-context";
+import { listPeople, type PersonRecord } from "@/lib/recall-api";
 import { notesPath } from "@/lib/recall-nav";
 
 const priorityClass: Record<RecallCaptureItem["suggestedPriority"], string> = {
@@ -23,6 +24,10 @@ export function Inbox() {
   const [evidenceTarget, setEvidenceTarget] = useState<RecallCaptureItem | null>(null);
   /** Capture ids where the user cleared a wrong suggested person. */
   const [clearedPerson, setClearedPerson] = useState<Record<string, true>>({});
+  /** Manual person override per capture (typed or picked). */
+  const [personOverride, setPersonOverride] = useState<Record<string, string>>({});
+  const [people, setPeople] = useState<PersonRecord[]>([]);
+  const [pickerFor, setPickerFor] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -36,24 +41,50 @@ export function Inbox() {
 
   useEffect(() => {
     void load();
+    void listPeople()
+      .then((res) => setPeople(res.people))
+      .catch(() => {});
   }, []);
 
   const personFor = (item: RecallCaptureItem): string | null => {
+    const override = personOverride[item.id]?.trim();
+    if (override) return override;
     if (clearedPerson[item.id]) return null;
     return item.suggestedPersonName ?? null;
   };
+
+  const peopleSuggestions = useMemo(() => {
+    if (!pickerFor) return [];
+    const q = (personOverride[pickerFor] ?? "").trim().toLowerCase();
+    if (!q) return people.slice(0, 8);
+    return people
+      .filter((p) => p.displayName.toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [pickerFor, personOverride, people]);
 
   const accept = async (item: RecallCaptureItem) => {
     try {
       const personName = personFor(item);
       const cleared = Boolean(clearedPerson[item.id]);
+      const hasOverride = Boolean(personOverride[item.id]?.trim());
       const body = personName
         ? { personName }
-        : cleared
+        : cleared || hasOverride
           ? { skipPerson: true, personName: null }
           : {};
       const res = await acceptCapture(item.id, body);
       await Promise.all([load(), reloadNotes(), reloadTasks()]);
+      setPersonOverride((prev) => {
+        const next = { ...prev };
+        delete next[item.id];
+        return next;
+      });
+      setClearedPerson((prev) => {
+        const next = { ...prev };
+        delete next[item.id];
+        return next;
+      });
+      setPickerFor(null);
       const linked =
         res.personName != null && res.personName !== ""
           ? ` Linked to ${res.personName}.`
@@ -122,6 +153,7 @@ export function Inbox() {
             )}
             {items.map((item) => {
               const person = personFor(item);
+              const picking = pickerFor === item.id;
               return (
               <article key={item.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -139,16 +171,45 @@ export function Inbox() {
                           due {item.suggestedDueDate}
                         </span>
                       )}
-                      {person && (
+                      {person && !picking && (
                         <button
                           type="button"
-                          onClick={() =>
-                            setClearedPerson((prev) => ({ ...prev, [item.id]: true }))
-                          }
+                          onClick={() => {
+                            setClearedPerson((prev) => ({ ...prev, [item.id]: true }));
+                            setPersonOverride((prev) => {
+                              const next = { ...prev };
+                              delete next[item.id];
+                              return next;
+                            });
+                          }}
                           title="Clear person link"
                           className="rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-1 text-sky-200 hover:border-sky-400/40 hover:bg-sky-500/20"
                         >
                           → {person} ×
+                        </button>
+                      )}
+                      {!person && !picking && (
+                        <button
+                          type="button"
+                          onClick={() => setPickerFor(item.id)}
+                          className="rounded-full border border-white/15 px-2 py-1 text-white/55 hover:border-sky-400/40 hover:text-sky-200"
+                        >
+                          + Link person
+                        </button>
+                      )}
+                      {person && !picking && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPersonOverride((prev) => ({
+                              ...prev,
+                              [item.id]: person,
+                            }));
+                            setPickerFor(item.id);
+                          }}
+                          className="rounded-full border border-white/10 px-2 py-1 text-white/45 hover:text-white/70"
+                        >
+                          Change
                         </button>
                       )}
                     </div>
@@ -177,7 +238,107 @@ export function Inbox() {
                     </button>
                   </div>
                 </div>
-                {person && (
+                {picking && (
+                  <div className="mt-3 rounded-xl border border-sky-500/20 bg-sky-500/5 p-3">
+                    <label className="block text-xs text-sky-200/80">
+                      Person to link on accept
+                      <input
+                        autoFocus
+                        value={personOverride[item.id] ?? ""}
+                        onChange={(e) =>
+                          setPersonOverride((prev) => ({
+                            ...prev,
+                            [item.id]: e.target.value,
+                          }))
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            const name = (personOverride[item.id] ?? "").trim();
+                            if (name) {
+                              setClearedPerson((prev) => {
+                                const next = { ...prev };
+                                delete next[item.id];
+                                return next;
+                              });
+                            }
+                            setPickerFor(null);
+                          }
+                          if (e.key === "Escape") setPickerFor(null);
+                        }}
+                        placeholder="Type a name or pick below"
+                        className="mt-1.5 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none focus:border-sky-400/50"
+                      />
+                    </label>
+                    {peopleSuggestions.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {peopleSuggestions.map((p) => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => {
+                              setPersonOverride((prev) => ({
+                                ...prev,
+                                [item.id]: p.displayName,
+                              }));
+                              setClearedPerson((prev) => {
+                                const next = { ...prev };
+                                delete next[item.id];
+                                return next;
+                              });
+                              setPickerFor(null);
+                            }}
+                            className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-white/70 hover:border-sky-400/40 hover:text-sky-100"
+                          >
+                            {p.displayName}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const name = (personOverride[item.id] ?? "").trim();
+                          if (name) {
+                            setClearedPerson((prev) => {
+                              const next = { ...prev };
+                              delete next[item.id];
+                              return next;
+                            });
+                          } else {
+                            setClearedPerson((prev) => ({ ...prev, [item.id]: true }));
+                            setPersonOverride((prev) => {
+                              const next = { ...prev };
+                              delete next[item.id];
+                              return next;
+                            });
+                          }
+                          setPickerFor(null);
+                        }}
+                        className="rounded-lg bg-sky-500/20 px-2.5 py-1 text-xs text-sky-100 hover:bg-sky-500/30"
+                      >
+                        Done
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPersonOverride((prev) => {
+                            const next = { ...prev };
+                            delete next[item.id];
+                            return next;
+                          });
+                          setClearedPerson((prev) => ({ ...prev, [item.id]: true }));
+                          setPickerFor(null);
+                        }}
+                        className="rounded-lg px-2.5 py-1 text-xs text-white/45 hover:text-white/70"
+                      >
+                        No person
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {person && !picking && (
                   <p className="mt-3 text-xs text-sky-200/70">
                     Will link to <span className="font-medium text-sky-100">{person}</span> on
                     accept. Tap the chip to clear if wrong.

@@ -26,6 +26,31 @@ type ContextRecord = {
   text: string;
 };
 
+/** Detect known people named in the question for retrieval boost. */
+function mentionedPeople(
+  question: string,
+  people: { id: string; displayName: string }[],
+): { id: string; displayName: string }[] {
+  const lower = question.toLowerCase();
+  const hits: { id: string; displayName: string }[] = [];
+  for (const p of people) {
+    const name = p.displayName.trim();
+    if (name.length < 2) continue;
+    if (lower.includes(name.toLowerCase())) {
+      hits.push(p);
+      continue;
+    }
+    const first = name.split(/\s+/)[0] ?? "";
+    if (
+      first.length >= 3 &&
+      new RegExp(`\\b${first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(question)
+    ) {
+      hits.push(p);
+    }
+  }
+  return hits;
+}
+
 function keywordScore(question: string, text: string): number {
   const terms = question.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
   if (terms.length === 0) return 0;
@@ -45,7 +70,9 @@ const CORPUS = {
   semanticCandidates: 200,
 } as const;
 
-async function collectCorpus(userId: string): Promise<ContextRecord[]> {
+async function collectCorpus(
+  userId: string,
+): Promise<{ records: ContextRecord[]; people: { id: string; displayName: string }[] }> {
   const [tasks, notes, people, knowledge, documents, captures] = await Promise.all([
     listTasksForUser(userId),
     listNotesForUser(userId),
@@ -58,19 +85,25 @@ async function collectCorpus(userId: string): Promise<ContextRecord[]> {
   const records: ContextRecord[] = [];
 
   for (const t of tasks.slice(0, CORPUS.tasks)) {
+    const personBits = [t.requesterPersonName, t.requesterPersonId]
+      .filter(Boolean)
+      .join(" ");
     records.push({
       entityType: "task",
       entityId: t.id,
       title: t.title,
-      text: `${t.title} priority=${t.priority} due=${t.time ?? "none"} completed=${t.completed}`,
+      text: `${t.title} priority=${t.priority} due=${t.time ?? "none"} completed=${t.completed}${
+        personBits ? ` person=${personBits}` : ""
+      }`,
     });
   }
   for (const n of notes.slice(0, CORPUS.notes)) {
+    const tags = Array.isArray(n.tags) ? n.tags.join(",") : "";
     records.push({
       entityType: "note",
       entityId: n.id,
       title: n.title,
-      text: `${n.title}\n${(n.preview ?? n.content ?? "").slice(0, 600)}`,
+      text: `${n.title}\n${(n.preview ?? n.content ?? "").slice(0, 600)}\ntags=${tags}`,
     });
   }
   for (const p of people.slice(0, CORPUS.people)) {
@@ -106,7 +139,10 @@ async function collectCorpus(userId: string): Promise<ContextRecord[]> {
     });
   }
 
-  return records;
+  return {
+    records,
+    people: people.map((p) => ({ id: p.id, displayName: p.displayName })),
+  };
 }
 
 /**
@@ -118,11 +154,31 @@ export async function retrieveRelevantRecords(
   question: string,
   limit = 16,
 ): Promise<{ records: RetrievedRecord[]; usedSemantic: boolean }> {
-  const corpus = await collectCorpus(userId);
+  const { records: corpus, people } = await collectCorpus(userId);
   if (corpus.length === 0) return { records: [], usedSemantic: false };
 
+  const named = mentionedPeople(question, people);
+  const namedIds = new Set(named.map((p) => p.id));
+  const namedTokens = named.flatMap((p) => {
+    const parts = p.displayName.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
+    return [p.displayName.toLowerCase(), ...parts];
+  });
+
+  const personBoost = (r: ContextRecord): number => {
+    if (named.length === 0) return 0;
+    if (r.entityType === "person" && namedIds.has(r.entityId)) return 0.35;
+    const hay = `${r.title}\n${r.text}`.toLowerCase();
+    for (const token of namedTokens) {
+      if (hay.includes(token)) return 0.22;
+    }
+    return 0;
+  };
+
   const keywordHits = corpus
-    .map((r) => ({ r, kw: keywordScore(question, `${r.title}\n${r.text}`) }))
+    .map((r) => ({
+      r,
+      kw: keywordScore(question, `${r.title}\n${r.text}`) + personBoost(r),
+    }))
     .filter((x) => x.kw > 0)
     .sort((a, b) => b.kw - a.kw);
 
@@ -140,6 +196,16 @@ export async function retrieveRelevantRecords(
       );
       const candidates: ContextRecord[] = [];
       for (const hit of keywordHits.slice(0, CORPUS.keywordShortlist)) candidates.push(hit.r);
+      // Always include named people cards in the semantic candidate set.
+      for (const r of corpus) {
+        if (r.entityType === "person" && namedIds.has(r.entityId)) {
+          const id = `${r.entityType}:${r.entityId}`;
+          if (!shortlistIds.has(id)) {
+            shortlistIds.add(id);
+            candidates.push(r);
+          }
+        }
+      }
       for (const r of corpus) {
         const id = `${r.entityType}:${r.entityId}`;
         if (shortlistIds.has(id)) continue;
@@ -173,8 +239,9 @@ export async function retrieveRelevantRecords(
     const id = `${r.entityType}:${r.entityId}`;
     const kw = keywordScore(question, `${r.title}\n${r.text}`);
     const sem = semanticScores.get(id) ?? 0;
+    const boost = personBoost(r);
     // Blend: semantic dominates when present; keyword still boosts exact matches.
-    const score = usedSemantic ? sem * 0.75 + kw * 0.25 : kw;
+    const score = (usedSemantic ? sem * 0.75 + kw * 0.25 : kw) + boost;
     const method: RetrievedRecord["method"] =
       usedSemantic && sem > 0 && kw > 0 ? "hybrid" : usedSemantic && sem > 0 ? "semantic" : "keyword";
     return { r, score, method };

@@ -28,15 +28,26 @@ function makeEvidence(input: {
   claimType: string;
   evidenceText: string;
   metadata: Record<string, unknown>;
+  /** Prefer the source record so UI deep-links resolve. */
+  entityType?: string;
+  entityId?: string;
 }): EvidenceDto {
   const now = new Date().toISOString();
+  const relatedType =
+    typeof input.metadata.relatedEntityType === "string"
+      ? input.metadata.relatedEntityType
+      : null;
+  const relatedId =
+    typeof input.metadata.relatedEntityId === "string"
+      ? input.metadata.relatedEntityId
+      : null;
   return {
     id: newEvidenceId(),
-    entityType: "query_answer",
-    entityId: "ephemeral",
+    entityType: input.entityType ?? relatedType ?? "query_answer",
+    entityId: input.entityId ?? relatedId ?? "ephemeral",
     claimType: input.claimType,
     sourceCaptureId: null,
-    sourceRecordId: null,
+    sourceRecordId: relatedId,
     evidenceText: input.evidenceText,
     evidenceMetadata: input.metadata,
     fileName: null,
@@ -77,14 +88,20 @@ export async function queryRecallForUser(
 
   if (waitingItems.length > 0) {
     for (const w of waitingItems.slice(0, 6)) {
+      // Waiting ids are "note:uuid" / "knowledge:uuid" / "task:uuid".
+      const bareId = w.id.includes(":") ? w.id.slice(w.id.indexOf(":") + 1) : w.id;
       evidence.push(
         makeEvidence({
           claimType: "summary_based_on",
           evidenceText: `${w.person}: ${w.item} — ${w.evidenceText}`,
+          entityType: w.sourceType,
+          entityId: bareId,
           metadata: {
             relatedEntityType: w.sourceType,
-            relatedEntityId: w.id,
+            relatedEntityId: bareId,
             person: w.person,
+            personName: w.person,
+            personId: w.personId,
             days: w.days,
             retrievalMethod: "waiting_on",
           },
@@ -127,16 +144,23 @@ export async function queryRecallForUser(
 
   if (waitingItems.length === 0) {
     for (const rec of relevant.slice(0, 5)) {
+      const personMeta =
+        rec.entityType === "person"
+          ? { personId: rec.entityId, personName: rec.title, person: rec.title }
+          : {};
       evidence.push(
         makeEvidence({
           claimType: "summary_based_on",
           evidenceText: rec.text.slice(0, 500),
+          entityType: rec.entityType,
+          entityId: rec.entityId,
           metadata: {
             relatedEntityType: rec.entityType,
             relatedEntityId: rec.entityId,
             retrievalScore: Number(rec.score.toFixed(4)),
             retrievalMethod: rec.method,
             usedSemantic,
+            ...personMeta,
           },
         }),
       );
@@ -145,11 +169,14 @@ export async function queryRecallForUser(
 
   const relatedRecords =
     waitingItems.length > 0
-      ? waitingItems.map((w) => ({
-          entityType: w.sourceType,
-          entityId: w.id,
-          title: `${w.person}: ${w.item}`,
-        }))
+      ? waitingItems.map((w) => {
+          const bareId = w.id.includes(":") ? w.id.slice(w.id.indexOf(":") + 1) : w.id;
+          return {
+            entityType: w.sourceType,
+            entityId: bareId,
+            title: `${w.person}: ${w.item}`,
+          };
+        })
       : relevant.map((r) => ({
           entityType: r.entityType,
           entityId: r.entityId,
@@ -158,12 +185,15 @@ export async function queryRecallForUser(
 
   const contextRecords =
     waitingItems.length > 0
-      ? waitingItems.map((w) => ({
-          entityType: w.sourceType,
-          entityId: w.id,
-          title: `${w.person}: ${w.item}`,
-          text: `${w.followUp}. ${w.evidenceText}${w.days ? ` (${w.days}d)` : ""}`,
-        }))
+      ? waitingItems.map((w) => {
+          const bareId = w.id.includes(":") ? w.id.slice(w.id.indexOf(":") + 1) : w.id;
+          return {
+            entityType: w.sourceType,
+            entityId: bareId,
+            title: `${w.person}: ${w.item}`,
+            text: `${w.followUp}. ${w.evidenceText}${w.days ? ` (${w.days}d)` : ""}`,
+          };
+        })
       : relevant.map((r) => ({
           entityType: r.entityType,
           entityId: r.entityId,

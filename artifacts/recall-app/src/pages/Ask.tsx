@@ -214,7 +214,15 @@ export function Ask() {
                 ) : (
                   <div className="space-y-2">
                     {answer.evidence.map((ev) => {
-                      const href = entityPath(ev.entityType, ev.entityId);
+                      const relatedType =
+                        typeof ev.evidenceMetadata?.relatedEntityType === "string"
+                          ? ev.evidenceMetadata.relatedEntityType
+                          : ev.entityType;
+                      const relatedId =
+                        typeof ev.evidenceMetadata?.relatedEntityId === "string"
+                          ? ev.evidenceMetadata.relatedEntityId
+                          : ev.entityId;
+                      const href = entityPath(relatedType, relatedId);
                       const personId =
                         typeof ev.evidenceMetadata?.personId === "string"
                           ? ev.evidenceMetadata.personId
@@ -235,7 +243,7 @@ export function Ask() {
                           {typeof ev.evidenceMetadata?.retrievalMethod === "string"
                             ? ` · ${ev.evidenceMetadata.retrievalMethod}`
                             : ""}
-                          {` · ${ev.entityType}`}
+                          {` · ${relatedType}`}
                         </p>
                         {ev.evidenceText && (
                           <p className="mt-2 whitespace-pre-wrap text-sm text-white/75">
@@ -248,7 +256,7 @@ export function Ask() {
                               href={href}
                               className="text-xs text-indigo-300 no-underline hover:underline"
                             >
-                              Open {ev.entityType}
+                              Open {relatedType}
                             </Link>
                           )}
                           {personName && (
