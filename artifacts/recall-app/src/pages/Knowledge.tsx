@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation } from "wouter";
+import { useLocation } from "wouter";
 import { BookMarked, Plus, X } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import {
