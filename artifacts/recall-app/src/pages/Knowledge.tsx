@@ -15,7 +15,7 @@ import {
 } from "@/components/PersonTagLink";
 import { PersonTagger } from "@/components/PersonTagger";
 import { toast } from "@/hooks/use-toast";
-import { knowledgePath, peoplePath, readSearchParam } from "@/lib/recall-nav";
+import { askPath, knowledgePath, peoplePath, readSearchParam } from "@/lib/recall-nav";
 
 const ITEM_TYPES = ["note", "procedure", "reference", "snippet", "contact"] as const;
 
@@ -183,6 +183,19 @@ export function Knowledge() {
                 <span className="font-medium">{personFilter}</span>
               </span>
               <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate(
+                      askPath({
+                        q: `What do I know about ${personFilter}? What am I waiting on from them?`,
+                      }),
+                    )
+                  }
+                  className="rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
+                >
+                  Ask
+                </button>
                 <button
                   type="button"
                   onClick={() => {

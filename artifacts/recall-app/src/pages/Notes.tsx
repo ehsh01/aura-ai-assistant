@@ -16,7 +16,7 @@ import {
   type NotebookFilter,
   type RecallNote,
 } from "@/lib/recall-context";
-import { notesPath, peoplePath, readSearchParam } from "@/lib/recall-nav";
+import { askPath, notesPath, peoplePath, readSearchParam } from "@/lib/recall-nav";
 import { importEvernoteFiles } from "@/lib/evernote-import-ui";
 import { NoteRichContent } from "@/components/NoteRichContent";
 import {
@@ -349,6 +349,19 @@ export function Notes() {
                   <span className="font-medium">{personFilter}</span>
                 </span>
                 <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigate(
+                        askPath({
+                          q: `What do I know about ${personFilter}? What am I waiting on from them?`,
+                        }),
+                      )
+                    }
+                    className="rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
+                  >
+                    Ask
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
