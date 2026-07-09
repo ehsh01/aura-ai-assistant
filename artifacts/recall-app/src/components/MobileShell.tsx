@@ -59,6 +59,7 @@ type MobileBottomNavProps = {
   onCapture: () => void;
   onOpenMore: () => void;
   moreActive: boolean;
+  queuedCaptures?: number;
 };
 
 export function MobileBottomNav({
@@ -66,6 +67,7 @@ export function MobileBottomNav({
   onCapture,
   onOpenMore,
   moreActive,
+  queuedCaptures = 0,
 }: MobileBottomNavProps) {
   return (
     <nav
@@ -93,15 +95,24 @@ export function MobileBottomNav({
           );
         })}
 
-        <div className="flex flex-col items-center justify-end pb-1">
+        <div className="relative flex flex-col items-center justify-end pb-1">
           <button
             type="button"
             onClick={onCapture}
             className="flex h-14 w-14 -translate-y-3 items-center justify-center rounded-full bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 active:scale-95 transition-transform"
-            aria-label="Capture"
+            aria-label={
+              queuedCaptures > 0
+                ? `Capture (${queuedCaptures} waiting to sync)`
+                : "Capture"
+            }
           >
             <Plus size={26} strokeWidth={2.2} />
           </button>
+          {queuedCaptures > 0 && (
+            <span className="absolute right-2 top-0 flex h-5 min-w-5 -translate-y-1 items-center justify-center rounded-full bg-amber-400 px-1 text-[10px] font-bold text-black tabular-nums">
+              {queuedCaptures > 9 ? "9+" : queuedCaptures}
+            </span>
+          )}
         </div>
 
         <Link

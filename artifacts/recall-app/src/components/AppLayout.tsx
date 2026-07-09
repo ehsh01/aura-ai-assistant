@@ -3,9 +3,11 @@ import { Link, useLocation } from "wouter";
 import { BookOpen, Inbox, Library, Plus, FolderKanban, Sparkles, FileText, BookMarked, Activity } from "lucide-react";
 import { CaptureModal } from "@/components/CaptureModal";
 import { MobileBottomNav, MobileMoreSheet } from "@/components/MobileShell";
+import { OfflineQueueBanner } from "@/components/OfflineQueueBanner";
 import { RecallLogo } from "@/components/RecallLogo";
 import { useAuth } from "@/context/AuthContext";
 import { useRecallData } from "@/context/RecallDataContext";
+import { subscribeCaptureQueue } from "@/lib/capture-queue";
 import { notesPath, readSearchParam } from "@/lib/recall-nav";
 
 interface AppLayoutProps {
@@ -190,6 +192,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   const [captureOpen, setCaptureOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [sidebarQuery, setSidebarQuery] = useState("");
+  const [queuedCaptures, setQueuedCaptures] = useState(0);
   const sidebarSearchRef = useRef<HTMLInputElement>(null);
   const [location, navigate] = useLocation();
   const { user, logout } = useAuth();
@@ -198,6 +201,8 @@ export function AppLayout({ children }: AppLayoutProps) {
   const onNotesPage = location === "/notes";
   const activeNotebook = onNotesPage ? readSearchParam("notebook") ?? "all" : "all";
   const [notebooksExpanded, setNotebooksExpanded] = useState(false);
+
+  useEffect(() => subscribeCaptureQueue(setQueuedCaptures), []);
 
   React.useEffect(() => {
     if (location === "/notebooks" || (onNotesPage && activeNotebook !== "all")) {
@@ -463,6 +468,7 @@ export function AppLayout({ children }: AppLayoutProps) {
       </aside>
 
       <main className="flex-1 overflow-hidden flex flex-col min-w-0 pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:pb-0">
+        <OfflineQueueBanner />
         {children}
       </main>
       <button
@@ -474,12 +480,18 @@ export function AppLayout({ children }: AppLayoutProps) {
       >
         <Plus size={18} />
         Capture
+        {queuedCaptures > 0 && (
+          <span className="ml-0.5 rounded-full bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold text-black tabular-nums">
+            {queuedCaptures > 9 ? "9+" : queuedCaptures}
+          </span>
+        )}
       </button>
       <MobileBottomNav
         location={location}
         onCapture={() => setCaptureOpen(true)}
         onOpenMore={() => setMoreOpen(true)}
         moreActive={moreActive}
+        queuedCaptures={queuedCaptures}
       />
       <MobileMoreSheet
         open={moreOpen}

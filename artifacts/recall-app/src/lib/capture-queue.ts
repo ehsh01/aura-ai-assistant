@@ -1,6 +1,7 @@
 import { ingestCapture } from "@/lib/recall-api";
 
 const QUEUE_KEY = "recall_capture_queue_v1";
+const QUEUE_EVENT = "recall:capture-queue";
 
 export type QueuedCapture = {
   id: string;
@@ -26,6 +27,34 @@ function readQueue(): QueuedCapture[] {
 
 function writeQueue(items: QueuedCapture[]): void {
   localStorage.setItem(QUEUE_KEY, JSON.stringify(items));
+  notifyQueueChanged(items.length);
+}
+
+function notifyQueueChanged(count: number): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(QUEUE_EVENT, { detail: { count } }),
+  );
+}
+
+/** Subscribe to offline queue size changes. Returns unsubscribe. */
+export function subscribeCaptureQueue(
+  onChange: (count: number) => void,
+): () => void {
+  const handler = (e: Event) => {
+    const detail = (e as CustomEvent<{ count: number }>).detail;
+    onChange(typeof detail?.count === "number" ? detail.count : getQueuedCaptureCount());
+  };
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === QUEUE_KEY) onChange(getQueuedCaptureCount());
+  };
+  window.addEventListener(QUEUE_EVENT, handler);
+  window.addEventListener("storage", onStorage);
+  onChange(getQueuedCaptureCount());
+  return () => {
+    window.removeEventListener(QUEUE_EVENT, handler);
+    window.removeEventListener("storage", onStorage);
+  };
 }
 
 function newId(): string {

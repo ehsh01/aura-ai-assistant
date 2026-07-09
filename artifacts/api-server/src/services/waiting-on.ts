@@ -27,16 +27,35 @@ function daysSince(iso?: string | null): number {
   return Math.max(0, Math.floor((Date.now() - t) / 86_400_000));
 }
 
-function extractPerson(text: string, peopleNames: string[]): string {
-  // Prefer known people names that appear in the text.
+const NON_NAME =
+  /^(Still|Need|Needs|Waiting|Follow|Pending|Quote|Reply|Response|Call|Email|The|This|That|Before|After|Until|About|From|With|For)$/;
+
+/** Exported for unit tests — prefer known people, then from/with/for names. */
+export function extractPerson(text: string, peopleNames: string[]): string {
+  // Prefer known people: full name, then first-name word match.
   const lower = text.toLowerCase();
   for (const name of peopleNames) {
-    if (name.length >= 2 && lower.includes(name.toLowerCase())) return name;
+    const n = name.trim();
+    if (n.length < 2) continue;
+    if (lower.includes(n.toLowerCase())) return n;
   }
-  const from = text.match(/\b(?:from|with|for)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/);
-  if (from?.[1]) return from[1];
+  for (const name of peopleNames) {
+    const first = name.trim().split(/\s+/)[0] ?? "";
+    if (first.length < 2 || NON_NAME.test(first)) continue;
+    if (new RegExp(`\\b${first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text)) {
+      return name.trim();
+    }
+  }
+  // Prefer a single capitalized token after from/with/for — two-word names
+  // often swallow the next sentence word ("Mike Still need…").
+  const from = text.match(/\b(?:from|with|for)\s+([A-Z][a-z]+)(?:\s+([A-Z][a-z]+))?/);
+  if (from?.[1] && !NON_NAME.test(from[1])) {
+    if (from[2] && !NON_NAME.test(from[2])) return `${from[1]} ${from[2]}`;
+    return from[1];
+  }
   const bare = text.match(/\b([A-Z][a-z]{2,})\b/);
-  return bare?.[1] ?? "Someone";
+  if (bare?.[1] && !NON_NAME.test(bare[1])) return bare[1];
+  return "Someone";
 }
 
 function matchPersonId(
