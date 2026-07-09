@@ -220,7 +220,13 @@ export function Knowledge() {
                     <p className="mt-1 line-clamp-2 text-sm text-white/50">{item.content || "No content."}</p>
                     {item.tags.length > 0 && (
                       <div className="mt-2" onClick={(e) => e.stopPropagation()}>
-                        <NoteTagList tags={item.tags} limit={6} />
+                        <NoteTagList
+                          tags={item.tags}
+                          limit={6}
+                          onPersonClick={(name) =>
+                            navigate(knowledgePath({ person: name }))
+                          }
+                        />
                       </div>
                     )}
                   </div>

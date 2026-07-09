@@ -422,6 +422,7 @@ export function Notes() {
                   onClick={() => {
                     setActiveTag("All");
                     setSearchQuery("");
+                    setPersonFilter(null);
                     setSemanticMatchIds(null);
                     setActiveNotebook("all");
                     navigate(notesPath());
