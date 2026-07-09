@@ -34,21 +34,33 @@ export const financeApiConnector: RecallConnector = {
   },
 };
 
+/**
+ * Build the transactions endpoint URL, preserving the base path.
+ *
+ * A leading-slash URL argument (e.g. `new URL("/transactions", base)`) would
+ * drop the "/api/v1" prefix, so we append to the trimmed base instead.
+ */
+export function buildFinanceUrl(
+  baseUrl: string,
+  params?: { startDate?: string; endDate?: string },
+): string {
+  const url = new URL(`${baseUrl.replace(/\/$/, "")}/transactions`);
+  if (params?.startDate) url.searchParams.set("startDate", params.startDate);
+  if (params?.endDate) url.searchParams.set("endDate", params.endDate);
+  return url.toString();
+}
+
 export async function fetchFinanceTransactions(
   baseUrl: string,
   apiKey: string | null,
   params?: { startDate?: string; endDate?: string },
 ): Promise<FinanceTransaction[]> {
-  // Append to the base path (e.g. https://host/api/v1) rather than replacing
-  // it — a leading-slash URL argument would drop the "/api/v1" prefix.
-  const url = new URL(`${baseUrl.replace(/\/$/, "")}/transactions`);
-  if (params?.startDate) url.searchParams.set("startDate", params.startDate);
-  if (params?.endDate) url.searchParams.set("endDate", params.endDate);
+  const url = buildFinanceUrl(baseUrl, params);
 
   const headers: Record<string, string> = { Accept: "application/json" };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-  const res = await fetch(url.toString(), { headers });
+  const res = await fetch(url, { headers });
   if (!res.ok) {
     throw new Error(`Finance API error: ${res.status} ${res.statusText}`);
   }

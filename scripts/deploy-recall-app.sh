@@ -22,6 +22,9 @@ echo "==> Install & build"
 command -v pnpm >/dev/null || npm install -g pnpm@9
 pnpm install
 
+echo "==> Test gate (api-server unit tests)"
+pnpm --filter "./artifacts/api-server" run test
+
 echo "==> Database migrations (idempotent)"
 ENV_FILE="artifacts/api-server/.env"
 if [ -f "$ENV_FILE" ]; then
@@ -67,6 +70,11 @@ if [ ! -d "/etc/letsencrypt/live/recall-app.net" ]; then
 fi
 
 echo "==> Verify"
+# Give PM2 a moment to boot the API before probing health.
+for i in 1 2 3 4 5; do
+  if curl -sSf "http://127.0.0.1:$API_PORT/api/healthz" >/dev/null 2>&1; then break; fi
+  sleep 2
+done
 curl -sS "http://127.0.0.1:$API_PORT/api/healthz" && echo ""
 curl -sk -H "Host: recall-app.net" https://127.0.0.1/ | grep -o '<title>[^<]*</title>' || true
 echo "Done. Purge Cloudflare cache for recall-app.net if the browser still shows ABA."

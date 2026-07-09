@@ -131,3 +131,32 @@ recall-app.net (Cloudflare)
 ```
 
 Frontend uses same-origin `/api/...` (no `VITE_API_BASE_URL` needed when nginx proxies as above).
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push/PR to `main` and gates changes on:
+
+- `pnpm run typecheck` (all packages)
+- `pnpm --filter "./artifacts/api-server" run test` (Vitest unit tests)
+
+`scripts/deploy-recall-app.sh` also runs the api-server test suite as a gate before building, so a broken build never reaches production.
+
+## Auto-deploy on push
+
+`.github/workflows/deploy-recall-app.yml` deploys automatically when `main` changes under `artifacts/**`, `lib/**`, or the deploy script (and still supports manual `workflow_dispatch`).
+
+**Required GitHub secret:** `DEPLOY_SSH_KEY` — a private key whose public half is in the droplet's `~/.ssh/authorized_keys`. Without it the job safely no-ops. Add it under **Settings → Secrets and variables → Actions**. The matching public key is `~/.ssh/id_recall_deploy.pub` locally.
+
+## Database backups
+
+`scripts/backup-recall-db.sh` writes a compressed, timestamped `pg_dump` to `/var/backups/recall/` and keeps the newest 14. Schedule it via cron on the droplet:
+
+```bash
+15 3 * * * bash /var/www/recall-app/scripts/backup-recall-db.sh >> /var/log/recall-backup.log 2>&1
+```
+
+Restore with:
+
+```bash
+gunzip -c /var/backups/recall/recall-YYYYmmdd-HHMMSS.sql.gz | psql "$DATABASE_URL"
+```
