@@ -66,7 +66,9 @@ export function People() {
     notes: "",
   });
   const [savingEdit, setSavingEdit] = useState(false);
+  const [relatedLoadingId, setRelatedLoadingId] = useState<string | null>(null);
   const personRefs = useRef<Record<string, HTMLElement | null>>({});
+  const relatedLoaded = useRef<Record<string, true>>({});
 
   const load = async () => {
     setLoading(true);
@@ -74,41 +76,49 @@ export function People() {
       const [peopleRes, waitingRes] = await Promise.all([listPeople(), listWaitingOn()]);
       setPeople(peopleRes.people);
       setWaiting(waitingRes.items);
-      const related = await Promise.all(
-        peopleRes.people.map(async (p) => {
-          try {
-            const r = await getPersonRelated(p.id);
-            return [
-              p.id,
-              r.openTasks,
-              r.taggedNotes ?? ([] as TaggedNote[]),
-              r.taggedKnowledge ?? ([] as TaggedKnowledge[]),
-            ] as const;
-          } catch {
-            return [
-              p.id,
-              [] as OpenTask[],
-              [] as TaggedNote[],
-              [] as TaggedKnowledge[],
-            ] as const;
-          }
-        }),
-      );
-      setOpenByPerson(Object.fromEntries(related.map(([id, tasks]) => [id, tasks])));
-      setNotesByPerson(
-        Object.fromEntries(related.map(([id, , notes]) => [id, notes])),
-      );
-      setKnowledgeByPerson(
-        Object.fromEntries(related.map(([id, , , knowledge]) => [id, knowledge])),
-      );
+      relatedLoaded.current = {};
+      setOpenByPerson({});
+      setNotesByPerson({});
+      setKnowledgeByPerson({});
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadRelated = async (personId: string) => {
+    if (relatedLoaded.current[personId]) return;
+    setRelatedLoadingId(personId);
+    try {
+      const r = await getPersonRelated(personId);
+      relatedLoaded.current[personId] = true;
+      setOpenByPerson((prev) => ({ ...prev, [personId]: r.openTasks }));
+      setNotesByPerson((prev) => ({
+        ...prev,
+        [personId]: r.taggedNotes ?? [],
+      }));
+      setKnowledgeByPerson((prev) => ({
+        ...prev,
+        [personId]: r.taggedKnowledge ?? [],
+      }));
+    } catch {
+      relatedLoaded.current[personId] = true;
+      setOpenByPerson((prev) => ({ ...prev, [personId]: [] }));
+      setNotesByPerson((prev) => ({ ...prev, [personId]: [] }));
+      setKnowledgeByPerson((prev) => ({ ...prev, [personId]: [] }));
+    } finally {
+      setRelatedLoadingId((cur) => (cur === personId ? null : cur));
     }
   };
 
   useEffect(() => {
     void load();
   }, []);
+
+  // Lazy-load related tasks/notes when a person is expanded.
+  useEffect(() => {
+    if (!selectedId) return;
+    void loadRelated(selectedId);
+  }, [selectedId]);
 
   // Deep-link from Today / elsewhere: /people?person=<id>
   useEffect(() => {
@@ -364,29 +374,11 @@ export function People() {
                       {person.email && <p>{person.email}</p>}
                       {person.organization && <p>{person.organization}</p>}
                       {person.role && <p>{person.role}</p>}
-                      {!isSelected &&
-                        (personWaiting.length > 0 ||
-                          openTasks.length > 0 ||
-                          taggedNotes.length > 0 ||
-                          taggedKnowledge.length > 0) && (
+                      {!isSelected && (
                         <p className="pt-1 text-xs text-white/35">
-                          {[
-                            openTasks.length > 0
-                              ? `${openTasks.length} open task${openTasks.length === 1 ? "" : "s"}`
-                              : null,
-                            taggedNotes.length > 0
-                              ? `${taggedNotes.length} note${taggedNotes.length === 1 ? "" : "s"}`
-                              : null,
-                            taggedKnowledge.length > 0
-                              ? `${taggedKnowledge.length} knowledge`
-                              : null,
-                            personWaiting.length > 0
-                              ? `${personWaiting.length} waiting`
-                              : null,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
-                          {" · tap to expand"}
+                          {personWaiting.length > 0
+                            ? `${personWaiting.length} waiting · tap to expand`
+                            : "Tap to expand"}
                         </p>
                       )}
                     </div>
@@ -421,6 +413,9 @@ export function People() {
                           {editing ? "Cancel" : "Edit"}
                         </button>
                       </div>
+                      {relatedLoadingId === person.id && (
+                        <p className="text-xs text-white/40">Loading related records…</p>
+                      )}
 
                       {editing && (
                         <div className="space-y-2 rounded-xl border border-white/10 bg-black/20 p-3">
