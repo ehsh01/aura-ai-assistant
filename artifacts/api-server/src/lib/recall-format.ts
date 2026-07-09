@@ -32,6 +32,10 @@ export function newEvidenceId(): string {
   return `ev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function newEmbeddingId(): string {
+  return `emb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function newAiExtractionId(): string {
   return `aix-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

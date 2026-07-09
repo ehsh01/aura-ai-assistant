@@ -16,3 +16,4 @@ export * from "./source-records";
 export * from "./documents";
 export * from "./knowledge-items";
 export * from "./audit-log";
+export * from "./entity-embeddings";
