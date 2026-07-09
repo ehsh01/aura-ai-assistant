@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { generateWorkNote, listProjects } from "@workspace/api-client-react";
-import { ingestCapture } from "@/lib/recall-api";
+import { ingestCaptureReliable } from "@/lib/capture-queue";
 import { MicButton } from "@/components/MicButton";
 import { useRecallData } from "@/context/RecallDataContext";
 import { toast } from "@/hooks/use-toast";
@@ -95,15 +95,17 @@ export function CaptureModal({ open, onClose }: Props) {
     if (!rawText || saving) return;
     setSaving(true);
     try {
-      await ingestCapture({
+      const result = await ingestCaptureReliable({
         rawText,
         sourceType: "manual",
         sourceName: "Capture Modal",
         title: firstLineTitle(text),
       });
       toast({
-        title: "Sent to AI Inbox",
-        description: "Raw capture stored. Recall is processing it in the background.",
+        title: result.queued ? "Saved offline" : "Sent to AI Inbox",
+        description: result.queued
+          ? "Will sync to AI Inbox when you're back online."
+          : "Raw capture stored. Recall is processing it in the background.",
       });
       close();
     } catch {

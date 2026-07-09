@@ -22,6 +22,8 @@ import {
   setStoredToken,
 } from "@/lib/auth-storage";
 import { isAppPath, normalizeBrowserPath, pathnameOnly } from "@/lib/app-path";
+import { startCaptureQueueSync } from "@/lib/capture-queue";
+import { toast } from "@/hooks/use-toast";
 
 interface AuthContextValue {
   user: User | null;
@@ -73,6 +75,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!user) return;
     syncPathAfterAuth();
   }, [user, syncPathAfterAuth]);
+
+  // Flush offline captures when the device comes back online.
+  useEffect(() => {
+    if (!user) return;
+    return startCaptureQueueSync((result) => {
+      toast({
+        title: "Queued captures synced",
+        description: `${result.sent} capture${result.sent === 1 ? "" : "s"} sent to AI Inbox.`,
+      });
+    });
+  }, [user]);
 
   const login = useCallback(
     async (data: LoginRequest) => {

@@ -5,11 +5,11 @@ import { AppLayout } from "@/components/AppLayout";
 import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
   fetchHome,
-  ingestCapture,
   queryRecall,
   type EvidenceRecord,
   type HomeBriefingResponse,
 } from "@/lib/recall-api";
+import { ingestCaptureReliable } from "@/lib/capture-queue";
 import { useAuth } from "@/context/AuthContext";
 import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
@@ -134,18 +134,24 @@ export function Dashboard() {
     const body = text.trim();
     if (!body) return;
     try {
-      // Async capture pipeline: stores the raw capture and queues AI extraction.
-      await ingestCapture({
+      const result = await ingestCaptureReliable({
         rawText: body,
         sourceType: "manual",
         title: firstLineTitle(body),
       });
-      toast({
-        title: "Sent to AI Inbox",
-        description: "Recall is analyzing it — check the inbox in a moment.",
-      });
-      refreshCaptures();
-      refreshHome();
+      if (result.queued) {
+        toast({
+          title: "Saved offline",
+          description: "Will sync to AI Inbox when you're back online.",
+        });
+      } else {
+        toast({
+          title: "Sent to AI Inbox",
+          description: "Recall is analyzing it — check the inbox in a moment.",
+        });
+        refreshCaptures();
+        refreshHome();
+      }
     } catch {
       toast({ title: "Could not send to inbox", variant: "destructive" });
     }
