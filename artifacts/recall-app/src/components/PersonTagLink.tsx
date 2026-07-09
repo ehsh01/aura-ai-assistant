@@ -25,6 +25,12 @@ function loadPeople(): Promise<PersonRecord[]> {
   return peoplePromise;
 }
 
+/** Call after creating/updating people so tag links resolve fresh names. */
+export function invalidatePeopleCache(): void {
+  peopleCache = null;
+  peoplePromise = null;
+}
+
 export function parsePersonTag(tag: string): string | null {
   const m = tag.match(PERSON_TAG);
   return m?.[1]?.trim() || null;
@@ -34,15 +40,18 @@ export function parsePersonTag(tag: string): string | null {
 export function PersonTagLink({
   tag,
   className = "",
+  /** When set, click filters/handles locally instead of navigating to People. */
+  onPersonClick,
 }: {
   tag: string;
   className?: string;
+  onPersonClick?: (name: string) => void;
 }) {
   const name = parsePersonTag(tag);
   const [personId, setPersonId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!name) return;
+    if (!name || onPersonClick) return;
     let cancelled = false;
     void loadPeople().then((people) => {
       if (cancelled) return;
@@ -58,7 +67,7 @@ export function PersonTagLink({
     return () => {
       cancelled = true;
     };
-  }, [name]);
+  }, [name, onPersonClick]);
 
   if (!name) {
     return (
@@ -68,13 +77,30 @@ export function PersonTagLink({
     );
   }
 
+  const chipClass =
+    className ||
+    "inline-flex items-center gap-1 rounded-md border border-sky-500/25 bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-200 no-underline hover:bg-sky-500/20";
+
+  if (onPersonClick) {
+    return (
+      <button
+        type="button"
+        className={chipClass}
+        onClick={(e) => {
+          e.stopPropagation();
+          onPersonClick(name);
+        }}
+      >
+        <User size={10} />
+        {name}
+      </button>
+    );
+  }
+
   return (
     <Link
       href={personId ? peoplePath({ personId }) : peoplePath()}
-      className={
-        className ||
-        "inline-flex items-center gap-1 rounded-md border border-sky-500/25 bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-200 no-underline hover:bg-sky-500/20"
-      }
+      className={chipClass}
       onClick={(e) => e.stopPropagation()}
     >
       <User size={10} />
@@ -83,13 +109,21 @@ export function PersonTagLink({
   );
 }
 
-export function NoteTagList({ tags, limit = 4 }: { tags: string[]; limit?: number }) {
+export function NoteTagList({
+  tags,
+  limit = 4,
+  onPersonClick,
+}: {
+  tags: string[];
+  limit?: number;
+  onPersonClick?: (name: string) => void;
+}) {
   if (tags.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-1.5">
       {tags.slice(0, limit).map((tag) =>
         parsePersonTag(tag) ? (
-          <PersonTagLink key={tag} tag={tag} />
+          <PersonTagLink key={tag} tag={tag} onPersonClick={onPersonClick} />
         ) : (
           <span
             key={tag}

@@ -438,7 +438,14 @@ export function Notes() {
                 <h3 className="text-[11px] font-semibold text-white/30 uppercase tracking-wider px-1">Pinned</h3>
                 <div className="space-y-2">
                   {pinnedNotes.map((note, i) => (
-                    <NoteCard key={note.id} note={note} isActive={activeNoteId === note.id} onClick={() => setActiveNoteId(note.id)} index={i} />
+                    <NoteCard
+                      key={note.id}
+                      note={note}
+                      isActive={activeNoteId === note.id}
+                      onClick={() => setActiveNoteId(note.id)}
+                      onPersonClick={(name) => navigate(notesPath({ person: name }))}
+                      index={i}
+                    />
                   ))}
                 </div>
               </div>
@@ -449,7 +456,14 @@ export function Notes() {
                 <h3 className="text-[11px] font-semibold text-white/30 uppercase tracking-wider px-1">Recent</h3>
                 <div className="space-y-2">
                   {recentNotes.map((note, i) => (
-                    <NoteCard key={note.id} note={note} isActive={activeNoteId === note.id} onClick={() => setActiveNoteId(note.id)} index={i + pinnedNotes.length} />
+                    <NoteCard
+                      key={note.id}
+                      note={note}
+                      isActive={activeNoteId === note.id}
+                      onClick={() => setActiveNoteId(note.id)}
+                      onPersonClick={(name) => navigate(notesPath({ person: name }))}
+                      index={i + pinnedNotes.length}
+                    />
                   ))}
                 </div>
               </div>
@@ -649,11 +663,13 @@ function NoteCard({
   note,
   isActive,
   onClick,
+  onPersonClick,
   index,
 }: {
   note: RecallNote;
   isActive: boolean;
   onClick: () => void;
+  onPersonClick?: (name: string) => void;
   index: number;
 }) {
   return (
@@ -678,7 +694,7 @@ function NoteCard({
         {note.preview || "Empty note"}
       </p>
       <div className="flex items-center justify-between mt-auto gap-2">
-        <NoteTagList tags={note.tags} limit={2} />
+        <NoteTagList tags={note.tags} limit={2} onPersonClick={onPersonClick} />
         <span className="text-[10px] text-white/30 flex-shrink-0 ml-2">{note.date}</span>
       </div>
     </button>

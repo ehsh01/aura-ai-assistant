@@ -19,6 +19,7 @@ import {
   readSearchParam,
   tasksPath,
 } from "@/lib/recall-nav";
+import { invalidatePeopleCache } from "@/components/PersonTagLink";
 import { toast } from "@/hooks/use-toast";
 import { Pencil, Sparkles } from "lucide-react";
 
@@ -144,6 +145,7 @@ export function People() {
       });
       setName("");
       setEmail("");
+      invalidatePeopleCache();
       await load();
       setSelectedId(created.id);
       navigate(peoplePath({ personId: created.id }));
@@ -208,6 +210,7 @@ export function People() {
         notes: editForm.notes.trim() || null,
       });
       setEditing(false);
+      invalidatePeopleCache();
       await load();
       toast({ title: "Contact updated" });
     } catch {
