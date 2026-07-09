@@ -39,6 +39,7 @@ export function People() {
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [query, setQuery] = useState("");
   const [creatingId, setCreatingId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
@@ -178,6 +179,22 @@ export function People() {
   };
 
   const selected = people.find((p) => p.id === selectedId) ?? null;
+  const q = query.trim().toLowerCase();
+  const filteredPeople = q
+    ? people.filter((p) => {
+        const hay = [
+          p.displayName,
+          p.email,
+          p.organization,
+          p.role,
+          p.notes,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return hay.includes(q);
+      })
+    : people;
 
   return (
     <AppLayout>
@@ -188,6 +205,13 @@ export function People() {
           <p className="mt-2 text-white/50">
             Contacts plus what you&apos;re waiting on from them — tap a person to see linked tasks.
           </p>
+
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search people…"
+            className="mt-5 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm outline-none focus:border-indigo-500/40"
+          />
 
           <section className="mt-8">
             <div className="mb-3 flex items-center justify-between gap-3">
@@ -277,7 +301,10 @@ export function People() {
                 No people yet. Accept an Inbox item that mentions someone, or add a contact above.
               </p>
             )}
-            {people.map((person) => {
+            {!loading && people.length > 0 && filteredPeople.length === 0 && (
+              <p className="text-white/45">No people match “{query.trim()}”.</p>
+            )}
+            {filteredPeople.map((person) => {
               const openTasks = openByPerson[person.id] ?? [];
               const personWaiting = waitingForPerson(waiting, person);
               const isSelected = selected?.id === person.id;
