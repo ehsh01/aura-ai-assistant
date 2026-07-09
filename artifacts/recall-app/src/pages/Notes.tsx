@@ -19,7 +19,11 @@ import {
 import { notesPath, peoplePath, readSearchParam } from "@/lib/recall-nav";
 import { importEvernoteFiles } from "@/lib/evernote-import-ui";
 import { NoteRichContent } from "@/components/NoteRichContent";
-import { NoteTagList, parsePersonTag } from "@/components/PersonTagLink";
+import {
+  NoteTagList,
+  parsePersonTag,
+  resolvePersonIdByName,
+} from "@/components/PersonTagLink";
 import { PersonTagger } from "@/components/PersonTagger";
 import { Download, Loader2, BookOpen, ChevronDown, Sparkles, ChevronLeft, X } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -347,7 +351,11 @@ export function Notes() {
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
-                    onClick={() => navigate(peoplePath())}
+                    onClick={() => {
+                      void resolvePersonIdByName(personFilter).then((id) => {
+                        navigate(id ? peoplePath({ personId: id }) : peoplePath());
+                      });
+                    }}
                     className="rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
                   >
                     People

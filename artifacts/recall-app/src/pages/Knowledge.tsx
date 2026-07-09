@@ -8,7 +8,11 @@ import {
   updateKnowledge,
   type KnowledgeRecord,
 } from "@/lib/recall-api";
-import { NoteTagList, parsePersonTag } from "@/components/PersonTagLink";
+import {
+  NoteTagList,
+  parsePersonTag,
+  resolvePersonIdByName,
+} from "@/components/PersonTagLink";
 import { PersonTagger } from "@/components/PersonTagger";
 import { toast } from "@/hooks/use-toast";
 import { knowledgePath, peoplePath, readSearchParam } from "@/lib/recall-nav";
@@ -181,7 +185,11 @@ export function Knowledge() {
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={() => navigate(peoplePath())}
+                  onClick={() => {
+                    void resolvePersonIdByName(personFilter).then((id) => {
+                      navigate(id ? peoplePath({ personId: id }) : peoplePath());
+                    });
+                  }}
                   className="rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
                 >
                   People

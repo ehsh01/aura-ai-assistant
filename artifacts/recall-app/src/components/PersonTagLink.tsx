@@ -36,6 +36,21 @@ export function parsePersonTag(tag: string): string | null {
   return m?.[1]?.trim() || null;
 }
 
+/** Resolve a display name to a People id when possible. */
+export async function resolvePersonIdByName(name: string): Promise<string | null> {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  const people = await loadPeople();
+  const lower = trimmed.toLowerCase();
+  const hit = people.find(
+    (p) =>
+      p.displayName.toLowerCase() === lower ||
+      p.displayName.toLowerCase().includes(lower) ||
+      lower.includes(p.displayName.toLowerCase()),
+  );
+  return hit?.id ?? null;
+}
+
 /** Renders a person:Name tag as a People deep-link when possible. */
 export function PersonTagLink({
   tag,
