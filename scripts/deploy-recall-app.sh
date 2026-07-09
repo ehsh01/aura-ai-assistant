@@ -34,9 +34,14 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 if [ -n "${DATABASE_URL:-}" ] && command -v psql >/dev/null; then
-  psql "$DATABASE_URL" -f lib/db/migrations/0002_capture_layer.sql
-  psql "$DATABASE_URL" -f lib/db/migrations/0003_evidence_and_platform.sql
-  psql "$DATABASE_URL" -f lib/db/migrations/0004_entity_embeddings.sql
+  for mig in \
+    lib/db/migrations/0002_capture_layer.sql \
+    lib/db/migrations/0003_evidence_and_platform.sql \
+    lib/db/migrations/0004_entity_embeddings.sql
+  do
+    echo "--> Applying $mig"
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$mig"
+  done
 else
   echo "WARN: Skipping migrations (DATABASE_URL unset or psql missing)"
 fi
