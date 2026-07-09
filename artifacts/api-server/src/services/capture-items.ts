@@ -82,6 +82,8 @@ export type AcceptCaptureInput = {
   tags?: string[];
   personId?: string | null;
   personName?: string | null;
+  /** Skip person linking even if text mentions a name. */
+  skipPerson?: boolean;
 };
 
 export type AcceptCaptureResult = {
@@ -103,6 +105,8 @@ export async function resolvePersonForAccept(
     personName?: string | null;
     title: string;
     rawText: string;
+    /** When true, do not auto-extract a person from text. */
+    skipPerson?: boolean;
   },
 ): Promise<PersonDto | null> {
   if (input.personId) {
@@ -112,6 +116,11 @@ export async function resolvePersonForAccept(
 
   const people = await listPeopleForUser(userId);
   const peopleNames = people.map((p) => p.displayName);
+
+  // Explicit empty / null personName means the user cleared the suggestion.
+  if (input.skipPerson || input.personName === null || input.personName === "") {
+    return null;
+  }
 
   const explicit = input.personName?.trim();
   if (explicit && explicit.toLowerCase() !== "someone") {
@@ -367,6 +376,7 @@ export async function acceptCaptureForUser(
     personName: input.personName,
     title,
     rawText: item.rawText,
+    skipPerson: input.skipPerson === true,
   });
   if (person) {
     const personTag = `person:${person.displayName}`;

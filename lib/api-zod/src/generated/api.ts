@@ -577,7 +577,8 @@ export const AcceptCaptureBody = zod.object({
   "notebookId": zod.string().nullish(),
   "tags": zod.array(zod.string()).optional(),
   "personId": zod.string().nullish().describe('Link the created task\/note to this person when known.'),
-  "personName": zod.string().nullish().describe('Resolve or create a person by display name on accept.')
+  "personName": zod.string().nullish().describe('Resolve or create a person by display name on accept. Empty\/null skips linking when skipPerson is also set, or when sent alone as a clear.'),
+  "skipPerson": zod.boolean().optional().describe('When true, do not auto-link a person from the capture text.')
 })
 
 export const AcceptCaptureResponse = zod.object({

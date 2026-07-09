@@ -21,6 +21,8 @@ export function Inbox() {
   const [items, setItems] = useState<RecallCaptureItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [evidenceTarget, setEvidenceTarget] = useState<RecallCaptureItem | null>(null);
+  /** Capture ids where the user cleared a wrong suggested person. */
+  const [clearedPerson, setClearedPerson] = useState<Record<string, true>>({});
 
   const load = async () => {
     setLoading(true);
@@ -36,11 +38,19 @@ export function Inbox() {
     void load();
   }, []);
 
-  const accept = async (item: RecallCaptureItem, linkPerson = true) => {
+  const personFor = (item: RecallCaptureItem): string | null => {
+    if (clearedPerson[item.id]) return null;
+    return item.suggestedPersonName ?? null;
+  };
+
+  const accept = async (item: RecallCaptureItem) => {
     try {
-      const body =
-        linkPerson && item.suggestedPersonName
-          ? { personName: item.suggestedPersonName }
+      const personName = personFor(item);
+      const cleared = Boolean(clearedPerson[item.id]);
+      const body = personName
+        ? { personName }
+        : cleared
+          ? { skipPerson: true, personName: null }
           : {};
       const res = await acceptCapture(item.id, body);
       await Promise.all([load(), reloadNotes(), reloadTasks()]);
@@ -110,7 +120,9 @@ export function Inbox() {
                 No pending captures. Use + Capture to send something here.
               </div>
             )}
-            {items.map((item) => (
+            {items.map((item) => {
+              const person = personFor(item);
+              return (
               <article key={item.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
@@ -127,10 +139,17 @@ export function Inbox() {
                           due {item.suggestedDueDate}
                         </span>
                       )}
-                      {item.suggestedPersonName && (
-                        <span className="rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-1 text-sky-200">
-                          → {item.suggestedPersonName}
-                        </span>
+                      {person && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setClearedPerson((prev) => ({ ...prev, [item.id]: true }))
+                          }
+                          title="Clear person link"
+                          className="rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-1 text-sky-200 hover:border-sky-400/40 hover:bg-sky-500/20"
+                        >
+                          → {person} ×
+                        </button>
                       )}
                     </div>
                   </div>
@@ -154,16 +173,14 @@ export function Inbox() {
                       onClick={() => void accept(item)}
                       className="rounded-xl bg-indigo-500 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-400"
                     >
-                      {item.suggestedPersonName
-                        ? `Accept · ${item.suggestedPersonName}`
-                        : "Accept"}
+                      {person ? `Accept · ${person}` : "Accept"}
                     </button>
                   </div>
                 </div>
-                {item.suggestedPersonName && (
+                {person && (
                   <p className="mt-3 text-xs text-sky-200/70">
-                    Will link to <span className="font-medium text-sky-100">{item.suggestedPersonName}</span> on
-                    accept.
+                    Will link to <span className="font-medium text-sky-100">{person}</span> on
+                    accept. Tap the chip to clear if wrong.
                   </p>
                 )}
                 <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-white/70">{item.rawText}</p>
@@ -177,7 +194,8 @@ export function Inbox() {
                   </div>
                 )}
               </article>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>

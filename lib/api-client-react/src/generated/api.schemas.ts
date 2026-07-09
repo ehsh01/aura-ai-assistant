@@ -446,8 +446,10 @@ export interface AcceptCaptureRequest {
   tags?: string[];
   /** Link the created task/note to this person when known. */
   personId?: string | null;
-  /** Resolve or create a person by display name on accept. */
+  /** Resolve or create a person by display name on accept. Empty/null skips linking when skipPerson is also set, or when sent alone as a clear. */
   personName?: string | null;
+  /** When true, do not auto-link a person from the capture text. */
+  skipPerson?: boolean;
 }
 
 export type RecallNoteContentFormat = typeof RecallNoteContentFormat[keyof typeof RecallNoteContentFormat];

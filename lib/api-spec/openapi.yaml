@@ -1357,7 +1357,10 @@ components:
         personName:
           type: string
           nullable: true
-          description: Resolve or create a person by display name on accept.
+          description: Resolve or create a person by display name on accept. Empty/null skips linking when skipPerson is also set, or when sent alone as a clear.
+        skipPerson:
+          type: boolean
+          description: When true, do not auto-link a person from the capture text.
     AcceptCaptureResponse:
       type: object
       properties:
