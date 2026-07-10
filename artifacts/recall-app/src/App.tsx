@@ -22,6 +22,8 @@ import { Documents } from "@/pages/Documents";
 import { Knowledge } from "@/pages/Knowledge";
 import { Memory } from "@/pages/Memory";
 import { Activity } from "@/pages/Activity";
+import { PrivacyPolicy } from "@/pages/Privacy";
+import { TermsOfService } from "@/pages/Terms";
 import { normalizeBrowserPath, pathnameOnly } from "@/lib/app-path";
 
 const queryClient = new QueryClient();
@@ -55,6 +57,18 @@ function RedirectHome() {
 }
 
 function Router() {
+  return (
+    <Switch>
+      <Route path="/privacy" component={PrivacyPolicy} />
+      <Route path="/terms" component={TermsOfService} />
+      <Route>
+        <AuthedRoutes />
+      </Route>
+    </Switch>
+  );
+}
+
+function AuthedRoutes() {
   return (
     <RequireAuth>
       <Switch>
