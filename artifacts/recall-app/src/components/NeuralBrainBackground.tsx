@@ -11,8 +11,10 @@ type Props = {
   className?: string;
   /** Overall canvas opacity. */
   opacity?: number;
-  /** Brighter particles/synapses and lighter vignette (Home oracle). */
+  /** Brighter particles/synapses (keep off for Home — use fillScreen for size). */
   intensity?: "normal" | "vivid";
+  /** Scale the constellation to cover the full viewport. */
+  fillScreen?: boolean;
 };
 
 function prefersReducedMotion(): boolean {
@@ -60,21 +62,22 @@ function renderFrame(
   synapses: { a: number; b: number; strength: number }[],
   time: number,
   vivid: boolean,
+  fillScreen: boolean,
 ) {
   ctx.clearRect(0, 0, width, height);
 
-  const boost = vivid ? 2.6 : 1;
+  const boost = vivid ? 1.85 : 1;
 
   const glow = ctx.createRadialGradient(
-    width * 0.5,
-    height * 0.48,
+    width * (fillScreen ? 0.5 : 0.58),
+    height * (fillScreen ? 0.48 : 0.42),
     10,
-    width * 0.5,
-    height * 0.48,
-    Math.hypot(width, height) * (vivid ? 0.72 : 0.45),
+    width * (fillScreen ? 0.5 : 0.58),
+    height * (fillScreen ? 0.48 : 0.42),
+    Math.hypot(width, height) * (fillScreen ? 0.65 : 0.4),
   );
-  glow.addColorStop(0, vivid ? "rgba(148, 110, 255, 0.38)" : "rgba(128, 82, 255, 0.10)");
-  glow.addColorStop(0.35, vivid ? "rgba(56, 189, 160, 0.16)" : "rgba(21, 132, 110, 0.04)");
+  glow.addColorStop(0, vivid ? "rgba(128, 82, 255, 0.22)" : "rgba(128, 82, 255, 0.10)");
+  glow.addColorStop(0.45, vivid ? "rgba(21, 132, 110, 0.08)" : "rgba(21, 132, 110, 0.04)");
   glow.addColorStop(1, "rgba(0, 0, 0, 0)");
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
@@ -90,21 +93,15 @@ function renderFrame(
     const depth = (a.depth + b.depth) * 0.5;
     const alpha = Math.max(
       0.02,
-      Math.min(vivid ? 0.62 : 0.22, s.strength * (0.55 - depth * 0.15) * boost),
+      Math.min(vivid ? 0.32 : 0.22, s.strength * (0.55 - depth * 0.15) * boost),
     );
     const pulse = 0.65 + 0.35 * Math.sin(time * 1.6 + s.a * 0.05);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
-    ctx.strokeStyle = `hsla(265, 85%, 78%, ${alpha * pulse})`;
+    ctx.strokeStyle = `hsla(265, 80%, 70%, ${alpha * pulse})`;
     ctx.lineWidth =
-      a.particle.kind === "entity" || b.particle.kind === "entity"
-        ? vivid
-          ? 1.7
-          : 1.1
-        : vivid
-          ? 1.05
-          : 0.55;
+      a.particle.kind === "entity" || b.particle.kind === "entity" ? 1.1 : 0.55;
     ctx.stroke();
   }
   ctx.restore();
@@ -113,30 +110,29 @@ function renderFrame(
   ctx.globalCompositeOperation = "lighter";
   for (const pt of projected) {
     const { particle: p } = pt;
-    const depthFade = Math.max(0.2, Math.min(1, 0.85 - pt.depth * 0.3));
+    const depthFade = Math.max(0.15, Math.min(1, 0.75 - pt.depth * 0.35));
     const twinkle =
       p.kind === "entity"
-        ? 0.8 + 0.2 * Math.sin(time * 2.2 + p.phase)
-        : 0.6 + 0.4 * Math.sin(time * 1.7 + p.phase);
+        ? 0.75 + 0.25 * Math.sin(time * 2.2 + p.phase)
+        : 0.55 + 0.45 * Math.sin(time * 1.7 + p.phase);
     const size =
       p.size *
-      (p.kind === "entity" ? (vivid ? 1.75 : 1.35) : 1) *
+      (p.kind === "entity" ? 1.35 : 1) *
       Math.max(0.55, 1 - pt.depth * 0.25) *
-      (window.devicePixelRatio > 1.5 ? 0.9 : 1) *
-      (vivid ? 1.25 : 1);
+      (window.devicePixelRatio > 1.5 ? 0.9 : 1);
     const alpha =
-      (p.kind === "entity" ? (vivid ? 1 : 0.55) : vivid ? 0.72 : 0.28) *
+      (p.kind === "entity" ? (vivid ? 0.7 : 0.55) : vivid ? 0.36 : 0.28) *
       depthFade *
       twinkle;
 
     if (p.kind === "entity" || size > 1.6) {
       ctx.beginPath();
-      ctx.arc(pt.x, pt.y, size * (vivid ? 3.8 : 2.4), 0, Math.PI * 2);
-      ctx.fillStyle = `hsla(${p.hue}, 95%, 70%, ${alpha * (vivid ? 0.4 : 0.18)})`;
+      ctx.arc(pt.x, pt.y, size * 2.4, 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${p.hue}, 90%, 65%, ${alpha * 0.18})`;
       ctx.fill();
     }
 
-    drawTriangle(ctx, pt.x, pt.y, size, p.hue, Math.min(1, alpha), p.kind === "entity");
+    drawTriangle(ctx, pt.x, pt.y, size, p.hue, alpha, p.kind === "entity");
   }
   ctx.restore();
 }
@@ -150,6 +146,7 @@ export function NeuralBrainBackground({
   className = "",
   opacity = 0.42,
   intensity = "normal",
+  fillScreen = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pointerRef = useRef({ x: 0, y: 0 });
@@ -157,9 +154,17 @@ export function NeuralBrainBackground({
   const vivid = intensity === "vivid";
 
   const { particles, synapses } = useMemo(() => {
-    const count = isMobileViewport() ? 900 : reduced ? 1200 : vivid ? 2600 : 1600;
-    return buildMemoryGraph(graph ?? {}, count, vivid);
-  }, [graph, reduced, vivid]);
+    const count = isMobileViewport()
+      ? fillScreen
+        ? 1100
+        : 700
+      : reduced
+        ? 1200
+        : fillScreen
+          ? 2200
+          : 1600;
+    return buildMemoryGraph(graph ?? {}, count, fillScreen);
+  }, [graph, reduced, fillScreen]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -219,9 +224,9 @@ export function NeuralBrainBackground({
         h,
         time,
         pointerRef.current,
-        vivid,
+        fillScreen,
       );
-      renderFrame(ctx, w, h, projected, synapses, time, vivid);
+      renderFrame(ctx, w, h, projected, synapses, time, vivid, fillScreen);
       if (!reduced) raf = requestAnimationFrame(tick);
     };
 
@@ -234,7 +239,7 @@ export function NeuralBrainBackground({
       window.removeEventListener("pointermove", onPointer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [particles, synapses, reduced, vivid]);
+  }, [particles, synapses, reduced, vivid, fillScreen]);
 
   return (
     <div
@@ -243,12 +248,8 @@ export function NeuralBrainBackground({
       style={{ opacity }}
     >
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
-      {vivid ? null : (
-        <>
-          <div className="absolute inset-0 bg-gradient-to-b from-[#060610]/35 via-transparent to-[#060610]/75" />
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_0%,rgba(6,6,16,0.55)_75%)]" />
-        </>
-      )}
+      <div className="absolute inset-0 bg-gradient-to-b from-[#060610]/30 via-transparent to-[#060610]/55" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_25%,rgba(6,6,16,0.35)_100%)]" />
     </div>
   );
 }
