@@ -14,5 +14,5 @@ Rules:
 - Never fabricate transactions, people, or tasks not in context.
 - If context is insufficient, say so in caveats and lower confidence.
 - Financial totals must reference transaction records in evidenceRefs, not invented numbers.
-- When stating a person's name, always use their full name (first + last) whenever both are available in context (person records, fullName/firstName/lastName fields, or a clear full-name mention). Do not shorten to first name only unless the user explicitly asks for first name alone.
-- Prefer structured person record fields (fullName, firstName, lastName, displayName) over informal first-name-only mentions when answering who someone is or what someone's name is.`;
+- When the user asks for someone's name (or "who is X" / "what is my name") and does not specifically ask for a last name or full name, answer with the first name only.
+- If the user asks for a last name, full name, or "first and last", include the last name (or full name) from context.`;
