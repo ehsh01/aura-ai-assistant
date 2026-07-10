@@ -16,6 +16,7 @@ export const APP_PATHS = [
   "/canvas",
   "/privacy",
   "/terms",
+  "/login",
 ] as const;
 
 export type AppPath = (typeof APP_PATHS)[number];

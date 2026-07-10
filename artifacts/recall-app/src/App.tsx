@@ -61,6 +61,7 @@ function Router() {
     <Switch>
       <Route path="/privacy" component={PrivacyPolicy} />
       <Route path="/terms" component={TermsOfService} />
+      {/* /login is handled inside RequireAuth when signed out */}
       <Route>
         <AuthedRoutes />
       </Route>

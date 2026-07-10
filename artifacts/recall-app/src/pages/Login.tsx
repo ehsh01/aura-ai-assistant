@@ -45,6 +45,10 @@ export function Login() {
           </div>
         </div>
 
+        <a href="/" className="mb-6 inline-block text-sm text-indigo-300/80 hover:text-indigo-200">
+          ← About Recall
+        </a>
+
         <div className="flex gap-2 mb-6 p-1 rounded-xl bg-white/5">
           {(["login", "register"] as Mode[]).map((m) => (
             <button
