@@ -202,9 +202,16 @@ export async function createMemoryForUser(
   let domain = input.domain ? normalizeDomain(input.domain) : null;
   let title = input.title?.trim() || "";
   if (!domain || !title) {
-    const classified = await classifyMemoryText(content);
-    domain = domain ?? classified.domain;
-    title = title || classified.title;
+    // Prefer heuristic for bulk/import speed; AI only when both missing and not import.
+    if (input.sourceType === "import") {
+      const classified = classifyMemoryHeuristic(content);
+      domain = domain ?? classified.domain;
+      title = title || classified.title;
+    } else {
+      const classified = await classifyMemoryText(content);
+      domain = domain ?? classified.domain;
+      title = title || classified.title;
+    }
   }
 
   const now = new Date();
@@ -237,6 +244,40 @@ export async function createMemoryForUser(
   });
   warmMemory(userId, dto);
   return dto;
+}
+
+/** Bulk create for Life File import — one request, no per-item AI classify. */
+export async function importMemoriesForUser(
+  userId: string,
+  items: CreateMemoryInput[],
+  sourceId?: string | null,
+): Promise<{ created: LifeMemoryDto[]; failed: number }> {
+  const created: LifeMemoryDto[] = [];
+  let failed = 0;
+  for (const item of items) {
+    try {
+      const dto = await createMemoryForUser(userId, {
+        ...item,
+        sourceType: "import",
+        sourceId: item.sourceId ?? sourceId ?? null,
+      });
+      created.push(dto);
+    } catch {
+      failed += 1;
+    }
+  }
+  await writeAuditLog({
+    userId,
+    action: "memory_import",
+    entityType: "memory",
+    entityId: null,
+    metadata: {
+      created: created.length,
+      failed,
+      sourceId: sourceId ?? null,
+    },
+  });
+  return { created, failed };
 }
 
 export async function updateMemoryForUser(

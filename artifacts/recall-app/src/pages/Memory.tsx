@@ -255,7 +255,10 @@ export function Memory() {
           {showImport && (
             <MemoryImportReview
               onClose={() => setShowImport(false)}
-              onImported={() => void load()}
+              onImported={() => {
+                setDomainFilter("all");
+                void load();
+              }}
             />
           )}
 
@@ -342,7 +345,11 @@ export function Memory() {
               {loading && <p className="text-white/40">Loading memories…</p>}
               {!loading && filtered.length === 0 && (
                 <p className="rounded-2xl border border-white/10 bg-white/[0.03] p-8 text-center text-white/45">
-                  No memories yet. Teach Recall something permanent above.
+                  {items.length === 0
+                    ? "No memories yet. Teach Recall something permanent above, or Import .md."
+                    : domainFilter !== "all"
+                      ? `No memories in ${DOMAIN_LABELS[domainFilter as LifeMemoryDomain] ?? domainFilter}. Try All.`
+                      : "No memories match this search."}
                 </p>
               )}
               {filtered.map((item) => (

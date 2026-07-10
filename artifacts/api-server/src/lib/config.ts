@@ -32,7 +32,7 @@ export const config = {
   generalRateLimitWindowMs: Number(
     process.env.GENERAL_RATE_LIMIT_WINDOW_MS ?? "900000",
   ),
-  generalRateLimitMax: Number(process.env.GENERAL_RATE_LIMIT_MAX ?? "200"),
+  generalRateLimitMax: Number(process.env.GENERAL_RATE_LIMIT_MAX ?? "2000"),
   /** Stricter limit for /auth/login */
   loginRateLimitWindowMs: Number(
     process.env.LOGIN_RATE_LIMIT_WINDOW_MS ?? "900000",

@@ -8,6 +8,7 @@ import {
   deleteMemoryForUser,
   exportMemoriesMarkdownForUser,
   getMemoryForUser,
+  importMemoriesForUser,
   listMemoriesForUser,
   updateMemoryForUser,
 } from "../services/life-memory";
@@ -38,6 +39,22 @@ const UpdateBody = z.object({
 
 const ClassifyBody = z.object({
   content: z.string().min(1).max(50_000),
+});
+
+const ImportBody = z.object({
+  sourceId: z.string().max(500).nullish(),
+  items: z
+    .array(
+      z.object({
+        title: z.string().max(500).optional(),
+        content: z.string().min(1).max(50_000),
+        domain: DomainSchema.nullish(),
+        tags: z.array(z.string()).optional(),
+        pinned: z.boolean().optional(),
+      }),
+    )
+    .min(1)
+    .max(500),
 });
 
 const router: IRouter = Router();
@@ -73,6 +90,31 @@ router.post("/memory/classify", async (req, res, next) => {
     const body = ClassifyBody.parse(req.body);
     const result = await classifyMemoryText(body.content);
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/memory/import", async (req, res, next) => {
+  try {
+    const body = ImportBody.parse(req.body);
+    const result = await importMemoriesForUser(
+      req.user!.id,
+      body.items.map((item) => ({
+        title: item.title,
+        content: item.content,
+        domain: item.domain,
+        tags: item.tags,
+        pinned: item.pinned,
+        sourceType: "import" as const,
+      })),
+      body.sourceId,
+    );
+    res.status(201).json({
+      created: result.created.length,
+      failed: result.failed,
+      items: result.created,
+    });
   } catch (err) {
     next(err);
   }

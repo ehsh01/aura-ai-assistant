@@ -440,6 +440,22 @@ export async function createMemory(input: {
   return apiFetch("/memory", { method: "POST", body: JSON.stringify(input) });
 }
 
+export async function importMemories(input: {
+  sourceId?: string | null;
+  items: {
+    title?: string;
+    content: string;
+    domain?: string | null;
+    tags?: string[];
+    pinned?: boolean;
+  }[];
+}): Promise<{ created: number; failed: number; items: LifeMemoryRecord[] }> {
+  return apiFetch("/memory/import", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function updateMemory(
   memoryId: string,
   input: {
