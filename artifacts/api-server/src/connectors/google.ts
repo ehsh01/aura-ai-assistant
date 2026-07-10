@@ -170,7 +170,7 @@ async function fetchGmail(accessToken: string): Promise<GoogleRawRecord[]> {
         externalId: `gmail:${full.id}`,
         recordType: "gmail_message",
         recordTitle: subject.slice(0, 400),
-        recordText: `From: ${from}\nSubject: ${subject}\n${snippet}`,
+        recordText: `Email message\nFrom: ${from}\nSubject: ${subject}\n${snippet}`,
         sourceUrl: `https://mail.google.com/mail/u/0/#inbox/${full.id}`,
         sourceCreatedAt: full.internalDate
           ? new Date(Number(full.internalDate)).toISOString()

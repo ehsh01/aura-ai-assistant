@@ -31,6 +31,10 @@ type ContextRecord = {
   title: string;
   text: string;
   pinned?: boolean;
+  /** Optional subtype for source_records (gmail_message, drive_file, …). */
+  recordType?: string;
+  /** ISO timestamp for recency boosts. */
+  updatedAt?: string;
 };
 
 /** Permanent memories outrank ephemeral notes/captures in hybrid scoring. */
@@ -39,6 +43,49 @@ function typeBoost(entityType: string, pinned?: boolean): number {
   if (entityType === "knowledge") return 0.08;
   if (entityType === "person") return 0.05;
   return 0;
+}
+
+/** Detect Google / connector intents so we can force-include the right source_records. */
+function googleIntent(question: string): {
+  email: boolean;
+  drive: boolean;
+  calendar: boolean;
+  contacts: boolean;
+} {
+  const q = question.toLowerCase();
+  return {
+    email: /\b(email|emails|e-mail|gmail|inbox|mail|message|messages)\b/.test(q),
+    drive: /\b(drive|google\s*doc|docs|spreadsheet|sheets|file|files)\b/.test(q),
+    calendar: /\b(calendar|meeting|meetings|event|events|schedule|appointment)\b/.test(q),
+    contacts: /\b(contact|contacts|phone\s*number|address\s*book)\b/.test(q),
+  };
+}
+
+function sourceRecordMatchesIntent(
+  recordType: string | undefined,
+  intent: ReturnType<typeof googleIntent>,
+): boolean {
+  if (!recordType) return false;
+  if (intent.email && recordType === "gmail_message") return true;
+  if (intent.drive && recordType === "drive_file") return true;
+  if (intent.calendar && recordType === "calendar_event") return true;
+  if (intent.contacts && recordType === "google_contact") return true;
+  return false;
+}
+
+function sourceTypeAliases(recordType: string): string {
+  switch (recordType) {
+    case "gmail_message":
+      return "email gmail inbox mail message";
+    case "drive_file":
+      return "drive file google doc document";
+    case "calendar_event":
+      return "calendar event meeting schedule";
+    case "google_contact":
+      return "contact person phone email";
+    default:
+      return "source record";
+  }
 }
 
 /** First names that collide with common English words / months. */
@@ -112,7 +159,7 @@ const CORPUS = {
   memories: 200,
   documents: 100,
   captures: 100,
-  sourceRecords: 150,
+  sourceRecords: 400,
   keywordShortlist: 80,
   semanticCandidates: 280,
 } as const;
@@ -135,6 +182,7 @@ async function collectCorpus(
           recordType: sourceRecords.recordType,
           recordTitle: sourceRecords.recordTitle,
           recordText: sourceRecords.recordText,
+          updatedAt: sourceRecords.updatedAt,
         })
         .from(sourceRecords)
         .where(eq(sourceRecords.userId, userId))
@@ -234,11 +282,14 @@ async function collectCorpus(
 
   for (const s of sources) {
     const title = s.recordTitle || s.recordType || "Source record";
+    const aliases = sourceTypeAliases(s.recordType);
     records.push({
       entityType: "source_record",
       entityId: s.id,
       title,
-      text: `source=${s.recordType} ${title}\n${(s.recordText ?? "").slice(0, 800)}`,
+      text: `${aliases} source=${s.recordType} ${title}\n${(s.recordText ?? "").slice(0, 800)}`,
+      recordType: s.recordType,
+      updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : undefined,
     });
   }
 
@@ -265,6 +316,10 @@ export async function retrieveRelevantRecords(
   if (corpus.length === 0) {
     return { records: [], usedSemantic: false, namedPeople: [] };
   }
+
+  const intent = googleIntent(question);
+  const wantsGoogle =
+    intent.email || intent.drive || intent.calendar || intent.contacts;
 
   const named = mentionedPeople(question, people);
   const namedIds = new Set(named.map((p) => p.id));
@@ -296,10 +351,18 @@ export async function retrieveRelevantRecords(
     return 0;
   };
 
+  const googleBoost = (r: ContextRecord): number => {
+    if (!wantsGoogle) return 0;
+    if (r.entityType !== "source_record") return 0;
+    if (!sourceRecordMatchesIntent(r.recordType, intent)) return 0;
+    // Strong boost so email/drive questions surface connector data over notes.
+    return 0.55;
+  };
+
   const keywordHits = corpus
     .map((r) => ({
       r,
-      kw: keywordScore(question, `${r.title}\n${r.text}`) + personBoost(r),
+      kw: keywordScore(question, `${r.title}\n${r.text}`) + personBoost(r) + googleBoost(r),
     }))
     .filter((x) => x.kw > 0)
     .sort((a, b) => b.kw - a.kw);
@@ -365,7 +428,7 @@ export async function retrieveRelevantRecords(
     const id = `${r.entityType}:${r.entityId}`;
     const kw = keywordScore(question, `${r.title}\n${r.text}`);
     const sem = semanticScores.get(id) ?? 0;
-    const boost = personBoost(r) + typeBoost(r.entityType, r.pinned);
+    const boost = personBoost(r) + typeBoost(r.entityType, r.pinned) + googleBoost(r);
     // Blend: semantic dominates when present; keyword still boosts exact matches.
     const score = (usedSemantic ? sem * 0.75 + kw * 0.25 : kw) + boost;
     const method: RetrievedRecord["method"] =
@@ -392,11 +455,33 @@ export async function retrieveRelevantRecords(
     };
   };
 
-  const top = scored
+  let top = scored
     .filter((x) => x.score > minScore)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map(({ r, score, method }) => toRetrieved(r, score, method));
+
+  // Email / Drive / Calendar questions: always inject the most recent matching
+  // source_records so "last emails" works even when keyword/semantic miss.
+  if (wantsGoogle) {
+    const already = new Set(top.map((r) => r.entityId));
+    const recentMatches = corpus
+      .filter(
+        (r) =>
+          r.entityType === "source_record" &&
+          sourceRecordMatchesIntent(r.recordType, intent),
+      )
+      .slice(0, Math.min(8, limit));
+    const injected: RetrievedRecord[] = [];
+    for (const r of recentMatches) {
+      if (already.has(r.entityId)) continue;
+      injected.push(toRetrieved(r, 0.9, "keyword"));
+      already.add(r.entityId);
+    }
+    if (injected.length > 0) {
+      top = [...injected, ...top].slice(0, limit);
+    }
+  }
 
   // If semantic threshold filtered everything, fall back to keyword hits.
   if (top.length === 0 && keywordHits.length > 0) {
