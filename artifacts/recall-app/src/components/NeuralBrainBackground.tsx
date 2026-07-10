@@ -94,24 +94,24 @@ function renderFrame(
     if (!a || !b) continue;
     const depth = (a.depth + b.depth) * 0.5;
     const alpha = Math.max(
-      0.05,
+      0.08,
       Math.min(
-        vivid ? 0.38 : fillScreen ? 0.34 : 0.2,
-        s.strength * (0.55 - depth * 0.12) * boost,
+        vivid ? 0.38 : fillScreen ? 0.48 : 0.2,
+        s.strength * (0.7 - depth * 0.1) * (fillScreen ? 1.35 : boost),
       ),
     );
-    const pulse = 0.75 + 0.25 * Math.sin(time * 1.6 + s.a * 0.05);
+    const pulse = 0.8 + 0.2 * Math.sin(time * 1.6 + s.a * 0.05);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.strokeStyle = fillScreen
-      ? `hsla(265, 75%, 74%, ${alpha * pulse})`
+      ? `hsla(265, 80%, 78%, ${alpha * pulse})`
       : `hsla(265, 80%, 72%, ${alpha * pulse})`;
     ctx.lineWidth =
       a.particle.kind === "entity" || b.particle.kind === "entity"
-        ? 1.2
+        ? 1.35
         : fillScreen
-          ? 0.85
+          ? 1.15
           : 0.55;
     ctx.stroke();
   }
@@ -133,15 +133,15 @@ function renderFrame(
       (window.devicePixelRatio > 1.5 ? 0.9 : 1) *
       (vivid ? 1.1 : 1);
     const alpha =
-      (p.kind === "entity" ? (vivid ? 0.75 : 0.65) : vivid ? 0.42 : fillScreen ? 0.72 : 0.28) *
+      (p.kind === "entity" ? (vivid ? 0.75 : 0.7) : vivid ? 0.42 : fillScreen ? 0.88 : 0.28) *
       depthFade *
       twinkle;
 
     // Soft colored dots — kept modest so they don't stack to white.
-    if (p.kind === "entity" || (fillScreen && size > 2.2)) {
+    if (p.kind === "entity" || (fillScreen && size > 1.8)) {
       ctx.beginPath();
-      ctx.arc(pt.x, pt.y, size * (p.kind === "entity" ? 2.4 : 1.8), 0, Math.PI * 2);
-      ctx.fillStyle = `hsla(${p.hue}, 90%, 68%, ${alpha * (p.kind === "entity" ? 0.22 : 0.12)})`;
+      ctx.arc(pt.x, pt.y, size * (p.kind === "entity" ? 2.4 : 1.9), 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${p.hue}, 90%, 70%, ${alpha * (p.kind === "entity" ? 0.24 : 0.16)})`;
       ctx.fill();
     }
 
@@ -151,7 +151,7 @@ function renderFrame(
       pt.y,
       size,
       p.hue,
-      Math.min(fillScreen ? 0.82 : 0.85, alpha),
+      Math.min(fillScreen ? 0.92 : 0.85, alpha),
       p.kind === "entity",
     );
   }

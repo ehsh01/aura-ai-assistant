@@ -176,7 +176,7 @@ export function Dashboard() {
           style={{
             background: showAnswer
               ? "radial-gradient(ellipse 70% 55% at 50% 48%, transparent 0%, rgba(0,0,0,0.55) 100%)"
-              : "radial-gradient(ellipse 85% 70% at 50% 45%, transparent 30%, rgba(0,0,0,0.18) 100%)",
+              : "radial-gradient(ellipse 88% 72% at 50% 45%, transparent 35%, rgba(0,0,0,0.12) 100%)",
           }}
         />
 
