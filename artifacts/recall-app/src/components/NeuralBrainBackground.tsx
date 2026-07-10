@@ -45,11 +45,11 @@ function drawTriangle(
   ctx.lineTo(x - w, y + h * 0.55);
   ctx.closePath();
   if (filled) {
-    ctx.fillStyle = `hsla(${hue}, 90%, 78%, ${alpha})`;
+    ctx.fillStyle = `hsla(${hue}, 85%, 68%, ${alpha})`;
     ctx.fill();
   } else {
-    ctx.strokeStyle = `hsla(${hue}, 95%, 80%, ${alpha})`;
-    ctx.lineWidth = Math.max(1.1, size * 0.28);
+    ctx.strokeStyle = `hsla(${hue}, 90%, 72%, ${alpha})`;
+    ctx.lineWidth = Math.max(0.7, size * 0.22);
     ctx.stroke();
   }
 }
@@ -66,7 +66,8 @@ function renderFrame(
 ) {
   ctx.clearRect(0, 0, width, height);
 
-  const boost = vivid ? 3.2 : 1;
+  // fillScreen Home uses a calmer boost so additive blending doesn't blow to white.
+  const boost = vivid ? 1.7 : fillScreen ? 1.25 : 1;
 
   const glow = ctx.createRadialGradient(
     width * (fillScreen ? 0.5 : 0.58),
@@ -74,10 +75,10 @@ function renderFrame(
     10,
     width * (fillScreen ? 0.5 : 0.58),
     height * (fillScreen ? 0.46 : 0.42),
-    Math.min(width, height) * (fillScreen ? 0.7 : 0.4),
+    Math.min(width, height) * (fillScreen ? 0.58 : 0.4),
   );
-  glow.addColorStop(0, vivid ? "rgba(168, 130, 255, 0.55)" : "rgba(128, 82, 255, 0.10)");
-  glow.addColorStop(0.35, vivid ? "rgba(56, 189, 160, 0.28)" : "rgba(21, 132, 110, 0.04)");
+  glow.addColorStop(0, vivid ? "rgba(128, 82, 255, 0.22)" : "rgba(128, 82, 255, 0.12)");
+  glow.addColorStop(0.45, vivid ? "rgba(21, 132, 110, 0.1)" : "rgba(21, 132, 110, 0.05)");
   glow.addColorStop(1, "rgba(0, 0, 0, 0)");
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
@@ -92,24 +93,16 @@ function renderFrame(
     if (!a || !b) continue;
     const depth = (a.depth + b.depth) * 0.5;
     const alpha = Math.max(
-      0.04,
-      Math.min(vivid ? 0.85 : 0.22, s.strength * (0.7 - depth * 0.12) * boost),
+      0.03,
+      Math.min(vivid ? 0.38 : fillScreen ? 0.28 : 0.2, s.strength * (0.55 - depth * 0.15) * boost),
     );
     const pulse = 0.7 + 0.3 * Math.sin(time * 1.6 + s.a * 0.05);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
-    ctx.strokeStyle = `hsla(265, 90%, 82%, ${alpha * pulse})`;
+    ctx.strokeStyle = `hsla(265, 80%, 72%, ${alpha * pulse})`;
     ctx.lineWidth =
-      a.particle.kind === "entity" || b.particle.kind === "entity"
-        ? vivid
-          ? 2.2
-          : 1.1
-        : vivid
-          ? fillScreen
-            ? 1.55
-            : 1.15
-          : 0.55;
+      a.particle.kind === "entity" || b.particle.kind === "entity" ? 1.15 : fillScreen ? 0.75 : 0.55;
     ctx.stroke();
   }
   ctx.restore();
@@ -118,30 +111,30 @@ function renderFrame(
   ctx.globalCompositeOperation = "lighter";
   for (const pt of projected) {
     const { particle: p } = pt;
-    const depthFade = Math.max(0.35, Math.min(1, 0.95 - pt.depth * 0.25));
+    const depthFade = Math.max(0.25, Math.min(1, 0.8 - pt.depth * 0.3));
     const twinkle =
       p.kind === "entity"
-        ? 0.85 + 0.15 * Math.sin(time * 2.2 + p.phase)
-        : 0.7 + 0.3 * Math.sin(time * 1.7 + p.phase);
+        ? 0.8 + 0.2 * Math.sin(time * 2.2 + p.phase)
+        : 0.6 + 0.4 * Math.sin(time * 1.7 + p.phase);
     const size =
       p.size *
-      (p.kind === "entity" ? (vivid ? 2.1 : 1.35) : fillScreen && vivid ? 1.35 : 1) *
-      Math.max(0.65, 1 - pt.depth * 0.2) *
-      (window.devicePixelRatio > 1.5 ? 0.95 : 1) *
-      (vivid ? 1.45 : 1);
+      (p.kind === "entity" ? (vivid ? 1.55 : 1.35) : 1) *
+      Math.max(0.55, 1 - pt.depth * 0.25) *
+      (window.devicePixelRatio > 1.5 ? 0.9 : 1) *
+      (vivid ? 1.1 : 1);
     const alpha =
-      (p.kind === "entity" ? (vivid ? 1 : 0.55) : vivid ? 0.95 : 0.28) *
+      (p.kind === "entity" ? (vivid ? 0.75 : 0.55) : vivid ? 0.42 : fillScreen ? 0.38 : 0.28) *
       depthFade *
       twinkle;
 
-    if (p.kind === "entity" || size > 1.4) {
+    if (p.kind === "entity" || size > 1.8) {
       ctx.beginPath();
-      ctx.arc(pt.x, pt.y, size * (vivid ? 4.2 : 2.4), 0, Math.PI * 2);
-      ctx.fillStyle = `hsla(${p.hue}, 95%, 72%, ${alpha * (vivid ? 0.5 : 0.18)})`;
+      ctx.arc(pt.x, pt.y, size * (vivid ? 2.8 : 2.2), 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${p.hue}, 90%, 65%, ${alpha * (vivid ? 0.22 : 0.16)})`;
       ctx.fill();
     }
 
-    drawTriangle(ctx, pt.x, pt.y, size, p.hue, Math.min(1, alpha), p.kind === "entity");
+    drawTriangle(ctx, pt.x, pt.y, size, p.hue, Math.min(0.85, alpha), p.kind === "entity");
   }
   ctx.restore();
 }
@@ -165,12 +158,12 @@ export function NeuralBrainBackground({
   const { particles, synapses } = useMemo(() => {
     const count = isMobileViewport()
       ? fillScreen
-        ? 1400
+        ? 1100
         : 700
       : reduced
-        ? 1400
+        ? 1200
         : fillScreen
-          ? 2800
+          ? 2000
           : 1600;
     return buildMemoryGraph(graph ?? {}, count, fillScreen);
   }, [graph, reduced, fillScreen]);
@@ -257,12 +250,8 @@ export function NeuralBrainBackground({
       style={{ opacity }}
     >
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
-      {vivid ? null : (
-        <>
-          <div className="absolute inset-0 bg-gradient-to-b from-[#060610]/30 via-transparent to-[#060610]/55" />
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_25%,rgba(6,6,16,0.35)_100%)]" />
-        </>
-      )}
+      <div className="absolute inset-0 bg-gradient-to-b from-[#060610]/25 via-transparent to-[#060610]/50" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_30%,rgba(6,6,16,0.28)_100%)]" />
     </div>
   );
 }

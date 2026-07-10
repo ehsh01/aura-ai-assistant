@@ -164,11 +164,11 @@ export function Dashboard() {
             showAnswer ? "scale-[1.03] blur-[2px]" : "scale-100 blur-0"
           }`}
         >
-          <NeuralBrainBackground graph={brainGraph} opacity={1} intensity="vivid" fillScreen />
-          <div className="orb-1 nebula-orb opacity-90" />
-          <div className="orb-2 nebula-orb opacity-75" />
-          <div className="orb-3 nebula-orb opacity-70" />
-          <div className="orb-4 nebula-orb opacity-65" />
+          <NeuralBrainBackground graph={brainGraph} opacity={0.78} fillScreen />
+          <div className="orb-1 nebula-orb opacity-45" />
+          <div className="orb-2 nebula-orb opacity-35" />
+          <div className="orb-3 nebula-orb opacity-32" />
+          <div className="orb-4 nebula-orb opacity-25" />
         </div>
 
         <div
@@ -176,7 +176,7 @@ export function Dashboard() {
           style={{
             background: showAnswer
               ? "radial-gradient(ellipse 70% 55% at 50% 48%, transparent 0%, rgba(0,0,0,0.55) 100%)"
-              : "radial-gradient(ellipse 95% 80% at 50% 42%, transparent 55%, rgba(0,0,0,0.04) 100%)",
+              : "radial-gradient(ellipse 85% 70% at 50% 45%, transparent 25%, rgba(0,0,0,0.22) 100%)",
           }}
         />
 

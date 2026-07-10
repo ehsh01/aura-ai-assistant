@@ -113,8 +113,8 @@ export function buildAmbientCloud(count: number, fillScreen = false): BrainParti
       y: p.y * inflate,
       z: p.z * inflate,
       hue: particleHue(i),
-      // fillScreen needs larger nodes or the cortex disappears on dark UIs.
-      size: (fillScreen ? 1.8 : 0.7) + hash(i * 23.1) * (fillScreen ? 2.8 : 1.6),
+      // fillScreen needs readable nodes without additive white blowout.
+      size: (fillScreen ? 1.15 : 0.7) + hash(i * 23.1) * (fillScreen ? 1.9 : 1.6),
       phase: hash(i * 29.7) * Math.PI * 2,
       kind: "ambient",
     });
@@ -252,34 +252,32 @@ export function buildMemoryGraph(
 
   // Ambient local synapses — connect nearby ambient particles for the constellation look.
   // fillScreen inflates the cortex, so the link radius must grow with it.
-  const sample = Math.min(ambient.length, fillScreen ? 1400 : 900);
+  const sample = Math.min(ambient.length, fillScreen ? 1100 : 900);
   const step = Math.max(1, Math.floor(ambient.length / sample));
-  const linkRadius = fillScreen ? 0.22 : 0.085;
-  const linkChance = fillScreen ? 0.12 : 0.35;
-  const neighborScan = fillScreen ? 80 : 40;
+  const linkRadius = fillScreen ? 0.14 : 0.085;
+  const linkChance = fillScreen ? 0.28 : 0.35;
+  const neighborScan = fillScreen ? 55 : 40;
   for (let i = 0; i < ambient.length; i += step) {
     const a = ambient[i]!;
-    const neighbors: { j: number; d: number }[] = [];
+    let best = -1;
+    let bestD = linkRadius;
     for (let j = i + step; j < Math.min(ambient.length, i + step * neighborScan); j += step) {
       const b = ambient[j]!;
       const dx = a.x - b.x;
       const dy = a.y - b.y;
       const dz = a.z - b.z;
       const d = dx * dx + dy * dy + dz * dz;
-      if (d < linkRadius) neighbors.push({ j, d });
-    }
-    neighbors.sort((x, y) => x.d - y.d);
-    const links = fillScreen ? 3 : 1;
-    for (const n of neighbors.slice(0, links)) {
-      if (hash(i * 41.2 + n.j) > linkChance) {
-        synapses.push({
-          a: i,
-          b: n.j,
-          strength: fillScreen
-            ? 0.35 + (linkRadius - n.d) * 2.2
-            : 0.18 + (0.085 - n.d) * 4,
-        });
+      if (d < bestD) {
+        bestD = d;
+        best = j;
       }
+    }
+    if (best >= 0 && hash(i * 41.2) > linkChance) {
+      synapses.push({
+        a: i,
+        b: best,
+        strength: fillScreen ? 0.22 + (linkRadius - bestD) * 2.5 : 0.18 + (0.085 - bestD) * 4,
+      });
     }
   }
 
