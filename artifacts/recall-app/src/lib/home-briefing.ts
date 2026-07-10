@@ -79,11 +79,18 @@ export interface ContextArea {
 const ACTION_PHRASE = /\b(need to|needs to|should|have to|must|remember to|todo|to-do|follow up|follow-up)\b/i;
 const WAITING_RE = /\b(waiting|follow up|follow-up|call|email|reply|response|return|pending)\b/i;
 
+/** Offline Home fallback: only surface items from yesterday or today. */
+const HOME_SURFACE_MAX_AGE_DAYS = 1;
+
 function daysSince(iso?: string | null): number {
-  if (!iso) return 0;
+  if (!iso) return Number.POSITIVE_INFINITY;
   const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return 0;
+  if (Number.isNaN(t)) return Number.POSITIVE_INFINITY;
   return Math.max(0, Math.floor((Date.now() - t) / 86_400_000));
+}
+
+function isRecentForHome(iso?: string | null): boolean {
+  return daysSince(iso) <= HOME_SURFACE_MAX_AGE_DAYS;
 }
 
 function greetingForHour(hour: number): string {
@@ -186,12 +193,16 @@ export function buildDailyBriefing(
     .map((t) => ({ id: t.id, label: t.title, href: tasksPath({ taskId: t.id }) }));
 
   const waiting: BriefingItem[] = notes
-    .filter((n) => WAITING_RE.test(`${n.title} ${n.preview}`))
+    .filter(
+      (n) =>
+        isRecentForHome(n.updatedAt ?? n.createdAt) &&
+        WAITING_RE.test(`${n.title} ${n.preview}`),
+    )
     .slice(0, 3)
     .map((n) => ({ id: n.id, label: n.title, href: notesPath({ noteId: n.id }) }));
 
   const reminders: BriefingItem[] = captures
-    .filter((c) => c.status === "pending")
+    .filter((c) => c.status === "pending" && isRecentForHome(c.createdAt))
     .map((c) => ({ item: c, score: scoreCaptureUrgency(c) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, 3)
@@ -289,7 +300,11 @@ function extractPerson(text: string): string {
 
 export function buildWaitingOn(notes: RecallNote[], limit = 4): WaitingItem[] {
   return notes
-    .filter((n) => WAITING_RE.test(`${n.title} ${n.preview}`))
+    .filter(
+      (n) =>
+        isRecentForHome(n.updatedAt ?? n.createdAt) &&
+        WAITING_RE.test(`${n.title} ${n.preview}`),
+    )
     .slice(0, limit)
     .map((n) => ({
       id: n.id,
@@ -307,13 +322,15 @@ export function buildDontForget(
   limit = 5,
 ): BriefingItem[] {
   const fromCaptures = captures
-    .filter((c) => c.status === "pending")
+    .filter((c) => c.status === "pending" && isRecentForHome(c.createdAt))
     .map((c) => ({ id: c.id, label: c.cleanedTitle, href: inboxPath() }));
   const fromNotes = notes
-    .filter((n) =>
-      /\b(permit|inspection|renew|renewal|appointment|deadline|expire|expires|birthday|pay|due)\b/i.test(
-        `${n.title} ${n.preview}`,
-      ),
+    .filter(
+      (n) =>
+        isRecentForHome(n.updatedAt ?? n.createdAt) &&
+        /\b(permit|inspection|renew|renewal|appointment|deadline|expire|expires|birthday|pay|due)\b/i.test(
+          `${n.title} ${n.preview}`,
+        ),
     )
     .map((n) => ({ id: n.id, label: n.title, href: notesPath({ noteId: n.id }) }));
   const seen = new Set<string>();
@@ -331,8 +348,9 @@ export function buildInsights(
 ): InsightItem[] {
   const insights: InsightItem[] = [];
   const taskTitles = tasks.map((t) => t.title.toLowerCase());
+  const recentNotes = notes.filter((n) => isRecentForHome(n.updatedAt ?? n.createdAt));
 
-  for (const note of notes) {
+  for (const note of recentNotes) {
     if (insights.length >= limit) break;
     if (!ACTION_PHRASE.test(`${note.title} ${note.preview}`)) continue;
     const overlaps = taskTitles.some((t) => t.includes(note.title.toLowerCase().slice(0, 12)));
@@ -348,17 +366,18 @@ export function buildInsights(
   for (const capture of captures) {
     if (insights.length >= limit) break;
     if (capture.status !== "pending") continue;
+    if (!isRecentForHome(capture.createdAt)) continue;
     const age = daysSince(capture.createdAt);
-    if (age < 3) continue;
+    if (age < 1) continue;
     insights.push({
       id: `stale-${capture.id}`,
       kind: "stale",
-      text: `“${capture.cleanedTitle}” has been sitting in your inbox for ${age} days.`,
+      text: `“${capture.cleanedTitle}” has been sitting in your inbox since yesterday.`,
       href: inboxPath(),
     });
   }
 
-  for (const note of notes) {
+  for (const note of recentNotes) {
     if (insights.length >= limit) break;
     if (!WAITING_RE.test(`${note.title} ${note.preview}`)) continue;
     insights.push({
@@ -371,7 +390,7 @@ export function buildInsights(
 
   if (insights.length < limit && projects.length > 0) {
     const project = projects[0]!;
-    const related = notes.find(
+    const related = recentNotes.find(
       (n) => n.projectId === project.id || n.tags.some((tag) => tag.toLowerCase() === project.name.toLowerCase()),
     );
     if (related) {

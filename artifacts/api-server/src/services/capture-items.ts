@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt } from "drizzle-orm";
 import { captureItems, type CaptureItem } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newCaptureId } from "../lib/recall-format";
@@ -281,8 +281,22 @@ export async function createCaptureForUser(
 }
 
 export async function listCaptureInboxForUser(userId: string): Promise<RecallCaptureItemDto[]> {
+  const db = getDb();
+  // Auto-clear stale pending captures so Home/Inbox stay focused on recent items.
+  const cutoff = new Date(Date.now() - 2 * 86_400_000);
+  await db
+    .update(captureItems)
+    .set({ status: "dismissed", updatedAt: new Date() })
+    .where(
+      and(
+        eq(captureItems.userId, userId),
+        eq(captureItems.status, "pending"),
+        lt(captureItems.createdAt, cutoff),
+      ),
+    );
+
   const [rows, peopleNames] = await Promise.all([
-    getDb()
+    db
       .select()
       .from(captureItems)
       .where(and(eq(captureItems.userId, userId), eq(captureItems.status, "pending")))

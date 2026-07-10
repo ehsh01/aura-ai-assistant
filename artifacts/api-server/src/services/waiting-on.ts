@@ -8,6 +8,9 @@ import { writeAuditLog } from "./audit";
 const WAITING_RE =
   /\b(waiting|follow[- ]?up|awaiting|need(?:s)? (?:a |the )?(?:quote|reply|response|call|email)|still need|pending (?:from|on)|haven't heard|no response)\b/i;
 
+/** Ignore archive noise — only surface waiting items from yesterday or today. */
+const WAITING_MAX_AGE_DAYS = 1;
+
 export type WaitingOnItem = {
   id: string;
   person: string;
@@ -21,9 +24,9 @@ export type WaitingOnItem = {
 };
 
 function daysSince(iso?: string | null): number {
-  if (!iso) return 0;
+  if (!iso) return Number.POSITIVE_INFINITY;
   const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return 0;
+  if (Number.isNaN(t)) return Number.POSITIVE_INFINITY;
   return Math.max(0, Math.floor((Date.now() - t) / 86_400_000));
 }
 
@@ -109,13 +112,15 @@ export async function listWaitingOnForUser(
   for (const n of notes) {
     const blob = `${n.title} ${n.preview}`;
     if (!WAITING_RE.test(blob)) continue;
+    const age = daysSince(n.updatedAt ?? n.createdAt);
+    if (age > WAITING_MAX_AGE_DAYS) continue;
     const person = extractPerson(blob, peopleNames);
     items.push({
       id: `note:${n.id}`,
       person,
       personId: matchPersonId(person, people),
       item: n.title,
-      days: daysSince(n.updatedAt ?? n.createdAt),
+      days: age,
       href: `/notes?note=${encodeURIComponent(n.id)}`,
       followUp: `Follow up with ${person}`,
       sourceType: "note",
@@ -126,13 +131,15 @@ export async function listWaitingOnForUser(
   for (const k of knowledge) {
     const blob = `${k.title} ${k.content}`;
     if (!WAITING_RE.test(blob)) continue;
+    const age = daysSince(k.updatedAt ?? k.createdAt);
+    if (age > WAITING_MAX_AGE_DAYS) continue;
     const person = extractPerson(blob, peopleNames);
     items.push({
       id: `knowledge:${k.id}`,
       person,
       personId: matchPersonId(person, people),
       item: k.title,
-      days: daysSince(k.updatedAt ?? k.createdAt),
+      days: age,
       href: "/knowledge",
       followUp: `Follow up with ${person}`,
       sourceType: "knowledge",
@@ -156,7 +163,7 @@ export async function listWaitingOnForUser(
   }
 
   return items
-    .sort((a, b) => b.days - a.days)
+    .sort((a, b) => a.days - b.days)
     .slice(0, limit);
 }
 
