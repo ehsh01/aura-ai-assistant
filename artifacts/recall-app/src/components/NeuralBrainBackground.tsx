@@ -94,10 +94,10 @@ function renderFrame(
     if (!a || !b) continue;
     const depth = (a.depth + b.depth) * 0.5;
     const alpha = Math.max(
-      0.08,
+      0.04,
       Math.min(
-        vivid ? 0.38 : fillScreen ? 0.48 : 0.2,
-        s.strength * (0.7 - depth * 0.1) * (fillScreen ? 1.35 : boost),
+        vivid ? 0.38 : fillScreen ? 0.28 : 0.2,
+        s.strength * (0.55 - depth * 0.12) * (fillScreen ? 1.05 : boost),
       ),
     );
     const pulse = 0.8 + 0.2 * Math.sin(time * 1.6 + s.a * 0.05);
@@ -105,13 +105,13 @@ function renderFrame(
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.strokeStyle = fillScreen
-      ? `hsla(265, 80%, 78%, ${alpha * pulse})`
+      ? `hsla(265, 75%, 72%, ${alpha * pulse})`
       : `hsla(265, 80%, 72%, ${alpha * pulse})`;
     ctx.lineWidth =
       a.particle.kind === "entity" || b.particle.kind === "entity"
-        ? 1.35
+        ? 1.15
         : fillScreen
-          ? 1.15
+          ? 0.75
           : 0.55;
     ctx.stroke();
   }

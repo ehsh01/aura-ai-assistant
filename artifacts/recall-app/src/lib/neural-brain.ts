@@ -254,30 +254,30 @@ export function buildMemoryGraph(
   // fillScreen inflates the cortex, so the link radius must grow with it.
   const sample = Math.min(ambient.length, fillScreen ? 1100 : 900);
   const step = Math.max(1, Math.floor(ambient.length / sample));
-  const linkRadius = fillScreen ? 0.16 : 0.085;
-  const linkChance = fillScreen ? 0.18 : 0.35;
-  const neighborScan = fillScreen ? 65 : 40;
+  const linkRadius = fillScreen ? 0.13 : 0.085;
+  const linkChance = fillScreen ? 0.38 : 0.35;
+  const neighborScan = fillScreen ? 50 : 40;
   for (let i = 0; i < ambient.length; i += step) {
     const a = ambient[i]!;
-    const neighbors: { j: number; d: number }[] = [];
+    let best = -1;
+    let bestD = linkRadius;
     for (let j = i + step; j < Math.min(ambient.length, i + step * neighborScan); j += step) {
       const b = ambient[j]!;
       const dx = a.x - b.x;
       const dy = a.y - b.y;
       const dz = a.z - b.z;
       const d = dx * dx + dy * dy + dz * dz;
-      if (d < linkRadius) neighbors.push({ j, d });
-    }
-    neighbors.sort((x, y) => x.d - y.d);
-    const links = fillScreen ? 2 : 1;
-    for (const n of neighbors.slice(0, links)) {
-      if (hash(i * 41.2 + n.j) > linkChance) {
-        synapses.push({
-          a: i,
-          b: n.j,
-          strength: fillScreen ? 0.32 + (linkRadius - n.d) * 2.8 : 0.18 + (0.085 - n.d) * 4,
-        });
+      if (d < bestD) {
+        bestD = d;
+        best = j;
       }
+    }
+    if (best >= 0 && hash(i * 41.2) > linkChance) {
+      synapses.push({
+        a: i,
+        b: best,
+        strength: fillScreen ? 0.2 + (linkRadius - bestD) * 2.2 : 0.18 + (0.085 - bestD) * 4,
+      });
     }
   }
 
