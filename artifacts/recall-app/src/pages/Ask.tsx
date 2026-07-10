@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
-import { Sparkles, Search, ShieldCheck, ArrowRight } from "lucide-react";
+import { Sparkles, Search, ShieldCheck, ArrowRight, Volume2, VolumeX } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import {
   fetchHome,
@@ -10,6 +10,8 @@ import {
   type EvidenceRecord,
 } from "@/lib/recall-api";
 import { entityPath, readSearchParam } from "@/lib/recall-nav";
+import { useSpeakAnswer } from "@/hooks/use-speak-answer";
+import { stopSpeaking } from "@/lib/speech-synthesis";
 
 type Answer = {
   answer: string;
@@ -69,6 +71,7 @@ export function Ask() {
   const ask = async (q: string) => {
     const trimmed = q.trim();
     if (!trimmed || loading) return;
+    stopSpeaking();
     setQuestion(trimmed);
     setLoading(true);
     setError(null);
@@ -82,6 +85,8 @@ export function Ask() {
       setLoading(false);
     }
   };
+
+  const voice = useSpeakAnswer(answer?.answer, Boolean(answer && !loading));
 
   useEffect(() => {
     void Promise.all([
@@ -224,6 +229,37 @@ export function Ask() {
                       </span>
                     ) : null;
                   })()}
+                  {voice.supported && (
+                    <div className="ml-auto flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (voice.speaking) voice.stop();
+                          else voice.replay();
+                        }}
+                        className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
+                        aria-label={voice.speaking ? "Stop speaking" : "Read answer aloud"}
+                        title={voice.speaking ? "Stop" : "Read aloud"}
+                      >
+                        <Volume2 size={16} className={voice.speaking ? "text-indigo-300" : undefined} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => voice.setVoiceEnabled(!voice.enabled)}
+                        className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
+                        aria-label={voice.enabled ? "Mute voice answers" : "Enable voice answers"}
+                        title={voice.enabled ? "Mute voice answers" : "Enable voice answers"}
+                      >
+                        {voice.enabled ? (
+                          <span className="px-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-300">
+                            Voice
+                          </span>
+                        ) : (
+                          <VolumeX size={16} />
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <p className="whitespace-pre-wrap text-base leading-relaxed text-white/90">
                   {answer.answer}

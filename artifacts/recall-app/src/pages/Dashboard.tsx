@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
-import { ArrowRight, Loader2, ShieldCheck, Sparkles, X } from "lucide-react";
+import {
+  ArrowRight,
+  Loader2,
+  ShieldCheck,
+  Sparkles,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
@@ -15,6 +23,8 @@ import { entityPath, readSearchParam } from "@/lib/recall-nav";
 import { NeuralBrainBackground } from "@/components/NeuralBrainBackground";
 import { MicButton } from "@/components/MicButton";
 import { RecallLogo } from "@/components/RecallLogo";
+import { useSpeakAnswer } from "@/hooks/use-speak-answer";
+import { stopSpeaking } from "@/lib/speech-synthesis";
 
 type AskResult = {
   question: string;
@@ -92,6 +102,7 @@ export function Dashboard() {
   const ask = async (text: string) => {
     const q = text.trim();
     if (!q || askPending) return;
+    stopSpeaking();
     setQuestion(q);
     setAskPending(true);
     setAskResult(null);
@@ -122,8 +133,11 @@ export function Dashboard() {
   };
 
   const closePanel = () => {
+    stopSpeaking();
     setPanelOpen(false);
   };
+
+  const voice = useSpeakAnswer(askResult?.answer, Boolean(askResult && !askPending));
 
   const brainGraph = useMemo(
     () => ({
@@ -259,14 +273,47 @@ export function Dashboard() {
                     <p className="mt-1 truncate text-sm text-white/45">“{askResult.question}”</p>
                   )}
                 </div>
-                <button
-                  type="button"
-                  onClick={closePanel}
-                  className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
-                  aria-label="Close"
-                >
-                  <X size={18} />
-                </button>
+                <div className="flex items-center gap-1">
+                  {voice.supported && askResult && !askPending && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (voice.speaking) voice.stop();
+                          else voice.replay();
+                        }}
+                        className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
+                        aria-label={voice.speaking ? "Stop speaking" : "Read answer aloud"}
+                        title={voice.speaking ? "Stop" : "Read aloud"}
+                      >
+                        <Volume2 size={18} className={voice.speaking ? "text-indigo-300" : undefined} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => voice.setVoiceEnabled(!voice.enabled)}
+                        className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
+                        aria-label={voice.enabled ? "Mute voice answers" : "Enable voice answers"}
+                        title={voice.enabled ? "Mute voice answers" : "Enable voice answers"}
+                      >
+                        {voice.enabled ? (
+                          <span className="px-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-300">
+                            Voice
+                          </span>
+                        ) : (
+                          <VolumeX size={18} />
+                        )}
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    onClick={closePanel}
+                    className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
+                    aria-label="Close"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
               </div>
 
               <div className="flex-1 overflow-y-auto px-5 py-4 recall-scrollbar">
