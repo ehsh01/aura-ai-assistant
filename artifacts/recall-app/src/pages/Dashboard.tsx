@@ -200,7 +200,7 @@ export function Dashboard() {
               <h1 className="font-[family-name:var(--font-oracle,inherit)] text-4xl font-semibold tracking-tight text-white md:text-5xl">
                 Recall
               </h1>
-              <p className="max-w-md text-center text-sm text-white/45 md:text-base">
+              <p className="max-w-md rounded-full bg-black/55 px-4 py-1.5 text-center text-sm text-white/70 shadow-[0_0_24px_rgba(0,0,0,0.45)] backdrop-blur-md md:text-base">
                 Ask anything about your world.
               </p>
             </div>
