@@ -101,7 +101,7 @@ function particleHue(i: number): number {
 export function buildAmbientCloud(count: number, fillScreen = false): BrainParticle[] {
   const particles: BrainParticle[] = [];
   // Mostly brain-shaped; a thin field halo only when filling the screen.
-  const brainCount = fillScreen ? Math.floor(count * 0.88) : count;
+  const brainCount = fillScreen ? Math.floor(count * 0.9) : count;
   const fieldCount = fillScreen ? count - brainCount : 0;
 
   for (let i = 0; i < brainCount; i++) {
@@ -113,7 +113,8 @@ export function buildAmbientCloud(count: number, fillScreen = false): BrainParti
       y: p.y * inflate,
       z: p.z * inflate,
       hue: particleHue(i),
-      size: 0.7 + hash(i * 23.1) * 1.6,
+      // fillScreen needs larger nodes or the cortex disappears on dark UIs.
+      size: (fillScreen ? 1.8 : 0.7) + hash(i * 23.1) * (fillScreen ? 2.8 : 1.6),
       phase: hash(i * 29.7) * Math.PI * 2,
       kind: "ambient",
     });
@@ -123,14 +124,13 @@ export function buildAmbientCloud(count: number, fillScreen = false): BrainParti
     // Sparse outer dust — stays dim and outside the main lobes.
     const p = sampleFieldPoint(i + 9000);
     const len = Math.hypot(p.x, p.y) || 1;
-    // Push field points outward so they don't fill the brain silhouette.
     const push = 1.35 + hash(i * 41.2) * 0.45;
     particles.push({
       x: (p.x / len) * push * 1.6,
       y: (p.y / len) * push * 1.15,
       z: p.z * 0.7,
       hue: particleHue(i + 400),
-      size: 0.4 + hash(i * 31.1) * 0.9,
+      size: 0.9 + hash(i * 31.1) * 1.4,
       phase: hash(i * 37.3) * Math.PI * 2,
       kind: "ambient",
     });
@@ -251,25 +251,35 @@ export function buildMemoryGraph(
   const particles = [...ambient, ...entities];
 
   // Ambient local synapses — connect nearby ambient particles for the constellation look.
-  const sample = Math.min(ambient.length, 900);
+  // fillScreen inflates the cortex, so the link radius must grow with it.
+  const sample = Math.min(ambient.length, fillScreen ? 1400 : 900);
   const step = Math.max(1, Math.floor(ambient.length / sample));
+  const linkRadius = fillScreen ? 0.22 : 0.085;
+  const linkChance = fillScreen ? 0.12 : 0.35;
+  const neighborScan = fillScreen ? 80 : 40;
   for (let i = 0; i < ambient.length; i += step) {
     const a = ambient[i]!;
-    let best = -1;
-    let bestD = 0.085;
-    for (let j = i + step; j < Math.min(ambient.length, i + step * 40); j += step) {
+    const neighbors: { j: number; d: number }[] = [];
+    for (let j = i + step; j < Math.min(ambient.length, i + step * neighborScan); j += step) {
       const b = ambient[j]!;
       const dx = a.x - b.x;
       const dy = a.y - b.y;
       const dz = a.z - b.z;
       const d = dx * dx + dy * dy + dz * dz;
-      if (d < bestD) {
-        bestD = d;
-        best = j;
-      }
+      if (d < linkRadius) neighbors.push({ j, d });
     }
-    if (best >= 0 && hash(i * 41.2) > 0.35) {
-      synapses.push({ a: i, b: best, strength: 0.18 + (0.085 - bestD) * 4 });
+    neighbors.sort((x, y) => x.d - y.d);
+    const links = fillScreen ? 3 : 1;
+    for (const n of neighbors.slice(0, links)) {
+      if (hash(i * 41.2 + n.j) > linkChance) {
+        synapses.push({
+          a: i,
+          b: n.j,
+          strength: fillScreen
+            ? 0.35 + (linkRadius - n.d) * 2.2
+            : 0.18 + (0.085 - n.d) * 4,
+        });
+      }
     }
   }
 
@@ -307,7 +317,7 @@ export function projectParticles(
   const cy = fillScreen ? height * 0.46 : height * 0.42;
   // fillScreen: large brain silhouette covering most of the viewport (not a full wash).
   const scale = fillScreen
-    ? Math.min(width, height) * 0.72
+    ? Math.min(width, height) * 0.82
     : Math.min(width, height) * 0.42;
   const rotY = time * 0.12 + pointer.x * 0.35;
   const rotX = (fillScreen ? 0.12 : 0.25) + pointer.y * 0.2;

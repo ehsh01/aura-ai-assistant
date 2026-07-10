@@ -45,11 +45,11 @@ function drawTriangle(
   ctx.lineTo(x - w, y + h * 0.55);
   ctx.closePath();
   if (filled) {
-    ctx.fillStyle = `hsla(${hue}, 85%, 68%, ${alpha})`;
+    ctx.fillStyle = `hsla(${hue}, 90%, 78%, ${alpha})`;
     ctx.fill();
   } else {
-    ctx.strokeStyle = `hsla(${hue}, 90%, 70%, ${alpha})`;
-    ctx.lineWidth = Math.max(0.6, size * 0.22);
+    ctx.strokeStyle = `hsla(${hue}, 95%, 80%, ${alpha})`;
+    ctx.lineWidth = Math.max(1.1, size * 0.28);
     ctx.stroke();
   }
 }
@@ -66,7 +66,7 @@ function renderFrame(
 ) {
   ctx.clearRect(0, 0, width, height);
 
-  const boost = vivid ? 2.6 : 1;
+  const boost = vivid ? 3.2 : 1;
 
   const glow = ctx.createRadialGradient(
     width * (fillScreen ? 0.5 : 0.58),
@@ -74,10 +74,10 @@ function renderFrame(
     10,
     width * (fillScreen ? 0.5 : 0.58),
     height * (fillScreen ? 0.46 : 0.42),
-    Math.min(width, height) * (fillScreen ? 0.62 : 0.4),
+    Math.min(width, height) * (fillScreen ? 0.7 : 0.4),
   );
-  glow.addColorStop(0, vivid ? "rgba(148, 110, 255, 0.45)" : "rgba(128, 82, 255, 0.10)");
-  glow.addColorStop(0.4, vivid ? "rgba(56, 189, 160, 0.2)" : "rgba(21, 132, 110, 0.04)");
+  glow.addColorStop(0, vivid ? "rgba(168, 130, 255, 0.55)" : "rgba(128, 82, 255, 0.10)");
+  glow.addColorStop(0.35, vivid ? "rgba(56, 189, 160, 0.28)" : "rgba(21, 132, 110, 0.04)");
   glow.addColorStop(1, "rgba(0, 0, 0, 0)");
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
@@ -92,21 +92,23 @@ function renderFrame(
     if (!a || !b) continue;
     const depth = (a.depth + b.depth) * 0.5;
     const alpha = Math.max(
-      0.02,
-      Math.min(vivid ? 0.62 : 0.22, s.strength * (0.55 - depth * 0.15) * boost),
+      0.04,
+      Math.min(vivid ? 0.85 : 0.22, s.strength * (0.7 - depth * 0.12) * boost),
     );
-    const pulse = 0.65 + 0.35 * Math.sin(time * 1.6 + s.a * 0.05);
+    const pulse = 0.7 + 0.3 * Math.sin(time * 1.6 + s.a * 0.05);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
-    ctx.strokeStyle = `hsla(265, 85%, 78%, ${alpha * pulse})`;
+    ctx.strokeStyle = `hsla(265, 90%, 82%, ${alpha * pulse})`;
     ctx.lineWidth =
       a.particle.kind === "entity" || b.particle.kind === "entity"
         ? vivid
-          ? 1.7
+          ? 2.2
           : 1.1
         : vivid
-          ? 1.05
+          ? fillScreen
+            ? 1.55
+            : 1.15
           : 0.55;
     ctx.stroke();
   }
@@ -116,26 +118,26 @@ function renderFrame(
   ctx.globalCompositeOperation = "lighter";
   for (const pt of projected) {
     const { particle: p } = pt;
-    const depthFade = Math.max(0.2, Math.min(1, 0.85 - pt.depth * 0.3));
+    const depthFade = Math.max(0.35, Math.min(1, 0.95 - pt.depth * 0.25));
     const twinkle =
       p.kind === "entity"
-        ? 0.8 + 0.2 * Math.sin(time * 2.2 + p.phase)
-        : 0.6 + 0.4 * Math.sin(time * 1.7 + p.phase);
+        ? 0.85 + 0.15 * Math.sin(time * 2.2 + p.phase)
+        : 0.7 + 0.3 * Math.sin(time * 1.7 + p.phase);
     const size =
       p.size *
-      (p.kind === "entity" ? (vivid ? 1.75 : 1.35) : 1) *
-      Math.max(0.55, 1 - pt.depth * 0.25) *
-      (window.devicePixelRatio > 1.5 ? 0.9 : 1) *
-      (vivid ? 1.25 : 1);
+      (p.kind === "entity" ? (vivid ? 2.1 : 1.35) : fillScreen && vivid ? 1.35 : 1) *
+      Math.max(0.65, 1 - pt.depth * 0.2) *
+      (window.devicePixelRatio > 1.5 ? 0.95 : 1) *
+      (vivid ? 1.45 : 1);
     const alpha =
-      (p.kind === "entity" ? (vivid ? 1 : 0.55) : vivid ? 0.72 : 0.28) *
+      (p.kind === "entity" ? (vivid ? 1 : 0.55) : vivid ? 0.95 : 0.28) *
       depthFade *
       twinkle;
 
-    if (p.kind === "entity" || size > 1.6) {
+    if (p.kind === "entity" || size > 1.4) {
       ctx.beginPath();
-      ctx.arc(pt.x, pt.y, size * (vivid ? 3.8 : 2.4), 0, Math.PI * 2);
-      ctx.fillStyle = `hsla(${p.hue}, 95%, 70%, ${alpha * (vivid ? 0.4 : 0.18)})`;
+      ctx.arc(pt.x, pt.y, size * (vivid ? 4.2 : 2.4), 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${p.hue}, 95%, 72%, ${alpha * (vivid ? 0.5 : 0.18)})`;
       ctx.fill();
     }
 
@@ -163,12 +165,12 @@ export function NeuralBrainBackground({
   const { particles, synapses } = useMemo(() => {
     const count = isMobileViewport()
       ? fillScreen
-        ? 1100
+        ? 1400
         : 700
       : reduced
-        ? 1200
+        ? 1400
         : fillScreen
-          ? 2200
+          ? 2800
           : 1600;
     return buildMemoryGraph(graph ?? {}, count, fillScreen);
   }, [graph, reduced, fillScreen]);
