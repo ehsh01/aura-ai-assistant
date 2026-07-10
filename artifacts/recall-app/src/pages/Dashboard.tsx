@@ -83,6 +83,8 @@ export function Dashboard() {
   const closePanel = () => {
     stopSpeaking();
     setPanelOpen(false);
+    setAskResult(null);
+    setQuestion("");
   };
 
   useSpeakAnswer(askResult?.answer, Boolean(askResult && !askPending));
