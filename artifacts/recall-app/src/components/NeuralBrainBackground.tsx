@@ -70,11 +70,11 @@ function renderFrame(
 
   const glow = ctx.createRadialGradient(
     width * (fillScreen ? 0.5 : 0.58),
-    height * (fillScreen ? 0.48 : 0.42),
+    height * (fillScreen ? 0.46 : 0.42),
     10,
     width * (fillScreen ? 0.5 : 0.58),
-    height * (fillScreen ? 0.48 : 0.42),
-    Math.hypot(width, height) * (fillScreen ? 0.65 : 0.4),
+    height * (fillScreen ? 0.46 : 0.42),
+    Math.min(width, height) * (fillScreen ? 0.62 : 0.4),
   );
   glow.addColorStop(0, vivid ? "rgba(128, 82, 255, 0.22)" : "rgba(128, 82, 255, 0.10)");
   glow.addColorStop(0.45, vivid ? "rgba(21, 132, 110, 0.08)" : "rgba(21, 132, 110, 0.04)");

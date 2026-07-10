@@ -100,13 +100,18 @@ function particleHue(i: number): number {
 
 export function buildAmbientCloud(count: number, fillScreen = false): BrainParticle[] {
   const particles: BrainParticle[] = [];
-  const brainCount = fillScreen ? Math.floor(count * 0.45) : count;
+  // Mostly brain-shaped; a thin field halo only when filling the screen.
+  const brainCount = fillScreen ? Math.floor(count * 0.88) : count;
   const fieldCount = fillScreen ? count - brainCount : 0;
 
   for (let i = 0; i < brainCount; i++) {
     const p = sampleBrainPoint(i + 1);
+    // Slightly inflate the cortex so the silhouette reads larger on Home.
+    const inflate = fillScreen ? 1.18 : 1;
     particles.push({
-      ...p,
+      x: p.x * inflate,
+      y: p.y * inflate,
+      z: p.z * inflate,
       hue: particleHue(i),
       size: 0.7 + hash(i * 23.1) * 1.6,
       phase: hash(i * 29.7) * Math.PI * 2,
@@ -115,11 +120,17 @@ export function buildAmbientCloud(count: number, fillScreen = false): BrainParti
   }
 
   for (let i = 0; i < fieldCount; i++) {
+    // Sparse outer dust — stays dim and outside the main lobes.
     const p = sampleFieldPoint(i + 9000);
+    const len = Math.hypot(p.x, p.y) || 1;
+    // Push field points outward so they don't fill the brain silhouette.
+    const push = 1.35 + hash(i * 41.2) * 0.45;
     particles.push({
-      ...p,
+      x: (p.x / len) * push * 1.6,
+      y: (p.y / len) * push * 1.15,
+      z: p.z * 0.7,
       hue: particleHue(i + 400),
-      size: 0.55 + hash(i * 31.1) * 1.35,
+      size: 0.4 + hash(i * 31.1) * 0.9,
       phase: hash(i * 37.3) * Math.PI * 2,
       kind: "ambient",
     });
@@ -293,10 +304,10 @@ export function projectParticles(
   fillScreen = false,
 ): ProjectedPoint[] {
   const cx = fillScreen ? width * 0.5 : width * 0.58;
-  const cy = fillScreen ? height * 0.48 : height * 0.42;
-  // fillScreen: scale so the field (~±1.7) reaches past the corners.
+  const cy = fillScreen ? height * 0.46 : height * 0.42;
+  // fillScreen: large brain silhouette covering most of the viewport (not a full wash).
   const scale = fillScreen
-    ? Math.hypot(width, height) * 0.52
+    ? Math.min(width, height) * 0.72
     : Math.min(width, height) * 0.42;
   const rotY = time * 0.12 + pointer.x * 0.35;
   const rotX = (fillScreen ? 0.12 : 0.25) + pointer.y * 0.2;
