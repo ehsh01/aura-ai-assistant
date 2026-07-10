@@ -3,11 +3,13 @@ import { AppLayout } from "@/components/AppLayout";
 import {
   getFinanceSummary,
   listConnectors,
+  startGoogleOAuth,
   syncConnector,
   type FinanceSummary,
 } from "@/lib/recall-api";
 import { getStoredToken } from "@/lib/auth-storage";
 import { toast } from "@/hooks/use-toast";
+import { readSearchParam } from "@/lib/recall-nav";
 
 type ConnectorRow = {
   id: string;
@@ -30,6 +32,7 @@ function formatUsd(value: number): string {
 
 export function Connectors() {
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
+  const [googleOAuthConfigured, setGoogleOAuthConfigured] = useState(false);
   const [csvText, setCsvText] = useState("");
   const [loading, setLoading] = useState(true);
   const [syncingId, setSyncingId] = useState<string | null>(null);
@@ -41,12 +44,39 @@ export function Connectors() {
     try {
       const res = await listConnectors();
       setConnectors(res.connectors);
+      setGoogleOAuthConfigured(Boolean(res.googleOAuthConfigured));
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
+    void load();
+  }, []);
+
+  useEffect(() => {
+    const status = readSearchParam("google");
+    if (!status) return;
+    const reason = readSearchParam("reason");
+    if (status === "connected") {
+      toast({
+        title: "Google connected",
+        description: "Click Sync on the Google connector to pull mail, calendar, contacts, and Drive.",
+      });
+    } else if (status === "error") {
+      const detail =
+        reason === "already_connected"
+          ? "That Google account is already linked."
+          : reason === "not_configured"
+            ? "Google OAuth is not configured on the server yet."
+            : "Could not complete Google sign-in. Try again.";
+      toast({ title: "Google connect failed", description: detail, variant: "destructive" });
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete("google");
+    url.searchParams.delete("reason");
+    url.searchParams.delete("connectorId");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
     void load();
   }, []);
 
@@ -92,6 +122,8 @@ export function Connectors() {
     }
   };
 
+  const hasGoogle = connectors.some((c) => c.type === "google");
+
   return (
     <AppLayout>
       <div className="h-full overflow-y-auto bg-[#0a0a0f] p-4 md:p-8 text-white">
@@ -99,6 +131,27 @@ export function Connectors() {
           <p className="text-sm uppercase tracking-[0.3em] text-indigo-300/70">Integrations</p>
           <h1 className="mt-2 text-3xl font-semibold">Connectors</h1>
           <p className="mt-2 text-white/50">External sources feeding Recall with evidence-backed records.</p>
+
+          <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+            <h2 className="text-lg font-semibold">Google</h2>
+            <p className="mt-2 text-sm text-white/55">
+              Connect one Google account to sync Gmail, Calendar, Contacts, and Drive (read-only).
+              You can add another account later with the same button.
+            </p>
+            <button
+              type="button"
+              onClick={() => startGoogleOAuth()}
+              disabled={!googleOAuthConfigured}
+              className="mt-4 rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {hasGoogle ? "Connect another Google account" : "Connect Google"}
+            </button>
+            {!googleOAuthConfigured && (
+              <p className="mt-3 text-xs text-amber-200/80">
+                Google OAuth is not configured on the server yet (needs GOOGLE_CLIENT_ID / SECRET).
+              </p>
+            )}
+          </div>
 
           {loading && <p className="mt-8 text-white/40">Loading connectors…</p>}
           <div className="mt-8 space-y-3">
@@ -173,7 +226,7 @@ export function Connectors() {
                         className="flex items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm hover:bg-white/5"
                       >
                         <div className="min-w-0">
-                          <p className="truncate text-white/85">{tx.payee ?? "Unknown"}</p>
+                          <p className="truncate text-white/80">{tx.payee ?? "Unknown"}</p>
                           <p className="text-xs text-white/40">
                             {tx.date}
                             {tx.category ? ` · ${tx.category}` : ""}

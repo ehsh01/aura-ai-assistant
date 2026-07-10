@@ -5,7 +5,8 @@ export type ConnectorType =
   | "browser_extension"
   | "csv_import"
   | "finance_api"
-  | "ticket_email";
+  | "ticket_email"
+  | "google";
 
 export type NormalizedSourceRecord = {
   externalId: string;

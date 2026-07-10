@@ -271,8 +271,14 @@ export async function listConnectors(): Promise<{
     syncStatus: string;
     enabled: boolean;
   }[];
+  googleOAuthConfigured?: boolean;
 }> {
   return apiFetch("/connectors");
+}
+
+/** Full-page navigation so the session cookie is sent to Google OAuth start. */
+export function startGoogleOAuth(): void {
+  window.location.assign("/api/connectors/google/oauth/start");
 }
 
 export async function syncConnector(

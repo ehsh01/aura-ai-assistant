@@ -164,6 +164,26 @@ Sessions are issued as `HttpOnly; Secure; SameSite=Lax` cookies (`recall_session
 
 **Key rotation:** generate a new `SECRETS_ENCRYPTION_KEY`, re-seal any stored connector secrets with the new key (or re-authorize connectors), then update `.env` and restart `recall-api`.
 
+## Google connector (OAuth)
+
+To let users connect Gmail / Calendar / Contacts / Drive:
+
+1. In Google Cloud Console, enable **Gmail API**, **Google Calendar API**, **People API**, and **Google Drive API**.
+2. Configure the OAuth consent screen and add read-only scopes for those APIs (plus `openid email profile`).
+3. Create a **Web application** OAuth client with redirect URI:
+   - Production: `https://recall-app.net/api/connectors/google/oauth/callback`
+4. On the droplet `.env` for `recall-api`:
+
+```bash
+GOOGLE_CLIENT_ID=....apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_OAUTH_REDIRECT_URI=https://recall-app.net/api/connectors/google/oauth/callback
+APP_PUBLIC_URL=https://recall-app.net
+SECRETS_ENCRYPTION_KEY=...   # required so refresh tokens are encrypted at rest
+```
+
+5. Restart the API (`systemctl restart recall-api` or your usual process). Users then click **Connect Google** on `/connectors`.
+
 ## Database backups
 
 `scripts/backup-recall-db.sh` writes a compressed, timestamped `pg_dump` to `/var/backups/recall/` and keeps the newest 14. It prefers `docker run postgres:18 pg_dump` so the client major matches DigitalOcean managed Postgres 18 (host `postgresql-client-17` is too old).

@@ -56,4 +56,9 @@ export const config = {
   sessionCookieMaxAgeMs: Number(
     process.env.SESSION_COOKIE_MAX_AGE_MS ?? String(7 * 24 * 60 * 60 * 1000),
   ),
+  /** Browser origin for post-OAuth redirects */
+  appPublicUrl: (
+    process.env.APP_PUBLIC_URL?.trim() ||
+    (isProduction ? "https://recall-app.net" : "http://localhost:5173")
+  ).replace(/\/$/, ""),
 } as const;

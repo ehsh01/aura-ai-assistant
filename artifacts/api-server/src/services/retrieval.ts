@@ -1,3 +1,6 @@
+import { desc, eq } from "drizzle-orm";
+import { sourceRecords } from "@workspace/db/schema";
+import { getDb } from "../lib/db";
 import { listTasksForUser } from "./tasks";
 import { listNotesForUser } from "./notes";
 import { listPeopleForUser } from "./people";
@@ -109,6 +112,7 @@ const CORPUS = {
   memories: 200,
   documents: 100,
   captures: 100,
+  sourceRecords: 150,
   keywordShortlist: 80,
   semanticCandidates: 280,
 } as const;
@@ -116,15 +120,27 @@ const CORPUS = {
 async function collectCorpus(
   userId: string,
 ): Promise<{ records: ContextRecord[]; people: { id: string; displayName: string }[] }> {
-  const [tasks, notes, people, knowledge, memories, documents, captures] = await Promise.all([
-    listTasksForUser(userId),
-    listNotesForUser(userId),
-    listPeopleForUser(userId),
-    listKnowledgeForUser(userId),
-    listMemoriesForUser(userId, { limit: CORPUS.memories }),
-    listDocumentsForUser(userId),
-    listCapturesForUser(userId, { limit: CORPUS.captures }),
-  ]);
+  const [tasks, notes, people, knowledge, memories, documents, captures, sources] =
+    await Promise.all([
+      listTasksForUser(userId),
+      listNotesForUser(userId),
+      listPeopleForUser(userId),
+      listKnowledgeForUser(userId),
+      listMemoriesForUser(userId, { limit: CORPUS.memories }),
+      listDocumentsForUser(userId),
+      listCapturesForUser(userId, { limit: CORPUS.captures }),
+      getDb()
+        .select({
+          id: sourceRecords.id,
+          recordType: sourceRecords.recordType,
+          recordTitle: sourceRecords.recordTitle,
+          recordText: sourceRecords.recordText,
+        })
+        .from(sourceRecords)
+        .where(eq(sourceRecords.userId, userId))
+        .orderBy(desc(sourceRecords.updatedAt))
+        .limit(CORPUS.sourceRecords),
+    ]);
 
   const records: ContextRecord[] = [];
 
@@ -213,6 +229,16 @@ async function collectCorpus(
       entityId: c.id,
       title: c.title || "Capture",
       text: `${c.title ?? ""}\n${(c.rawText ?? "").slice(0, 500)}`,
+    });
+  }
+
+  for (const s of sources) {
+    const title = s.recordTitle || s.recordType || "Source record";
+    records.push({
+      entityType: "source_record",
+      entityId: s.id,
+      title,
+      text: `source=${s.recordType} ${title}\n${(s.recordText ?? "").slice(0, 800)}`,
     });
   }
 
