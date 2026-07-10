@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   getVoiceAnswersEnabled,
-  isSpeechSynthesisSupported,
+  isVoiceAnswersSupported,
   setVoiceAnswersEnabled,
   speakText,
   stopSpeaking,
 } from "@/lib/speech-synthesis";
 
 /**
- * Speaks Ask answers when voice is enabled. Stops on unmount / when answer clears.
+ * Speaks Ask answers when voice is enabled. Prefers OpenAI TTS, falls back to browser.
  */
 export function useSpeakAnswer(answer: string | null | undefined, ready: boolean) {
-  const supported = isSpeechSynthesisSupported();
+  const supported = isVoiceAnswersSupported();
   const [enabled, setEnabled] = useState(() => getVoiceAnswersEnabled());
   const [speaking, setSpeaking] = useState(false);
 
@@ -32,7 +32,7 @@ export function useSpeakAnswer(answer: string | null | undefined, ready: boolean
   const replay = useCallback(() => {
     if (!supported || !enabled || !answer?.trim()) return;
     setSpeaking(true);
-    speakText(answer, {
+    void speakText(answer, {
       onEnd: () => setSpeaking(false),
       onError: () => setSpeaking(false),
     });
@@ -45,13 +45,19 @@ export function useSpeakAnswer(answer: string | null | undefined, ready: boolean
       return;
     }
 
+    let cancelled = false;
     setSpeaking(true);
-    speakText(answer, {
-      onEnd: () => setSpeaking(false),
-      onError: () => setSpeaking(false),
+    void speakText(answer, {
+      onEnd: () => {
+        if (!cancelled) setSpeaking(false);
+      },
+      onError: () => {
+        if (!cancelled) setSpeaking(false);
+      },
     });
 
     return () => {
+      cancelled = true;
       stopSpeaking();
     };
   }, [answer, enabled, ready, supported]);

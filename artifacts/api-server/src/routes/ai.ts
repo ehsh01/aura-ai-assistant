@@ -22,6 +22,7 @@ import { pickBestNoteToOpen, userWantsNoteOpened } from "../lib/note-open-intent
 import { z } from "zod";
 import { queryRecallForUser } from "../services/query-engine";
 import { getExtractionJobStatus } from "../services/capture-pipeline";
+import { OPENAI_TTS_VOICES, synthesizeSpeech } from "../services/tts";
 
 function mergeSearchHitsIntoContext(
   context: AiContext | undefined,
@@ -152,6 +153,24 @@ router.post("/ai/generate-work-note", async (req, res, next) => {
 
 const AiQueryBody = z.object({
   question: z.string().min(1).max(4000),
+});
+
+const AiTtsBody = z.object({
+  text: z.string().min(1).max(4096),
+  voice: z.enum(OPENAI_TTS_VOICES).optional(),
+});
+
+router.post("/ai/tts", async (req, res, next) => {
+  try {
+    const body = AiTtsBody.parse(req.body);
+    const { buffer, contentType } = await synthesizeSpeech(body.text, body.voice);
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Length", String(buffer.length));
+    res.send(buffer);
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.post("/ai/query", async (req, res, next) => {

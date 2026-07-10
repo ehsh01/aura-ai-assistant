@@ -1,93 +1,106 @@
-const VOICE_PREF_KEY = "recall.voiceAnswers";
+import { getStoredToken } from "./auth-storage";
+import {
+  isSpeechSynthesisSupported,
+  pickPreferredVoice,
+  setVoiceAnswersEnabled as setVoicePref,
+  textForSpeech,
+} from "./speech-synthesis-shared";
 
-export function isSpeechSynthesisSupported(): boolean {
-  return typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
-}
-
-export function getVoiceAnswersEnabled(): boolean {
-  if (typeof window === "undefined") return true;
-  const raw = localStorage.getItem(VOICE_PREF_KEY);
-  if (raw === null) return true;
-  return raw === "1" || raw === "true";
-}
+export {
+  getVoiceAnswersEnabled,
+  isSpeechSynthesisSupported,
+  isVoiceAnswersSupported,
+  pickPreferredVoice,
+  textForSpeech,
+} from "./speech-synthesis-shared";
 
 export function setVoiceAnswersEnabled(enabled: boolean): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(VOICE_PREF_KEY, enabled ? "1" : "0");
+  setVoicePref(enabled);
   if (!enabled) stopSpeaking();
 }
 
-/** Prefer a natural English voice when the browser exposes several. */
-export function pickPreferredVoice(): SpeechSynthesisVoice | null {
-  if (!isSpeechSynthesisSupported()) return null;
-  const voices = window.speechSynthesis.getVoices();
-  if (!voices.length) return null;
+const API_BASE = "/api";
 
-  const scored = voices.map((v) => {
-    const name = v.name.toLowerCase();
-    const lang = v.lang.toLowerCase();
-    let score = 0;
-    if (lang.startsWith("en")) score += 10;
-    if (lang === "en-us" || lang === "en_us") score += 3;
-    if (lang === "en-gb" || lang === "en_gb") score += 2;
-    if (/samantha|karen|moira|serena|aria|jenny|natural|premium|enhanced|google/.test(name)) {
-      score += 8;
-    }
-    if (v.localService) score += 1;
-    if (/compact|eloquence|novelty/.test(name)) score -= 4;
-    return { v, score };
-  });
+let currentAudio: HTMLAudioElement | null = null;
+let currentObjectUrl: string | null = null;
+let speakGeneration = 0;
 
-  scored.sort((a, b) => b.score - a.score);
-  return scored[0]?.v ?? null;
-}
-
-/** Strip markdown / UI noise so TTS sounds natural. */
-export function textForSpeech(raw: string): string {
-  return raw
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/!\[[^\]]*\]\([^)]+\)/g, " ")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/[#>*_~]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+function cleanupAudio(): void {
+  if (currentAudio) {
+    currentAudio.onended = null;
+    currentAudio.onerror = null;
+    currentAudio.pause();
+    currentAudio.src = "";
+    currentAudio = null;
+  }
+  if (currentObjectUrl) {
+    URL.revokeObjectURL(currentObjectUrl);
+    currentObjectUrl = null;
+  }
 }
 
 export function stopSpeaking(): void {
-  if (!isSpeechSynthesisSupported()) return;
-  window.speechSynthesis.cancel();
+  speakGeneration += 1;
+  cleanupAudio();
+  if (isSpeechSynthesisSupported()) {
+    window.speechSynthesis.cancel();
+  }
 }
 
 export type SpeakOptions = {
   rate?: number;
   pitch?: number;
+  voice?: string;
   onEnd?: () => void;
   onError?: () => void;
 };
 
-/**
- * Speak text with the browser voice. Cancels any in-progress utterance first.
- * Returns false if synthesis is unavailable or text is empty.
- */
-export function speakText(text: string, options: SpeakOptions = {}): boolean {
-  if (!isSpeechSynthesisSupported()) return false;
-  const cleaned = textForSpeech(text);
-  if (!cleaned) return false;
+async function fetchOpenAiTts(text: string, voice?: string): Promise<Blob> {
+  const token = getStoredToken();
+  const headers: Record<string, string> = {
+    Accept: "audio/mpeg",
+    "Content-Type": "application/json",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${API_BASE}/ai/tts`, {
+    method: "POST",
+    headers,
+    credentials: "include",
+    body: JSON.stringify({ text, ...(voice ? { voice } : {}) }),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { message?: string };
+    throw new Error(err.message ?? `TTS failed (${res.status})`);
+  }
+  return res.blob();
+}
+
+function speakBrowser(cleaned: string, options: SpeakOptions, generation: number): boolean {
+  if (!isSpeechSynthesisSupported()) {
+    options.onError?.();
+    return false;
+  }
 
   window.speechSynthesis.cancel();
-
   const utter = new SpeechSynthesisUtterance(cleaned);
   utter.rate = options.rate ?? 1.02;
   utter.pitch = options.pitch ?? 1;
   const voice = pickPreferredVoice();
   if (voice) utter.voice = voice;
 
-  utter.onend = () => options.onEnd?.();
-  utter.onerror = () => options.onError?.();
+  utter.onend = () => {
+    if (generation === speakGeneration) options.onEnd?.();
+  };
+  utter.onerror = () => {
+    if (generation === speakGeneration) options.onError?.();
+  };
 
-  // Chrome sometimes needs voices to load asynchronously.
-  const start = () => window.speechSynthesis.speak(utter);
+  const start = () => {
+    if (generation !== speakGeneration) return;
+    window.speechSynthesis.speak(utter);
+  };
+
   if (window.speechSynthesis.getVoices().length === 0) {
     const onVoices = () => {
       window.speechSynthesis.removeEventListener("voiceschanged", onVoices);
@@ -96,14 +109,51 @@ export function speakText(text: string, options: SpeakOptions = {}): boolean {
       start();
     };
     window.speechSynthesis.addEventListener("voiceschanged", onVoices);
-    // Fallback if voiceschanged never fires.
     window.setTimeout(() => {
       window.speechSynthesis.removeEventListener("voiceschanged", onVoices);
-      if (!window.speechSynthesis.speaking) start();
+      if (generation === speakGeneration && !window.speechSynthesis.speaking) start();
     }, 250);
   } else {
     start();
   }
 
   return true;
+}
+
+/**
+ * Speak with OpenAI TTS when available; fall back to browser speech synthesis.
+ */
+export async function speakText(text: string, options: SpeakOptions = {}): Promise<boolean> {
+  const cleaned = textForSpeech(text);
+  if (!cleaned) return false;
+
+  stopSpeaking();
+  const generation = speakGeneration;
+
+  try {
+    const blob = await fetchOpenAiTts(cleaned, options.voice);
+    if (generation !== speakGeneration) return false;
+
+    const url = URL.createObjectURL(blob);
+    currentObjectUrl = url;
+    const audio = new Audio(url);
+    currentAudio = audio;
+
+    audio.onended = () => {
+      if (generation !== speakGeneration) return;
+      cleanupAudio();
+      options.onEnd?.();
+    };
+    audio.onerror = () => {
+      if (generation !== speakGeneration) return;
+      cleanupAudio();
+      speakBrowser(cleaned, options, generation);
+    };
+
+    await audio.play();
+    return true;
+  } catch {
+    if (generation !== speakGeneration) return false;
+    return speakBrowser(cleaned, options, generation);
+  }
 }

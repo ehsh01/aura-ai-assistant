@@ -69,6 +69,18 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     return;
   }
 
+  const status =
+    typeof err === "object" &&
+    err !== null &&
+    "status" in err &&
+    typeof (err as { status?: unknown }).status === "number"
+      ? (err as { status: number }).status
+      : 500;
+  if (status >= 400 && status < 600 && status !== 500 && err instanceof Error) {
+    res.status(status).json({ error: "REQUEST_ERROR", message: err.message });
+    return;
+  }
+
   logger.error({ err }, "Unhandled error");
   res.status(500).json({ error: "INTERNAL_ERROR", message: "Something went wrong" });
 });
