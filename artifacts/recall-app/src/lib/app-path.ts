@@ -1,5 +1,6 @@
 export const APP_PATHS = [
   "/",
+  "/today",
   "/ask",
   "/notes",
   "/notebooks",

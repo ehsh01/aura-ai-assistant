@@ -7,6 +7,7 @@ import { RecallDataProvider } from "@/context/RecallDataContext";
 import { AuthProvider } from "@/context/AuthContext";
 import { RequireAuth } from "@/components/RequireAuth";
 import { Dashboard } from "@/pages/Dashboard";
+import { Today } from "@/pages/Today";
 import { Notes } from "@/pages/Notes";
 import { Notebooks } from "@/pages/Notebooks";
 import { Tasks } from "@/pages/Tasks";
@@ -58,6 +59,7 @@ function Router() {
     <RequireAuth>
       <Switch>
         <Route path="/" component={Dashboard} />
+        <Route path="/today" component={Today} />
         <Route path="/ask" component={Ask} />
         <Route path="/notes" component={Notes} />
         <Route path="/notebooks" component={Notebooks} />

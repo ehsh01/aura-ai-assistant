@@ -42,10 +42,10 @@ const primaryTabs: TabItem[] = [
     match: (path) => path === "/",
   },
   {
-    href: notesPath(),
-    label: "Memory",
-    icon: <FileText size={22} strokeWidth={1.8} />,
-    match: (path) => path === "/notes",
+    href: "/today",
+    label: "Today",
+    icon: <LayoutGrid size={22} strokeWidth={1.8} />,
+    match: (path) => path === "/today",
   },
   {
     href: "/inbox",
@@ -196,6 +196,10 @@ export function MobileMoreSheet({
           <Link href="/ask" onClick={close} className={linkClass(location === "/ask")}>
             <Sparkles size={18} />
             <span className="flex-1 text-sm font-medium">Ask Recall</span>
+          </Link>
+          <Link href="/today" onClick={close} className={linkClass(location === "/today")}>
+            <LayoutGrid size={18} />
+            <span className="flex-1 text-sm font-medium">Today</span>
           </Link>
           <Link href="/documents" onClick={close} className={linkClass(location === "/documents")}>
             <FileText size={18} />

@@ -30,7 +30,16 @@ export function homePath(opts?: { capture?: string }): string {
   const params = new URLSearchParams();
   if (opts?.capture?.trim()) params.set("capture", opts.capture.trim());
   const q = params.toString();
-  return q ? `/?${q}` : "/";
+  // Captures land on Today (pending workspace); bare home is the oracle Ask screen.
+  if (q) return `/today?${q}`;
+  return "/";
+}
+
+export function todayPath(opts?: { capture?: string }): string {
+  const params = new URLSearchParams();
+  if (opts?.capture?.trim()) params.set("capture", opts.capture.trim());
+  const q = params.toString();
+  return q ? `/today?${q}` : "/today";
 }
 
 export function inboxPath(opts?: { captureId?: string }): string {

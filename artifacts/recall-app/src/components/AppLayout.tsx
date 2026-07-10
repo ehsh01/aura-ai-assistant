@@ -12,6 +12,8 @@ import { notesPath, readSearchParam } from "@/lib/recall-nav";
 
 interface AppLayoutProps {
   children: React.ReactNode;
+  /** Home oracle mode: hide sidebar until left-edge hover. */
+  immersive?: boolean;
 }
 
 type NavEntry = {
@@ -47,6 +49,17 @@ const staticNavItems = [
         <rect x="14" y="3" width="7" height="7" rx="1.5"/>
         <rect x="3" y="14" width="7" height="7" rx="1.5"/>
         <rect x="14" y="14" width="7" height="7" rx="1.5"/>
+      </svg>
+    ),
+  },
+  {
+    id: "/today",
+    label: "Today",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="4" width="18" height="18" rx="2"/>
+        <path d="M16 2v4M8 2v4M3 10h18"/>
+        <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/>
       </svg>
     ),
   },
@@ -128,7 +141,7 @@ const staticNavItems = [
   },
   {
     id: "/tasks",
-    label: "Today",
+    label: "Tasks",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <path d="M9 11l3 3L22 4"/>
@@ -192,12 +205,14 @@ function SidebarNavButton({
   );
 }
 
-export function AppLayout({ children }: AppLayoutProps) {
+export function AppLayout({ children, immersive = false }: AppLayoutProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [captureOpen, setCaptureOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [sidebarQuery, setSidebarQuery] = useState("");
   const [queuedCaptures, setQueuedCaptures] = useState(0);
+  const [railOpen, setRailOpen] = useState(false);
+  const railCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sidebarSearchRef = useRef<HTMLInputElement>(null);
   const [location, navigate] = useLocation();
   const { user, logout } = useAuth();
@@ -206,6 +221,20 @@ export function AppLayout({ children }: AppLayoutProps) {
   const onNotesPage = location === "/notes";
   const activeNotebook = onNotesPage ? readSearchParam("notebook") ?? "all" : "all";
   const [notebooksExpanded, setNotebooksExpanded] = useState(false);
+  const hideRail = immersive && !railOpen;
+
+  const openRail = () => {
+    if (railCloseTimer.current) clearTimeout(railCloseTimer.current);
+    setRailOpen(true);
+  };
+  const scheduleCloseRail = () => {
+    if (railCloseTimer.current) clearTimeout(railCloseTimer.current);
+    railCloseTimer.current = setTimeout(() => setRailOpen(false), 280);
+  };
+
+  useEffect(() => {
+    if (!immersive) setRailOpen(false);
+  }, [immersive, location]);
 
   useEffect(() => subscribeCaptureQueue(setQueuedCaptures), []);
 
@@ -294,6 +323,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   const moreActive =
     location === "/notebooks" ||
     location === "/tasks" ||
+    location === "/today" ||
     location === "/canvas" ||
     location === "/ask" ||
     location === "/documents" ||
@@ -313,11 +343,31 @@ export function AppLayout({ children }: AppLayoutProps) {
       }))
     : [];
 
+  const sidebarWidth = collapsed ? 64 : 220;
+
   return (
     <div className="flex h-[100dvh] bg-[#0a0a0f] text-white overflow-hidden recall-safe-top">
+      {/* Left-edge hover target — reveals nav on immersive Home */}
+      {immersive && (
+        <div
+          className="pointer-events-auto fixed inset-y-0 left-0 z-[60] hidden w-3 md:block"
+          onMouseEnter={openRail}
+          aria-hidden
+        />
+      )}
+
       <aside
-        className="hidden md:flex flex-col border-r border-white/[0.06] transition-all duration-300 ease-in-out flex-shrink-0"
-        style={{ width: collapsed ? 64 : 220, background: "rgba(255,255,255,0.02)" }}
+        className={`hidden md:flex flex-col border-r border-white/[0.06] transition-all duration-300 ease-out flex-shrink-0 ${
+          immersive ? "fixed inset-y-0 left-0 z-[55] shadow-2xl shadow-black/50" : ""
+        }`}
+        style={{
+          width: sidebarWidth,
+          background: immersive ? "rgba(8,8,14,0.92)" : "rgba(255,255,255,0.02)",
+          backdropFilter: immersive ? "blur(20px)" : undefined,
+          transform: hideRail ? "translateX(-105%)" : "translateX(0)",
+        }}
+        onMouseEnter={immersive ? openRail : undefined}
+        onMouseLeave={immersive ? scheduleCloseRail : undefined}
       >
         <div className="flex items-center gap-3 px-4 py-5 border-b border-white/[0.06]">
           <RecallLogo size={collapsed ? 36 : 44} />
@@ -474,14 +524,14 @@ export function AppLayout({ children }: AppLayoutProps) {
       </aside>
 
       <main className="flex-1 overflow-hidden flex flex-col min-w-0 pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:pb-0">
-        <OfflineQueueBanner />
+        {!immersive && <OfflineQueueBanner />}
         {children}
       </main>
       <button
         type="button"
         onClick={() => setCaptureOpen(true)}
         className={`fixed bottom-6 right-6 z-40 items-center gap-2 rounded-full bg-indigo-500 px-5 py-3 text-sm font-semibold text-white shadow-2xl shadow-indigo-500/25 hover:bg-indigo-400 ${
-          location === "/" ? "hidden" : "hidden md:flex"
+          immersive ? "hidden" : "hidden md:flex"
         }`}
       >
         <Plus size={18} />
@@ -499,6 +549,18 @@ export function AppLayout({ children }: AppLayoutProps) {
         moreActive={moreActive}
         queuedCaptures={queuedCaptures}
       />
+      {immersive && (
+        <button
+          type="button"
+          onClick={() => setMoreOpen(true)}
+          className="fixed left-3 top-[max(0.75rem,env(safe-area-inset-top))] z-40 flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-black/40 text-white/70 backdrop-blur-md md:hidden"
+          aria-label="Open menu"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+      )}
       <MobileMoreSheet
         open={moreOpen}
         onOpenChange={setMoreOpen}

@@ -256,6 +256,69 @@
     50% { border-color: rgba(99, 102, 241, 1); }
   }
 
+  @keyframes oracle-rise {
+    from {
+      opacity: 0;
+      transform: translateY(48px) scale(0.94);
+      filter: blur(12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      filter: blur(0);
+    }
+  }
+  @keyframes oracle-scrim-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes oracle-prompt-glow {
+    0%, 100% { box-shadow: 0 0 0 1px rgba(255,255,255,0.12), 0 20px 60px -20px rgba(0,0,0,0.8), 0 0 40px rgba(99,102,241,0.15); }
+    50% { box-shadow: 0 0 0 1px rgba(165,180,252,0.35), 0 20px 60px -20px rgba(0,0,0,0.8), 0 0 56px rgba(99,102,241,0.28); }
+  }
+
+  .oracle-home { background: #000; }
+  .oracle-brand { animation: recall-fade-in 0.9s ease-out both; }
+  .oracle-prompt-shell { animation: recall-fade-in 1s ease-out 0.12s both; }
+  .oracle-prompt {
+    border-radius: 1.25rem;
+    background: rgba(12, 12, 20, 0.55);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255,255,255,0.14);
+    animation: oracle-prompt-glow 5s ease-in-out infinite;
+  }
+  .oracle-prompt:focus-within {
+    border-color: rgba(165,180,252,0.45);
+  }
+  .oracle-answer-scrim {
+    animation: oracle-scrim-in 0.45s ease-out both;
+  }
+  .oracle-answer-panel {
+    animation: oracle-rise 0.65s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .oracle-answer-card {
+    border-radius: 1.5rem;
+    background: rgba(10, 10, 18, 0.72);
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+    border: 1px solid rgba(255,255,255,0.14);
+    box-shadow:
+      0 0 0 1px rgba(99,102,241,0.12),
+      0 40px 100px -20px rgba(0,0,0,0.85),
+      0 0 80px rgba(99,102,241,0.12);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .oracle-brand,
+    .oracle-prompt-shell,
+    .oracle-answer-scrim,
+    .oracle-answer-panel,
+    .oracle-prompt {
+      animation: none !important;
+    }
+  }
+
   .nebula-bg { background-color: #000000; position: relative; overflow: hidden; }
   .nebula-orb { position: absolute; border-radius: 50%; filter: blur(120px); z-index: 0; pointer-events: none; animation: drift 20s infinite alternate ease-in-out; }
   .orb-1 { width: 600px; height: 600px; background: radial-gradient(circle, rgba(124,58,237,0.4) 0%, transparent 70%); top: -200px; left: -100px; animation-duration: 25s; }
