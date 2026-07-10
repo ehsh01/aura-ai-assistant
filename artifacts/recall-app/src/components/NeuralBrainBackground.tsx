@@ -54,6 +54,110 @@ function drawTriangle(
   }
 }
 
+/** Deterministic 0..1 from synapse endpoints. */
+function synapseSeed(a: number, b: number): number {
+  const n = Math.sin(a * 12.9898 + b * 78.233) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+/**
+ * Some synapses occasionally fire: returns travel progress 0..1 while active.
+ * Only ~20% of edges are fireable; each has its own period/phase.
+ */
+function synapseFireProgress(a: number, b: number, time: number): number | null {
+  const seed = synapseSeed(a, b);
+  if (seed > 0.2) return null;
+  const period = 2.6 + synapseSeed(b, a) * 5.2;
+  const phase = seed * period * 3.1;
+  const cycle = ((time + phase) % period) / period;
+  const window = 0.14 + synapseSeed(a + 3, b + 7) * 0.08;
+  if (cycle > window) return null;
+  return cycle / window;
+}
+
+function drawSynapseFires(
+  ctx: CanvasRenderingContext2D,
+  projected: ProjectedPoint[],
+  synapses: { a: number; b: number; strength: number }[],
+  time: number,
+  fillScreen: boolean,
+) {
+  ctx.save();
+  // Sparks alone can use additive — they're sparse enough not to bloom white.
+  ctx.globalCompositeOperation = "lighter";
+
+  for (const s of synapses) {
+    const progress = synapseFireProgress(s.a, s.b, time);
+    if (progress === null) continue;
+    const from = projected[s.a];
+    const to = projected[s.b];
+    if (!from || !to) continue;
+
+    const seed = synapseSeed(s.a, s.b);
+    const reverse = synapseSeed(s.b, s.a) > 0.5;
+    const t = reverse ? 1 - progress : progress;
+    const x = from.x + (to.x - from.x) * t;
+    const y = from.y + (to.y - from.y) * t;
+
+    // Envelope: bright mid-travel, soft at start/end.
+    const envelope = Math.sin(progress * Math.PI);
+    const hue = 200 + seed * 90;
+
+    // Briefly light the whole axon while the pulse travels.
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.strokeStyle = `hsla(${hue}, 95%, 82%, ${envelope * (fillScreen ? 0.45 : 0.28)})`;
+    ctx.lineWidth = fillScreen ? 1.6 : 1.1;
+    ctx.stroke();
+
+    const trailBehind = 0.18;
+    const back = reverse
+      ? Math.min(1, t + trailBehind)
+      : Math.max(0, t - trailBehind);
+    const tx0 = from.x + (to.x - from.x) * back;
+    const ty0 = from.y + (to.y - from.y) * back;
+    const grad = ctx.createLinearGradient(tx0, ty0, x, y);
+    grad.addColorStop(0, `hsla(${hue}, 100%, 80%, 0)`);
+    grad.addColorStop(1, `hsla(${hue}, 100%, 88%, ${envelope * 0.85})`);
+    ctx.beginPath();
+    ctx.moveTo(tx0, ty0);
+    ctx.lineTo(x, y);
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = fillScreen ? 2.4 : 1.8;
+    ctx.lineCap = "round";
+    ctx.stroke();
+
+    // Bright spark head.
+    const r = (fillScreen ? 3.2 : 2.4) * (0.65 + envelope * 0.55);
+    const glow = ctx.createRadialGradient(x, y, 0, x, y, r * 3.2);
+    glow.addColorStop(0, `hsla(${hue}, 100%, 95%, ${envelope * 0.95})`);
+    glow.addColorStop(0.35, `hsla(${hue}, 95%, 78%, ${envelope * 0.45})`);
+    glow.addColorStop(1, `hsla(${hue}, 90%, 70%, 0)`);
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(x, y, r * 3.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Tiny core
+    ctx.beginPath();
+    ctx.arc(x, y, r * 0.45, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(0, 0%, 100%, ${envelope * 0.9})`;
+    ctx.fill();
+
+    // Endpoint flash when the pulse arrives / departs.
+    if (progress < 0.18 || progress > 0.82) {
+      const tip = progress < 0.18 ? (reverse ? to : from) : reverse ? from : to;
+      const tipFlash = progress < 0.18 ? 1 - progress / 0.18 : (progress - 0.82) / 0.18;
+      ctx.beginPath();
+      ctx.arc(tip.x, tip.y, (fillScreen ? 5 : 3.5) * tipFlash, 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${hue}, 100%, 90%, ${tipFlash * 0.55})`;
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
 function renderFrame(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -63,6 +167,7 @@ function renderFrame(
   time: number,
   vivid: boolean,
   fillScreen: boolean,
+  animateFires: boolean,
 ) {
   ctx.clearRect(0, 0, width, height);
 
@@ -156,6 +261,10 @@ function renderFrame(
     );
   }
   ctx.restore();
+
+  if (animateFires) {
+    drawSynapseFires(ctx, projected, synapses, time, fillScreen);
+  }
 }
 
 /**
@@ -247,7 +356,7 @@ export function NeuralBrainBackground({
         pointerRef.current,
         fillScreen,
       );
-      renderFrame(ctx, w, h, projected, synapses, time, vivid, fillScreen);
+      renderFrame(ctx, w, h, projected, synapses, time, vivid, fillScreen, !reduced);
       if (!reduced) raf = requestAnimationFrame(tick);
     };
 
