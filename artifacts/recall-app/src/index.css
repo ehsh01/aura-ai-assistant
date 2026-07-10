@@ -256,7 +256,7 @@
     50% { border-color: rgba(99, 102, 241, 1); }
   }
 
-  .nebula-bg { background-color: #060610; position: relative; overflow: hidden; }
+  .nebula-bg { background-color: #000000; position: relative; overflow: hidden; }
   .nebula-orb { position: absolute; border-radius: 50%; filter: blur(120px); z-index: 0; pointer-events: none; animation: drift 20s infinite alternate ease-in-out; }
   .orb-1 { width: 600px; height: 600px; background: radial-gradient(circle, rgba(124,58,237,0.4) 0%, transparent 70%); top: -200px; left: -100px; animation-duration: 25s; }
   .orb-2 { width: 500px; height: 500px; background: radial-gradient(circle, rgba(79,70,229,0.3) 0%, transparent 70%); bottom: -150px; right: -100px; animation-duration: 22s; animation-delay: -5s; }

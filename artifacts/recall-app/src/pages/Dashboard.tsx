@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { ArrowRight, ShieldCheck, Sparkles } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
@@ -6,10 +6,12 @@ import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
   fetchHome,
   listActivity,
+  listPeople,
   queryRecall,
   type ActivityRecord,
   type EvidenceRecord,
   type HomeBriefingResponse,
+  type PersonRecord,
 } from "@/lib/recall-api";
 import { ingestCaptureReliable } from "@/lib/capture-queue";
 import { RecentActivityCard } from "@/components/home/RecentActivityCard";
@@ -38,6 +40,7 @@ import { RecallInsightsSection } from "@/components/home/RecallInsightsSection";
 import { CurrentContextSection } from "@/components/home/CurrentContextSection";
 import { FinanceSnapshotCard } from "@/components/home/FinanceSnapshotCard";
 import { BrainDumpInput } from "@/components/home/BrainDumpInput";
+import { NeuralBrainBackground } from "@/components/NeuralBrainBackground";
 
 function firstLineTitle(text: string, fallback = "Quick capture"): string {
   const line = text.trim().split(/\r?\n/).find(Boolean) ?? fallback;
@@ -68,6 +71,7 @@ export function Dashboard() {
   const [askPending, setAskPending] = useState(false);
   const [captures, setCaptures] = useState<RecallCaptureItem[]>([]);
   const [projects, setProjects] = useState<RecallProject[]>([]);
+  const [people, setPeople] = useState<PersonRecord[]>([]);
   const [home, setHome] = useState<HomeBriefingResponse | null>(null);
   const [activity, setActivity] = useState<ActivityRecord[]>([]);
   const [capturePrefill, setCapturePrefill] = useState<string | null>(() =>
@@ -91,6 +95,9 @@ export function Dashboard() {
     refreshHome();
     refreshCaptures();
     void listProjects().then((res) => setProjects(res.projects as RecallProject[])).catch(() => {});
+    void listPeople()
+      .then((res) => setPeople(res.people))
+      .catch(() => setPeople([]));
     void listActivity({ limit: 6 })
       .then((res) => setActivity(res.items))
       .catch(() => setActivity([]));
@@ -197,13 +204,45 @@ export function Dashboard() {
   const finance = home?.finance ?? null;
   const conf = askResult ? confidenceLabel(askResult.confidence) : null;
 
+  const brainGraph = useMemo(
+    () => ({
+      tasks: tasks.map((t) => ({
+        id: t.id,
+        title: t.title,
+        completed: t.completed,
+        requesterPersonId: t.requesterPersonId,
+        projectId: t.projectId,
+      })),
+      notes: notes.map((n) => ({
+        id: n.id,
+        title: n.title,
+        primaryPersonId: n.primaryPersonId,
+        projectId: n.projectId,
+        updatedAt: n.updatedAt,
+        createdAt: n.createdAt,
+      })),
+      people: people.map((p) => ({ id: p.id, displayName: p.displayName })),
+      projects: projects.map((p) => ({ id: p.id, name: p.name })),
+      captures: captures.map((c) => ({
+        id: c.id,
+        cleanedTitle: c.cleanedTitle,
+        status: c.status,
+      })),
+    }),
+    [tasks, notes, people, projects, captures],
+  );
+
   return (
     <AppLayout>
-      <div className="nebula-bg h-full overflow-y-auto text-zinc-100 dashboard-hide-scrollbar">
-        <div className="orb-1 nebula-orb" />
-        <div className="orb-3 nebula-orb" />
+      <div className="nebula-bg relative h-full text-zinc-100">
+        <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+          <NeuralBrainBackground graph={brainGraph} opacity={0.5} />
+          <div className="orb-1 nebula-orb opacity-35" />
+          <div className="orb-3 nebula-orb opacity-25" />
+        </div>
 
-        <div className="relative z-10 mx-auto w-full max-w-5xl space-y-6 px-4 pb-44 pt-6 md:px-8 md:pt-8">
+        <div className="relative z-10 h-full overflow-y-auto dashboard-hide-scrollbar">
+        <div className="mx-auto w-full max-w-5xl space-y-6 px-4 pb-44 pt-6 md:px-8 md:pt-8">
           <DailyBriefingCard briefing={briefing} date={date} />
 
           <MorningActions focus={focus} waiting={waiting} briefing={briefing} />
@@ -357,6 +396,7 @@ export function Dashboard() {
           <DontForgetSection items={dontForget} />
 
           <CurrentContextSection areas={contextAreas} />
+        </div>
         </div>
       </div>
 
