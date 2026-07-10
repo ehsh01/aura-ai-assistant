@@ -1,25 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "wouter";
-import {
-  ArrowRight,
-  Loader2,
-  ShieldCheck,
-  Sparkles,
-  Volume2,
-  VolumeX,
-  X,
-} from "lucide-react";
+import { ArrowRight, Loader2, Sparkles, X } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
   listPeople,
   queryRecall,
-  type EvidenceRecord,
   type PersonRecord,
 } from "@/lib/recall-api";
 import { useRecallData } from "@/context/RecallDataContext";
 import { type RecallCaptureItem, type RecallProject } from "@/lib/recall-context";
-import { entityPath, readSearchParam } from "@/lib/recall-nav";
+import { readSearchParam } from "@/lib/recall-nav";
 import { NeuralBrainBackground } from "@/components/NeuralBrainBackground";
 import { MicButton } from "@/components/MicButton";
 import { RecallLogo } from "@/components/RecallLogo";
@@ -29,40 +19,7 @@ import { stopSpeaking } from "@/lib/speech-synthesis";
 type AskResult = {
   question: string;
   answer: string;
-  confidence: number;
-  caveats: string | null;
-  evidence: EvidenceRecord[];
-  suggestedNextAction: string | null;
-  privacy?: {
-    model: string | null;
-    dataLeftDevice: boolean;
-    categoriesSent: string[];
-  };
 };
-
-function privacyChipLabel(privacy: NonNullable<AskResult["privacy"]>): string {
-  const cats = privacy.categoriesSent
-    .map((c) => {
-      if (c === "memory") return "Memory";
-      if (c === "note") return "Notes";
-      if (c === "task") return "Tasks";
-      if (c === "knowledge") return "Knowledge";
-      if (c === "person") return "People";
-      return c;
-    })
-    .filter((v, i, a) => a.indexOf(v) === i)
-    .slice(0, 4);
-  const used = cats.length > 0 ? cats.join(" + ") : "your data";
-  if (!privacy.dataLeftDevice) return `Answer used ${used} · stayed on device`;
-  const model = privacy.model ? ` · sent to ${privacy.model}` : " · sent to AI";
-  return `Answer used ${used}${model}`;
-}
-
-function confidenceLabel(score: number): { label: string; className: string } {
-  if (score >= 0.8) return { label: "High confidence", className: "text-emerald-300 bg-emerald-500/10" };
-  if (score >= 0.5) return { label: "Needs review", className: "text-amber-300 bg-amber-500/10" };
-  return { label: "Low confidence", className: "text-red-300 bg-red-500/10" };
-}
 
 /** Immersive oracle Home — background + ask only. */
 export function Dashboard() {
@@ -112,20 +69,11 @@ export function Dashboard() {
       setAskResult({
         question: q,
         answer: res.answer,
-        confidence: res.confidence,
-        caveats: res.caveats,
-        evidence: res.evidence,
-        suggestedNextAction: res.suggestedNextAction,
-        privacy: res.privacy,
       });
     } catch {
       setAskResult({
         question: q,
         answer: "Could not reach Recall. Check that you are signed in and try again.",
-        confidence: 0,
-        caveats: null,
-        evidence: [],
-        suggestedNextAction: null,
       });
     } finally {
       setAskPending(false);
@@ -137,7 +85,7 @@ export function Dashboard() {
     setPanelOpen(false);
   };
 
-  const voice = useSpeakAnswer(askResult?.answer, Boolean(askResult && !askPending));
+  useSpeakAnswer(askResult?.answer, Boolean(askResult && !askPending));
 
   const brainGraph = useMemo(
     () => ({
@@ -167,7 +115,6 @@ export function Dashboard() {
     [tasks, notes, people, projects, captures],
   );
 
-  const conf = askResult ? confidenceLabel(askResult.confidence) : null;
   const showAnswer = panelOpen && (askPending || askResult);
 
   return (
@@ -264,121 +211,18 @@ export function Dashboard() {
         {showAnswer && (
           <div className="oracle-answer-panel absolute inset-x-0 bottom-0 z-30 flex max-h-[78%] justify-center px-3 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] md:inset-x-auto md:left-1/2 md:bottom-auto md:top-1/2 md:w-full md:max-w-2xl md:-translate-x-1/2 md:-translate-y-[42%] md:px-4 md:pb-0">
             <article className="oracle-answer-card relative flex max-h-full w-full flex-col overflow-hidden">
-              <div className="flex items-start justify-between gap-3 border-b border-white/10 px-5 py-4">
-                <div className="min-w-0">
-                  <p className="text-xs font-medium uppercase tracking-[0.2em] text-indigo-300/80">
-                    Recall
-                  </p>
-                  {askResult?.question && (
-                    <p className="mt-1 truncate text-sm text-white/45">“{askResult.question}”</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  {voice.supported && askResult && !askPending && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (voice.speaking) voice.stop();
-                          else voice.replay();
-                        }}
-                        className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
-                        aria-label={voice.speaking ? "Stop speaking" : "Read answer aloud"}
-                        title={voice.speaking ? "Stop" : "Read aloud"}
-                      >
-                        <Volume2 size={18} className={voice.speaking ? "text-indigo-300" : undefined} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => voice.setVoiceEnabled(!voice.enabled)}
-                        className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
-                        aria-label={voice.enabled ? "Mute voice answers" : "Enable voice answers"}
-                        title={voice.enabled ? "Mute voice answers" : "Enable voice answers"}
-                      >
-                        {voice.enabled ? (
-                          <span className="px-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-300">
-                            Voice
-                          </span>
-                        ) : (
-                          <VolumeX size={18} />
-                        )}
-                      </button>
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    onClick={closePanel}
-                    className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
-                    aria-label="Close"
-                  >
-                    <X size={18} />
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex-1 overflow-y-auto px-5 py-4 recall-scrollbar">
-                <div className="mb-3 flex flex-wrap gap-2">
-                  {conf && askResult && askResult.confidence > 0 && (
-                    <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${conf.className}`}>
-                      {conf.label} · {Math.round(askResult.confidence * 100)}%
-                    </span>
-                  )}
-                  {askResult?.privacy && (
-                    <span className="rounded-full bg-white/5 px-2.5 py-1 text-xs text-white/50">
-                      {privacyChipLabel(askResult.privacy)}
-                    </span>
-                  )}
-                </div>
-
-                <p className="whitespace-pre-wrap text-base leading-relaxed text-white/90 md:text-lg">
+              <button
+                type="button"
+                onClick={closePanel}
+                className="absolute right-3 top-3 z-10 rounded-lg p-1.5 text-white/35 hover:bg-white/10 hover:text-white"
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+              <div className="flex-1 overflow-y-auto px-6 py-8 recall-scrollbar md:px-8 md:py-10">
+                <p className="whitespace-pre-wrap text-center text-lg leading-relaxed text-white/95 md:text-xl">
                   {askPending ? "Listening to your world…" : askResult?.answer}
                 </p>
-
-                {askResult?.caveats && (
-                  <p className="mt-4 text-sm text-amber-200/80">⚠ {askResult.caveats}</p>
-                )}
-
-                {askResult && askResult.evidence.length > 0 && (
-                  <div className="mt-5 border-t border-white/10 pt-4">
-                    <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/40">
-                      <ShieldCheck size={12} className="text-indigo-300" />
-                      Evidence
-                    </p>
-                    <div className="space-y-2">
-                      {askResult.evidence.slice(0, 4).map((ev) => {
-                        const relatedType =
-                          typeof ev.evidenceMetadata?.relatedEntityType === "string"
-                            ? ev.evidenceMetadata.relatedEntityType
-                            : ev.entityType;
-                        const relatedId =
-                          typeof ev.evidenceMetadata?.relatedEntityId === "string"
-                            ? ev.evidenceMetadata.relatedEntityId
-                            : ev.entityId;
-                        const href = entityPath(relatedType, relatedId);
-                        return (
-                          <div key={ev.id}>
-                            <p className="line-clamp-2 text-xs text-white/50">{ev.evidenceText}</p>
-                            {href && (
-                              <Link
-                                href={href}
-                                className="mt-0.5 inline-block text-[11px] text-indigo-300 no-underline hover:underline"
-                              >
-                                Open {relatedType}
-                              </Link>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {askResult?.suggestedNextAction && (
-                  <p className="mt-4 flex items-center gap-1.5 text-sm text-indigo-200">
-                    <ArrowRight size={14} />
-                    {askResult.suggestedNextAction}
-                  </p>
-                )}
               </div>
             </article>
           </div>
