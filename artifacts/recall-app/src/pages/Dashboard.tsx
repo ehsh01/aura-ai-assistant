@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, Loader2, Sparkles, X } from "lucide-react";
+import { ArrowRight, X } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
@@ -11,6 +11,7 @@ import { useRecallData } from "@/context/RecallDataContext";
 import { type RecallCaptureItem, type RecallProject } from "@/lib/recall-context";
 import { readSearchParam } from "@/lib/recall-nav";
 import { NeuralBrainBackground } from "@/components/NeuralBrainBackground";
+import { NeuralBrainOrb } from "@/components/NeuralBrainOrb";
 import { MicButton } from "@/components/MicButton";
 import { RecallLogo } from "@/components/RecallLogo";
 import { useSpeakAnswer } from "@/hooks/use-speak-answer";
@@ -176,13 +177,7 @@ export function Dashboard() {
               className="oracle-prompt-shell w-full"
             >
               <div className="oracle-prompt flex items-center gap-3 px-4 py-3 md:px-5 md:py-4">
-                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-white/10 text-indigo-200">
-                  {askPending ? (
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                  ) : (
-                    <Sparkles className="h-5 w-5" />
-                  )}
-                </span>
+                <NeuralBrainOrb active={askPending} size={40} />
                 <input
                   type="text"
                   value={question}
