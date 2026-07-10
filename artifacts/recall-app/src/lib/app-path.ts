@@ -1,4 +1,19 @@
-export const APP_PATHS = ["/", "/notes", "/notebooks", "/inbox", "/projects", "/tasks", "/canvas"] as const;
+export const APP_PATHS = [
+  "/",
+  "/ask",
+  "/notes",
+  "/notebooks",
+  "/inbox",
+  "/documents",
+  "/memory",
+  "/knowledge",
+  "/people",
+  "/activity",
+  "/connectors",
+  "/projects",
+  "/tasks",
+  "/canvas",
+] as const;
 
 export type AppPath = (typeof APP_PATHS)[number];
 
@@ -24,5 +39,5 @@ export function normalizeBrowserPath(): void {
 }
 
 export function isAppPath(path: string): path is AppPath {
-  return (APP_PATHS as readonly string[]).includes(path);
+  return (APP_PATHS as readonly string[]).includes(path) || path.startsWith("/projects/");
 }
