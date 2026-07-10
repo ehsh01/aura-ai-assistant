@@ -36,6 +36,11 @@ describe("mentionedPeople", () => {
     ];
     expect(mentionedPeople("Ask Mike Hernandez for the quote", both)).toEqual([both[1]]);
   });
+
+  it("fuzzy-matches typos in a unique first name", () => {
+    const wife = [{ id: "s1", displayName: "Sandra Hernandez" }];
+    expect(mentionedPeople("email from sandrra", wife)).toEqual([wife[0]]);
+  });
 });
 
 describe("PERSON_INTENT / WAITING_INTENT", () => {

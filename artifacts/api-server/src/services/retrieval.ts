@@ -235,11 +235,13 @@ export function mentionedPeople(
   const lower = question.toLowerCase();
   const fullHits: PersonRef[] = [];
   const firstHits: PersonRef[] = [];
+  const qTokens = questionNameTokens(question);
 
   for (const p of people) {
     const name = p.displayName.trim();
     if (name.length < 2) continue;
-    const qTokens = questionNameTokens(question);
+
+    // Exact full-name or email substring — strongest signal.
     if (lower.includes(name.toLowerCase())) {
       fullHits.push(p);
       continue;
@@ -248,11 +250,25 @@ export function mentionedPeople(
       fullHits.push(p);
       continue;
     }
-    const nameParts = name.toLowerCase().split(/\s+/).filter((t) => t.length >= 3);
-    if (nameParts.some((part) => qTokens.some((t) => namesFuzzyMatch(t, part)))) {
+
+    // Fuzzy full display name (typos like "sandrra hernandez").
+    if (qTokens.length > 0 && namesFuzzyMatch(qTokens.join(" "), name.toLowerCase())) {
       fullHits.push(p);
       continue;
     }
+    // All significant name parts fuzzy-present in the question.
+    const nameParts = name
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((t) => t.length >= 3 && !AMBIGUOUS_FIRST.test(t));
+    if (
+      nameParts.length >= 2 &&
+      nameParts.every((part) => qTokens.some((t) => namesFuzzyMatch(t, part)))
+    ) {
+      fullHits.push(p);
+      continue;
+    }
+
     const first = (p.firstName?.trim() || name.split(/\s+/)[0] || "");
     if (first.length < 3 || AMBIGUOUS_FIRST.test(first)) continue;
     if (
