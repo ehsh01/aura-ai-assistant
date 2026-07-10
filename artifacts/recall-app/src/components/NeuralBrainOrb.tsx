@@ -24,24 +24,24 @@ function buildMiniSynapses(
 ): { particles: ReturnType<typeof buildAmbientCloud>; synapses: BrainSynapse[] } {
   const particles = buildAmbientCloud(count, false).map((p) => ({
     ...p,
-    size: 0.55 + p.size * 0.35,
+    // Larger nodes so they read inside a ~40px circle.
+    size: 1.4 + p.size * 0.9,
   }));
   const synapses: BrainSynapse[] = [];
-  const step = 2;
+  const step = 1;
   for (let i = 0; i < particles.length; i += step) {
     const a = particles[i]!;
     let best = -1;
-    let bestD = 0.12;
-    for (let j = i + step; j < Math.min(particles.length, i + step * 24); j += step) {
+    let bestD = 0.18;
+    for (let j = i + 1; j < Math.min(particles.length, i + 30); j++) {
       const b = particles[j]!;
-      const d =
-        (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2;
+      const d = (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2;
       if (d < bestD) {
         bestD = d;
         best = j;
       }
     }
-    if (best >= 0) synapses.push({ a: i, b: best, strength: 0.35 });
+    if (best >= 0) synapses.push({ a: i, b: best, strength: 0.45 });
   }
   return { particles, synapses };
 }
@@ -52,7 +52,7 @@ function buildMiniSynapses(
 export function NeuralBrainOrb({ className = "", active = false, size = 40 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const reduced = useMemo(() => prefersReducedMotion(), []);
-  const { particles, synapses } = useMemo(() => buildMiniSynapses(reduced ? 48 : 90), [reduced]);
+  const { particles, synapses } = useMemo(() => buildMiniSynapses(reduced ? 60 : 110), [reduced]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -83,20 +83,34 @@ export function NeuralBrainOrb({ className = "", active = false, size = 40 }: Pr
     const tick = (now: number) => {
       if (!running) return;
       const time = reduced ? 0 : (now - start) / 1000;
-      // Slightly faster spin so the tiny orb still feels alive.
-      const projected = projectParticles(particles, size, size, time * 2.4, { x: 0, y: 0 }, true);
+      // Centered fillScreen projection; time boost so the tiny orb still spins clearly.
+      const projected = projectParticles(
+        particles,
+        size,
+        size,
+        time * 2.8,
+        { x: 0, y: 0 },
+        true,
+      );
 
       ctx.clearRect(0, 0, size, size);
 
+      // Solid dark base so the mesh pops in the prompt bar.
+      ctx.fillStyle = active ? "rgba(28, 18, 64, 0.95)" : "rgba(12, 10, 28, 0.95)";
+      ctx.beginPath();
+      ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+      ctx.fill();
+
       const glow = ctx.createRadialGradient(
         size * 0.5,
-        size * 0.48,
+        size * 0.45,
         1,
         size * 0.5,
-        size * 0.48,
+        size * 0.5,
         size * 0.55,
       );
-      glow.addColorStop(0, active ? "rgba(140, 110, 255, 0.55)" : "rgba(110, 90, 220, 0.4)");
+      glow.addColorStop(0, active ? "rgba(168, 130, 255, 0.7)" : "rgba(130, 100, 255, 0.5)");
+      glow.addColorStop(0.55, active ? "rgba(56, 189, 160, 0.25)" : "rgba(56, 160, 180, 0.15)");
       glow.addColorStop(1, "rgba(0, 0, 0, 0)");
       ctx.fillStyle = glow;
       ctx.fillRect(0, 0, size, size);
@@ -107,22 +121,26 @@ export function NeuralBrainOrb({ className = "", active = false, size = 40 }: Pr
         const a = projected[s.a];
         const b = projected[s.b];
         if (!a || !b) continue;
-        const pulse = 0.7 + 0.3 * Math.sin(time * 2.2 + s.a * 0.08);
+        const pulse = 0.75 + 0.25 * Math.sin(time * 2.4 + s.a * 0.08);
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
-        ctx.strokeStyle = `hsla(265, 85%, 78%, ${0.35 * pulse})`;
-        ctx.lineWidth = 0.7;
+        ctx.strokeStyle = `hsla(265, 90%, 82%, ${0.55 * pulse})`;
+        ctx.lineWidth = 1.05;
         ctx.stroke();
       }
 
       for (const pt of projected) {
         const p = pt.particle;
-        const twinkle = 0.65 + 0.35 * Math.sin(time * 2.4 + p.phase);
-        const r = Math.max(0.6, p.size * 0.55 * twinkle);
+        const twinkle = 0.7 + 0.3 * Math.sin(time * 2.6 + p.phase);
+        const r = Math.max(1.1, p.size * 0.42 * twinkle);
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, r * 1.8, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${p.hue}, 95%, 72%, ${0.28 * twinkle})`;
+        ctx.fill();
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
-        ctx.fillStyle = `hsla(${p.hue}, 90%, 72%, ${0.75 * twinkle})`;
+        ctx.fillStyle = `hsla(${p.hue}, 95%, 80%, ${0.95 * twinkle})`;
         ctx.fill();
       }
       ctx.restore();
@@ -140,7 +158,7 @@ export function NeuralBrainOrb({ className = "", active = false, size = 40 }: Pr
 
   return (
     <span
-      className={`relative inline-flex flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-black/40 ring-1 ring-white/15 ${className}`}
+      className={`relative inline-flex flex-shrink-0 items-center justify-center overflow-hidden rounded-full shadow-[0_0_12px_rgba(129,140,248,0.35)] ring-1 ring-indigo-300/40 ${className}`}
       style={{ width: size, height: size }}
       aria-hidden
     >

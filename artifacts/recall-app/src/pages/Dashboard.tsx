@@ -177,7 +177,7 @@ export function Dashboard() {
               className="oracle-prompt-shell w-full"
             >
               <div className="oracle-prompt flex items-center gap-3 px-4 py-3 md:px-5 md:py-4">
-                <NeuralBrainOrb active={askPending} size={40} />
+                <NeuralBrainOrb active={askPending} size={44} />
                 <input
                   type="text"
                   value={question}
