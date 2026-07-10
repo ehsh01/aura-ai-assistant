@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { FileUp, SkipForward, Check, ChevronLeft, ChevronRight, X } from "lucide-react";
+import React, { useMemo, useRef, useState } from "react";
+import { FileUp, SkipForward, Check, ChevronLeft, ChevronRight, X, Sparkles } from "lucide-react";
 import {
   classifyMemory,
-  createMemory,
+  importMemories,
   LIFE_MEMORY_DOMAINS,
   type LifeMemoryDomain,
 } from "@/lib/recall-api";
@@ -37,8 +37,7 @@ export function MemoryImportReview({ onClose, onImported }: Props) {
   const [index, setIndex] = useState(0);
   const [preparing, setPreparing] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [progress, setProgress] = useState({ done: 0, total: 0 });
-  const classifiedIds = useRef(new Set<string>());
+  const [refining, setRefining] = useState(false);
 
   const current = drafts[index] ?? null;
   const includedCount = useMemo(
@@ -52,45 +51,29 @@ export function MemoryImportReview({ onClose, onImported }: Props) {
     );
   };
 
-  // Classify the visible chunk so domains improve as you review.
-  useEffect(() => {
-    const draft = drafts[index];
-    if (!draft || classifiedIds.current.has(draft.id)) return;
-
-    let cancelled = false;
-    classifiedIds.current.add(draft.id);
-    setDrafts((prev) =>
-      prev.map((d) => (d.id === draft.id ? { ...d, classifying: true } : d)),
-    );
-    void classifyMemory(`${draft.title}\n\n${draft.content}`)
-      .then((res) => {
-        if (cancelled) return;
-        setDrafts((prev) =>
-          prev.map((d) => {
-            if (d.id !== draft.id) return d;
-            const keepHeadingDomain = d.domain !== "other";
-            return {
-              ...d,
-              domain: keepHeadingDomain ? d.domain : res.domain,
-              title:
-                d.title === "Untitled" || d.title.length < 4 ? res.title : d.title,
-              classifying: false,
-            };
-          }),
-        );
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setDrafts((prev) =>
-          prev.map((d) => (d.id === draft.id ? { ...d, classifying: false } : d)),
-        );
+  const refineCurrent = async () => {
+    if (!current) return;
+    setRefining(true);
+    try {
+      const res = await classifyMemory(`${current.title}\n\n${current.content}`);
+      updateCurrent({
+        domain: current.domain === "other" ? res.domain : current.domain,
+        title:
+          current.title === "Untitled" || current.title.length < 4
+            ? res.title
+            : current.title,
       });
-    return () => {
-      cancelled = true;
-    };
-    // Only re-run when the active chunk changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, drafts[index]?.id]);
+      toast({ title: "Domain refined", description: DOMAIN_LABELS[res.domain] });
+    } catch (err) {
+      toast({
+        title: "Could not refine",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setRefining(false);
+    }
+  };
 
   const onPickFile = async (file: File) => {
     if (!file.name.toLowerCase().endsWith(".md") && file.type !== "text/markdown") {
@@ -109,10 +92,13 @@ export function MemoryImportReview({ onClose, onImported }: Props) {
         include: true,
       }));
       if (chunks.length === 0) {
-        toast({ title: "Nothing to import", description: "File looked empty.", variant: "destructive" });
+        toast({
+          title: "Nothing to import",
+          description: "File looked empty.",
+          variant: "destructive",
+        });
         return;
       }
-      classifiedIds.current = new Set();
       setFileName(file.name);
       setDrafts(chunks);
       setIndex(0);
@@ -138,34 +124,29 @@ export function MemoryImportReview({ onClose, onImported }: Props) {
       return;
     }
     setImporting(true);
-    setProgress({ done: 0, total: toImport.length });
-    let ok = 0;
-    let failed = 0;
-    for (const draft of toImport) {
-      try {
-        await createMemory({
-          title: draft.title.trim() || undefined,
-          content: draft.content.trim(),
-          domain: draft.domain,
-          sourceType: "import",
-          sourceId: fileName,
-        });
-        ok += 1;
-      } catch {
-        failed += 1;
-      }
-      setProgress({ done: ok + failed, total: toImport.length });
-    }
-    setImporting(false);
-    if (ok > 0) {
+    try {
+      const res = await importMemories({
+        sourceId: fileName,
+        items: toImport.map((d) => ({
+          title: d.title.trim() || undefined,
+          content: d.content.trim(),
+          domain: d.domain,
+        })),
+      });
       toast({
-        title: `Imported ${ok} memor${ok === 1 ? "y" : "ies"}`,
-        description: failed > 0 ? `${failed} failed — you can retry those.` : undefined,
+        title: `Imported ${res.created} memor${res.created === 1 ? "y" : "ies"}`,
+        description: res.failed > 0 ? `${res.failed} failed` : undefined,
       });
       onImported();
       onClose();
-    } else {
-      toast({ title: "Import failed", variant: "destructive" });
+    } catch (err) {
+      toast({
+        title: "Import failed",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -229,7 +210,6 @@ export function MemoryImportReview({ onClose, onImported }: Props) {
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-white/45">
             <span>
               {fileName} · chunk {index + 1} of {drafts.length}
-              {current?.classifying ? " · classifying…" : ""}
             </span>
             <span>{includedCount} marked to import</span>
           </div>
@@ -265,6 +245,15 @@ export function MemoryImportReview({ onClose, onImported }: Props) {
                     </option>
                   ))}
                 </select>
+                <button
+                  type="button"
+                  disabled={refining}
+                  onClick={() => void refineCurrent()}
+                  className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-white/55 hover:bg-white/5 disabled:opacity-50"
+                >
+                  <Sparkles size={12} />
+                  {refining ? "Refining…" : "Refine domain"}
+                </button>
               </div>
               <input
                 value={current.title}
@@ -322,9 +311,7 @@ export function MemoryImportReview({ onClose, onImported }: Props) {
               onClick={() => void importIncluded()}
               className="ml-auto rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
             >
-              {importing
-                ? `Importing ${progress.done}/${progress.total}…`
-                : `Import ${includedCount} selected`}
+              {importing ? "Importing…" : `Import ${includedCount} selected`}
             </button>
           </div>
 
@@ -334,7 +321,6 @@ export function MemoryImportReview({ onClose, onImported }: Props) {
               setDrafts([]);
               setFileName(null);
               setIndex(0);
-              classifiedIds.current = new Set();
             }}
             className="text-xs text-white/40 underline-offset-2 hover:text-white/70 hover:underline"
           >
