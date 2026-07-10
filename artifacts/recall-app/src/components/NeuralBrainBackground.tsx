@@ -78,8 +78,8 @@ function renderFrame(
     height * (fillScreen ? 0.46 : 0.42),
     Math.min(width, height) * (fillScreen ? 0.55 : 0.4),
   );
-  glow.addColorStop(0, vivid ? "rgba(128, 82, 255, 0.22)" : fillScreen ? "rgba(99, 70, 200, 0.18)" : "rgba(128, 82, 255, 0.10)");
-  glow.addColorStop(0.45, vivid ? "rgba(21, 132, 110, 0.1)" : fillScreen ? "rgba(21, 132, 110, 0.08)" : "rgba(21, 132, 110, 0.04)");
+  glow.addColorStop(0, vivid ? "rgba(128, 82, 255, 0.22)" : fillScreen ? "rgba(120, 90, 230, 0.28)" : "rgba(128, 82, 255, 0.10)");
+  glow.addColorStop(0.45, vivid ? "rgba(21, 132, 110, 0.1)" : fillScreen ? "rgba(40, 160, 140, 0.12)" : "rgba(21, 132, 110, 0.04)");
   glow.addColorStop(1, "rgba(0, 0, 0, 0)");
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
@@ -94,10 +94,10 @@ function renderFrame(
     if (!a || !b) continue;
     const depth = (a.depth + b.depth) * 0.5;
     const alpha = Math.max(
-      0.04,
+      0.05,
       Math.min(
-        vivid ? 0.38 : fillScreen ? 0.22 : 0.2,
-        s.strength * (0.5 - depth * 0.12) * boost,
+        vivid ? 0.38 : fillScreen ? 0.34 : 0.2,
+        s.strength * (0.55 - depth * 0.12) * boost,
       ),
     );
     const pulse = 0.75 + 0.25 * Math.sin(time * 1.6 + s.a * 0.05);
@@ -105,13 +105,13 @@ function renderFrame(
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.strokeStyle = fillScreen
-      ? `hsla(265, 70%, 68%, ${alpha * pulse})`
+      ? `hsla(265, 75%, 74%, ${alpha * pulse})`
       : `hsla(265, 80%, 72%, ${alpha * pulse})`;
     ctx.lineWidth =
       a.particle.kind === "entity" || b.particle.kind === "entity"
-        ? 1.1
+        ? 1.2
         : fillScreen
-          ? 0.65
+          ? 0.85
           : 0.55;
     ctx.stroke();
   }
@@ -121,27 +121,27 @@ function renderFrame(
   ctx.globalCompositeOperation = additive ? "lighter" : "source-over";
   for (const pt of projected) {
     const { particle: p } = pt;
-    const depthFade = Math.max(0.3, Math.min(1, 0.82 - pt.depth * 0.28));
+    const depthFade = Math.max(0.35, Math.min(1, 0.85 - pt.depth * 0.28));
     const twinkle =
       p.kind === "entity"
         ? 0.8 + 0.2 * Math.sin(time * 2.2 + p.phase)
         : 0.65 + 0.35 * Math.sin(time * 1.7 + p.phase);
     const size =
       p.size *
-      (p.kind === "entity" ? (vivid ? 1.55 : 1.3) : 1) *
+      (p.kind === "entity" ? (vivid ? 1.55 : 1.35) : fillScreen ? 1.12 : 1) *
       Math.max(0.55, 1 - pt.depth * 0.25) *
       (window.devicePixelRatio > 1.5 ? 0.9 : 1) *
       (vivid ? 1.1 : 1);
     const alpha =
-      (p.kind === "entity" ? (vivid ? 0.75 : 0.6) : vivid ? 0.42 : fillScreen ? 0.55 : 0.28) *
+      (p.kind === "entity" ? (vivid ? 0.75 : 0.65) : vivid ? 0.42 : fillScreen ? 0.72 : 0.28) *
       depthFade *
       twinkle;
 
-    // Soft halo only on entity hubs — ambient halos were the white bloom.
-    if (p.kind === "entity") {
+    // Soft colored dots — kept modest so they don't stack to white.
+    if (p.kind === "entity" || (fillScreen && size > 2.2)) {
       ctx.beginPath();
-      ctx.arc(pt.x, pt.y, size * (vivid ? 2.8 : 2.2), 0, Math.PI * 2);
-      ctx.fillStyle = `hsla(${p.hue}, 90%, 65%, ${alpha * 0.2})`;
+      ctx.arc(pt.x, pt.y, size * (p.kind === "entity" ? 2.4 : 1.8), 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${p.hue}, 90%, 68%, ${alpha * (p.kind === "entity" ? 0.22 : 0.12)})`;
       ctx.fill();
     }
 
@@ -151,7 +151,7 @@ function renderFrame(
       pt.y,
       size,
       p.hue,
-      Math.min(fillScreen ? 0.7 : 0.85, alpha),
+      Math.min(fillScreen ? 0.82 : 0.85, alpha),
       p.kind === "entity",
     );
   }
@@ -177,12 +177,12 @@ export function NeuralBrainBackground({
   const { particles, synapses } = useMemo(() => {
     const count = isMobileViewport()
       ? fillScreen
-        ? 900
+        ? 1100
         : 700
       : reduced
-        ? 1000
+        ? 1200
         : fillScreen
-          ? 1500
+          ? 1800
           : 1600;
     return buildMemoryGraph(graph ?? {}, count, fillScreen);
   }, [graph, reduced, fillScreen]);
@@ -269,8 +269,8 @@ export function NeuralBrainBackground({
       style={{ opacity }}
     >
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
-      <div className="absolute inset-0 bg-gradient-to-b from-[#060610]/25 via-transparent to-[#060610]/50" />
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_30%,rgba(6,6,16,0.28)_100%)]" />
+      <div className="absolute inset-0 bg-gradient-to-b from-[#060610]/15 via-transparent to-[#060610]/40" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_40%,rgba(6,6,16,0.18)_100%)]" />
     </div>
   );
 }
