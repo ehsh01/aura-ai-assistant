@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import {
-  buildBrainOutlinePoints,
   buildMemoryGraph,
-  projectBrainOutline,
   projectParticles,
   type MemoryGraphInput,
   type ProjectedPoint,
@@ -56,52 +54,12 @@ function drawTriangle(
   }
 }
 
-function drawBrainOutline(
-  ctx: CanvasRenderingContext2D,
-  path: { x: number; y: number }[],
-  time: number,
-  vivid: boolean,
-  mode: "glow" | "edge" | "full" = "full",
-) {
-  if (path.length < 8) return;
-
-  const pulse = 0.85 + 0.15 * Math.sin(time * 1.3);
-  ctx.save();
-  ctx.globalCompositeOperation = "lighter";
-  ctx.beginPath();
-  ctx.moveTo(path[0]!.x, path[0]!.y);
-  for (let i = 1; i < path.length; i++) {
-    const p = path[i]!;
-    ctx.lineTo(p.x, p.y);
-  }
-  ctx.closePath();
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-
-  if (mode === "glow" || mode === "full") {
-    ctx.strokeStyle = `hsla(265, 90%, 78%, ${(vivid ? 0.4 : 0.2) * pulse})`;
-    ctx.lineWidth = vivid ? 12 : 7;
-    ctx.stroke();
-    ctx.strokeStyle = `hsla(200, 90%, 75%, ${(vivid ? 0.5 : 0.25) * pulse})`;
-    ctx.lineWidth = vivid ? 4.5 : 2.8;
-    ctx.stroke();
-  }
-
-  if (mode === "edge" || mode === "full") {
-    ctx.strokeStyle = `hsla(270, 100%, 94%, ${(vivid ? 1 : 0.6) * pulse})`;
-    ctx.lineWidth = vivid ? 1.75 : 1.2;
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
 function renderFrame(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
   projected: ProjectedPoint[],
   synapses: { a: number; b: number; strength: number }[],
-  outlinePath: { x: number; y: number }[],
   time: number,
   vivid: boolean,
   fillScreen: boolean,
@@ -123,11 +81,6 @@ function renderFrame(
   glow.addColorStop(1, "rgba(0, 0, 0, 0)");
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
-
-  // Draw outline first so particles sit inside a readable cortex edge.
-  if (fillScreen || vivid) {
-    drawBrainOutline(ctx, outlinePath, time, vivid, "glow");
-  }
 
   const byIndex = projected;
 
@@ -191,11 +144,6 @@ function renderFrame(
     drawTriangle(ctx, pt.x, pt.y, size, p.hue, Math.min(1, alpha), p.kind === "entity");
   }
   ctx.restore();
-
-  // Redraw a crisp edge on top so particles don't erase the silhouette.
-  if (fillScreen || vivid) {
-    drawBrainOutline(ctx, outlinePath, time, vivid, "edge");
-  }
 }
 
 /**
@@ -226,11 +174,6 @@ export function NeuralBrainBackground({
           : 1600;
     return buildMemoryGraph(graph ?? {}, count, fillScreen);
   }, [graph, reduced, fillScreen]);
-
-  const outlinePoints = useMemo(
-    () => buildBrainOutlinePoints(fillScreen ? 260 : 160, fillScreen),
-    [fillScreen],
-  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -292,15 +235,7 @@ export function NeuralBrainBackground({
         pointerRef.current,
         fillScreen,
       );
-      const outlinePath = projectBrainOutline(
-        outlinePoints,
-        w,
-        h,
-        time,
-        pointerRef.current,
-        fillScreen,
-      );
-      renderFrame(ctx, w, h, projected, synapses, outlinePath, time, vivid, fillScreen);
+      renderFrame(ctx, w, h, projected, synapses, time, vivid, fillScreen);
       if (!reduced) raf = requestAnimationFrame(tick);
     };
 
@@ -313,7 +248,7 @@ export function NeuralBrainBackground({
       window.removeEventListener("pointermove", onPointer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [particles, synapses, outlinePoints, reduced, vivid, fillScreen]);
+  }, [particles, synapses, reduced, vivid, fillScreen]);
 
   return (
     <div

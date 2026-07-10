@@ -305,137 +305,6 @@ export type ProjectedPoint = {
 };
 
 /** Project 3D brain coords into canvas space with slow rotation. */
-export function getProjectionParams(
-  width: number,
-  height: number,
-  time: number,
-  pointer: { x: number; y: number },
-  fillScreen = false,
-) {
-  const cx = fillScreen ? width * 0.5 : width * 0.58;
-  const cy = fillScreen ? height * 0.46 : height * 0.42;
-  const scale = fillScreen
-    ? Math.min(width, height) * 0.82
-    : Math.min(width, height) * 0.42;
-  const rotY = time * 0.12 + pointer.x * 0.35;
-  const rotX = (fillScreen ? 0.12 : 0.25) + pointer.y * 0.2;
-  return {
-    cx,
-    cy,
-    scale,
-    cosY: Math.cos(rotY),
-    sinY: Math.sin(rotY),
-    cosX: Math.cos(rotX),
-    sinX: Math.sin(rotX),
-  };
-}
-
-function projectXYZ(
-  x0: number,
-  y0: number,
-  z0: number,
-  params: ReturnType<typeof getProjectionParams>,
-  pulse = 1,
-): { x: number; y: number; depth: number } {
-  let x = x0 * pulse;
-  let y = y0 * pulse;
-  let z = z0 * pulse;
-
-  const xz = x * params.cosY - z * params.sinY;
-  z = x * params.sinY + z * params.cosY;
-  x = xz;
-  const yz = y * params.cosX - z * params.sinX;
-  z = y * params.sinX + z * params.cosX;
-  y = yz;
-
-  const perspective = 2.4 / (2.4 + z);
-  return {
-    x: params.cx + x * params.scale * perspective,
-    y: params.cy + y * params.scale * perspective,
-    depth: z,
-  };
-}
-
-/**
- * Surface samples for the dual-lobe cortex (r ≈ 1), used to draw a thin outline.
- * Matches sampleBrainPoint lobe geometry + fillScreen inflate.
- */
-export function buildBrainOutlinePoints(count = 220, fillScreen = false): { x: number; y: number; z: number }[] {
-  const inflate = fillScreen ? 1.18 : 1;
-  const points: { x: number; y: number; z: number }[] = [];
-
-  for (let i = 0; i < count; i++) {
-    const t = i / count;
-    // Alternate lobes so both hemispheres contribute to the silhouette.
-    const lobe = i % 2 === 0 ? -1 : 1;
-    const theta = t * Math.PI * 2;
-    // Bias toward the outer equator / upper folds so the 2D edge reads as a brain.
-    const phi = 0.35 + (hash(i * 3.7 + 0.2) * 0.9);
-    const r = 0.92 + hash(i * 5.1) * 0.1;
-
-    let x = Math.sin(phi) * Math.cos(theta) * 0.72 * r;
-    let y = Math.cos(phi) * 0.55 * r;
-    let z = Math.sin(phi) * Math.sin(theta) * 0.5 * r;
-
-    x = x * 0.85 + lobe * 0.42;
-    y = y * 0.9 - 0.05;
-    z = z * 0.95 + 0.08;
-
-    // Mild organic wobble so the edge isn't a perfect ellipse.
-    x += (hash(i * 11.2) - 0.5) * 0.04;
-    y += (hash(i * 13.7) - 0.5) * 0.03;
-    z += (hash(i * 17.4) - 0.5) * 0.03;
-
-    points.push({ x: x * inflate, y: y * inflate, z: z * inflate });
-  }
-
-  // Brainstem notch under the center — helps the outline read as a brain, not a blob.
-  for (let i = 0; i < 18; i++) {
-    const u = i / 17;
-    points.push({
-      x: (u - 0.5) * 0.28 * inflate,
-      y: (-0.55 - u * 0.08) * inflate,
-      z: 0.05 * inflate,
-    });
-  }
-
-  return points;
-}
-
-/** Project outline samples and build a closed outer silhouette path. */
-export function projectBrainOutline(
-  outline: { x: number; y: number; z: number }[],
-  width: number,
-  height: number,
-  time: number,
-  pointer: { x: number; y: number },
-  fillScreen = false,
-): { x: number; y: number }[] {
-  const params = getProjectionParams(width, height, time, pointer, fillScreen);
-  const bins = 96;
-  const best = new Array<{ x: number; y: number; r: number } | null>(bins).fill(null);
-
-  for (const p of outline) {
-    const pulse = 1 + Math.sin(time * 1.4) * 0.015;
-    const pt = projectXYZ(p.x, p.y, p.z, params, pulse);
-    const dx = pt.x - params.cx;
-    const dy = pt.y - params.cy;
-    const r = Math.hypot(dx, dy);
-    let angle = Math.atan2(dy, dx);
-    if (angle < 0) angle += Math.PI * 2;
-    const bin = Math.min(bins - 1, Math.floor((angle / (Math.PI * 2)) * bins));
-    const prev = best[bin];
-    if (!prev || r > prev.r) best[bin] = { x: pt.x, y: pt.y, r };
-  }
-
-  const path: { x: number; y: number }[] = [];
-  for (let i = 0; i < bins; i++) {
-    const b = best[i];
-    if (b) path.push({ x: b.x, y: b.y });
-  }
-  return path;
-}
-
 export function projectParticles(
   particles: BrainParticle[],
   width: number,
@@ -444,15 +313,38 @@ export function projectParticles(
   pointer: { x: number; y: number },
   fillScreen = false,
 ): ProjectedPoint[] {
-  const params = getProjectionParams(width, height, time, pointer, fillScreen);
+  const cx = fillScreen ? width * 0.5 : width * 0.58;
+  const cy = fillScreen ? height * 0.46 : height * 0.42;
+  // fillScreen: large brain silhouette covering most of the viewport (not a full wash).
+  const scale = fillScreen
+    ? Math.min(width, height) * 0.82
+    : Math.min(width, height) * 0.42;
+  const rotY = time * 0.12 + pointer.x * 0.35;
+  const rotX = (fillScreen ? 0.12 : 0.25) + pointer.y * 0.2;
+  const cosY = Math.cos(rotY);
+  const sinY = Math.sin(rotY);
+  const cosX = Math.cos(rotX);
+  const sinX = Math.sin(rotX);
 
   return particles.map((p, index) => {
     const pulse = 1 + Math.sin(time * 1.4 + p.phase) * 0.03;
-    const pt = projectXYZ(p.x, p.y, p.z, params, pulse);
+    let x = p.x * pulse;
+    let y = p.y * pulse;
+    let z = p.z * pulse;
+
+    // Rotate Y then X.
+    const xz = x * cosY - z * sinY;
+    z = x * sinY + z * cosY;
+    x = xz;
+    const yz = y * cosX - z * sinX;
+    z = y * sinX + z * cosX;
+    y = yz;
+
+    const perspective = 2.4 / (2.4 + z);
     return {
-      x: pt.x,
-      y: pt.y,
-      depth: pt.depth,
+      x: cx + x * scale * perspective,
+      y: cy + y * scale * perspective,
+      depth: z,
       particle: p,
       index,
     };
