@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Brain, Download, Pin, Trash2 } from "lucide-react";
+import { Brain, Download, Pin, Trash2, FileUp } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
+import { MemoryImportReview } from "@/components/MemoryImportReview";
 import {
   classifyMemory,
   createMemory,
@@ -42,6 +43,7 @@ export function Memory() {
   const [classifying, setClassifying] = useState(false);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const openedFromQuery = useRef(false);
 
   const load = async () => {
@@ -232,6 +234,14 @@ export function Memory() {
               </Link>
               <button
                 type="button"
+                onClick={() => setShowImport(true)}
+                className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100 hover:bg-emerald-500/20"
+              >
+                <FileUp size={14} />
+                Import .md
+              </button>
+              <button
+                type="button"
                 onClick={() => void exportLifeFile()}
                 disabled={exporting}
                 className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-xs text-white/70 hover:bg-white/5 disabled:opacity-50"
@@ -241,6 +251,13 @@ export function Memory() {
               </button>
             </div>
           </div>
+
+          {showImport && (
+            <MemoryImportReview
+              onClose={() => setShowImport(false)}
+              onImported={() => void load()}
+            />
+          )}
 
           <section className="mt-8 rounded-2xl border border-indigo-500/20 bg-indigo-500/[0.06] p-5">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-indigo-200/80">

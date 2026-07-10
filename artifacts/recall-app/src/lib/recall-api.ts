@@ -434,6 +434,7 @@ export async function createMemory(input: {
   primaryPersonId?: string | null;
   projectId?: string | null;
   sourceType?: "teach" | "capture" | "ask" | "import";
+  sourceId?: string | null;
   pinned?: boolean;
 }): Promise<LifeMemoryRecord> {
   return apiFetch("/memory", { method: "POST", body: JSON.stringify(input) });
