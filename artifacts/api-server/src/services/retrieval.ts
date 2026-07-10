@@ -167,11 +167,25 @@ async function collectCorpus(
     });
   }
   for (const p of people.slice(0, CORPUS.people)) {
+    const fullName =
+      [p.firstName, p.lastName].filter(Boolean).join(" ").trim() || p.displayName;
+    const nameBits = [
+      `fullName=${fullName}`,
+      `displayName=${p.displayName}`,
+      p.firstName ? `firstName=${p.firstName}` : null,
+      p.lastName ? `lastName=${p.lastName}` : null,
+      p.organization ? `organization=${p.organization}` : null,
+      p.email ? `email=${p.email}` : null,
+      p.phone ? `phone=${p.phone}` : null,
+      p.role ? `role=${p.role}` : null,
+    ]
+      .filter(Boolean)
+      .join(" ");
     records.push({
       entityType: "person",
       entityId: p.id,
-      title: p.displayName,
-      text: `${p.displayName} ${p.organization ?? ""} ${p.email ?? ""}`.trim(),
+      title: fullName,
+      text: nameBits,
     });
   }
   for (const k of knowledge.slice(0, CORPUS.knowledge)) {

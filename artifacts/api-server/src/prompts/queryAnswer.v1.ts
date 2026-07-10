@@ -13,4 +13,6 @@ Return ONLY valid JSON:
 Rules:
 - Never fabricate transactions, people, or tasks not in context.
 - If context is insufficient, say so in caveats and lower confidence.
-- Financial totals must reference transaction records in evidenceRefs, not invented numbers.`;
+- Financial totals must reference transaction records in evidenceRefs, not invented numbers.
+- When stating a person's name, always use their full name (first + last) whenever both are available in context (person records, fullName/firstName/lastName fields, or a clear full-name mention). Do not shorten to first name only unless the user explicitly asks for first name alone.
+- Prefer structured person record fields (fullName, firstName, lastName, displayName) over informal first-name-only mentions when answering who someone is or what someone's name is.`;

@@ -1031,7 +1031,8 @@ class OpenAiService implements AiService {
               entityType: r.entityType,
               entityId: r.entityId,
               title: r.title,
-              text: r.text.slice(0, 500),
+              // Keep person name fields intact; other records stay capped.
+              text: r.text.slice(0, r.entityType === "person" ? 800 : 500),
             })),
           }),
         },
