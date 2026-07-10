@@ -166,16 +166,41 @@ async function fetchGmail(accessToken: string): Promise<GoogleRawRecord[]> {
       const from = headerValue(full.payload?.headers, "From") ?? "";
       const date = headerValue(full.payload?.headers, "Date");
       const snippet = (full.snippet ?? "").slice(0, 800);
+      const fromParsed = (() => {
+        const angle = from.match(/^(.*?)\s*<([^>]+)>/);
+        if (angle) {
+          return {
+            name: angle[1]!.replace(/^["']|["']$/g, "").trim(),
+            email: angle[2]!.trim().toLowerCase(),
+          };
+        }
+        if (from.includes("@")) return { name: "", email: from.toLowerCase() };
+        return { name: from, email: "" };
+      })();
       out.push({
         externalId: `gmail:${full.id}`,
         recordType: "gmail_message",
         recordTitle: subject.slice(0, 400),
-        recordText: `Email message\nFrom: ${from}\nSubject: ${subject}\n${snippet}`,
+        recordText: [
+          "Email message",
+          `From: ${from}`,
+          fromParsed.name ? `sender_name: ${fromParsed.name}` : null,
+          fromParsed.email ? `sender_email: ${fromParsed.email}` : null,
+          `Subject: ${subject}`,
+          snippet,
+        ]
+          .filter(Boolean)
+          .join("\n"),
         sourceUrl: `https://mail.google.com/mail/u/0/#inbox/${full.id}`,
         sourceCreatedAt: full.internalDate
           ? new Date(Number(full.internalDate)).toISOString()
           : date,
-        metadata: { from, subject },
+        metadata: {
+          from,
+          subject,
+          senderName: fromParsed.name || null,
+          senderEmail: fromParsed.email || null,
+        },
       });
     } catch {
       // Skip individual message failures.

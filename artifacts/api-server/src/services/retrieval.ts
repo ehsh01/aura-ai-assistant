@@ -88,6 +88,94 @@ function sourceTypeAliases(recordType: string): string {
   }
 }
 
+const QUESTION_STOP =
+  /^(the|and|for|from|with|about|what|when|where|who|how|did|does|have|has|was|were|are|any|last|recent|latest|email|emails|mail|message|messages|gmail|inbox|my|me|a|an|of|to|in|on|is|it|this|that|please|show|find|get|tell)$/i;
+
+/** Name-like tokens from the question (e.g. "sandra" from "emails from Sandra"). */
+function questionNameTokens(question: string): string[] {
+  const tokens = question
+    .toLowerCase()
+    .split(/[^a-z0-9@._+-]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 3 && !QUESTION_STOP.test(t));
+  return [...new Set(tokens)];
+}
+
+/** Parse Gmail "From:" line into display name + email. */
+export function parseGmailFrom(text: string): { name: string; email: string } | null {
+  const line = text.match(/From:\s*(.+)/i)?.[1]?.trim();
+  if (!line) return null;
+  const angle = line.match(/^(.*?)\s*<([^>]+)>/);
+  if (angle) {
+    return {
+      name: angle[1]!.replace(/^["']|["']$/g, "").trim(),
+      email: angle[2]!.trim().toLowerCase(),
+    };
+  }
+  if (line.includes("@")) {
+    return { name: "", email: line.toLowerCase() };
+  }
+  return { name: line, email: "" };
+}
+
+type PersonRef = {
+  id: string;
+  displayName: string;
+  email?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+};
+
+/** How strongly a gmail record's sender matches the question / known people. */
+function gmailSenderMatchScore(
+  question: string,
+  r: ContextRecord,
+  named: PersonRef[],
+  nameTokens: string[],
+): number {
+  if (r.entityType !== "source_record" || r.recordType !== "gmail_message") return 0;
+
+  const from = parseGmailFrom(r.text);
+  if (!from) return 0;
+  const fromName = from.name.toLowerCase();
+  const fromEmail = from.email.toLowerCase();
+  const fromLocal = fromEmail.split("@")[0] ?? "";
+  const hay = `${fromName} ${fromEmail} ${fromLocal}`.toLowerCase();
+
+  let score = 0;
+
+  for (const p of named) {
+    const needles = [
+      p.displayName,
+      p.firstName,
+      p.lastName,
+      p.email,
+      [p.firstName, p.lastName].filter(Boolean).join(" "),
+    ]
+      .filter((x): x is string => Boolean(x && String(x).trim().length >= 2))
+      .map((x) => String(x).toLowerCase());
+    for (const n of needles) {
+      if (n.includes("@") && fromEmail === n) score = Math.max(score, 1);
+      else if (fromEmail.includes(n) || fromName.includes(n) || hay.includes(n)) {
+        score = Math.max(score, n.length >= 4 ? 0.95 : 0.85);
+      }
+    }
+  }
+
+  for (const token of nameTokens) {
+    if (token.includes("@") && fromEmail === token) score = Math.max(score, 1);
+    else if (
+      fromName.split(/\s+/).includes(token) ||
+      fromLocal === token ||
+      fromName.includes(token)
+    ) {
+      score = Math.max(score, token.length >= 4 ? 0.92 : 0.8);
+    }
+  }
+
+  return score;
+}
+
 /** First names that collide with common English words / months. */
 const AMBIGUOUS_FIRST =
   /^(May|April|June|July|August|Will|Bill|Grant|Chase|Hope|Faith|Joy|Ray|Pat|Chris|Alex|Sam|Max|Lee|Kim|Day|Week|Month|Year|Still|Need)$/i;
@@ -95,11 +183,11 @@ const AMBIGUOUS_FIRST =
 /** Detect known people named in the question for retrieval boost. */
 export function mentionedPeople(
   question: string,
-  people: { id: string; displayName: string }[],
-): { id: string; displayName: string }[] {
+  people: PersonRef[],
+): PersonRef[] {
   const lower = question.toLowerCase();
-  const fullHits: { id: string; displayName: string }[] = [];
-  const firstHits: { id: string; displayName: string }[] = [];
+  const fullHits: PersonRef[] = [];
+  const firstHits: PersonRef[] = [];
 
   for (const p of people) {
     const name = p.displayName.trim();
@@ -108,7 +196,11 @@ export function mentionedPeople(
       fullHits.push(p);
       continue;
     }
-    const first = name.split(/\s+/)[0] ?? "";
+    if (p.email && lower.includes(p.email.toLowerCase())) {
+      fullHits.push(p);
+      continue;
+    }
+    const first = (p.firstName?.trim() || name.split(/\s+/)[0] || "");
     if (first.length < 3 || AMBIGUOUS_FIRST.test(first)) continue;
     if (
       new RegExp(`\\b${first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(question)
@@ -166,7 +258,7 @@ const CORPUS = {
 
 async function collectCorpus(
   userId: string,
-): Promise<{ records: ContextRecord[]; people: { id: string; displayName: string }[] }> {
+): Promise<{ records: ContextRecord[]; people: PersonRef[] }> {
   const [tasks, notes, people, knowledge, memories, documents, captures, sources] =
     await Promise.all([
       listTasksForUser(userId),
@@ -283,11 +375,15 @@ async function collectCorpus(
   for (const s of sources) {
     const title = s.recordTitle || s.recordType || "Source record";
     const aliases = sourceTypeAliases(s.recordType);
+    const from = s.recordType === "gmail_message" ? parseGmailFrom(s.recordText ?? "") : null;
+    const senderBits = from
+      ? ` sender_name=${from.name} sender_email=${from.email}`
+      : "";
     records.push({
       entityType: "source_record",
       entityId: s.id,
       title,
-      text: `${aliases} source=${s.recordType} ${title}\n${(s.recordText ?? "").slice(0, 800)}`,
+      text: `${aliases} source=${s.recordType} ${title}${senderBits}\n${(s.recordText ?? "").slice(0, 800)}`,
       recordType: s.recordType,
       updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : undefined,
     });
@@ -295,7 +391,13 @@ async function collectCorpus(
 
   return {
     records,
-    people: people.map((p) => ({ id: p.id, displayName: p.displayName })),
+    people: people.map((p) => ({
+      id: p.id,
+      displayName: p.displayName,
+      email: p.email ?? null,
+      firstName: p.firstName ?? null,
+      lastName: p.lastName ?? null,
+    })),
   };
 }
 
@@ -318,9 +420,7 @@ export async function retrieveRelevantRecords(
   }
 
   const intent = googleIntent(question);
-  const wantsGoogle =
-    intent.email || intent.drive || intent.calendar || intent.contacts;
-
+  const nameTokens = questionNameTokens(question);
   const named = mentionedPeople(question, people);
   const namedIds = new Set(named.map((p) => p.id));
   const namedTokens = named.flatMap((p) => {
@@ -328,6 +428,17 @@ export async function retrieveRelevantRecords(
     return [p.displayName.toLowerCase(), ...parts];
   });
   const personTagNeedles = named.map((p) => `person:${p.displayName.toLowerCase()}`);
+
+  // If the question names someone who appears as a Gmail sender, treat as email intent.
+  const senderMatchedMail = corpus.filter(
+    (r) => gmailSenderMatchScore(question, r, named, nameTokens) >= 0.8,
+  );
+  const wantsGoogle =
+    intent.email ||
+    intent.drive ||
+    intent.calendar ||
+    intent.contacts ||
+    senderMatchedMail.length > 0;
 
   const personBoost = (r: ContextRecord): number => {
     if (named.length === 0) return 0;
@@ -352,11 +463,18 @@ export async function retrieveRelevantRecords(
   };
 
   const googleBoost = (r: ContextRecord): number => {
+    const sender = gmailSenderMatchScore(question, r, named, nameTokens);
+    if (sender >= 0.8) return 0.7 + sender * 0.25; // prefer sender-matched mail
     if (!wantsGoogle) return 0;
     if (r.entityType !== "source_record") return 0;
-    if (!sourceRecordMatchesIntent(r.recordType, intent)) return 0;
-    // Strong boost so email/drive questions surface connector data over notes.
-    return 0.55;
+    if (!sourceRecordMatchesIntent(r.recordType, intent) && senderMatchedMail.length === 0) {
+      return 0;
+    }
+    if (r.recordType === "gmail_message" && (intent.email || senderMatchedMail.length > 0)) {
+      return 0.55;
+    }
+    if (sourceRecordMatchesIntent(r.recordType, intent)) return 0.55;
+    return 0;
   };
 
   const keywordHits = corpus
@@ -381,7 +499,7 @@ export async function retrieveRelevantRecords(
       );
       const candidates: ContextRecord[] = [];
       for (const hit of keywordHits.slice(0, CORPUS.keywordShortlist)) candidates.push(hit.r);
-      // Always include named people + person-tagged records in candidates.
+      // Always include named people + person-tagged + sender-matched gmail in candidates.
       for (const r of corpus) {
         const id = `${r.entityType}:${r.entityId}`;
         if (shortlistIds.has(id)) continue;
@@ -391,6 +509,11 @@ export async function retrieveRelevantRecords(
           continue;
         }
         if (named.length > 0 && personBoost(r) >= 0.28) {
+          shortlistIds.add(id);
+          candidates.push(r);
+          continue;
+        }
+        if (gmailSenderMatchScore(question, r, named, nameTokens) >= 0.8) {
           shortlistIds.add(id);
           candidates.push(r);
         }
@@ -461,23 +584,40 @@ export async function retrieveRelevantRecords(
     .slice(0, limit)
     .map(({ r, score, method }) => toRetrieved(r, score, method));
 
-  // Email / Drive / Calendar questions: always inject the most recent matching
-  // source_records so "last emails" works even when keyword/semantic miss.
-  if (wantsGoogle) {
+  // Prefer emails whose From name/address matches the asked-about person.
+  if (wantsGoogle || senderMatchedMail.length > 0) {
     const already = new Set(top.map((r) => r.entityId));
-    const recentMatches = corpus
-      .filter(
-        (r) =>
-          r.entityType === "source_record" &&
-          sourceRecordMatchesIntent(r.recordType, intent),
-      )
-      .slice(0, Math.min(8, limit));
     const injected: RetrievedRecord[] = [];
-    for (const r of recentMatches) {
+
+    const bySender = [...senderMatchedMail].sort(
+      (a, b) =>
+        gmailSenderMatchScore(question, b, named, nameTokens) -
+        gmailSenderMatchScore(question, a, named, nameTokens),
+    );
+    for (const r of bySender.slice(0, Math.min(8, limit))) {
       if (already.has(r.entityId)) continue;
-      injected.push(toRetrieved(r, 0.9, "keyword"));
+      injected.push(
+        toRetrieved(r, 1.1 + gmailSenderMatchScore(question, r, named, nameTokens), "keyword"),
+      );
       already.add(r.entityId);
     }
+
+    if (intent.email && injected.length < 4) {
+      const recentMatches = corpus
+        .filter(
+          (r) =>
+            r.entityType === "source_record" &&
+            sourceRecordMatchesIntent(r.recordType, intent),
+        )
+        .slice(0, Math.min(8, limit));
+      for (const r of recentMatches) {
+        if (already.has(r.entityId)) continue;
+        injected.push(toRetrieved(r, 0.9, "keyword"));
+        already.add(r.entityId);
+        if (injected.length >= 8) break;
+      }
+    }
+
     if (injected.length > 0) {
       top = [...injected, ...top].slice(0, limit);
     }
