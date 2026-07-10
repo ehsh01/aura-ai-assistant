@@ -165,21 +165,19 @@ export function Dashboard() {
           }`}
         >
           <NeuralBrainBackground graph={brainGraph} opacity={1} intensity="vivid" />
-          <div className="orb-1 nebula-orb opacity-70" />
-          <div className="orb-2 nebula-orb opacity-55" />
-          <div className="orb-3 nebula-orb opacity-50" />
-          <div className="orb-4 nebula-orb opacity-45" />
+          <div className="orb-1 nebula-orb opacity-90" />
+          <div className="orb-2 nebula-orb opacity-75" />
+          <div className="orb-3 nebula-orb opacity-70" />
+          <div className="orb-4 nebula-orb opacity-65" />
         </div>
 
-        {/* Light vignette only — keep the brain visible */}
+        {/* Minimal vignette — only enough for prompt contrast when answering */}
         <div
-          className={`pointer-events-none absolute inset-0 z-[1] transition-opacity duration-700 ${
-            showAnswer ? "opacity-100" : "opacity-100"
-          }`}
+          className="pointer-events-none absolute inset-0 z-[1] transition-opacity duration-700"
           style={{
             background: showAnswer
-              ? "radial-gradient(ellipse 70% 55% at 50% 48%, transparent 0%, rgba(0,0,0,0.65) 100%)"
-              : "radial-gradient(ellipse 80% 65% at 50% 45%, transparent 20%, rgba(0,0,0,0.22) 100%)",
+              ? "radial-gradient(ellipse 70% 55% at 50% 48%, transparent 0%, rgba(0,0,0,0.55) 100%)"
+              : "radial-gradient(ellipse 90% 75% at 50% 42%, transparent 40%, rgba(0,0,0,0.08) 100%)",
           }}
         />
 
