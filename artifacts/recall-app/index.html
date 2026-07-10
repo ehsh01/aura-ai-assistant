@@ -30,20 +30,30 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>
       (function () {
+        var KNOWN = [
+          "/",
+          "/today",
+          "/ask",
+          "/notes",
+          "/notebooks",
+          "/inbox",
+          "/documents",
+          "/knowledge",
+          "/memory",
+          "/people",
+          "/activity",
+          "/connectors",
+          "/projects",
+          "/tasks",
+          "/canvas",
+          "/privacy",
+          "/terms"
+        ];
         var path = location.pathname;
         if (path.endsWith("/index.html")) {
           path = path.slice(0, -"/index.html".length) || "/";
         }
-        if (
-          path !== "/" &&
-          path !== "/notes" &&
-          path !== "/notebooks" &&
-          path !== "/inbox" &&
-          path !== "/projects" &&
-          !path.startsWith("/projects/") &&
-          path !== "/tasks" &&
-          path !== "/canvas"
-        ) {
+        if (KNOWN.indexOf(path) === -1 && !path.startsWith("/projects/")) {
           path = "/";
         }
         var next = path + location.search + location.hash;
