@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { sourceRecords } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { listTasksForUser } from "./tasks";
@@ -89,7 +89,7 @@ function sourceTypeAliases(recordType: string): string {
 }
 
 const QUESTION_STOP =
-  /^(the|and|for|from|with|about|what|when|where|who|how|did|does|have|has|was|were|are|any|last|recent|latest|email|emails|mail|message|messages|gmail|inbox|my|me|a|an|of|to|in|on|is|it|this|that|please|show|find|get|tell)$/i;
+  /^(the|and|for|from|with|about|what|when|where|who|how|did|does|have|has|was|were|are|any|last|recent|latest|email|emails|mail|message|messages|gmail|inbox|my|me|a|an|of|to|in|on|is|it|this|that|please|show|find|get|tell|wife|husband)$/i;
 
 /** Name-like tokens from the question (e.g. "sandra" from "emails from Sandra"). */
 function questionNameTokens(question: string): string[] {
@@ -99,6 +99,46 @@ function questionNameTokens(question: string): string[] {
     .map((t) => t.trim())
     .filter((t) => t.length >= 3 && !QUESTION_STOP.test(t));
   return [...new Set(tokens)];
+}
+
+/** Collapse repeated letters so "sandrra" ≈ "sandra". */
+function collapseRepeats(s: string): string {
+  return s.toLowerCase().replace(/(.)\1+/g, "$1");
+}
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const dp = new Array<number>(cols);
+  for (let j = 0; j < cols; j++) dp[j] = j;
+  for (let i = 1; i < rows; i++) {
+    let prev = dp[0]!;
+    dp[0] = i;
+    for (let j = 1; j < cols; j++) {
+      const tmp = dp[j]!;
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[j] = Math.min(dp[j]! + 1, dp[j - 1]! + 1, prev + cost);
+      prev = tmp;
+    }
+  }
+  return dp[b.length]!;
+}
+
+/** Fuzzy name equality for typos (sandrra/sandra, jon/john). */
+function namesFuzzyMatch(a: string, b: string): boolean {
+  const x = a.toLowerCase().trim();
+  const y = b.toLowerCase().trim();
+  if (!x || !y) return false;
+  if (x === y) return true;
+  if (x.includes(y) || y.includes(x)) return true;
+  if (collapseRepeats(x) === collapseRepeats(y)) return true;
+  const maxLen = Math.max(x.length, y.length);
+  if (maxLen >= 4 && levenshtein(x, y) <= 1) return true;
+  if (maxLen >= 7 && levenshtein(x, y) <= 2) return true;
+  return false;
 }
 
 /** Parse Gmail "From:" line into display name + email. */
@@ -128,7 +168,7 @@ type PersonRef = {
 
 /** How strongly a gmail record's sender matches the question / known people. */
 function gmailSenderMatchScore(
-  question: string,
+  _question: string,
   r: ContextRecord,
   named: PersonRef[],
   nameTokens: string[],
@@ -140,7 +180,7 @@ function gmailSenderMatchScore(
   const fromName = from.name.toLowerCase();
   const fromEmail = from.email.toLowerCase();
   const fromLocal = fromEmail.split("@")[0] ?? "";
-  const hay = `${fromName} ${fromEmail} ${fromLocal}`.toLowerCase();
+  const fromParts = fromName.split(/\s+/).filter(Boolean);
 
   let score = 0;
 
@@ -155,21 +195,28 @@ function gmailSenderMatchScore(
       .filter((x): x is string => Boolean(x && String(x).trim().length >= 2))
       .map((x) => String(x).toLowerCase());
     for (const n of needles) {
-      if (n.includes("@") && fromEmail === n) score = Math.max(score, 1);
-      else if (fromEmail.includes(n) || fromName.includes(n) || hay.includes(n)) {
+      if (n.includes("@") && (fromEmail === n || namesFuzzyMatch(fromEmail, n))) {
+        score = Math.max(score, 1);
+      } else if (
+        namesFuzzyMatch(fromName, n) ||
+        fromParts.some((part) => namesFuzzyMatch(part, n)) ||
+        namesFuzzyMatch(fromLocal, n) ||
+        fromEmail.includes(n)
+      ) {
         score = Math.max(score, n.length >= 4 ? 0.95 : 0.85);
       }
     }
   }
 
   for (const token of nameTokens) {
-    if (token.includes("@") && fromEmail === token) score = Math.max(score, 1);
-    else if (
-      fromName.split(/\s+/).includes(token) ||
-      fromLocal === token ||
-      fromName.includes(token)
+    if (token.includes("@") && (fromEmail === token || fromEmail.includes(token))) {
+      score = Math.max(score, 1);
+    } else if (
+      fromParts.some((part) => namesFuzzyMatch(part, token)) ||
+      namesFuzzyMatch(fromName, token) ||
+      namesFuzzyMatch(fromLocal, token)
     ) {
-      score = Math.max(score, token.length >= 4 ? 0.92 : 0.8);
+      score = Math.max(score, token.length >= 4 ? 0.95 : 0.85);
     }
   }
 
@@ -192,6 +239,7 @@ export function mentionedPeople(
   for (const p of people) {
     const name = p.displayName.trim();
     if (name.length < 2) continue;
+    const qTokens = questionNameTokens(question);
     if (lower.includes(name.toLowerCase())) {
       fullHits.push(p);
       continue;
@@ -200,10 +248,16 @@ export function mentionedPeople(
       fullHits.push(p);
       continue;
     }
+    const nameParts = name.toLowerCase().split(/\s+/).filter((t) => t.length >= 3);
+    if (nameParts.some((part) => qTokens.some((t) => namesFuzzyMatch(t, part)))) {
+      fullHits.push(p);
+      continue;
+    }
     const first = (p.firstName?.trim() || name.split(/\s+/)[0] || "");
     if (first.length < 3 || AMBIGUOUS_FIRST.test(first)) continue;
     if (
-      new RegExp(`\\b${first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(question)
+      new RegExp(`\\b${first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(question) ||
+      qTokens.some((t) => namesFuzzyMatch(t, first))
     ) {
       firstHits.push(p);
     }
@@ -275,10 +329,13 @@ async function collectCorpus(
           recordTitle: sourceRecords.recordTitle,
           recordText: sourceRecords.recordText,
           updatedAt: sourceRecords.updatedAt,
+          sourceCreatedAt: sourceRecords.sourceCreatedAt,
         })
         .from(sourceRecords)
         .where(eq(sourceRecords.userId, userId))
-        .orderBy(desc(sourceRecords.updatedAt))
+        .orderBy(
+          desc(sql`coalesce(${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`),
+        )
         .limit(CORPUS.sourceRecords),
     ]);
 
@@ -385,7 +442,11 @@ async function collectCorpus(
       title,
       text: `${aliases} source=${s.recordType} ${title}${senderBits}\n${(s.recordText ?? "").slice(0, 800)}`,
       recordType: s.recordType,
-      updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : undefined,
+      updatedAt: s.sourceCreatedAt
+        ? new Date(s.sourceCreatedAt).toISOString()
+        : s.updatedAt
+          ? new Date(s.updatedAt).toISOString()
+          : undefined,
     });
   }
 
