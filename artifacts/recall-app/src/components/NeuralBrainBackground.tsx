@@ -66,15 +66,15 @@ function renderFrame(
   const boost = vivid ? 2.6 : 1;
 
   const glow = ctx.createRadialGradient(
-    width * 0.58,
-    height * 0.42,
+    width * 0.5,
+    height * 0.48,
     10,
-    width * 0.58,
-    height * 0.42,
-    Math.min(width, height) * 0.55,
+    width * 0.5,
+    height * 0.48,
+    Math.hypot(width, height) * (vivid ? 0.72 : 0.45),
   );
-  glow.addColorStop(0, vivid ? "rgba(148, 110, 255, 0.45)" : "rgba(128, 82, 255, 0.10)");
-  glow.addColorStop(0.4, vivid ? "rgba(56, 189, 160, 0.2)" : "rgba(21, 132, 110, 0.04)");
+  glow.addColorStop(0, vivid ? "rgba(148, 110, 255, 0.38)" : "rgba(128, 82, 255, 0.10)");
+  glow.addColorStop(0.35, vivid ? "rgba(56, 189, 160, 0.16)" : "rgba(21, 132, 110, 0.04)");
   glow.addColorStop(1, "rgba(0, 0, 0, 0)");
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
@@ -157,8 +157,8 @@ export function NeuralBrainBackground({
   const vivid = intensity === "vivid";
 
   const { particles, synapses } = useMemo(() => {
-    const count = isMobileViewport() ? 700 : reduced ? 900 : vivid ? 2000 : 1600;
-    return buildMemoryGraph(graph ?? {}, count);
+    const count = isMobileViewport() ? 900 : reduced ? 1200 : vivid ? 2600 : 1600;
+    return buildMemoryGraph(graph ?? {}, count, vivid);
   }, [graph, reduced, vivid]);
 
   useEffect(() => {
@@ -213,7 +213,14 @@ export function NeuralBrainBackground({
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       const time = reduced ? 0 : (now - start) / 1000;
-      const projected = projectParticles(particles, w, h, time, pointerRef.current);
+      const projected = projectParticles(
+        particles,
+        w,
+        h,
+        time,
+        pointerRef.current,
+        vivid,
+      );
       renderFrame(ctx, w, h, projected, synapses, time, vivid);
       if (!reduced) raf = requestAnimationFrame(tick);
     };

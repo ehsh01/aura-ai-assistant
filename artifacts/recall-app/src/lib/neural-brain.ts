@@ -71,6 +71,19 @@ function sampleBrainPoint(i: number): { x: number; y: number; z: number } {
   return { x, y, z };
 }
 
+/** Wide field points so the constellation can fill the whole viewport. */
+function sampleFieldPoint(i: number): { x: number; y: number; z: number } {
+  const u = hash(i * 2.3 + 0.7);
+  const v = hash(i * 4.1 + 1.9);
+  const w = hash(i * 6.7 + 3.3);
+  // Cover a large box; projection scale maps this across the full screen.
+  return {
+    x: (u - 0.5) * 3.4,
+    y: (v - 0.5) * 2.6,
+    z: (w - 0.5) * 1.8,
+  };
+}
+
 const SPECTRUM = [
   265, // violet
   280, // purple
@@ -85,15 +98,29 @@ function particleHue(i: number): number {
   return SPECTRUM[Math.floor(hash(i * 19.3) * SPECTRUM.length)]!;
 }
 
-export function buildAmbientCloud(count: number): BrainParticle[] {
+export function buildAmbientCloud(count: number, fillScreen = false): BrainParticle[] {
   const particles: BrainParticle[] = [];
-  for (let i = 0; i < count; i++) {
+  const brainCount = fillScreen ? Math.floor(count * 0.45) : count;
+  const fieldCount = fillScreen ? count - brainCount : 0;
+
+  for (let i = 0; i < brainCount; i++) {
     const p = sampleBrainPoint(i + 1);
     particles.push({
       ...p,
       hue: particleHue(i),
       size: 0.7 + hash(i * 23.1) * 1.6,
       phase: hash(i * 29.7) * Math.PI * 2,
+      kind: "ambient",
+    });
+  }
+
+  for (let i = 0; i < fieldCount; i++) {
+    const p = sampleFieldPoint(i + 9000);
+    particles.push({
+      ...p,
+      hue: particleHue(i + 400),
+      size: 0.55 + hash(i * 31.1) * 1.35,
+      phase: hash(i * 37.3) * Math.PI * 2,
       kind: "ambient",
     });
   }
@@ -133,11 +160,15 @@ function placeEntity(
   };
 }
 
-export function buildMemoryGraph(input: MemoryGraphInput, ambientCount = 1400): {
+export function buildMemoryGraph(
+  input: MemoryGraphInput,
+  ambientCount = 1400,
+  fillScreen = false,
+): {
   particles: BrainParticle[];
   synapses: BrainSynapse[];
 } {
-  const ambient = buildAmbientCloud(ambientCount);
+  const ambient = buildAmbientCloud(ambientCount, fillScreen);
   const entities: BrainParticle[] = [];
   const idToIndex = new Map<string, number>();
   const synapses: BrainSynapse[] = [];
@@ -259,12 +290,16 @@ export function projectParticles(
   height: number,
   time: number,
   pointer: { x: number; y: number },
+  fillScreen = false,
 ): ProjectedPoint[] {
-  const cx = width * 0.58;
-  const cy = height * 0.42;
-  const scale = Math.min(width, height) * 0.42;
+  const cx = fillScreen ? width * 0.5 : width * 0.58;
+  const cy = fillScreen ? height * 0.48 : height * 0.42;
+  // fillScreen: scale so the field (~±1.7) reaches past the corners.
+  const scale = fillScreen
+    ? Math.hypot(width, height) * 0.52
+    : Math.min(width, height) * 0.42;
   const rotY = time * 0.12 + pointer.x * 0.35;
-  const rotX = 0.25 + pointer.y * 0.2;
+  const rotX = (fillScreen ? 0.12 : 0.25) + pointer.y * 0.2;
   const cosY = Math.cos(rotY);
   const sinY = Math.sin(rotY);
   const cosX = Math.cos(rotX);
