@@ -1,11 +1,12 @@
 import { Router, type IRouter } from "express";
+import { z } from "zod";
 import {
   AcceptCaptureBody,
-  AcceptCaptureResponse,
   CreateCaptureBody,
   ListCaptureInboxResponse,
   UpdateCaptureBody,
 } from "@workspace/api-zod";
+import { LIFE_MEMORY_DOMAINS } from "@workspace/db/schema";
 import { requireAuth } from "../middleware/auth";
 import {
   acceptCaptureForUser,
@@ -14,6 +15,11 @@ import {
   updateCaptureForUser,
 } from "../services/capture-items";
 import { aiService } from "../services/ai";
+
+const AcceptBody = AcceptCaptureBody.extend({
+  saveAsMemory: z.boolean().optional(),
+  memoryDomain: z.enum(LIFE_MEMORY_DOMAINS).nullish(),
+});
 
 const router: IRouter = Router();
 
@@ -62,13 +68,13 @@ router.patch("/capture/:captureId", async (req, res, next) => {
 
 router.post("/capture/:captureId/accept", async (req, res, next) => {
   try {
-    const body = AcceptCaptureBody.parse(req.body ?? {});
+    const body = AcceptBody.parse(req.body ?? {});
     const result = await acceptCaptureForUser(req.user!.id, req.params.captureId, body);
     if (!result) {
       res.status(404).json({ error: "NOT_FOUND", message: "Capture item not found" });
       return;
     }
-    res.json(AcceptCaptureResponse.parse(result));
+    res.json(result);
   } catch (err) {
     next(err);
   }

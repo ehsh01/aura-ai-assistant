@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import {
   Activity,
   BookMarked,
+  Brain,
   Cable,
   FileText,
   FolderKanban,
@@ -199,6 +200,10 @@ export function MobileMoreSheet({
           <Link href="/documents" onClick={close} className={linkClass(location === "/documents")}>
             <FileText size={18} />
             <span className="flex-1 text-sm font-medium">Documents</span>
+          </Link>
+          <Link href="/memory" onClick={close} className={linkClass(location === "/memory")}>
+            <Brain size={18} />
+            <span className="flex-1 text-sm font-medium">Memory</span>
           </Link>
           <Link href="/knowledge" onClick={close} className={linkClass(location === "/knowledge")}>
             <BookMarked size={18} />

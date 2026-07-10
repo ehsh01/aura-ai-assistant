@@ -5,6 +5,7 @@ import {
   verifyAccessToken,
   type AuthUser,
 } from "../services/auth";
+import { config } from "../lib/config";
 
 declare global {
   namespace Express {
@@ -14,21 +15,23 @@ declare global {
   }
 }
 
+function extractToken(req: Request): string | null {
+  const header = req.headers.authorization;
+  if (header?.startsWith("Bearer ")) {
+    const token = header.slice("Bearer ".length).trim();
+    if (token) return token;
+  }
+  const cookie = req.cookies?.[config.sessionCookieName];
+  if (typeof cookie === "string" && cookie.trim()) return cookie.trim();
+  return null;
+}
+
 export async function requireAuth(
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const header = req.headers.authorization;
-  if (!header?.startsWith("Bearer ")) {
-    res.status(401).json({
-      error: "UNAUTHORIZED",
-      message: "Authentication required",
-    });
-    return;
-  }
-
-  const token = header.slice("Bearer ".length).trim();
+  const token = extractToken(req);
   if (!token) {
     res.status(401).json({
       error: "UNAUTHORIZED",

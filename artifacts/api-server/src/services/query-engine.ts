@@ -24,6 +24,11 @@ export type QueryAnswer = {
   suggestedNextAction: string | null;
   promptVersion: string;
   degraded: boolean;
+  privacy: {
+    model: string | null;
+    dataLeftDevice: boolean;
+    categoriesSent: string[];
+  };
 };
 
 function makeEvidence(input: {
@@ -74,7 +79,8 @@ export async function queryRecallForUser(
   question: string,
 ): Promise<QueryAnswer> {
   const today = todayIso();
-  const degraded = aiService.getStatus().degraded;
+  const status = aiService.getStatus();
+  const degraded = status.degraded;
   const waitingIntent = WAITING_INTENT.test(question);
   const personIntent = PERSON_INTENT.test(question);
 
@@ -239,7 +245,25 @@ export async function queryRecallForUser(
     ? waitingContext
     : [...waitingContext, ...retrievalContext].slice(0, 14);
 
-  const finish = async (result: QueryAnswer): Promise<QueryAnswer> => {
+  const finish = async (
+    result: Omit<QueryAnswer, "privacy"> & { privacy?: QueryAnswer["privacy"] },
+  ): Promise<QueryAnswer> => {
+    const categoriesSent = [
+      ...new Set(
+        [
+          ...result.relatedRecords.map((r) => r.entityType),
+          ...relevant.map((r) => r.entityType),
+        ].filter(Boolean),
+      ),
+    ];
+    const withPrivacy: QueryAnswer = {
+      ...result,
+      privacy: result.privacy ?? {
+        model: status.model,
+        dataLeftDevice: !result.degraded && Boolean(status.enabled),
+        categoriesSent,
+      },
+    };
     await writeAuditLog({
       userId,
       action: "query_answered",
@@ -247,16 +271,17 @@ export async function queryRecallForUser(
       entityId: null,
       metadata: {
         question: question.slice(0, 240),
-        confidence: result.confidence,
-        evidenceCount: result.evidence.length,
+        confidence: withPrivacy.confidence,
+        evidenceCount: withPrivacy.evidence.length,
         usedSemantic,
         waitingCount: waitingItems.length,
         personIntent,
         namedPeople: namedPeople.map((p) => p.displayName).slice(0, 4),
         hasFinance: Boolean(finance && !financeNeedsSync),
+        privacy: withPrivacy.privacy,
       },
     });
-    return result;
+    return withPrivacy;
   };
 
   const defaultNext =

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { BookOpen, Inbox, Library, Plus, FolderKanban, Sparkles, FileText, BookMarked, Activity } from "lucide-react";
+import { BookOpen, Inbox, Library, Plus, FolderKanban, Sparkles, FileText, BookMarked, Activity, Brain } from "lucide-react";
 import { CaptureModal } from "@/components/CaptureModal";
 import { MobileBottomNav, MobileMoreSheet } from "@/components/MobileShell";
 import { OfflineQueueBanner } from "@/components/OfflineQueueBanner";
@@ -81,6 +81,11 @@ const staticNavItems = [
     id: "/documents",
     label: "Documents",
     icon: <FileText width={18} height={18} strokeWidth={1.8} />,
+  },
+  {
+    id: "/memory",
+    label: "Memory",
+    icon: <Brain width={18} height={18} strokeWidth={1.8} />,
   },
   {
     id: "/knowledge",
@@ -293,6 +298,7 @@ export function AppLayout({ children }: AppLayoutProps) {
     location === "/ask" ||
     location === "/documents" ||
     location === "/knowledge" ||
+    location === "/memory" ||
     location === "/people" ||
     location === "/activity" ||
     location === "/connectors" ||

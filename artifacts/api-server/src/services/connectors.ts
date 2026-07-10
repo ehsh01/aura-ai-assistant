@@ -13,6 +13,7 @@ import { manualConnector } from "../connectors/manual";
 import type { RecallConnector } from "../connectors/types";
 import { createEvidenceForUser } from "./evidence";
 import { writeAuditLog } from "./audit";
+import { sealConnectorSettings } from "../lib/secret-box";
 
 const CONNECTOR_IMPLS: Record<string, RecallConnector> = {
   manual: manualConnector,
@@ -83,7 +84,7 @@ export async function createConnectorForUser(
       authType: input.authType ?? null,
       enabled: true,
       syncStatus: "disconnected",
-      settings: input.settings ?? {},
+      settings: sealConnectorSettings(input.settings ?? {}),
       createdAt: now,
       updatedAt: now,
     })

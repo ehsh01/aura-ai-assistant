@@ -36,6 +36,26 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+async function logoutOnServer(): Promise<void> {
+  try {
+    const token = getStoredToken();
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "include",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+  } catch {
+    try {
+      await fetch("/api/auth/logout/public", {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      // ignore
+    }
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
   const [user, setUser] = useState<User | null>(null);
@@ -50,16 +70,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [location, setLocation]);
 
   useEffect(() => {
+    // Bearer fallback for extension / older sessions; cookie is primary.
     setAuthTokenGetter(() => getStoredToken());
   }, []);
 
   useEffect(() => {
-    const token = getStoredToken();
-    if (!token) {
-      setIsLoading(false);
-      return;
-    }
-
+    // Prefer httpOnly cookie session; Bearer token is optional fallback.
     getCurrentUser()
       .then((res) => {
         setUser(res.user);
@@ -90,6 +106,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(
     async (data: LoginRequest) => {
       const res = await apiLogin(data);
+      // Keep Bearer for extension / offline capture queue; cookie is primary.
       setStoredToken(res.token);
       setUser(res.user);
       normalizeBrowserPath();
@@ -110,9 +127,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const logout = useCallback(() => {
-    clearStoredToken();
-    setUser(null);
-    setLocation("/", { replace: true });
+    void logoutOnServer().finally(() => {
+      clearStoredToken();
+      setUser(null);
+      setLocation("/", { replace: true });
+    });
   }, [setLocation]);
 
   const value = useMemo(

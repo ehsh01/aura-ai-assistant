@@ -13,7 +13,11 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     headers["Content-Type"] = "application/json";
   }
 
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers,
+    credentials: "include",
+  });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { message?: string };
     throw new Error(err.message ?? `Request failed (${res.status})`);
@@ -247,6 +251,11 @@ export async function queryRecall(question: string): Promise<{
   evidence: EvidenceRecord[];
   relatedRecords: { entityType: string; entityId: string; title: string }[];
   suggestedNextAction: string | null;
+  privacy?: {
+    model: string | null;
+    dataLeftDevice: boolean;
+    categoriesSent: string[];
+  };
 }> {
   return apiFetch("/ai/query", {
     method: "POST",
@@ -374,6 +383,105 @@ export async function updateKnowledge(
     method: "PATCH",
     body: JSON.stringify(input),
   });
+}
+
+export const LIFE_MEMORY_DOMAINS = [
+  "family",
+  "vehicles",
+  "home",
+  "health",
+  "work",
+  "finance",
+  "people",
+  "preferences",
+  "procedures",
+  "other",
+] as const;
+
+export type LifeMemoryDomain = (typeof LIFE_MEMORY_DOMAINS)[number];
+
+export type LifeMemoryRecord = {
+  id: string;
+  domain: LifeMemoryDomain;
+  title: string;
+  content: string;
+  tags: string[];
+  primaryPersonId: string | null;
+  projectId: string | null;
+  sourceType: "teach" | "capture" | "ask" | "import";
+  sourceId: string | null;
+  pinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function listMemories(opts?: {
+  domain?: string;
+  q?: string;
+}): Promise<{ items: LifeMemoryRecord[] }> {
+  const params = new URLSearchParams();
+  if (opts?.domain) params.set("domain", opts.domain);
+  if (opts?.q?.trim()) params.set("q", opts.q.trim());
+  const q = params.toString();
+  return apiFetch(`/memory${q ? `?${q}` : ""}`);
+}
+
+export async function createMemory(input: {
+  title?: string;
+  content: string;
+  domain?: string | null;
+  tags?: string[];
+  primaryPersonId?: string | null;
+  projectId?: string | null;
+  sourceType?: "teach" | "capture" | "ask" | "import";
+  pinned?: boolean;
+}): Promise<LifeMemoryRecord> {
+  return apiFetch("/memory", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function updateMemory(
+  memoryId: string,
+  input: {
+    title?: string;
+    content?: string;
+    domain?: string | null;
+    tags?: string[];
+    primaryPersonId?: string | null;
+    projectId?: string | null;
+    pinned?: boolean;
+  },
+): Promise<LifeMemoryRecord> {
+  return apiFetch(`/memory/${encodeURIComponent(memoryId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteMemory(memoryId: string): Promise<void> {
+  await apiFetch(`/memory/${encodeURIComponent(memoryId)}`, { method: "DELETE" });
+}
+
+export async function classifyMemory(
+  content: string,
+): Promise<{ domain: LifeMemoryDomain; title: string; degraded: boolean }> {
+  return apiFetch("/memory/classify", {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+}
+
+export async function exportLifeMemoryMarkdown(): Promise<string> {
+  const token = getStoredToken();
+  const headers: Record<string, string> = { Accept: "text/markdown" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}/memory/export.md`, {
+    headers,
+    credentials: "include",
+  });
+  if (!res.ok) {
+    throw new Error(`Export failed (${res.status})`);
+  }
+  return res.text();
 }
 
 export async function summarizeText(

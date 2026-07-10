@@ -3,6 +3,7 @@ import { captureItems, type CaptureItem } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newCaptureId } from "../lib/recall-format";
 import { createEvidenceForUser } from "./evidence";
+import { createMemoryForUser, type LifeMemoryDto } from "./life-memory";
 import { createNoteForUser, type RecallNoteDto } from "./notes";
 import {
   getPersonForUser,
@@ -84,12 +85,16 @@ export type AcceptCaptureInput = {
   personName?: string | null;
   /** Skip person linking even if text mentions a name. */
   skipPerson?: boolean;
+  /** Save as permanent life memory instead of a note. */
+  saveAsMemory?: boolean;
+  memoryDomain?: string | null;
 };
 
 export type AcceptCaptureResult = {
   item: RecallCaptureItemDto;
   note?: RecallNoteDto;
   task?: RecallTaskDto;
+  memory?: LifeMemoryDto;
   personId?: string | null;
   personName?: string | null;
 };
@@ -401,8 +406,32 @@ export async function acceptCaptureForUser(
 
   let note: RecallNoteDto | undefined;
   let task: RecallTaskDto | undefined;
+  let memory: LifeMemoryDto | undefined;
 
-  if (type === "task" || type === "reminder") {
+  if (input.saveAsMemory) {
+    memory = await createMemoryForUser(userId, {
+      title,
+      content,
+      domain: input.memoryDomain ?? null,
+      tags,
+      primaryPersonId: person?.id ?? null,
+      projectId,
+      sourceType: "capture",
+      sourceId: item.rawCaptureId ?? captureId,
+    });
+    if (memory && item.rawCaptureId) {
+      await createEvidenceForUser(userId, {
+        entityType: "memory",
+        entityId: memory.id,
+        claimType: "summary_based_on",
+        sourceCaptureId: item.rawCaptureId,
+        evidenceText: item.rawText.slice(0, 500),
+        evidenceMetadata: person
+          ? { personId: person.id, personName: person.displayName }
+          : undefined,
+      });
+    }
+  } else if (type === "task" || type === "reminder") {
     task = await createTaskForUser(userId, {
       title,
       time: input.dueDate ?? item.suggestedDueDate,
@@ -454,14 +483,15 @@ export async function acceptCaptureForUser(
     await writeAuditLog({
       userId,
       action: "capture_accepted",
-      entityType: task ? "task" : "note",
-      entityId: task?.id ?? note?.id ?? captureId,
+      entityType: memory ? "memory" : task ? "task" : "note",
+      entityId: memory?.id ?? task?.id ?? note?.id ?? captureId,
       metadata: {
         captureItemId: captureId,
-        type,
+        type: memory ? "memory" : type,
         title,
         createdTaskId: task?.id ?? null,
         createdNoteId: note?.id ?? null,
+        createdMemoryId: memory?.id ?? null,
         sourceCaptureId: item.rawCaptureId,
         personId: person?.id ?? null,
         personName: person?.displayName ?? null,
@@ -473,6 +503,7 @@ export async function acceptCaptureForUser(
         item: updated,
         note,
         task,
+        memory,
         personId: person?.id ?? null,
         personName: person?.displayName ?? null,
       }

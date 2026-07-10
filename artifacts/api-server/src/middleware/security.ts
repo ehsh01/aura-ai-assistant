@@ -52,3 +52,14 @@ export const aiRateLimiter: RequestHandler = rateLimit({
     message: "Too many AI requests — try again later",
   },
 });
+
+export const loginRateLimiter: RequestHandler = rateLimit({
+  windowMs: config.loginRateLimitWindowMs,
+  max: config.loginRateLimitMax,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: "LOGIN_RATE_LIMITED",
+    message: "Too many login attempts — try again later",
+  },
+});

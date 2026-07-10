@@ -147,6 +147,23 @@ Frontend uses same-origin `/api/...` (no `VITE_API_BASE_URL` needed when nginx p
 
 **Required GitHub secret:** `DEPLOY_SSH_KEY` — a private key whose public half is in the droplet's `~/.ssh/authorized_keys`. Without it the job safely no-ops. Add it under **Settings → Secrets and variables → Actions**. The matching public key is `~/.ssh/id_recall_deploy.pub` locally.
 
+## Security (Phase 1)
+
+Production `.env` should include:
+
+```bash
+ALLOW_PUBLIC_REGISTER=false
+# Optional recovery invite when registration is locked:
+# REGISTER_INVITE_CODE=your-one-time-code
+
+# 64 hex chars (openssl rand -hex 32) — encrypts connector OAuth/API secrets at rest
+SECRETS_ENCRYPTION_KEY=$(openssl rand -hex 32)
+```
+
+Sessions are issued as `HttpOnly; Secure; SameSite=Lax` cookies (`recall_session`). Bearer tokens remain for the browser extension / offline capture queue.
+
+**Key rotation:** generate a new `SECRETS_ENCRYPTION_KEY`, re-seal any stored connector secrets with the new key (or re-authorize connectors), then update `.env` and restart `recall-api`.
+
 ## Database backups
 
 `scripts/backup-recall-db.sh` writes a compressed, timestamped `pg_dump` to `/var/backups/recall/` and keeps the newest 14. It prefers `docker run postgres:18 pg_dump` so the client major matches DigitalOcean managed Postgres 18 (host `postgresql-client-17` is too old).

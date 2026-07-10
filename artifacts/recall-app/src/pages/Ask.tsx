@@ -18,7 +18,32 @@ type Answer = {
   evidence: EvidenceRecord[];
   relatedRecords: { entityType: string; entityId: string; title: string }[];
   suggestedNextAction: string | null;
+  privacy?: {
+    model: string | null;
+    dataLeftDevice: boolean;
+    categoriesSent: string[];
+  };
 };
+
+function privacyChipLabel(privacy: NonNullable<Answer["privacy"]>): string {
+  const cats = privacy.categoriesSent
+    .map((c) => {
+      if (c === "memory") return "Memory";
+      if (c === "note") return "Notes";
+      if (c === "task") return "Tasks";
+      if (c === "knowledge") return "Knowledge";
+      if (c === "person") return "People";
+      return c;
+    })
+    .filter((v, i, a) => a.indexOf(v) === i)
+    .slice(0, 4);
+  const used = cats.length > 0 ? cats.join(" + ") : "your data";
+  if (!privacy.dataLeftDevice) {
+    return `Answer used ${used} · stayed on device`;
+  }
+  const model = privacy.model ? ` · sent to ${privacy.model}` : " · sent to AI";
+  return `Answer used ${used}${model}`;
+}
 
 const FALLBACK_SUGGESTIONS = [
   "What am I waiting on from other people?",
@@ -121,7 +146,7 @@ export function Ask() {
           <p className="text-sm uppercase tracking-[0.3em] text-indigo-300/70">Ask Recall</p>
           <h1 className="mt-2 text-3xl font-semibold">Ask anything about your world</h1>
           <p className="mt-2 text-white/50">
-            Recall answers from your captures, notes, tasks, people, and connected data — and shows
+            Recall answers from your Memory, notes, tasks, people, and connected data — and shows
             the evidence behind every answer.
           </p>
 
@@ -177,6 +202,11 @@ export function Ask() {
                   {conf && (
                     <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${conf.className}`}>
                       {conf.label} · {Math.round(answer.confidence * 100)}%
+                    </span>
+                  )}
+                  {answer.privacy && (
+                    <span className="rounded-full bg-white/5 px-2.5 py-1 text-xs font-medium text-white/55">
+                      {privacyChipLabel(answer.privacy)}
                     </span>
                   )}
                   {(() => {

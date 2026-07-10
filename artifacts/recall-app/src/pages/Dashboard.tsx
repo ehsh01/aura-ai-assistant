@@ -54,7 +54,30 @@ type AskResult = {
   caveats: string | null;
   evidence: EvidenceRecord[];
   suggestedNextAction: string | null;
+  privacy?: {
+    model: string | null;
+    dataLeftDevice: boolean;
+    categoriesSent: string[];
+  };
 };
+
+function privacyChipLabel(privacy: NonNullable<AskResult["privacy"]>): string {
+  const cats = privacy.categoriesSent
+    .map((c) => {
+      if (c === "memory") return "Memory";
+      if (c === "note") return "Notes";
+      if (c === "task") return "Tasks";
+      if (c === "knowledge") return "Knowledge";
+      if (c === "person") return "People";
+      return c;
+    })
+    .filter((v, i, a) => a.indexOf(v) === i)
+    .slice(0, 4);
+  const used = cats.length > 0 ? cats.join(" + ") : "your data";
+  if (!privacy.dataLeftDevice) return `Answer used ${used} · stayed on device`;
+  const model = privacy.model ? ` · sent to ${privacy.model}` : " · sent to AI";
+  return `Answer used ${used}${model}`;
+}
 
 function confidenceLabel(score: number): { label: string; className: string } {
   if (score >= 0.8) return { label: "High confidence", className: "text-emerald-300 bg-emerald-500/10" };
@@ -128,6 +151,7 @@ export function Dashboard() {
         caveats: res.caveats,
         evidence: res.evidence,
         suggestedNextAction: res.suggestedNextAction,
+        privacy: res.privacy,
       });
     } catch {
       setAskResult({
@@ -257,6 +281,18 @@ export function Dashboard() {
               <ArrowRight size={12} />
             </Link>
             <Link
+              href="/memory"
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/55 no-underline hover:bg-white/5 hover:text-white/80"
+            >
+              Teach Recall
+            </Link>
+            <Link
+              href="/ask?q=What%20do%20you%20know%20about%20my%20life%3F"
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/55 no-underline hover:bg-white/5 hover:text-white/80"
+            >
+              Ask about my life
+            </Link>
+            <Link
               href="/inbox"
               className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/55 no-underline hover:bg-white/5 hover:text-white/80"
             >
@@ -286,6 +322,11 @@ export function Dashboard() {
                     {conf && askResult && askResult.confidence > 0 && (
                       <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${conf.className}`}>
                         {conf.label} · {Math.round(askResult.confidence * 100)}%
+                      </span>
+                    )}
+                    {askResult?.privacy && (
+                      <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] font-medium text-white/50">
+                        {privacyChipLabel(askResult.privacy)}
                       </span>
                     )}
                   </div>

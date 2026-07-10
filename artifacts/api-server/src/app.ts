@@ -1,4 +1,5 @@
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
+import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 import { ZodError } from "zod";
 import router from "./routes";
@@ -32,6 +33,7 @@ app.use(
   }),
 );
 applySecurityMiddleware(app);
+app.use(cookieParser());
 app.use(express.json({ limit: config.jsonLimit }));
 app.use(express.urlencoded({ extended: true, limit: config.jsonLimit }));
 app.use("/api", generalRateLimiter, router);

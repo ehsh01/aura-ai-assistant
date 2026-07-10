@@ -4,6 +4,7 @@ import { listPeopleForUser } from "./people";
 import { listKnowledgeForUser } from "./knowledge";
 import { listDocumentsForUser } from "./documents";
 import { listCapturesForUser } from "./captures";
+import { listMemoriesForUser } from "./life-memory";
 import {
   cosineSimilarity,
   embedItemsCached,
@@ -26,7 +27,16 @@ type ContextRecord = {
   entityId: string;
   title: string;
   text: string;
+  pinned?: boolean;
 };
+
+/** Permanent memories outrank ephemeral notes/captures in hybrid scoring. */
+function typeBoost(entityType: string, pinned?: boolean): number {
+  if (entityType === "memory") return pinned ? 0.35 : 0.22;
+  if (entityType === "knowledge") return 0.08;
+  if (entityType === "person") return 0.05;
+  return 0;
+}
 
 /** First names that collide with common English words / months. */
 const AMBIGUOUS_FIRST =
@@ -96,6 +106,7 @@ const CORPUS = {
   notes: 250,
   people: 120,
   knowledge: 120,
+  memories: 200,
   documents: 100,
   captures: 100,
   keywordShortlist: 80,
@@ -105,16 +116,30 @@ const CORPUS = {
 async function collectCorpus(
   userId: string,
 ): Promise<{ records: ContextRecord[]; people: { id: string; displayName: string }[] }> {
-  const [tasks, notes, people, knowledge, documents, captures] = await Promise.all([
+  const [tasks, notes, people, knowledge, memories, documents, captures] = await Promise.all([
     listTasksForUser(userId),
     listNotesForUser(userId),
     listPeopleForUser(userId),
     listKnowledgeForUser(userId),
+    listMemoriesForUser(userId, { limit: CORPUS.memories }),
     listDocumentsForUser(userId),
     listCapturesForUser(userId, { limit: CORPUS.captures }),
   ]);
 
   const records: ContextRecord[] = [];
+
+  for (const m of memories.slice(0, CORPUS.memories)) {
+    const cap = m.pinned ? 4000 : 1200;
+    records.push({
+      entityType: "memory",
+      entityId: m.id,
+      title: m.title,
+      text: `domain=${m.domain} ${m.title}\n${m.content.slice(0, cap)}\ntags=${m.tags.join(",")}${
+        m.primaryPersonId ? ` personId=${m.primaryPersonId}` : ""
+      }${m.pinned ? " pinned=true" : ""}`,
+      pinned: m.pinned,
+    });
+  }
 
   for (const t of tasks.slice(0, CORPUS.tasks)) {
     const personBits = [t.requesterPersonName, t.requesterPersonId]
@@ -212,6 +237,15 @@ export async function retrieveRelevantRecords(
   const personBoost = (r: ContextRecord): number => {
     if (named.length === 0) return 0;
     if (r.entityType === "person" && namedIds.has(r.entityId)) return 0.45;
+    if (
+      r.entityType === "memory" &&
+      (r.text.includes("domain=family") || r.text.includes("domain=people"))
+    ) {
+      const hay = `${r.title}\n${r.text}`.toLowerCase();
+      for (const token of namedTokens) {
+        if (hay.includes(token)) return 0.4;
+      }
+    }
     const hay = `${r.title}\n${r.text}`.toLowerCase();
     for (const needle of personTagNeedles) {
       if (hay.includes(needle)) return 0.38;
@@ -291,7 +325,7 @@ export async function retrieveRelevantRecords(
     const id = `${r.entityType}:${r.entityId}`;
     const kw = keywordScore(question, `${r.title}\n${r.text}`);
     const sem = semanticScores.get(id) ?? 0;
-    const boost = personBoost(r);
+    const boost = personBoost(r) + typeBoost(r.entityType, r.pinned);
     // Blend: semantic dominates when present; keyword still boosts exact matches.
     const score = (usedSemantic ? sem * 0.75 + kw * 0.25 : kw) + boost;
     const method: RetrievedRecord["method"] =

@@ -7,13 +7,27 @@ import { useRecallData } from "@/context/RecallDataContext";
 import { toast } from "@/hooks/use-toast";
 import type { RecallCaptureItem } from "@/lib/recall-context";
 import { listPeople, type PersonRecord } from "@/lib/recall-api";
-import { notesPath, readSearchParam } from "@/lib/recall-nav";
+import { notesPath, memoryPath, readSearchParam } from "@/lib/recall-nav";
+import { LIFE_MEMORY_DOMAINS, type LifeMemoryDomain } from "@/lib/recall-api";
 
 const priorityClass: Record<RecallCaptureItem["suggestedPriority"], string> = {
   low: "text-blue-300 bg-blue-500/10",
   medium: "text-white/60 bg-white/5",
   high: "text-orange-300 bg-orange-500/10",
   urgent: "text-red-300 bg-red-500/10",
+};
+
+const DOMAIN_LABELS: Record<LifeMemoryDomain, string> = {
+  family: "Family",
+  vehicles: "Vehicles",
+  home: "Home",
+  health: "Health",
+  work: "Work",
+  finance: "Finance",
+  people: "People",
+  preferences: "Preferences",
+  procedures: "Procedures",
+  other: "Other",
 };
 
 export function Inbox() {
@@ -28,6 +42,8 @@ export function Inbox() {
   const [personOverride, setPersonOverride] = useState<Record<string, string>>({});
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [pickerFor, setPickerFor] = useState<string | null>(null);
+  /** Optional domain override when saving to Memory. */
+  const [memoryDomain, setMemoryDomain] = useState<Record<string, LifeMemoryDomain | "">>({});
 
   const load = async () => {
     setLoading(true);
@@ -80,17 +96,25 @@ export function Inbox() {
       .slice(0, 8);
   }, [pickerFor, personOverride, people]);
 
-  const accept = async (item: RecallCaptureItem) => {
+  const accept = async (
+    item: RecallCaptureItem,
+    opts?: { saveAsMemory?: boolean },
+  ) => {
     try {
       const personName = personFor(item);
       const cleared = Boolean(clearedPerson[item.id]);
       const hasOverride = Boolean(personOverride[item.id]?.trim());
-      const body = personName
+      const domain = memoryDomain[item.id];
+      const body: Record<string, unknown> = personName
         ? { personName }
         : cleared || hasOverride
           ? { skipPerson: true, personName: null }
           : {};
-      const res = await acceptCapture(item.id, body);
+      if (opts?.saveAsMemory) {
+        body.saveAsMemory = true;
+        if (domain) body.memoryDomain = domain;
+      }
+      const res = await acceptCapture(item.id, body as Parameters<typeof acceptCapture>[1]);
       await Promise.all([load(), reloadNotes(), reloadTasks()]);
       setPersonOverride((prev) => {
         const next = { ...prev };
@@ -102,11 +126,28 @@ export function Inbox() {
         delete next[item.id];
         return next;
       });
+      setMemoryDomain((prev) => {
+        const next = { ...prev };
+        delete next[item.id];
+        return next;
+      });
       setPickerFor(null);
       const linked =
         res.personName != null && res.personName !== ""
           ? ` Linked to ${res.personName}.`
           : "";
+      const memoryId =
+        res && typeof res === "object" && "memory" in res
+          ? (res as { memory?: { id?: string; title?: string; domain?: string } }).memory
+          : undefined;
+      if (memoryId?.id) {
+        toast({
+          title: "Saved to Memory",
+          description: `${memoryId.title ?? "Fact"}${memoryId.domain ? ` · ${memoryId.domain}` : ""}.${linked}`,
+        });
+        navigate(memoryPath({ memoryId: memoryId.id }));
+        return;
+      }
       if (res.task?.id) {
         toast({
           title: "Task created",
@@ -251,6 +292,33 @@ export function Inbox() {
                     >
                       Dismiss
                     </button>
+                    <div className="flex items-center gap-1.5">
+                      <select
+                        value={memoryDomain[item.id] ?? ""}
+                        onChange={(e) =>
+                          setMemoryDomain((prev) => ({
+                            ...prev,
+                            [item.id]: e.target.value as LifeMemoryDomain | "",
+                          }))
+                        }
+                        className="rounded-xl border border-white/10 bg-black/30 px-2 py-2 text-xs text-white/70"
+                        title="Memory domain (optional)"
+                      >
+                        <option value="">Auto domain</option>
+                        {LIFE_MEMORY_DOMAINS.map((d) => (
+                          <option key={d} value={d}>
+                            {DOMAIN_LABELS[d]}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => void accept(item, { saveAsMemory: true })}
+                        className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-100 hover:bg-emerald-500/20"
+                      >
+                        Save to Memory
+                      </button>
+                    </div>
                     <button
                       type="button"
                       onClick={() => void accept(item)}

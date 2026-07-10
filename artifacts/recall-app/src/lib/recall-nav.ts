@@ -73,6 +73,14 @@ export function knowledgePath(opts?: { knowledgeId?: string; person?: string }):
   return q ? `/knowledge?${q}` : "/knowledge";
 }
 
+export function memoryPath(opts?: { memoryId?: string; domain?: string }): string {
+  const params = new URLSearchParams();
+  if (opts?.memoryId) params.set("memory", opts.memoryId);
+  if (opts?.domain?.trim()) params.set("domain", opts.domain.trim());
+  const q = params.toString();
+  return q ? `/memory?${q}` : "/memory";
+}
+
 /** Best-effort deep link for Ask related records / evidence entities. */
 export function entityPath(entityType: string, entityId: string): string | null {
   switch (entityType) {
@@ -86,6 +94,8 @@ export function entityPath(entityType: string, entityId: string): string | null 
       return documentsPath({ documentId: entityId });
     case "knowledge":
       return knowledgePath({ knowledgeId: entityId });
+    case "memory":
+      return memoryPath({ memoryId: entityId });
     case "capture":
     case "capture_item":
       return inboxPath({ captureId: entityId });

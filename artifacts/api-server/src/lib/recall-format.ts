@@ -64,6 +64,10 @@ export function newKnowledgeId(): string {
   return `know-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function newMemoryId(): string {
+  return `mem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function newCorrectionId(): string {
   return `corr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

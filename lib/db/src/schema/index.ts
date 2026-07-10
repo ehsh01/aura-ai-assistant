@@ -15,5 +15,6 @@ export * from "./sync-runs";
 export * from "./source-records";
 export * from "./documents";
 export * from "./knowledge-items";
+export * from "./life-memories";
 export * from "./audit-log";
 export * from "./entity-embeddings";

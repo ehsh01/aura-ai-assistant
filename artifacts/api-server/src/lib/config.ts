@@ -33,4 +33,27 @@ export const config = {
     process.env.GENERAL_RATE_LIMIT_WINDOW_MS ?? "900000",
   ),
   generalRateLimitMax: Number(process.env.GENERAL_RATE_LIMIT_MAX ?? "200"),
+  /** Stricter limit for /auth/login */
+  loginRateLimitWindowMs: Number(
+    process.env.LOGIN_RATE_LIMIT_WINDOW_MS ?? "900000",
+  ),
+  loginRateLimitMax: Number(process.env.LOGIN_RATE_LIMIT_MAX ?? "20"),
+  /**
+   * When false, POST /auth/register returns 403.
+   * Default: allow in non-production; lock in production unless explicitly enabled.
+   */
+  allowPublicRegister:
+    process.env.ALLOW_PUBLIC_REGISTER != null
+      ? process.env.ALLOW_PUBLIC_REGISTER === "true"
+      : !isProduction,
+  /** Optional one-time invite code when registration is locked. */
+  registerInviteCode: process.env.REGISTER_INVITE_CODE?.trim() || null,
+  sessionCookieName: process.env.SESSION_COOKIE_NAME ?? "recall_session",
+  sessionCookieSecure:
+    process.env.SESSION_COOKIE_SECURE != null
+      ? process.env.SESSION_COOKIE_SECURE === "true"
+      : isProduction,
+  sessionCookieMaxAgeMs: Number(
+    process.env.SESSION_COOKIE_MAX_AGE_MS ?? String(7 * 24 * 60 * 60 * 1000),
+  ),
 } as const;

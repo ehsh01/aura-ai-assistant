@@ -2,8 +2,8 @@ openapi: 3.1.0
 info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
-  version: 0.6.0
-  description: Recall API — health, auth, notebooks, notes, tasks, capture, projects, and AI operations
+  version: 0.7.0
+  description: Recall API — health, auth, notebooks, notes, tasks, capture, memory, projects, and AI operations
 servers:
   - url: /api
     description: Base API path
@@ -22,6 +22,8 @@ tags:
     description: User tasks (persisted)
   - name: capture
     description: Universal capture and AI Inbox operations
+  - name: memory
+    description: Permanent life memories (teach once, ask forever)
   - name: projects
     description: User projects and command-center organization
 paths:
@@ -78,6 +80,16 @@ paths:
                 $ref: "#/components/schemas/LoginResponse"
         "401":
           description: Invalid credentials
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Sign out and clear session cookie
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Logged out
   /auth/me:
     get:
       operationId: getCurrentUser
@@ -497,6 +509,148 @@ paths:
                 $ref: "#/components/schemas/AcceptCaptureResponse"
         "404":
           description: Capture item not found
+  /memory:
+    get:
+      operationId: listMemories
+      tags: [memory]
+      summary: List permanent life memories
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: domain
+          in: query
+          schema:
+            type: string
+        - name: q
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Memories
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifeMemoryListResponse"
+    post:
+      operationId: createMemory
+      tags: [memory]
+      summary: Teach Recall a permanent memory
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLifeMemoryRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifeMemory"
+  /memory/export.md:
+    get:
+      operationId: exportMemoriesMarkdown
+      tags: [memory]
+      summary: Download growing Life File markdown
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Markdown Life File
+          content:
+            text/markdown:
+              schema:
+                type: string
+  /memory/classify:
+    post:
+      operationId: classifyMemory
+      tags: [memory]
+      summary: Suggest domain and title for raw memory text
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClassifyMemoryRequest"
+      responses:
+        "200":
+          description: Classification
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassifyMemoryResponse"
+  /memory/{memoryId}:
+    get:
+      operationId: getMemory
+      tags: [memory]
+      summary: Get a life memory
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: memoryId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Memory
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifeMemory"
+        "404":
+          description: Not found
+    patch:
+      operationId: updateMemory
+      tags: [memory]
+      summary: Update a life memory
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: memoryId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLifeMemoryRequest"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LifeMemory"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteMemory
+      tags: [memory]
+      summary: Delete a life memory
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: memoryId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
   /projects:
     get:
       operationId: listProjects
@@ -1361,6 +1515,13 @@ components:
         skipPerson:
           type: boolean
           description: When true, do not auto-link a person from the capture text.
+        saveAsMemory:
+          type: boolean
+          description: When true, save the capture as a permanent life memory instead of a note.
+        memoryDomain:
+          type: string
+          enum: [family, vehicles, home, health, work, finance, people, preferences, procedures, other]
+          description: Life domain when saveAsMemory is true (auto-classified if omitted).
     AcceptCaptureResponse:
       type: object
       properties:
@@ -1370,6 +1531,8 @@ components:
           $ref: "#/components/schemas/RecallNote"
         task:
           $ref: "#/components/schemas/RecallTask"
+        memory:
+          $ref: "#/components/schemas/LifeMemory"
         personId:
           type: string
           nullable: true
@@ -1378,6 +1541,133 @@ components:
           nullable: true
       required:
         - item
+    LifeMemory:
+      type: object
+      properties:
+        id:
+          type: string
+        domain:
+          type: string
+          enum: [family, vehicles, home, health, work, finance, people, preferences, procedures, other]
+        title:
+          type: string
+        content:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        primaryPersonId:
+          type: string
+          nullable: true
+        projectId:
+          type: string
+          nullable: true
+        sourceType:
+          type: string
+          enum: [teach, capture, ask, import]
+        sourceId:
+          type: string
+          nullable: true
+        pinned:
+          type: boolean
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - domain
+        - title
+        - content
+        - tags
+        - pinned
+        - createdAt
+        - updatedAt
+    LifeMemoryListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/LifeMemory"
+      required:
+        - items
+    CreateLifeMemoryRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        content:
+          type: string
+        domain:
+          type: string
+          enum: [family, vehicles, home, health, work, finance, people, preferences, procedures, other]
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        primaryPersonId:
+          type: string
+          nullable: true
+        projectId:
+          type: string
+          nullable: true
+        sourceType:
+          type: string
+          enum: [teach, capture, ask, import]
+        sourceId:
+          type: string
+          nullable: true
+        pinned:
+          type: boolean
+      required:
+        - content
+    UpdateLifeMemoryRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        content:
+          type: string
+        domain:
+          type: string
+          enum: [family, vehicles, home, health, work, finance, people, preferences, procedures, other]
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        primaryPersonId:
+          type: string
+          nullable: true
+        projectId:
+          type: string
+          nullable: true
+        pinned:
+          type: boolean
+    ClassifyMemoryRequest:
+      type: object
+      properties:
+        content:
+          type: string
+      required:
+        - content
+    ClassifyMemoryResponse:
+      type: object
+      properties:
+        domain:
+          type: string
+          enum: [family, vehicles, home, health, work, finance, people, preferences, procedures, other]
+        title:
+          type: string
+        degraded:
+          type: boolean
+      required:
+        - domain
+        - title
+        - degraded
     RecallNoteMetadata:
       type: object
       properties:
