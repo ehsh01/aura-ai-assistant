@@ -244,13 +244,17 @@ export async function fetchHome(): Promise<HomeBriefingResponse> {
   return apiFetch("/home");
 }
 
-export async function queryRecall(question: string): Promise<{
+export async function queryRecall(
+  question: string,
+  options?: { threadId?: string | null },
+): Promise<{
   answer: string;
   confidence: number;
   caveats: string | null;
   evidence: EvidenceRecord[];
   relatedRecords: { entityType: string; entityId: string; title: string }[];
   suggestedNextAction: string | null;
+  threadId: string | null;
   privacy?: {
     model: string | null;
     dataLeftDevice: boolean;
@@ -259,8 +263,63 @@ export async function queryRecall(question: string): Promise<{
 }> {
   return apiFetch("/ai/query", {
     method: "POST",
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({
+      question,
+      threadId: options?.threadId ?? undefined,
+    }),
   });
+}
+
+export type AskThreadRecord = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AskMessageRecord = {
+  id: string;
+  threadId: string;
+  role: "user" | "assistant";
+  content: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export async function listAskThreads(): Promise<{ threads: AskThreadRecord[] }> {
+  return apiFetch("/ai/threads");
+}
+
+export async function createAskThread(): Promise<{
+  thread: AskThreadRecord;
+  messages: AskMessageRecord[];
+}> {
+  return apiFetch("/ai/threads", { method: "POST", body: "{}" });
+}
+
+export async function getAskThread(
+  threadId: string,
+): Promise<{ thread: AskThreadRecord; messages: AskMessageRecord[] }> {
+  return apiFetch(`/ai/threads/${encodeURIComponent(threadId)}`);
+}
+
+const ASK_THREAD_KEY = "recall_ask_thread_id";
+
+export function getStoredAskThreadId(): string | null {
+  try {
+    return localStorage.getItem(ASK_THREAD_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredAskThreadId(threadId: string | null): void {
+  try {
+    if (!threadId) localStorage.removeItem(ASK_THREAD_KEY);
+    else localStorage.setItem(ASK_THREAD_KEY, threadId);
+  } catch {
+    // ignore
+  }
 }
 
 export async function listConnectors(): Promise<{

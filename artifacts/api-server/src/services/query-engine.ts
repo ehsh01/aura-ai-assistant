@@ -14,6 +14,13 @@ import { listWaitingOnForUser } from "./waiting-on";
 import { writeAuditLog } from "./audit";
 import { QUERY_ANSWER_PROMPT_VERSION } from "../prompts/queryAnswer.v1";
 import { newEvidenceId } from "../lib/recall-format";
+import {
+  appendAskMessage,
+  ensureAskThreadForUser,
+  listRecentTurnsForThread,
+  retrievalQueryFromHistory,
+  type ConversationTurn,
+} from "./ask-threads";
 
 export type QueryAnswer = {
   answer: string;
@@ -24,6 +31,7 @@ export type QueryAnswer = {
   suggestedNextAction: string | null;
   promptVersion: string;
   degraded: boolean;
+  threadId: string | null;
   privacy: {
     model: string | null;
     dataLeftDevice: boolean;
@@ -72,11 +80,13 @@ function makeEvidence(input: {
  *
  * Retrieval is hybrid (keyword + cached embeddings). Finance answers use
  * already-synced source_records rather than a live external API call.
- * Reads are side-effect free: evidence is assembled in-memory.
+ * When threadId is provided (or created), prior turns are used for follow-ups
+ * and the Q&A is persisted on the thread.
  */
 export async function queryRecallForUser(
   userId: string,
   question: string,
+  options?: { threadId?: string | null },
 ): Promise<QueryAnswer> {
   const today = todayIso();
   const status = aiService.getStatus();
@@ -84,12 +94,24 @@ export async function queryRecallForUser(
   const waitingIntent = WAITING_INTENT.test(question);
   const personIntent = PERSON_INTENT.test(question);
 
+  const thread = await ensureAskThreadForUser(userId, options?.threadId, question);
+  const priorTurns = await listRecentTurnsForThread(userId, thread.id);
+  const conversation: ConversationTurn[] = priorTurns;
+  const retrievalQuestion = retrievalQueryFromHistory(question, conversation);
+
+  await appendAskMessage({
+    userId,
+    threadId: thread.id,
+    role: "user",
+    content: question,
+  });
+
   const [
     { records: relevant, usedSemantic, namedPeople },
     tasks,
     waitingRaw,
   ] = await Promise.all([
-    retrieveRelevantRecords(userId, question, 12),
+    retrieveRelevantRecords(userId, retrievalQuestion, 12),
     listTasksForUser(userId),
     waitingIntent || personIntent
       ? listWaitingOnForUser(userId, 12)
@@ -246,7 +268,10 @@ export async function queryRecallForUser(
     : [...waitingContext, ...retrievalContext].slice(0, 14);
 
   const finish = async (
-    result: Omit<QueryAnswer, "privacy"> & { privacy?: QueryAnswer["privacy"] },
+    result: Omit<QueryAnswer, "privacy" | "threadId"> & {
+      privacy?: QueryAnswer["privacy"];
+      threadId?: string | null;
+    },
   ): Promise<QueryAnswer> => {
     const categoriesSent = [
       ...new Set(
@@ -258,19 +283,34 @@ export async function queryRecallForUser(
     ];
     const withPrivacy: QueryAnswer = {
       ...result,
+      threadId: thread.id,
       privacy: result.privacy ?? {
         model: status.model,
         dataLeftDevice: !result.degraded && Boolean(status.enabled),
         categoriesSent,
       },
     };
+
+    await appendAskMessage({
+      userId,
+      threadId: thread.id,
+      role: "assistant",
+      content: withPrivacy.answer,
+      metadata: {
+        confidence: withPrivacy.confidence,
+        caveats: withPrivacy.caveats,
+        relatedRecords: withPrivacy.relatedRecords.slice(0, 8),
+      },
+    });
+
     await writeAuditLog({
       userId,
       action: "query_answered",
       entityType: "query",
-      entityId: null,
+      entityId: thread.id,
       metadata: {
         question: question.slice(0, 240),
+        threadId: thread.id,
         confidence: withPrivacy.confidence,
         evidenceCount: withPrivacy.evidence.length,
         usedSemantic,
@@ -299,6 +339,7 @@ export async function queryRecallForUser(
         today,
         records: contextRecords,
         finance: financeNeedsSync ? null : finance,
+        conversation,
       });
       let caveats = ai.caveats;
       if (financeNeedsSync) {

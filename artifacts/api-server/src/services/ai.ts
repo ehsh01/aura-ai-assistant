@@ -170,6 +170,8 @@ export interface AnswerQueryRequest {
   today: string;
   records: QueryContextRecord[];
   finance?: QueryFinanceAggregate | null;
+  /** Prior turns in this Ask thread (oldest → newest), excluding the current question. */
+  conversation?: { role: "user" | "assistant"; content: string }[];
 }
 
 export interface AnswerQueryResponse extends AiDegradedMeta {
@@ -1026,6 +1028,10 @@ class OpenAiService implements AiService {
           content: JSON.stringify({
             today: request.today,
             question: request.question,
+            conversation: (request.conversation ?? []).slice(-12).map((t) => ({
+              role: t.role,
+              content: t.content.slice(0, 1200),
+            })),
             finance: request.finance ?? null,
             records: request.records.map((r) => ({
               entityType: r.entityType,

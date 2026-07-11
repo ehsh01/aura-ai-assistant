@@ -76,6 +76,14 @@ export function newAuditId(): string {
   return `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function newAskThreadId(): string {
+  return `athread-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newAskMessageId(): string {
+  return `amsg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function newExtractionJobId(): string {
   return `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

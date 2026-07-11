@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, X } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
+  getAskThread,
+  getStoredAskThreadId,
   listPeople,
   queryRecall,
+  setStoredAskThreadId,
+  type AskMessageRecord,
   type PersonRecord,
 } from "@/lib/recall-api";
 import { useRecallData } from "@/context/RecallDataContext";
@@ -17,21 +21,18 @@ import { RecallLogo } from "@/components/RecallLogo";
 import { useSpeakAnswer } from "@/hooks/use-speak-answer";
 import { stopSpeaking } from "@/lib/speech-synthesis";
 
-type AskResult = {
-  question: string;
-  answer: string;
-};
-
 /** Immersive oracle Home — background + ask only. */
 export function Dashboard() {
   const { notes, tasks } = useRecallData();
   const [question, setQuestion] = useState("");
-  const [askResult, setAskResult] = useState<AskResult | null>(null);
+  const [messages, setMessages] = useState<AskMessageRecord[]>([]);
+  const [threadId, setThreadId] = useState<string | null>(getStoredAskThreadId());
   const [askPending, setAskPending] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [captures, setCaptures] = useState<RecallCaptureItem[]>([]);
   const [projects, setProjects] = useState<RecallProject[]>([]);
   const [people, setPeople] = useState<PersonRecord[]>([]);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     void listCaptureInbox()
@@ -43,6 +44,21 @@ export function Dashboard() {
     void listPeople()
       .then((res) => setPeople(res.people))
       .catch(() => setPeople([]));
+  }, []);
+
+  // Restore saved thread so follow-ups continue across reloads.
+  useEffect(() => {
+    const stored = getStoredAskThreadId();
+    if (!stored) return;
+    void getAskThread(stored)
+      .then((detail) => {
+        setThreadId(detail.thread.id);
+        setMessages(detail.messages);
+      })
+      .catch(() => {
+        setStoredAskThreadId(null);
+        setThreadId(null);
+      });
   }, []);
 
   // Deep link: /?q=… auto-ask
@@ -57,25 +73,77 @@ export function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (panelOpen) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, askPending, panelOpen]);
+
   const ask = async (text: string) => {
     const q = text.trim();
     if (!q || askPending) return;
     stopSpeaking();
-    setQuestion(q);
+    setQuestion("");
     setAskPending(true);
-    setAskResult(null);
     setPanelOpen(true);
+    const tempId = `local-${Date.now()}`;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: tempId,
+        threadId: threadId ?? "pending",
+        role: "user",
+        content: q,
+        metadata: {},
+        createdAt: new Date().toISOString(),
+      },
+    ]);
     try {
-      const res = await queryRecall(q);
-      setAskResult({
-        question: q,
-        answer: res.answer,
-      });
+      const res = await queryRecall(q, { threadId });
+      if (res.threadId) {
+        setThreadId(res.threadId);
+        setStoredAskThreadId(res.threadId);
+        const detail = await getAskThread(res.threadId);
+        setMessages(detail.messages);
+      } else {
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== tempId),
+          {
+            id: tempId,
+            threadId: "local",
+            role: "user",
+            content: q,
+            metadata: {},
+            createdAt: new Date().toISOString(),
+          },
+          {
+            id: `${tempId}-a`,
+            threadId: "local",
+            role: "assistant",
+            content: res.answer,
+            metadata: {},
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      }
     } catch {
-      setAskResult({
-        question: q,
-        answer: "Could not reach Recall. Check that you are signed in and try again.",
-      });
+      setMessages((prev) => [
+        ...prev.filter((m) => m.id !== tempId),
+        {
+          id: tempId,
+          threadId: "local",
+          role: "user",
+          content: q,
+          metadata: {},
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: `${tempId}-a`,
+          threadId: "local",
+          role: "assistant",
+          content: "Could not reach Recall. Check that you are signed in and try again.",
+          metadata: {},
+          createdAt: new Date().toISOString(),
+        },
+      ]);
     } finally {
       setAskPending(false);
     }
@@ -84,11 +152,11 @@ export function Dashboard() {
   const closePanel = () => {
     stopSpeaking();
     setPanelOpen(false);
-    setAskResult(null);
-    setQuestion("");
   };
 
-  useSpeakAnswer(askResult?.answer, Boolean(askResult && !askPending));
+  const latestAssistant =
+    [...messages].reverse().find((m) => m.role === "assistant")?.content ?? null;
+  useSpeakAnswer(latestAssistant, Boolean(latestAssistant && !askPending && panelOpen));
 
   const brainGraph = useMemo(
     () => ({
@@ -118,7 +186,7 @@ export function Dashboard() {
     [tasks, notes, people, projects, captures],
   );
 
-  const showAnswer = panelOpen && (askPending || askResult);
+  const showAnswer = panelOpen && (askPending || messages.length > 0);
 
   return (
     <AppLayout immersive>
@@ -216,11 +284,52 @@ export function Dashboard() {
               >
                 <X size={18} />
               </button>
-              <div className="flex-1 overflow-y-auto px-6 py-8 recall-scrollbar md:px-8 md:py-10">
-                <p className="whitespace-pre-wrap text-center text-lg leading-relaxed text-white/95 md:text-xl">
-                  {askPending ? "Listening to your world…" : askResult?.answer}
-                </p>
+              <div className="flex-1 space-y-3 overflow-y-auto px-5 py-8 recall-scrollbar md:px-7 md:py-10">
+                {messages.map((m) => (
+                  <div
+                    key={m.id}
+                    className={`flex ${m.role === "user" ? "justify-end" : "justify-center"}`}
+                  >
+                    <p
+                      className={`max-w-[95%] whitespace-pre-wrap text-base leading-relaxed md:text-lg ${
+                        m.role === "user"
+                          ? "rounded-2xl bg-indigo-500/25 px-4 py-2 text-left text-indigo-50"
+                          : "text-center text-white/95"
+                      }`}
+                    >
+                      {m.content}
+                    </p>
+                  </div>
+                ))}
+                {askPending && (
+                  <p className="text-center text-lg text-white/50">Listening to your world…</p>
+                )}
+                <div ref={bottomRef} />
               </div>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void ask(question);
+                }}
+                className="border-t border-white/10 px-4 py-3"
+              >
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={question}
+                    onChange={(e) => setQuestion(e.target.value)}
+                    placeholder="Ask a follow-up…"
+                    className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none placeholder:text-white/35"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!question.trim() || askPending}
+                    className="rounded-xl bg-indigo-500 px-3 py-2 text-sm text-white disabled:opacity-40"
+                  >
+                    Ask
+                  </button>
+                </div>
+              </form>
             </article>
           </div>
         )}

@@ -23,6 +23,11 @@ import { z } from "zod";
 import { queryRecallForUser } from "../services/query-engine";
 import { getExtractionJobStatus } from "../services/capture-pipeline";
 import { OPENAI_TTS_VOICES, synthesizeSpeech } from "../services/tts";
+import {
+  createAskThreadForUser,
+  getAskThreadForUser,
+  listAskThreadsForUser,
+} from "../services/ask-threads";
 
 function mergeSearchHitsIntoContext(
   context: AiContext | undefined,
@@ -153,6 +158,7 @@ router.post("/ai/generate-work-note", async (req, res, next) => {
 
 const AiQueryBody = z.object({
   question: z.string().min(1).max(4000),
+  threadId: z.string().min(1).max(64).optional().nullable(),
 });
 
 const AiTtsBody = z.object({
@@ -173,10 +179,43 @@ router.post("/ai/tts", async (req, res, next) => {
   }
 });
 
+router.get("/ai/threads", async (req, res, next) => {
+  try {
+    const threads = await listAskThreadsForUser(req.user!.id);
+    res.json({ threads });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/ai/threads", async (req, res, next) => {
+  try {
+    const thread = await createAskThreadForUser(req.user!.id);
+    res.status(201).json({ thread, messages: [] });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/ai/threads/:threadId", async (req, res, next) => {
+  try {
+    const detail = await getAskThreadForUser(req.user!.id, req.params.threadId);
+    if (!detail) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Thread not found" });
+      return;
+    }
+    res.json(detail);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/ai/query", async (req, res, next) => {
   try {
     const body = AiQueryBody.parse(req.body);
-    const result = await queryRecallForUser(req.user!.id, body.question);
+    const result = await queryRecallForUser(req.user!.id, body.question, {
+      threadId: body.threadId ?? null,
+    });
     res.json(result);
   } catch (err) {
     next(err);
