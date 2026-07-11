@@ -153,7 +153,11 @@ export async function queryRecallForUser(
     tasks,
     waitingRaw,
   ] = await Promise.all([
-    retrieveRelevantRecords(userId, retrievalQuestion, familyIntent ? 16 : 12),
+    retrieveRelevantRecords(
+      userId,
+      retrievalQuestion,
+      familyIntent || /\b(email|emails|gmail|inbox|mail)\b/i.test(retrievalQuestion) ? 16 : 12,
+    ),
     listTasksForUser(userId),
     waitingIntent || personIntent
       ? listWaitingOnForUser(userId, 12)

@@ -375,7 +375,10 @@ async function fetchDrive(accessToken: string): Promise<GoogleRawRecord[]> {
 }
 
 /** Fetch a bounded Google data bundle for sync. */
-export async function fetchGoogleBundle(accessToken: string): Promise<GoogleRawRecord[]> {
+export async function fetchGoogleBundle(
+  accessToken: string,
+  mailboxEmail?: string | null,
+): Promise<GoogleRawRecord[]> {
   const settled = await Promise.allSettled([
     fetchGmail(accessToken),
     fetchCalendar(accessToken),
@@ -390,6 +393,15 @@ export async function fetchGoogleBundle(accessToken: string): Promise<GoogleRawR
   }
   if (out.length === 0 && errors.length > 0) {
     throw new Error(`Google sync failed: ${errors[0]}`);
+  }
+  const mailbox = mailboxEmail?.trim().toLowerCase() || null;
+  if (mailbox) {
+    for (const r of out) {
+      r.metadata = { ...(r.metadata ?? {}), mailbox };
+      if (r.recordType === "gmail_message") {
+        r.recordText = `Mailbox: ${mailbox}\n${r.recordText}`;
+      }
+    }
   }
   return out;
 }

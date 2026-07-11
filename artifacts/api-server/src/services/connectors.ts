@@ -147,7 +147,10 @@ async function fetchGoogleRecordsForConnector(conn: Connector): Promise<unknown[
       .where(eq(connectors.id, conn.id));
   }
 
-  return fetchGoogleBundle(accessToken!);
+  return fetchGoogleBundle(
+    accessToken!,
+    typeof settings.googleEmail === "string" ? settings.googleEmail : null,
+  );
 }
 
 export async function findGoogleConnectorByEmail(

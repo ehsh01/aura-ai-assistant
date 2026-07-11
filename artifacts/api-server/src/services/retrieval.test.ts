@@ -7,6 +7,7 @@ import {
   peopleMatchingRelation,
   relationTermsInQuestion,
   textFuzzyHasName,
+  extractMailboxHint,
 } from "./retrieval";
 import { FAMILY_RELATION_INTENT, PERSON_INTENT, WAITING_INTENT } from "./query-utils";
 
@@ -94,6 +95,17 @@ describe("family relation retrieval helpers", () => {
 
   it("fuzzy-matches boyfrind to boyfriend in memory text", () => {
     expect(namesFuzzyMatch("boyfrind", "boyfriend")).toBe(true);
+  });
+
+  it("extracts connected mailbox hints from the question", () => {
+    const boxes = ["ehernandez2@gmail.com", "reiinvestorsllc@gmail.com"];
+    expect(extractMailboxHint("emails in reiinvestorsllc@gmail.com", boxes)).toBe(
+      "reiinvestorsllc@gmail.com",
+    );
+    expect(extractMailboxHint("search my ehernandez2 inbox", boxes)).toBe(
+      "ehernandez2@gmail.com",
+    );
+    expect(extractMailboxHint("any new mail?", boxes)).toBeNull();
   });
 });
 

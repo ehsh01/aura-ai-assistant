@@ -1,5 +1,5 @@
-import { desc, eq, sql } from "drizzle-orm";
-import { sourceRecords } from "@workspace/db/schema";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { connectors, sourceRecords } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { listTasksForUser } from "./tasks";
 import { listNotesForUser } from "./notes";
@@ -34,6 +34,8 @@ type ContextRecord = {
   pinned?: boolean;
   /** Optional subtype for source_records (gmail_message, drive_file, …). */
   recordType?: string;
+  /** Connected Google mailbox this record came from (lowercase). */
+  mailbox?: string | null;
   /** ISO timestamp for recency boosts. */
   updatedAt?: string;
 };
@@ -457,10 +459,167 @@ const CORPUS = {
   memories: 200,
   documents: 100,
   captures: 100,
-  sourceRecords: 400,
+  /** Per connected Google mailbox — keeps ehernandez2 + REI + others searchable. */
+  gmailPerMailbox: 120,
+  contactsTotal: 40,
+  driveTotal: 40,
+  calendarTotal: 40,
   keywordShortlist: 80,
   semanticCandidates: 280,
 } as const;
+
+function connectorGoogleEmail(settings: unknown): string | null {
+  if (!settings || typeof settings !== "object") return null;
+  const email = (settings as Record<string, unknown>).googleEmail;
+  return typeof email === "string" ? email.trim().toLowerCase() : null;
+}
+
+/** If the question names a connected mailbox (full or local-part), return it. */
+export function extractMailboxHint(question: string, mailboxes: string[]): string | null {
+  const q = question.toLowerCase();
+  for (const mailbox of mailboxes) {
+    const m = mailbox.toLowerCase();
+    if (q.includes(m)) return m;
+    const local = m.split("@")[0] ?? "";
+    if (local.length >= 4 && q.includes(local)) return m;
+  }
+  return null;
+}
+
+type SourceRow = {
+  id: string;
+  recordType: string;
+  recordTitle: string | null;
+  recordText: string | null;
+  updatedAt: Date | null;
+  sourceCreatedAt: Date | null;
+  mailbox: string | null;
+};
+
+function sourceRowToContext(s: SourceRow): ContextRecord {
+  const title = s.recordTitle || s.recordType || "Source record";
+  const aliases = sourceTypeAliases(s.recordType);
+  const from = s.recordType === "gmail_message" ? parseGmailFrom(s.recordText ?? "") : null;
+  const senderBits = from
+    ? ` sender_name=${from.name} sender_email=${from.email}`
+    : "";
+  const mailboxBit = s.mailbox ? ` mailbox=${s.mailbox}` : "";
+  return {
+    entityType: "source_record",
+    entityId: s.id,
+    title,
+    text: `${aliases} source=${s.recordType}${mailboxBit} ${title}${senderBits}\n${(s.recordText ?? "").slice(0, 800)}`,
+    recordType: s.recordType,
+    mailbox: s.mailbox,
+    updatedAt: s.sourceCreatedAt
+      ? new Date(s.sourceCreatedAt).toISOString()
+      : s.updatedAt
+        ? new Date(s.updatedAt).toISOString()
+        : undefined,
+  };
+}
+
+/**
+ * Load Google + other connector records without letting contacts (or one mailbox)
+ * crowd out mail from every connected account.
+ */
+async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[]> {
+  const googleConns = await getDb()
+    .select({
+      id: connectors.id,
+      settings: connectors.settings,
+    })
+    .from(connectors)
+    .where(
+      and(
+        eq(connectors.userId, userId),
+        eq(connectors.type, "google"),
+        eq(connectors.enabled, true),
+      ),
+    );
+
+  const out: ContextRecord[] = [];
+  const seen = new Set<string>();
+
+  const pushRows = (rows: SourceRow[]) => {
+    for (const row of rows) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      out.push(sourceRowToContext(row));
+    }
+  };
+
+  // Equal share of recent Gmail from each connected Google account.
+  for (const conn of googleConns) {
+    const mailbox = connectorGoogleEmail(conn.settings);
+    const rows = await getDb()
+      .select({
+        id: sourceRecords.id,
+        recordType: sourceRecords.recordType,
+        recordTitle: sourceRecords.recordTitle,
+        recordText: sourceRecords.recordText,
+        updatedAt: sourceRecords.updatedAt,
+        sourceCreatedAt: sourceRecords.sourceCreatedAt,
+      })
+      .from(sourceRecords)
+      .where(
+        and(
+          eq(sourceRecords.userId, userId),
+          eq(sourceRecords.connectorId, conn.id),
+          eq(sourceRecords.recordType, "gmail_message"),
+        ),
+      )
+      .orderBy(
+        desc(sql`coalesce(${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`),
+      )
+      .limit(CORPUS.gmailPerMailbox);
+
+    pushRows(rows.map((r) => ({ ...r, mailbox })));
+  }
+
+  // Smaller buckets for other Google record types (contacts used to dominate Ask).
+  for (const [recordType, limit] of [
+    ["google_contact", CORPUS.contactsTotal],
+    ["drive_file", CORPUS.driveTotal],
+    ["calendar_event", CORPUS.calendarTotal],
+  ] as const) {
+    const rows = await getDb()
+      .select({
+        id: sourceRecords.id,
+        recordType: sourceRecords.recordType,
+        recordTitle: sourceRecords.recordTitle,
+        recordText: sourceRecords.recordText,
+        updatedAt: sourceRecords.updatedAt,
+        sourceCreatedAt: sourceRecords.sourceCreatedAt,
+        connectorId: sourceRecords.connectorId,
+      })
+      .from(sourceRecords)
+      .where(
+        and(eq(sourceRecords.userId, userId), eq(sourceRecords.recordType, recordType)),
+      )
+      .orderBy(
+        desc(sql`coalesce(${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`),
+      )
+      .limit(limit);
+
+    const mailboxByConnector = new Map(
+      googleConns.map((c) => [c.id, connectorGoogleEmail(c.settings)] as const),
+    );
+    pushRows(
+      rows.map((r) => ({
+        id: r.id,
+        recordType: r.recordType,
+        recordTitle: r.recordTitle,
+        recordText: r.recordText,
+        updatedAt: r.updatedAt,
+        sourceCreatedAt: r.sourceCreatedAt,
+        mailbox: mailboxByConnector.get(r.connectorId) ?? null,
+      })),
+    );
+  }
+
+  return out;
+}
 
 async function collectCorpus(
   userId: string,
@@ -474,21 +633,7 @@ async function collectCorpus(
       listMemoriesForUser(userId, { limit: CORPUS.memories }),
       listDocumentsForUser(userId),
       listCapturesForUser(userId, { limit: CORPUS.captures }),
-      getDb()
-        .select({
-          id: sourceRecords.id,
-          recordType: sourceRecords.recordType,
-          recordTitle: sourceRecords.recordTitle,
-          recordText: sourceRecords.recordText,
-          updatedAt: sourceRecords.updatedAt,
-          sourceCreatedAt: sourceRecords.sourceCreatedAt,
-        })
-        .from(sourceRecords)
-        .where(eq(sourceRecords.userId, userId))
-        .orderBy(
-          desc(sql`coalesce(${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`),
-        )
-        .limit(CORPUS.sourceRecords),
+      loadSourceRecordsBalanced(userId),
     ]);
 
   const records: ContextRecord[] = [];
@@ -587,26 +732,7 @@ async function collectCorpus(
     });
   }
 
-  for (const s of sources) {
-    const title = s.recordTitle || s.recordType || "Source record";
-    const aliases = sourceTypeAliases(s.recordType);
-    const from = s.recordType === "gmail_message" ? parseGmailFrom(s.recordText ?? "") : null;
-    const senderBits = from
-      ? ` sender_name=${from.name} sender_email=${from.email}`
-      : "";
-    records.push({
-      entityType: "source_record",
-      entityId: s.id,
-      title,
-      text: `${aliases} source=${s.recordType} ${title}${senderBits}\n${(s.recordText ?? "").slice(0, 800)}`,
-      recordType: s.recordType,
-      updatedAt: s.sourceCreatedAt
-        ? new Date(s.sourceCreatedAt).toISOString()
-        : s.updatedAt
-          ? new Date(s.updatedAt).toISOString()
-          : undefined,
-    });
-  }
+  records.push(...sources);
 
   return {
     records,
@@ -657,6 +783,15 @@ export async function retrieveRelevantRecords(
   });
   const personTagNeedles = named.map((p) => `person:${p.displayName.toLowerCase()}`);
 
+  const mailboxes = [
+    ...new Set(
+      corpus
+        .map((r) => r.mailbox?.toLowerCase())
+        .filter((m): m is string => Boolean(m)),
+    ),
+  ];
+  const mailboxHint = extractMailboxHint(question, mailboxes);
+
   // If the question names someone who appears as a Gmail sender, treat as email intent.
   const senderMatchedMail = corpus.filter(
     (r) => gmailSenderMatchScore(question, r, named, nameTokens) >= 0.8,
@@ -702,17 +837,29 @@ export async function retrieveRelevantRecords(
 
   const googleBoost = (r: ContextRecord): number => {
     const sender = gmailSenderMatchScore(question, r, named, nameTokens);
-    if (sender >= 0.8) return 0.7 + sender * 0.25; // prefer sender-matched mail
-    if (!wantsGoogle) return 0;
-    if (r.entityType !== "source_record") return 0;
-    if (!sourceRecordMatchesIntent(r.recordType, intent) && senderMatchedMail.length === 0) {
-      return 0;
+    let boost = 0;
+    if (sender >= 0.8) boost = 0.7 + sender * 0.25; // prefer sender-matched mail
+    else if (wantsGoogle && r.entityType === "source_record") {
+      if (
+        sourceRecordMatchesIntent(r.recordType, intent) ||
+        senderMatchedMail.length > 0
+      ) {
+        if (r.recordType === "gmail_message" && (intent.email || senderMatchedMail.length > 0)) {
+          boost = 0.55;
+        } else if (sourceRecordMatchesIntent(r.recordType, intent)) {
+          boost = 0.55;
+        }
+      }
     }
-    if (r.recordType === "gmail_message" && (intent.email || senderMatchedMail.length > 0)) {
-      return 0.55;
+    if (
+      boost > 0 &&
+      mailboxHint &&
+      r.recordType === "gmail_message" &&
+      r.mailbox?.toLowerCase() === mailboxHint
+    ) {
+      boost += 0.35;
     }
-    if (sourceRecordMatchesIntent(r.recordType, intent)) return 0.55;
-    return 0;
+    return boost;
   };
 
   const keywordHits = corpus
@@ -828,6 +975,7 @@ export async function retrieveRelevantRecords(
     .map(({ r, score, method }) => toRetrieved(r, score, method));
 
   // Prefer emails whose From name/address matches the asked-about person.
+  // Always pull recent mail from EACH connected mailbox so REI / personal aren't starved.
   if (wantsGoogle || senderMatchedMail.length > 0) {
     const already = new Set(top.map((r) => r.entityId));
     const injected: RetrievedRecord[] = [];
@@ -845,24 +993,33 @@ export async function retrieveRelevantRecords(
       already.add(r.entityId);
     }
 
-    if (intent.email && injected.length < 4) {
-      const recentMatches = corpus
-        .filter(
-          (r) =>
-            r.entityType === "source_record" &&
-            sourceRecordMatchesIntent(r.recordType, intent),
-        )
-        .slice(0, Math.min(8, limit));
-      for (const r of recentMatches) {
-        if (already.has(r.entityId)) continue;
-        injected.push(toRetrieved(r, 0.9, "keyword"));
-        already.add(r.entityId);
-        if (injected.length >= 8) break;
+    if (intent.email) {
+      const gmailByMailbox = new Map<string, ContextRecord[]>();
+      for (const r of corpus) {
+        if (r.entityType !== "source_record" || r.recordType !== "gmail_message") continue;
+        if (mailboxHint && r.mailbox?.toLowerCase() !== mailboxHint) continue;
+        const key = r.mailbox?.toLowerCase() || "unknown";
+        const list = gmailByMailbox.get(key) ?? [];
+        list.push(r);
+        gmailByMailbox.set(key, list);
+      }
+      const perMailbox = Math.max(3, Math.floor(Math.min(12, limit) / Math.max(1, gmailByMailbox.size)));
+      for (const [, mails] of gmailByMailbox) {
+        let added = 0;
+        for (const r of mails) {
+          if (already.has(r.entityId)) continue;
+          const mailboxBoost =
+            mailboxHint && r.mailbox?.toLowerCase() === mailboxHint ? 0.15 : 0;
+          injected.push(toRetrieved(r, 0.95 + mailboxBoost, "keyword"));
+          already.add(r.entityId);
+          added += 1;
+          if (added >= perMailbox) break;
+        }
       }
     }
 
     if (injected.length > 0) {
-      top = [...injected, ...top].slice(0, limit);
+      top = [...injected, ...top].slice(0, Math.max(limit, Math.min(16, injected.length + 4)));
     }
   }
 
