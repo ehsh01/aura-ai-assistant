@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { mentionedPeople } from "./retrieval";
-import { PERSON_INTENT, WAITING_INTENT } from "./query-utils";
+import {
+  keywordScore,
+  mentionedPeople,
+  normalizeKeywordToken,
+  peopleMatchingRelation,
+  relationTermsInQuestion,
+} from "./retrieval";
+import { FAMILY_RELATION_INTENT, PERSON_INTENT, WAITING_INTENT } from "./query-utils";
 
 describe("mentionedPeople", () => {
   const people = [
@@ -43,10 +49,48 @@ describe("mentionedPeople", () => {
   });
 });
 
-describe("PERSON_INTENT / WAITING_INTENT", () => {
+describe("family relation retrieval helpers", () => {
+  it("extracts relation terms including possessives", () => {
+    expect(relationTermsInQuestion("What is my wife's name?")).toEqual(["wife"]);
+    expect(relationTermsInQuestion("Tell me about my son and daughter")).toEqual(
+      expect.arrayContaining(["son", "daughter"]),
+    );
+  });
+
+  it("matches people by role/notes relation", () => {
+    const people = [
+      { id: "s1", displayName: "Sandra Hernandez", role: "wife", notes: null },
+      { id: "k1", displayName: "Kenneth", role: "son", notes: null },
+      { id: "m1", displayName: "Mike", role: "friend", notes: null },
+    ];
+    expect(peopleMatchingRelation("What is my wife's name?", people)).toEqual([people[0]]);
+    expect(peopleMatchingRelation("Who is my son?", people)).toEqual([people[1]]);
+  });
+
+  it("normalizes possessive keyword tokens", () => {
+    expect(normalizeKeywordToken("wife's")).toBe("wife");
+    expect(normalizeKeywordToken("son's")).toBe("son");
+  });
+
+  it("scores wife questions against family memory text", () => {
+    const memory =
+      "domain=family My wife is Sandra Hernandez and she has a cousin named Raisa Fernandez";
+    expect(keywordScore("What is my wife's name?", memory)).toBeGreaterThan(0.2);
+    expect(memory.toLowerCase()).toContain("sandra hernandez");
+  });
+});
+
+describe("PERSON_INTENT / FAMILY_RELATION_INTENT / WAITING_INTENT", () => {
   it("detects about-person questions", () => {
     expect(PERSON_INTENT.test("What do I know about Mike?")).toBe(true);
     expect(PERSON_INTENT.test("Tell me about Jane Doe")).toBe(true);
+    expect(PERSON_INTENT.test("What is my wife's name?")).toBe(true);
+  });
+
+  it("detects family relation questions", () => {
+    expect(FAMILY_RELATION_INTENT.test("What is my wife's name?")).toBe(true);
+    expect(FAMILY_RELATION_INTENT.test("When is my sister's birthday?")).toBe(true);
+    expect(FAMILY_RELATION_INTENT.test("How much did I spend?")).toBe(false);
   });
 
   it("detects waiting questions", () => {

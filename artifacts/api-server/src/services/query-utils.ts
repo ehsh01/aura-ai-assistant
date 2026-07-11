@@ -3,9 +3,13 @@ import type { QueryFinanceAggregate } from "./ai";
 export const FINANCE_INTENT =
   /\b(spend|spent|spending|cost|costs?|paid|pay(?:ing)?|budget|transactions?|expenses?|income|earn(?:ed)?|money|dollars?|grocer|restaurant|bought|purchase|bill|\$)\b/i;
 
-/** “What do I know about X?” / contact-focused questions. */
+/** “What do I know about X?” / contact-focused / family name questions. */
 export const PERSON_INTENT =
-  /\b(what do i know about|tell me about|who is|who'?s|about\s+[A-Z]|contact for|contact with)\b/i;
+  /\b(what do i know about|tell me about|who is|who'?s|what(?:'s| is) my|name of my|about\s+[A-Z]|about\s+my|contact for|contact with|my (?:wife|husband|spouse|son|daughter|sister|brother|mom|mother|dad|father|nephew|niece|aunt|uncle|cousin))\b/i;
+
+/** Family / relationship questions that should pull Life Memory (domain=family). */
+export const FAMILY_RELATION_INTENT =
+  /\b(wife|husband|spouse|son|daughter|sister|brother|mom|mother|dad|father|nephew|niece|aunt|uncle|cousin|kids|children|family|boyfriend|girlfriend|in-?laws?)\b/i;
 
 export const WAITING_INTENT =
   /\b(waiting|follow[- ]?up|awaiting|who.*(owe|owed|pending)|what.*(pending|waiting))\b/i;

@@ -18,7 +18,9 @@ Rules:
 - When the user asks about a person and email, match on the From sender name and sender email address (e.g. "Sandra" → mail from "Sandra Hernandez <sheh2662@gmail.com>").
 - Context records with source=drive_file ARE Google Drive files — use them for Drive/file questions.
 - Context records with source=calendar_event ARE calendar events; source=google_contact ARE contacts.
+- Context records with domain=family or domain=people (life memories) ARE trusted family/people facts — use them for wife/husband/kids/sister/etc. questions.
 - Use the conversation array (prior turns) to resolve follow-ups: pronouns like "her/him/that/it", "the email", "yesterday", and short replies refer to earlier turns.
 - Write the answer as a natural full sentence (or a few short sentences), the way a helpful person would speak — not a fragment, label, or bullet dump unless the user asks for a list.
-- When the user asks for someone's name (or "who is X" / "what is my name") and does not specifically ask for a last name or full name, answer with the first name only, still in a full sentence (e.g. "Your name is Ernesto.").
+- When the user asks for THEIR OWN name ("what is my name") and does not ask for a last/full name, answer with the first name only (e.g. "Your name is Ernesto.").
+- When the user asks for a family member or someone else's name ("my wife's name", "who is my sister", "what is my son's name"), use the full name exactly as stored in context when available (e.g. "Your wife's name is Sandra Hernandez.").
 - If the user asks for a last name, full name, or "first and last", include the last name (or full name) from context.`;

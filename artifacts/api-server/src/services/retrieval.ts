@@ -13,6 +13,7 @@ import {
   embedItemsCached,
   embedQuery,
 } from "./embedding-cache";
+import { FAMILY_RELATION_INTENT } from "./query-utils";
 
 export type RetrievedRecord = {
   entityType: string;
@@ -89,7 +90,41 @@ function sourceTypeAliases(recordType: string): string {
 }
 
 const QUESTION_STOP =
-  /^(the|and|for|from|with|about|what|when|where|who|how|did|does|have|has|was|were|are|any|last|recent|latest|email|emails|mail|message|messages|gmail|inbox|my|me|a|an|of|to|in|on|is|it|this|that|please|show|find|get|tell|wife|husband)$/i;
+  /^(the|and|for|from|with|about|what|when|where|who|how|did|does|have|has|was|were|are|any|last|recent|latest|email|emails|mail|message|messages|gmail|inbox|my|me|a|an|of|to|in|on|is|it|this|that|please|show|find|get|tell|name)$/i;
+
+/** Family/relationship nouns we boost against Life Memory + people.role/notes. */
+const FAMILY_RELATION_TERMS = [
+  "wife",
+  "husband",
+  "spouse",
+  "son",
+  "daughter",
+  "sister",
+  "brother",
+  "mom",
+  "mother",
+  "dad",
+  "father",
+  "nephew",
+  "niece",
+  "aunt",
+  "uncle",
+  "cousin",
+  "kids",
+  "children",
+  "family",
+  "boyfriend",
+  "girlfriend",
+] as const;
+
+/** Relation words present in the question (handles "wife's", "sons", etc.). */
+export function relationTermsInQuestion(question: string): string[] {
+  const q = question.toLowerCase();
+  return FAMILY_RELATION_TERMS.filter((term) => {
+    const re = new RegExp(`\\b${term}(?:['']s|s)?\\b`, "i");
+    return re.test(q);
+  });
+}
 
 /** Name-like tokens from the question (e.g. "sandra" from "emails from Sandra"). */
 function questionNameTokens(question: string): string[] {
@@ -164,7 +199,25 @@ type PersonRef = {
   email?: string | null;
   firstName?: string | null;
   lastName?: string | null;
+  role?: string | null;
+  notes?: string | null;
 };
+
+/** People whose role/notes mention a relation from the question (e.g. role=wife). */
+export function peopleMatchingRelation(
+  question: string,
+  people: PersonRef[],
+): PersonRef[] {
+  const relations = relationTermsInQuestion(question);
+  if (relations.length === 0) return [];
+  const hits: PersonRef[] = [];
+  for (const p of people) {
+    const hay = `${p.role ?? ""} ${p.notes ?? ""}`.toLowerCase();
+    if (!hay.trim()) continue;
+    if (relations.some((rel) => hay.includes(rel))) hits.push(p);
+  }
+  return hits;
+}
 
 /** How strongly a gmail record's sender matches the question / known people. */
 function gmailSenderMatchScore(
@@ -305,11 +358,41 @@ function personMatchOnRecord(
   return null;
 }
 
-function keywordScore(question: string, text: string): number {
-  const terms = question.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
+/** Strip possessives/punctuation so "wife's" matches "wife". */
+export function normalizeKeywordToken(t: string): string {
+  return t
+    .toLowerCase()
+    .replace(/^[^\w@]+|[^\w@]+$/g, "")
+    .replace(/['']s$/i, "")
+    .replace(/['']/g, "");
+}
+
+export function keywordScore(question: string, text: string): number {
+  const terms = question
+    .toLowerCase()
+    .split(/\s+/)
+    .map(normalizeKeywordToken)
+    .filter((t) => t.length > 2);
   if (terms.length === 0) return 0;
   const hay = text.toLowerCase();
   return terms.reduce((s, t) => (hay.includes(t) ? s + 1 : s), 0) / terms.length;
+}
+
+function isFamilyOrPeopleMemory(r: ContextRecord): boolean {
+  return (
+    r.entityType === "memory" &&
+    (r.text.includes("domain=family") || r.text.includes("domain=people"))
+  );
+}
+
+function relationMatchScore(r: ContextRecord, relations: string[]): number {
+  if (relations.length === 0) return 0;
+  const hay = `${r.title}\n${r.text}`.toLowerCase();
+  let hits = 0;
+  for (const rel of relations) {
+    if (hay.includes(rel)) hits += 1;
+  }
+  return hits;
 }
 
 /** Soft caps — embeddings are persisted, so a larger corpus is affordable. */
@@ -356,16 +439,21 @@ async function collectCorpus(
     ]);
 
   const records: ContextRecord[] = [];
+  const personById = new Map(people.map((p) => [p.id, p] as const));
 
   for (const m of memories.slice(0, CORPUS.memories)) {
     const cap = m.pinned ? 4000 : 1200;
+    const linked = m.primaryPersonId ? personById.get(m.primaryPersonId) : undefined;
+    const personName =
+      linked?.displayName ??
+      ([linked?.firstName, linked?.lastName].filter(Boolean).join(" ").trim() || null);
     records.push({
       entityType: "memory",
       entityId: m.id,
       title: m.title,
       text: `domain=${m.domain} ${m.title}\n${m.content.slice(0, cap)}\ntags=${m.tags.join(",")}${
         m.primaryPersonId ? ` personId=${m.primaryPersonId}` : ""
-      }${m.pinned ? " pinned=true" : ""}`,
+      }${personName ? ` person=${personName}` : ""}${m.pinned ? " pinned=true" : ""}`,
       pinned: m.pinned,
     });
   }
@@ -407,6 +495,7 @@ async function collectCorpus(
       p.email ? `email=${p.email}` : null,
       p.phone ? `phone=${p.phone}` : null,
       p.role ? `role=${p.role}` : null,
+      p.notes ? `notes=${p.notes.slice(0, 400)}` : null,
     ]
       .filter(Boolean)
       .join(" ");
@@ -474,6 +563,8 @@ async function collectCorpus(
       email: p.email ?? null,
       firstName: p.firstName ?? null,
       lastName: p.lastName ?? null,
+      role: p.role ?? null,
+      notes: p.notes ?? null,
     })),
   };
 }
@@ -497,8 +588,14 @@ export async function retrieveRelevantRecords(
   }
 
   const intent = googleIntent(question);
+  const wantsFamily = FAMILY_RELATION_INTENT.test(question);
+  const relations = relationTermsInQuestion(question);
   const nameTokens = questionNameTokens(question);
-  const named = mentionedPeople(question, people);
+  const namedByMention = mentionedPeople(question, people);
+  const namedByRelation = peopleMatchingRelation(question, people);
+  const namedMap = new Map<string, PersonRef>();
+  for (const p of [...namedByMention, ...namedByRelation]) namedMap.set(p.id, p);
+  const named = [...namedMap.values()];
   const namedIds = new Set(named.map((p) => p.id));
   const namedTokens = named.flatMap((p) => {
     const parts = p.displayName.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
@@ -518,12 +615,15 @@ export async function retrieveRelevantRecords(
     senderMatchedMail.length > 0;
 
   const personBoost = (r: ContextRecord): number => {
+    // Family memories: boost even when no People row is named (facts live in Memory).
+    if (wantsFamily && isFamilyOrPeopleMemory(r)) {
+      const relHits = relationMatchScore(r, relations);
+      if (relHits > 0) return 0.55 + Math.min(relHits, 2) * 0.05;
+      return 0.35;
+    }
     if (named.length === 0) return 0;
     if (r.entityType === "person" && namedIds.has(r.entityId)) return 0.45;
-    if (
-      r.entityType === "memory" &&
-      (r.text.includes("domain=family") || r.text.includes("domain=people"))
-    ) {
+    if (isFamilyOrPeopleMemory(r)) {
       const hay = `${r.title}\n${r.text}`.toLowerCase();
       for (const token of namedTokens) {
         if (hay.includes(token)) return 0.4;
@@ -576,11 +676,16 @@ export async function retrieveRelevantRecords(
       );
       const candidates: ContextRecord[] = [];
       for (const hit of keywordHits.slice(0, CORPUS.keywordShortlist)) candidates.push(hit.r);
-      // Always include named people + person-tagged + sender-matched gmail in candidates.
+      // Always include named people + person-tagged + family memories + sender-matched gmail.
       for (const r of corpus) {
         const id = `${r.entityType}:${r.entityId}`;
         if (shortlistIds.has(id)) continue;
         if (r.entityType === "person" && namedIds.has(r.entityId)) {
+          shortlistIds.add(id);
+          candidates.push(r);
+          continue;
+        }
+        if (wantsFamily && isFamilyOrPeopleMemory(r)) {
           shortlistIds.add(id);
           candidates.push(r);
           continue;
@@ -695,6 +800,25 @@ export async function retrieveRelevantRecords(
       }
     }
 
+    if (injected.length > 0) {
+      top = [...injected, ...top].slice(0, limit);
+    }
+  }
+
+  // Force-include family/people Life Memories for relationship questions.
+  if (wantsFamily) {
+    const already = new Set(top.map((r) => r.entityId));
+    const familyMemories = corpus
+      .filter(isFamilyOrPeopleMemory)
+      .map((r) => ({ r, relScore: relationMatchScore(r, relations) }))
+      .sort((a, b) => b.relScore - a.relScore || b.r.text.length - a.r.text.length);
+
+    const injected: RetrievedRecord[] = [];
+    for (const { r, relScore } of familyMemories.slice(0, Math.min(8, limit))) {
+      if (already.has(r.entityId)) continue;
+      injected.push(toRetrieved(r, 1.05 + relScore * 0.05, "keyword"));
+      already.add(r.entityId);
+    }
     if (injected.length > 0) {
       top = [...injected, ...top].slice(0, limit);
     }
