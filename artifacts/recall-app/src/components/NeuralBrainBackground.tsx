@@ -226,7 +226,7 @@ export function NeuralBrainBackground({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   /** Continuous drift from mouse movement (keeps going in that direction). */
   const driftRef = useRef({ rotY: 0, rotX: 0, velY: 0, velX: 0 });
-  const cursorRef = useRef({ x: 0, y: 0, active: false });
+  const cursorRef = useRef({ x: 0, y: 0, active: false, movedAt: 0 });
   const lastPointerRef = useRef({ x: 0, y: 0, t: 0 });
   const reduced = useMemo(() => prefersReducedMotion(), []);
   const vivid = intensity === "vivid";
@@ -279,25 +279,27 @@ export function NeuralBrainBackground({
       const y = e.clientY - rect.top;
       const now = performance.now();
       const prev = lastPointerRef.current;
-      const dt = Math.max(0.008, (now - (prev.t || now)) / 1000);
+      let moving = false;
       if (prev.t > 0) {
-        // Mouse delta → angular velocity (field keeps drifting that way).
         const dx = (x - prev.x) / Math.max(1, rect.width);
         const dy = (y - prev.y) / Math.max(1, rect.height);
-        const drift = driftRef.current;
-        drift.velY += dx * 1.8;
-        drift.velX += dy * 1.1;
-        // Cap so fast swipes don't spin wildly.
-        drift.velY = Math.max(-1.2, Math.min(1.2, drift.velY));
-        drift.velX = Math.max(-0.7, Math.min(0.7, drift.velX));
+        const speed = Math.hypot(dx, dy);
+        moving = speed > 0.0005;
+        if (moving) {
+          const drift = driftRef.current;
+          drift.velY += dx * 1.8;
+          drift.velX += dy * 1.1;
+          drift.velY = Math.max(-1.2, Math.min(1.2, drift.velY));
+          drift.velX = Math.max(-0.7, Math.min(0.7, drift.velX));
+        }
       }
       lastPointerRef.current = { x, y, t: now };
-      cursorRef.current = { x, y, active: true };
-      void dt;
+      // Disturb synapses only while the mouse is moving — stop = leave the brain alone.
+      cursorRef.current = { x, y, active: moving, movedAt: moving ? now : cursorRef.current.movedAt };
     };
 
     const onPointerLeave = () => {
-      cursorRef.current = { ...cursorRef.current, active: false };
+      cursorRef.current = { x: 0, y: 0, active: false, movedAt: 0 };
       lastPointerRef.current.t = 0;
     };
 
@@ -322,17 +324,22 @@ export function NeuralBrainBackground({
       lastFrame = now;
       const time = reduced ? 0 : (now - start) / 1000;
 
-      // Integrate mouse-driven velocity into continuous drift; slow coast after move.
+      // Integrate mouse-driven velocity; settle fast when the mouse stops.
       if (!reduced) {
         const drift = driftRef.current;
         drift.rotY += drift.velY * dt;
         drift.rotX += drift.velX * dt;
-        // Soft spring toward level on X so it doesn't tip forever; Y keeps coasting.
         drift.rotX *= 0.995;
-        drift.velY *= 0.985;
-        drift.velX *= 0.97;
+        drift.velY *= 0.88;
+        drift.velX *= 0.85;
+        if (Math.abs(drift.velY) < 0.003) drift.velY = 0;
+        if (Math.abs(drift.velX) < 0.003) drift.velX = 0;
       }
 
+      // Local bend only during recent movement — idle cursor leaves the mesh alone.
+      const cursor = cursorRef.current;
+      const disturb =
+        cursor.active && cursor.movedAt > 0 && now - cursor.movedAt < 120;
       const projected = projectParticles(
         particles,
         w,
@@ -341,17 +348,11 @@ export function NeuralBrainBackground({
         { rotY: driftRef.current.rotY, rotX: driftRef.current.rotX },
         fillScreen,
       );
-      renderFrame(
-        ctx,
-        w,
-        h,
-        projected,
-        synapses,
-        time,
-        vivid,
-        fillScreen,
-        cursorRef.current,
-      );
+      renderFrame(ctx, w, h, projected, synapses, time, vivid, fillScreen, {
+        x: cursor.x,
+        y: cursor.y,
+        active: disturb,
+      });
       if (!reduced) raf = requestAnimationFrame(tick);
     };
 
