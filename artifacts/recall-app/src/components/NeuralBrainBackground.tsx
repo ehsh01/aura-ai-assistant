@@ -63,6 +63,8 @@ function renderFrame(
   time: number,
   vivid: boolean,
   fillScreen: boolean,
+  /** Cursor in canvas CSS pixels; only synapses near this get disturbed. */
+  cursor: { x: number; y: number; active: boolean },
 ) {
   ctx.clearRect(0, 0, width, height);
 
@@ -85,6 +87,9 @@ function renderFrame(
   ctx.fillRect(0, 0, width, height);
 
   const byIndex = projected;
+  // Local disturbance radius — only connections the cursor touches.
+  const disturbR = Math.min(width, height) * 0.11;
+  const disturbR2 = disturbR * disturbR;
 
   ctx.save();
   ctx.globalCompositeOperation = additive ? "lighter" : "source-over";
@@ -101,17 +106,66 @@ function renderFrame(
       ),
     );
     const pulse = 0.8 + 0.2 * Math.sin(time * 1.6 + s.a * 0.05);
+
+    let ax = a.x;
+    let ay = a.y;
+    let bx = b.x;
+    let by = b.y;
+    let cpx = (ax + bx) * 0.5;
+    let cpy = (ay + by) * 0.5;
+    let disturbed = false;
+
+    if (cursor.active) {
+      const mx = cursor.x;
+      const my = cursor.y;
+      // Distance from cursor to the segment (closest point).
+      const abx = bx - ax;
+      const aby = by - ay;
+      const apx = mx - ax;
+      const apy = my - ay;
+      const abLen2 = abx * abx + aby * aby || 1;
+      let t = (apx * abx + apy * aby) / abLen2;
+      t = Math.max(0, Math.min(1, t));
+      const closestX = ax + abx * t;
+      const closestY = ay + aby * t;
+      const dx = closestX - mx;
+      const dy = closestY - my;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < disturbR2) {
+        disturbed = true;
+        const d = Math.sqrt(d2) || 0.0001;
+        const falloff = 1 - d / disturbR;
+        const push = falloff * falloff * disturbR * 0.55;
+        // Push the line away from the cursor along the radial direction.
+        const nx = dx / d;
+        const ny = dy / d;
+        const endPush = push * 0.35;
+        ax += nx * endPush * (1 - t);
+        ay += ny * endPush * (1 - t);
+        bx += nx * endPush * t;
+        by += ny * endPush * t;
+        cpx = closestX + nx * push;
+        cpy = closestY + ny * push;
+      }
+    }
+
     ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
+    ctx.moveTo(ax, ay);
+    if (disturbed) {
+      ctx.quadraticCurveTo(cpx, cpy, bx, by);
+    } else {
+      ctx.lineTo(bx, by);
+    }
     ctx.strokeStyle = fillScreen
-      ? `hsla(265, 75%, 72%, ${alpha * pulse})`
+      ? `hsla(${disturbed ? 280 : 265}, ${disturbed ? 90 : 75}%, ${disturbed ? 78 : 72}%, ${alpha * pulse * (disturbed ? 1.35 : 1)})`
       : `hsla(265, 80%, 72%, ${alpha * pulse})`;
     ctx.lineWidth =
       a.particle.kind === "entity" || b.particle.kind === "entity"
         ? 1.15
         : fillScreen
-          ? 0.75
+          ? disturbed
+            ? 1.05
+            : 0.75
           : 0.55;
     ctx.stroke();
   }
@@ -170,7 +224,10 @@ export function NeuralBrainBackground({
   fillScreen = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const pointerRef = useRef({ x: 0, y: 0 });
+  /** Continuous drift from mouse movement (keeps going in that direction). */
+  const driftRef = useRef({ rotY: 0, rotX: 0, velY: 0, velX: 0 });
+  const cursorRef = useRef({ x: 0, y: 0, active: false });
+  const lastPointerRef = useRef({ x: 0, y: 0, t: 0 });
   const reduced = useMemo(() => prefersReducedMotion(), []);
   const vivid = intensity === "vivid";
 
@@ -196,6 +253,7 @@ export function NeuralBrainBackground({
     let raf = 0;
     let running = true;
     let start = performance.now();
+    let lastFrame = start;
     const parent = canvas.parentElement;
 
     const resize = () => {
@@ -217,37 +275,83 @@ export function NeuralBrainBackground({
 
     const onPointer = (e: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
-      pointerRef.current = {
-        x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
-        y: ((e.clientY - rect.top) / rect.height) * 2 - 1,
-      };
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const now = performance.now();
+      const prev = lastPointerRef.current;
+      const dt = Math.max(0.008, (now - (prev.t || now)) / 1000);
+      if (prev.t > 0) {
+        // Mouse delta → angular velocity (field keeps drifting that way).
+        const dx = (x - prev.x) / Math.max(1, rect.width);
+        const dy = (y - prev.y) / Math.max(1, rect.height);
+        const drift = driftRef.current;
+        drift.velY += dx * 1.8;
+        drift.velX += dy * 1.1;
+        // Cap so fast swipes don't spin wildly.
+        drift.velY = Math.max(-1.2, Math.min(1.2, drift.velY));
+        drift.velX = Math.max(-0.7, Math.min(0.7, drift.velX));
+      }
+      lastPointerRef.current = { x, y, t: now };
+      cursorRef.current = { x, y, active: true };
+      void dt;
+    };
+
+    const onPointerLeave = () => {
+      cursorRef.current = { ...cursorRef.current, active: false };
+      lastPointerRef.current.t = 0;
     };
 
     const onVisibility = () => {
       running = document.visibilityState === "visible";
       if (running) {
         start = performance.now() - (performance.now() - start);
+        lastFrame = performance.now();
         raf = requestAnimationFrame(tick);
       }
     };
 
     window.addEventListener("pointermove", onPointer, { passive: true });
+    window.addEventListener("pointerleave", onPointerLeave, { passive: true });
     document.addEventListener("visibilitychange", onVisibility);
 
     const tick = (now: number) => {
       if (!running) return;
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
+      const dt = Math.min(0.05, (now - lastFrame) / 1000);
+      lastFrame = now;
       const time = reduced ? 0 : (now - start) / 1000;
+
+      // Integrate mouse-driven velocity into continuous drift; slow coast after move.
+      if (!reduced) {
+        const drift = driftRef.current;
+        drift.rotY += drift.velY * dt;
+        drift.rotX += drift.velX * dt;
+        // Soft spring toward level on X so it doesn't tip forever; Y keeps coasting.
+        drift.rotX *= 0.995;
+        drift.velY *= 0.985;
+        drift.velX *= 0.97;
+      }
+
       const projected = projectParticles(
         particles,
         w,
         h,
         time,
-        pointerRef.current,
+        { rotY: driftRef.current.rotY, rotX: driftRef.current.rotX },
         fillScreen,
       );
-      renderFrame(ctx, w, h, projected, synapses, time, vivid, fillScreen);
+      renderFrame(
+        ctx,
+        w,
+        h,
+        projected,
+        synapses,
+        time,
+        vivid,
+        fillScreen,
+        cursorRef.current,
+      );
       if (!reduced) raf = requestAnimationFrame(tick);
     };
 
@@ -258,6 +362,7 @@ export function NeuralBrainBackground({
       cancelAnimationFrame(raf);
       ro.disconnect();
       window.removeEventListener("pointermove", onPointer);
+      window.removeEventListener("pointerleave", onPointerLeave);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [particles, synapses, reduced, vivid, fillScreen]);

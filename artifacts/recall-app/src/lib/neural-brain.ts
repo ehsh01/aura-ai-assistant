@@ -302,13 +302,14 @@ export type ProjectedPoint = {
   index: number;
 };
 
-/** Project 3D brain coords into canvas space with slow rotation. */
+/** Project 3D brain coords into canvas space with continuous drift rotation. */
 export function projectParticles(
   particles: BrainParticle[],
   width: number,
   height: number,
   time: number,
-  pointer: { x: number; y: number },
+  /** Accumulated drift angles from mouse movement (keeps spinning in that direction). */
+  drift: { rotY: number; rotX: number },
   fillScreen = false,
 ): ProjectedPoint[] {
   const cx = fillScreen ? width * 0.5 : width * 0.58;
@@ -317,8 +318,8 @@ export function projectParticles(
   const scale = fillScreen
     ? Math.min(width, height) * 0.82
     : Math.min(width, height) * 0.42;
-  const rotY = time * 0.12 + pointer.x * 0.35;
-  const rotX = (fillScreen ? 0.12 : 0.25) + pointer.y * 0.2;
+  const rotY = time * 0.08 + drift.rotY;
+  const rotX = (fillScreen ? 0.12 : 0.25) + drift.rotX;
   const cosY = Math.cos(rotY);
   const sinY = Math.sin(rotY);
   const cosX = Math.cos(rotX);
