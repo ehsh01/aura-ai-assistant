@@ -89,7 +89,7 @@ export function NeuralBrainOrb({ className = "", active = false, size = 40 }: Pr
         size,
         size,
         time * 2.8,
-        { x: 0, y: 0 },
+        { rotY: 0, rotX: 0 },
         true,
       );
 
