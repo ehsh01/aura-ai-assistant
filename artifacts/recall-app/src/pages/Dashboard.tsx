@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, X } from "lucide-react";
+import { ArrowRight, History, Search, X } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
+  createAskThread,
   getAskThread,
   getStoredAskThreadId,
+  listAskThreads,
   listPeople,
   queryRecall,
   setStoredAskThreadId,
   type AskMessageRecord,
+  type AskThreadRecord,
   type PersonRecord,
 } from "@/lib/recall-api";
 import { useRecallData } from "@/context/RecallDataContext";
@@ -21,18 +24,27 @@ import { RecallLogo } from "@/components/RecallLogo";
 import { useSpeakAnswer } from "@/hooks/use-speak-answer";
 import { stopSpeaking } from "@/lib/speech-synthesis";
 
-/** Immersive oracle Home — background + ask only. */
+/** Immersive oracle Home — background + ask only. History stays behind a tab. */
 export function Dashboard() {
   const { notes, tasks } = useRecallData();
   const [question, setQuestion] = useState("");
-  const [messages, setMessages] = useState<AskMessageRecord[]>([]);
+  /** Only the current turn (latest Q + A) — not the full thread. */
+  const [liveMessages, setLiveMessages] = useState<AskMessageRecord[]>([]);
   const [threadId, setThreadId] = useState<string | null>(getStoredAskThreadId());
   const [askPending, setAskPending] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [threads, setThreads] = useState<AskThreadRecord[]>([]);
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyMessages, setHistoryMessages] = useState<AskMessageRecord[]>([]);
+  const [historyTitle, setHistoryTitle] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [captures, setCaptures] = useState<RecallCaptureItem[]>([]);
   const [projects, setProjects] = useState<RecallProject[]>([]);
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  /** While the answer panel is open, follow-ups stay on the same thread. */
+  const sessionActive = useRef(false);
 
   useEffect(() => {
     void listCaptureInbox()
@@ -46,19 +58,10 @@ export function Dashboard() {
       .catch(() => setPeople([]));
   }, []);
 
-  // Restore saved thread so follow-ups continue across reloads.
+  // Keep thread id for API continuity, but never restore chat into the home panel.
   useEffect(() => {
     const stored = getStoredAskThreadId();
-    if (!stored) return;
-    void getAskThread(stored)
-      .then((detail) => {
-        setThreadId(detail.thread.id);
-        setMessages(detail.messages);
-      })
-      .catch(() => {
-        setStoredAskThreadId(null);
-        setThreadId(null);
-      });
+    if (stored) setThreadId(stored);
   }, []);
 
   // Deep link: /?q=… auto-ask
@@ -75,7 +78,37 @@ export function Dashboard() {
 
   useEffect(() => {
     if (panelOpen) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, askPending, panelOpen]);
+  }, [liveMessages, askPending, panelOpen]);
+
+  const refreshThreads = async () => {
+    try {
+      const res = await listAskThreads();
+      setThreads(res.threads);
+    } catch {
+      // ignore
+    }
+  };
+
+  const openHistory = () => {
+    setHistoryOpen(true);
+    setHistoryMessages([]);
+    setHistoryTitle(null);
+    setHistoryQuery("");
+    void refreshThreads();
+  };
+
+  const openHistoryThread = async (id: string, title: string) => {
+    setHistoryLoading(true);
+    setHistoryTitle(title);
+    try {
+      const detail = await getAskThread(id);
+      setHistoryMessages(detail.messages);
+    } catch {
+      setHistoryMessages([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
 
   const ask = async (text: string) => {
     const q = text.trim();
@@ -84,12 +117,27 @@ export function Dashboard() {
     setQuestion("");
     setAskPending(true);
     setPanelOpen(true);
+    setHistoryOpen(false);
+
+    let activeThreadId = threadId;
+    // Fresh session when the panel was closed — don't surface old chat.
+    if (!sessionActive.current) {
+      try {
+        const created = await createAskThread();
+        activeThreadId = created.thread.id;
+        setThreadId(activeThreadId);
+        setStoredAskThreadId(activeThreadId);
+      } catch {
+        // Fall back to existing thread id if create fails.
+      }
+      sessionActive.current = true;
+    }
+
     const tempId = `local-${Date.now()}`;
-    setMessages((prev) => [
-      ...prev,
+    setLiveMessages([
       {
         id: tempId,
-        threadId: threadId ?? "pending",
+        threadId: activeThreadId ?? "pending",
         role: "user",
         content: q,
         metadata: {},
@@ -97,36 +145,33 @@ export function Dashboard() {
       },
     ]);
     try {
-      const res = await queryRecall(q, { threadId });
+      const res = await queryRecall(q, { threadId: activeThreadId });
       if (res.threadId) {
         setThreadId(res.threadId);
         setStoredAskThreadId(res.threadId);
-        const detail = await getAskThread(res.threadId);
-        setMessages(detail.messages);
-      } else {
-        setMessages((prev) => [
-          ...prev.filter((m) => m.id !== tempId),
-          {
-            id: tempId,
-            threadId: "local",
-            role: "user",
-            content: q,
-            metadata: {},
-            createdAt: new Date().toISOString(),
-          },
-          {
-            id: `${tempId}-a`,
-            threadId: "local",
-            role: "assistant",
-            content: res.answer,
-            metadata: {},
-            createdAt: new Date().toISOString(),
-          },
-        ]);
       }
+      // Only the current turn — never the full thread history.
+      setLiveMessages([
+        {
+          id: tempId,
+          threadId: res.threadId ?? activeThreadId ?? "local",
+          role: "user",
+          content: q,
+          metadata: {},
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: `${tempId}-a`,
+          threadId: res.threadId ?? activeThreadId ?? "local",
+          role: "assistant",
+          content: res.answer,
+          metadata: {},
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      void refreshThreads();
     } catch {
-      setMessages((prev) => [
-        ...prev.filter((m) => m.id !== tempId),
+      setLiveMessages([
         {
           id: tempId,
           threadId: "local",
@@ -152,10 +197,13 @@ export function Dashboard() {
   const closePanel = () => {
     stopSpeaking();
     setPanelOpen(false);
+    setLiveMessages([]);
+    setQuestion("");
+    sessionActive.current = false;
   };
 
   const latestAssistant =
-    [...messages].reverse().find((m) => m.role === "assistant")?.content ?? null;
+    [...liveMessages].reverse().find((m) => m.role === "assistant")?.content ?? null;
   useSpeakAnswer(latestAssistant, Boolean(latestAssistant && !askPending && panelOpen));
 
   const brainGraph = useMemo(
@@ -186,14 +234,20 @@ export function Dashboard() {
     [tasks, notes, people, projects, captures],
   );
 
-  const showAnswer = panelOpen && (askPending || messages.length > 0);
+  const showAnswer = panelOpen && (askPending || liveMessages.length > 0);
+
+  const filteredThreads = useMemo(() => {
+    const q = historyQuery.trim().toLowerCase();
+    if (!q) return threads;
+    return threads.filter((t) => t.title.toLowerCase().includes(q));
+  }, [threads, historyQuery]);
 
   return (
     <AppLayout immersive>
       <div className="oracle-home relative h-full w-full overflow-hidden text-zinc-100">
         <div
           className={`pointer-events-none absolute inset-0 z-0 overflow-hidden transition-[filter,transform] duration-700 ease-out ${
-            showAnswer ? "scale-[1.03] blur-[2px]" : "scale-100 blur-0"
+            showAnswer || historyOpen ? "scale-[1.03] blur-[2px]" : "scale-100 blur-0"
           }`}
         >
           <NeuralBrainBackground graph={brainGraph} opacity={1} fillScreen />
@@ -206,9 +260,10 @@ export function Dashboard() {
         <div
           className="pointer-events-none absolute inset-0 z-[1] transition-opacity duration-700"
           style={{
-            background: showAnswer
-              ? "radial-gradient(ellipse 70% 55% at 50% 48%, transparent 0%, rgba(0,0,0,0.55) 100%)"
-              : "radial-gradient(ellipse 88% 72% at 50% 45%, transparent 35%, rgba(0,0,0,0.12) 100%)",
+            background:
+              showAnswer || historyOpen
+                ? "radial-gradient(ellipse 70% 55% at 50% 48%, transparent 0%, rgba(0,0,0,0.55) 100%)"
+                : "radial-gradient(ellipse 88% 72% at 50% 45%, transparent 35%, rgba(0,0,0,0.12) 100%)",
           }}
         />
 
@@ -221,10 +276,21 @@ export function Dashboard() {
           />
         )}
 
+        {historyOpen && (
+          <button
+            type="button"
+            aria-label="Dismiss history"
+            onClick={() => setHistoryOpen(false)}
+            className="absolute inset-0 z-20 cursor-default border-0 bg-black/45 backdrop-blur-md"
+          />
+        )}
+
         <div className="relative z-10 flex h-full flex-col items-center justify-center px-4">
           <div
             className={`flex w-full max-w-2xl flex-col items-center transition-all duration-700 ease-out ${
-              showAnswer ? "pointer-events-none -translate-y-8 scale-95 opacity-40" : "opacity-100"
+              showAnswer || historyOpen
+                ? "pointer-events-none -translate-y-8 scale-95 opacity-40"
+                : "opacity-100"
             }`}
           >
             <div className="oracle-brand mb-8 flex flex-col items-center gap-3">
@@ -273,6 +339,92 @@ export function Dashboard() {
           </div>
         </div>
 
+        <button
+          type="button"
+          onClick={openHistory}
+          className="absolute right-4 top-[calc(1rem+env(safe-area-inset-top,0px))] z-40 flex items-center gap-2 rounded-full border border-white/15 bg-black/50 px-3 py-1.5 text-xs text-white/70 backdrop-blur-md transition hover:bg-black/70 hover:text-white md:right-6"
+          aria-label="Open ask history"
+        >
+          <History size={14} />
+          History
+        </button>
+
+        {historyOpen && (
+          <div className="absolute inset-x-0 bottom-0 z-30 flex max-h-[78%] justify-center px-3 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] md:inset-x-auto md:left-1/2 md:bottom-auto md:top-1/2 md:w-full md:max-w-2xl md:-translate-x-1/2 md:-translate-y-[42%] md:px-4 md:pb-0">
+            <article className="oracle-answer-card relative flex max-h-full w-full flex-col overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(false)}
+                className="absolute right-3 top-3 z-10 rounded-lg p-1.5 text-white/35 hover:bg-white/10 hover:text-white"
+                aria-label="Close history"
+              >
+                <X size={18} />
+              </button>
+              <div className="border-b border-white/10 px-5 py-4 md:px-7">
+                <p className="text-xs uppercase tracking-[0.2em] text-white/45">History</p>
+                <h2 className="mt-1 text-lg font-medium text-white">Past questions</h2>
+                <div className="mt-3 flex items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 py-2">
+                  <Search size={14} className="text-white/35" />
+                  <input
+                    value={historyQuery}
+                    onChange={(e) => setHistoryQuery(e.target.value)}
+                    placeholder="Search history…"
+                    className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/35"
+                  />
+                </div>
+              </div>
+              <div className="flex min-h-0 flex-1 overflow-hidden">
+                <div className="w-[42%] overflow-y-auto border-r border-white/10 recall-scrollbar">
+                  {filteredThreads.length === 0 ? (
+                    <p className="px-4 py-6 text-sm text-white/40">No saved questions yet.</p>
+                  ) : (
+                    filteredThreads.map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => void openHistoryThread(t.id, t.title)}
+                        className={`block w-full truncate border-b border-white/5 px-4 py-3 text-left text-xs transition hover:bg-white/5 ${
+                          historyTitle === t.title ? "bg-white/10 text-white" : "text-white/60"
+                        }`}
+                        title={t.title}
+                      >
+                        {t.title}
+                      </button>
+                    ))
+                  )}
+                </div>
+                <div className="flex-1 overflow-y-auto px-4 py-4 recall-scrollbar">
+                  {historyLoading && (
+                    <p className="text-sm text-white/40">Loading…</p>
+                  )}
+                  {!historyLoading && historyMessages.length === 0 && (
+                    <p className="text-sm text-white/40">
+                      {historyTitle ? "No messages in this chat." : "Select a chat to read it."}
+                    </p>
+                  )}
+                  {!historyLoading &&
+                    historyMessages.map((m) => (
+                      <div
+                        key={m.id}
+                        className={`mb-3 flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                      >
+                        <p
+                          className={`max-w-[95%] whitespace-pre-wrap text-sm leading-relaxed ${
+                            m.role === "user"
+                              ? "rounded-2xl bg-indigo-500/25 px-3 py-2 text-indigo-50"
+                              : "text-white/90"
+                          }`}
+                        >
+                          {m.content}
+                        </p>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            </article>
+          </div>
+        )}
+
         {showAnswer && (
           <div className="oracle-answer-panel absolute inset-x-0 bottom-0 z-30 flex max-h-[78%] justify-center px-3 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] md:inset-x-auto md:left-1/2 md:bottom-auto md:top-1/2 md:w-full md:max-w-2xl md:-translate-x-1/2 md:-translate-y-[42%] md:px-4 md:pb-0">
             <article className="oracle-answer-card relative flex max-h-full w-full flex-col overflow-hidden">
@@ -285,7 +437,7 @@ export function Dashboard() {
                 <X size={18} />
               </button>
               <div className="flex-1 space-y-3 overflow-y-auto px-5 py-8 recall-scrollbar md:px-7 md:py-10">
-                {messages.map((m) => (
+                {liveMessages.map((m) => (
                   <div
                     key={m.id}
                     className={`flex ${m.role === "user" ? "justify-end" : "justify-center"}`}

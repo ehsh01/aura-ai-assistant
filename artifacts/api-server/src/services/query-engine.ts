@@ -98,7 +98,10 @@ export async function queryRecallForUser(
 
   const thread = await ensureAskThreadForUser(userId, options?.threadId, question);
   const priorTurns = await listRecentTurnsForThread(userId, thread.id);
-  const conversation: ConversationTurn[] = priorTurns;
+  // Family facts must not be poisoned by earlier wrong assistant answers in the same thread.
+  const conversation: ConversationTurn[] = familyIntent
+    ? priorTurns.filter((t) => t.role === "user").slice(-3)
+    : priorTurns;
   const retrievalQuestion = retrievalQueryFromHistory(question, conversation);
 
   await appendAskMessage({

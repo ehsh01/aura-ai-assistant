@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   keywordScore,
   mentionedPeople,
+  namesFuzzyMatch,
   normalizeKeywordToken,
   peopleMatchingRelation,
   relationTermsInQuestion,
+  textFuzzyHasName,
 } from "./retrieval";
 import { FAMILY_RELATION_INTENT, PERSON_INTENT, WAITING_INTENT } from "./query-utils";
 
@@ -84,6 +86,10 @@ describe("family relation retrieval helpers", () => {
     const other =
       "domain=other my niece's name is Melissa Rodrigues\nmy brother in lae's name is Paul Rodrigues";
     expect(keywordScore("What is my niece's name?", other)).toBeGreaterThan(0.15);
+  });
+  it("fuzzy-matches Kayla to Khaila", () => {
+    expect(namesFuzzyMatch("kayla", "khaila")).toBe(true);
+    expect(textFuzzyHasName("my daughter khaila's boyfriend is Luis", "kayla")).toBe(true);
   });
 });
 

@@ -101,14 +101,9 @@ export function Ask() {
   useEffect(() => {
     void (async () => {
       await refreshThreads();
+      // Keep thread id for API continuity, but don't paint history until the user opens it.
       const stored = getStoredAskThreadId();
-      if (!stored) return;
-      try {
-        await loadThread(stored);
-      } catch {
-        setStoredAskThreadId(null);
-        setThreadId(null);
-      }
+      if (stored) setThreadId(stored);
     })();
   }, []);
 
@@ -141,10 +136,9 @@ export function Ask() {
     setQuestion("");
     setLoading(true);
     setError(null);
-    // Optimistic user bubble
+    // Show only this turn in the main pane (history stays in the sidebar).
     const tempId = `local-${Date.now()}`;
-    setMessages((prev) => [
-      ...prev,
+    setMessages([
       {
         id: tempId,
         threadId: threadId ?? "pending",
@@ -159,10 +153,29 @@ export function Ask() {
       if (res.threadId) {
         setThreadId(res.threadId);
         setStoredAskThreadId(res.threadId);
-        const detail = await getAskThread(res.threadId);
-        setMessages(detail.messages);
         await refreshThreads();
       }
+      setMessages([
+        {
+          id: tempId,
+          threadId: res.threadId ?? threadId ?? "local",
+          role: "user",
+          content: trimmed,
+          metadata: {},
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: `${tempId}-a`,
+          threadId: res.threadId ?? threadId ?? "local",
+          role: "assistant",
+          content: res.answer,
+          metadata: {
+            confidence: res.confidence,
+            caveats: res.caveats,
+          },
+          createdAt: new Date().toISOString(),
+        },
+      ]);
       setLatestMeta({
         confidence: res.confidence,
         caveats: res.caveats,
@@ -173,7 +186,7 @@ export function Ask() {
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not reach Recall AI.");
-      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      setMessages([]);
     } finally {
       setLoading(false);
     }
@@ -268,7 +281,7 @@ export function Ask() {
                 <p className="text-sm uppercase tracking-[0.3em] text-indigo-300/70">Ask Recall</p>
                 <h1 className="mt-1 text-2xl font-semibold md:text-3xl">Ask anything about your world</h1>
                 <p className="mt-1 text-sm text-white/45">
-                  Follow-ups stay in this chat and are saved so you can continue later.
+                  Each ask shows only the current answer. Open a chat in Recent to browse history.
                 </p>
               </div>
               <button

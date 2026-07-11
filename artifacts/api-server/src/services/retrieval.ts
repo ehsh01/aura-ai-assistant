@@ -168,8 +168,8 @@ function levenshtein(a: string, b: string): number {
   return dp[b.length]!;
 }
 
-/** Fuzzy name equality for typos (sandrra/sandra, jon/john). */
-function namesFuzzyMatch(a: string, b: string): boolean {
+/** Fuzzy name equality for typos (sandrra/sandra, kayla/khaila). */
+export function namesFuzzyMatch(a: string, b: string): boolean {
   const x = a.toLowerCase().trim();
   const y = b.toLowerCase().trim();
   if (!x || !y) return false;
@@ -178,7 +178,21 @@ function namesFuzzyMatch(a: string, b: string): boolean {
   if (collapseRepeats(x) === collapseRepeats(y)) return true;
   const maxLen = Math.max(x.length, y.length);
   if (maxLen >= 4 && levenshtein(x, y) <= 1) return true;
-  if (maxLen >= 7 && levenshtein(x, y) <= 2) return true;
+  // Kayla/Khaila (distance 2) and similar near-miss spellings.
+  if (maxLen >= 5 && levenshtein(x, y) <= 2) return true;
+  if (maxLen >= 8 && levenshtein(x, y) <= 3) return true;
+  return false;
+}
+
+/** True if any word in hay fuzzy-matches needle (e.g. kayla ≈ khaila in a memory). */
+export function textFuzzyHasName(hay: string, needle: string): boolean {
+  const n = needle.toLowerCase().trim();
+  if (n.length < 3) return false;
+  const lower = hay.toLowerCase();
+  if (lower.includes(n)) return true;
+  for (const word of lower.split(/[^a-z0-9]+/)) {
+    if (word.length >= 3 && namesFuzzyMatch(word, n)) return true;
+  }
   return false;
 }
 
@@ -401,6 +415,26 @@ function relationMatchScore(r: ContextRecord, relations: string[]): number {
   return hits;
 }
 
+/** Name tokens from the question that aren't relation/stop words (e.g. Kayla). */
+function questionPersonNameTokens(question: string): string[] {
+  const relations = new Set(relationTermsInQuestion(question));
+  return questionNameTokens(question).filter(
+    (t) =>
+      !relations.has(t) &&
+      !/^(name|names|named|know|tell|what|who|about|from|with)$/i.test(t),
+  );
+}
+
+function memoryNameMatchScore(r: ContextRecord, nameTokens: string[]): number {
+  if (nameTokens.length === 0 || r.entityType !== "memory") return 0;
+  const hay = `${r.title}\n${r.text}`;
+  let hits = 0;
+  for (const token of nameTokens) {
+    if (textFuzzyHasName(hay, token)) hits += 1;
+  }
+  return hits;
+}
+
 /** Family facts often land in domain=other — match by relation words in the text too. */
 function isFamilyRelevantMemory(r: ContextRecord, relations: string[]): boolean {
   if (r.entityType !== "memory") return false;
@@ -604,6 +638,7 @@ export async function retrieveRelevantRecords(
   const wantsFamily = FAMILY_RELATION_INTENT.test(question);
   const relations = relationTermsInQuestion(question);
   const nameTokens = questionNameTokens(question);
+  const personNameTokens = questionPersonNameTokens(question);
   const namedByMention = mentionedPeople(question, people);
   const namedByRelation = peopleMatchingRelation(question, people);
   const namedMap = new Map<string, PersonRef>();
@@ -620,19 +655,26 @@ export async function retrieveRelevantRecords(
   const senderMatchedMail = corpus.filter(
     (r) => gmailSenderMatchScore(question, r, named, nameTokens) >= 0.8,
   );
+  // Family/name questions must not pull random Gmail senders (e.g. "Gina" therapy portal).
   const wantsGoogle =
     intent.email ||
     intent.drive ||
     intent.calendar ||
     intent.contacts ||
-    senderMatchedMail.length > 0;
+    (!wantsFamily && senderMatchedMail.length > 0);
 
   const personBoost = (r: ContextRecord): number => {
     // Family memories: boost even when no People row is named (facts live in Memory).
     if (wantsFamily && isFamilyRelevantMemory(r, relations)) {
       const relHits = relationMatchScore(r, relations);
+      const nameHits = memoryNameMatchScore(r, personNameTokens);
+      if (nameHits > 0 && relHits > 0) return 0.75;
+      if (nameHits > 0) return 0.65;
       if (relHits > 0) return 0.55 + Math.min(relHits, 2) * 0.05;
       return isFamilyDomainMemory(r) ? 0.35 : 0;
+    }
+    if (r.entityType === "memory" && memoryNameMatchScore(r, personNameTokens) > 0) {
+      return 0.5;
     }
     if (named.length === 0) return 0;
     if (r.entityType === "person" && namedIds.has(r.entityId)) return 0.45;
@@ -822,8 +864,11 @@ export async function retrieveRelevantRecords(
   if (wantsFamily) {
     const already = new Set(top.map((r) => r.entityId));
     const familyMemories = corpus
-      .filter((r) => isFamilyRelevantMemory(r, relations))
-      .map((r) => ({ r, relScore: relationMatchScore(r, relations) }))
+      .filter((r) => isFamilyRelevantMemory(r, relations) || memoryNameMatchScore(r, personNameTokens) > 0)
+      .map((r) => ({
+        r,
+        relScore: relationMatchScore(r, relations) + memoryNameMatchScore(r, personNameTokens) * 2,
+      }))
       .sort((a, b) => b.relScore - a.relScore || b.r.text.length - a.r.text.length);
 
     const injected: RetrievedRecord[] = [];
