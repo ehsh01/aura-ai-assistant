@@ -492,11 +492,14 @@ async function buildFinanceSnapshot(userId: string, today: string): Promise<Fina
   const synced = await loadSyncedFinanceAggregate(userId, "this month", today);
   if (!synced) return null;
   const top = synced.finance.topPayees[0] ?? null;
+  // Home card is labeled "Spending" — show dollars spent, not net.
   return {
-    total: synced.finance.total,
-    transactionCount: synced.finance.count,
+    total: synced.finance.spent,
+    transactionCount: synced.finance.expenseCount || synced.finance.count,
     rangeLabel: "this month",
-    topPayee: top ? { payee: top.payee, total: top.total } : null,
+    topPayee: top
+      ? { payee: top.payee, total: Math.abs(top.total) }
+      : null,
     href: "/connectors",
     needsSync: synced.needsSync,
   };

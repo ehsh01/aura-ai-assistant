@@ -28,6 +28,52 @@ export function todayIso(now: Date = new Date()): string {
   }
 }
 
+/** Exact money string with cents (e.g. -$12.80, $1,551.12). */
+export function formatMoney(amount: number): string {
+  const cents = Math.round(amount * 100);
+  const neg = cents < 0;
+  const abs = Math.abs(cents);
+  const dollars = Math.floor(abs / 100);
+  const rem = abs % 100;
+  const body = `${dollars.toLocaleString("en-US")}.${String(rem).padStart(2, "0")}`;
+  return neg ? `-$${body}` : `$${body}`;
+}
+
+/** Convert to integer cents to avoid float drift when summing. */
+export function toCents(amount: number): number {
+  return Math.round(amount * 100);
+}
+
+export function fromCents(cents: number): number {
+  return cents / 100;
+}
+
+/**
+ * Which finance figure the question is asking for.
+ * Spend questions must NOT use net (income − expenses).
+ */
+export function financeMetricForQuestion(
+  question: string,
+): "spent" | "income" | "net" {
+  const q = question.toLowerCase();
+  if (/\b(income|earn(?:ed|ings)?|paycheck|salary|deposited|received)\b/.test(q)) {
+    return "income";
+  }
+  if (
+    /\b(net|balance|left over|remaining|profit|cash\s*flow|cashflow)\b/.test(q)
+  ) {
+    return "net";
+  }
+  if (
+    /\b(spend|spent|spending|expense|expenses|cost|costs?|paid|pay(?:ing)?|bought|purchase|grocer|restaurant|bill|budget|money|dollars?|transactions?)\b/.test(
+      q,
+    )
+  ) {
+    return "spent";
+  }
+  return "net";
+}
+
 /** Resolve relative time phrases in the question to an absolute date range. */
 export function parseDateRange(
   question: string,
@@ -64,39 +110,111 @@ export function parseDateRange(
   return { label: null };
 }
 
+/**
+ * Default undated finance questions to this month so Ask doesn't sum all-time history.
+ */
+export function parseFinanceDateRange(
+  question: string,
+  today: string,
+): { startDate?: string; endDate?: string; label: string | null } {
+  const range = parseDateRange(question, today);
+  if (range.startDate || range.endDate) return range;
+  return parseDateRange("this month", today);
+}
+
 export function aggregateFinance(
   transactions: { amount: number; payee?: string | null; category?: string | null }[],
   rangeLabel: string | null,
 ): QueryFinanceAggregate {
-  const byPayee = new Map<string, { total: number; count: number }>();
-  const byCategory = new Map<string, { total: number; count: number }>();
-  let total = 0;
+  const byPayee = new Map<string, { totalCents: number; count: number }>();
+  const byCategory = new Map<string, { totalCents: number; count: number }>();
+  let netCents = 0;
+  let spentCents = 0;
+  let incomeCents = 0;
+  let expenseCount = 0;
+  let incomeCount = 0;
+
   for (const tx of transactions) {
-    total += tx.amount;
+    const cents = toCents(tx.amount);
+    netCents += cents;
+    if (cents < 0) {
+      spentCents += -cents;
+      expenseCount += 1;
+    } else if (cents > 0) {
+      incomeCents += cents;
+      incomeCount += 1;
+    }
     const payee = (tx.payee ?? "Unknown").trim() || "Unknown";
     const category = (tx.category ?? "Uncategorized").trim() || "Uncategorized";
-    const p = byPayee.get(payee) ?? { total: 0, count: 0 };
-    p.total += tx.amount;
+    const p = byPayee.get(payee) ?? { totalCents: 0, count: 0 };
+    p.totalCents += cents;
     p.count += 1;
     byPayee.set(payee, p);
-    const c = byCategory.get(category) ?? { total: 0, count: 0 };
-    c.total += tx.amount;
+    const c = byCategory.get(category) ?? { totalCents: 0, count: 0 };
+    c.totalCents += cents;
     c.count += 1;
     byCategory.set(category, c);
   }
-  const rank = (map: Map<string, { total: number; count: number }>) =>
-    [...map.entries()].sort((a, b) => Math.abs(b[1].total) - Math.abs(a[1].total)).slice(0, 10);
-  return {
-    total: Number(total.toFixed(2)),
-    count: transactions.length,
-    rangeLabel,
-    topPayees: rank(byPayee).map(([payee, v]) => ({
-      payee,
-      total: Number(v.total.toFixed(2)),
+
+  const rank = (map: Map<string, { totalCents: number; count: number }>) =>
+    [...map.entries()]
+      .sort((a, b) => Math.abs(b[1].totalCents) - Math.abs(a[1].totalCents))
+      .slice(0, 10);
+
+  const total = fromCents(netCents);
+  const spent = fromCents(spentCents);
+  const income = fromCents(incomeCents);
+  const topPayees = rank(byPayee).map(([payee, v]) => ({
+    payee,
+    total: fromCents(v.totalCents),
+    count: v.count,
+  }));
+  const topCategories = rank(byCategory)
+    .slice(0, 8)
+    .map(([category, v]) => ({
+      category,
+      total: fromCents(v.totalCents),
       count: v.count,
-    })),
-    topCategories: rank(byCategory)
-      .slice(0, 8)
-      .map(([category, v]) => ({ category, total: Number(v.total.toFixed(2)), count: v.count })),
+    }));
+
+  return {
+    total,
+    spent,
+    income,
+    count: transactions.length,
+    expenseCount,
+    incomeCount,
+    rangeLabel,
+    topPayees,
+    topCategories,
+    formatted: {
+      net: formatMoney(total),
+      spent: formatMoney(spent),
+      income: formatMoney(income),
+      topPayees: topPayees.map((p) => ({
+        payee: p.payee,
+        total: formatMoney(p.total),
+        count: p.count,
+      })),
+      topCategories: topCategories.map((c) => ({
+        category: c.category,
+        total: formatMoney(c.total),
+        count: c.count,
+      })),
+    },
   };
+}
+
+/** Pick the primary amount + label for an answer sentence. */
+export function primaryFinanceFigure(
+  finance: QueryFinanceAggregate,
+  metric: "spent" | "income" | "net",
+): { amount: number; formatted: string; label: string } {
+  if (metric === "spent") {
+    return { amount: finance.spent, formatted: finance.formatted.spent, label: "spent" };
+  }
+  if (metric === "income") {
+    return { amount: finance.income, formatted: finance.formatted.income, label: "income" };
+  }
+  return { amount: finance.total, formatted: finance.formatted.net, label: "net" };
 }

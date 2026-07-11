@@ -13,7 +13,10 @@ Return ONLY valid JSON:
 Rules:
 - Never fabricate transactions, people, or tasks not in context.
 - If context is insufficient, say so in caveats and lower confidence.
-- Financial totals must reference transaction records in evidenceRefs, not invented numbers.
+- Financial totals must come from the finance object (not invented). Use finance.formatted.* strings exactly so cents are correct (e.g. $12.80, never $12.8 or "about twelve dollars").
+- If finance.rangeLabel mentions "answer with spent", lead with finance.formatted.spent (money out). For "answer with income", use finance.formatted.income. For "answer with net", use finance.formatted.net and you may also mention spent and income.
+- Never answer a spend/spent/spending question with the net total — net mixes income and expenses and will be wrong.
+- Always write money as $X.XX with exactly two decimal places (include trailing zeros: $72.80 not $72.8).
 - Context records with source=gmail_message (or text mentioning email/gmail) ARE emails from connected Google accounts — use them to answer mail questions.
 - When the user asks about a person and email, match on the From sender name and sender email address (e.g. "Sandra" → mail from "Sandra Hernandez <sheh2662@gmail.com>").
 - Context records with source=drive_file ARE Google Drive files — use them for Drive/file questions.

@@ -6,6 +6,8 @@ import {
   FAMILY_RELATION_INTENT,
   PERSON_INTENT,
   WAITING_INTENT,
+  financeMetricForQuestion,
+  primaryFinanceFigure,
   todayIso,
 } from "./query-utils";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
@@ -187,18 +189,25 @@ export async function queryRecallForUser(
       if (synced) {
         finance = synced.finance;
         financeNeedsSync = synced.needsSync;
+        const metric = financeMetricForQuestion(question);
+        const primary = primaryFinanceFigure(finance, metric);
         evidence.push(
           makeEvidence({
             claimType: "amount_calculated_from",
             evidenceText: synced.needsSync
               ? "Finance connector is configured but no transactions are synced yet. Sync on Connectors first."
-              : `Net total ${finance.total} across ${finance.count} transaction(s)${
+              : `Primary (${primary.label}): ${primary.formatted}. Spent ${finance.formatted.spent} (${finance.expenseCount} expenses), income ${finance.formatted.income} (${finance.incomeCount} credits), net ${finance.formatted.net} across ${finance.count} transaction(s)${
                   finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""
                 }. Source: synced MyFamilyBudget records in Recall.`,
             metadata: {
               rangeLabel: finance.rangeLabel,
-              topPayees: finance.topPayees.slice(0, 5),
-              topCategories: finance.topCategories.slice(0, 5),
+              metric,
+              spent: finance.spent,
+              income: finance.income,
+              net: finance.total,
+              formatted: finance.formatted,
+              topPayees: finance.formatted.topPayees.slice(0, 5),
+              topCategories: finance.formatted.topCategories.slice(0, 5),
               connectorId: synced.connectorId,
               payeeFilter: synced.payeeFilter,
               needsSync: synced.needsSync,
@@ -351,11 +360,25 @@ export async function queryRecallForUser(
   // AI synthesis when available.
   if (!degraded) {
     try {
+      const metric = finance && !financeNeedsSync ? financeMetricForQuestion(question) : null;
       const ai = await aiService.answerQuery({
         question,
         today,
         records: contextRecords,
-        finance: financeNeedsSync ? null : finance,
+        finance: financeNeedsSync
+          ? null
+          : finance
+            ? {
+                ...finance,
+                // Hint which figure to lead with (spent vs income vs net).
+                rangeLabel:
+                  metric && finance.rangeLabel
+                    ? `${finance.rangeLabel} · answer with ${metric}`
+                    : metric
+                      ? `answer with ${metric}`
+                      : finance.rangeLabel,
+              }
+            : null,
         conversation,
       });
       let caveats = ai.caveats;
@@ -398,11 +421,26 @@ export async function queryRecallForUser(
     caveats = "No synced finance records.";
     suggestedNextAction = "Open Connectors → Sync Finance";
   } else if (finance) {
-    const topPayee = finance.topPayees[0];
-    answer =
-      `Net total is $${finance.total.toFixed(2)} across ${finance.count} transaction(s)` +
-      `${finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""}.` +
-      (topPayee ? ` Largest: ${topPayee.payee} ($${topPayee.total.toFixed(2)}).` : "");
+    const metric = financeMetricForQuestion(question);
+    const primary = primaryFinanceFigure(finance, metric);
+    const topPayee = finance.formatted.topPayees[0];
+    if (metric === "spent") {
+      answer =
+        `You spent ${primary.formatted} across ${finance.expenseCount} expense(s)` +
+        `${finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""}.` +
+        (topPayee ? ` Largest: ${topPayee.payee} (${topPayee.total}).` : "");
+    } else if (metric === "income") {
+      answer =
+        `Your income was ${primary.formatted} across ${finance.incomeCount} credit(s)` +
+        `${finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""}.` +
+        (topPayee ? ` Largest: ${topPayee.payee} (${topPayee.total}).` : "");
+    } else {
+      answer =
+        `Net total is ${primary.formatted} across ${finance.count} transaction(s)` +
+        `${finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""}` +
+        ` (spent ${finance.formatted.spent}, income ${finance.formatted.income}).` +
+        (topPayee ? ` Largest: ${topPayee.payee} (${topPayee.total}).` : "");
+    }
     confidence = 0.85;
     suggestedNextAction = "Open Connectors → Finance for the full breakdown";
   } else if (personIntent && (relevant.length > 0 || waitingItems.length > 0)) {

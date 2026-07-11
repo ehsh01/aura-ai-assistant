@@ -72,5 +72,6 @@ export async function fetchFinanceTransactions(
 }
 
 export function sumTransactions(transactions: FinanceTransaction[]): number {
-  return transactions.reduce((sum, tx) => sum + tx.amount, 0);
+  const cents = transactions.reduce((sum, tx) => sum + Math.round(tx.amount * 100), 0);
+  return cents / 100;
 }

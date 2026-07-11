@@ -2,7 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { sourceRecords } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { listConnectorsForUser } from "./connectors";
-import { aggregateFinance, parseDateRange } from "./query-utils";
+import { aggregateFinance, parseFinanceDateRange } from "./query-utils";
 import type { QueryFinanceAggregate } from "./ai";
 
 export type SyncedFinanceResult = {
@@ -42,7 +42,7 @@ export async function loadSyncedFinanceAggregate(
   const financeConn = connectors.find((c) => c.type === "finance_api");
   if (!financeConn) return null;
 
-  const range = parseDateRange(question, today);
+  const range = parseFinanceDateRange(question, today);
   const payeeFilter = extractPayeeHint(question);
 
   const rows = await getDb()
@@ -65,10 +65,21 @@ export async function loadSyncedFinanceAggregate(
     return {
       finance: {
         total: 0,
+        spent: 0,
+        income: 0,
         count: 0,
+        expenseCount: 0,
+        incomeCount: 0,
         rangeLabel: range.label,
         topPayees: [],
         topCategories: [],
+        formatted: {
+          net: "$0.00",
+          spent: "$0.00",
+          income: "$0.00",
+          topPayees: [],
+          topCategories: [],
+        },
       },
       connectorId: financeConn.id,
       needsSync: true,

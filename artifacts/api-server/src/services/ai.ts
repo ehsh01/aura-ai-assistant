@@ -158,11 +158,26 @@ export interface QueryContextRecord {
 }
 
 export interface QueryFinanceAggregate {
+  /** Net = income + expenses (expenses are negative in source data). */
   total: number;
+  /** Dollars spent (sum of absolute expense amounts) — use for "how much did I spend". */
+  spent: number;
+  /** Dollars received (sum of positive amounts). */
+  income: number;
   count: number;
+  expenseCount: number;
+  incomeCount: number;
   rangeLabel: string | null;
   topPayees: { payee: string; total: number; count: number }[];
   topCategories: { category: string; total: number; count: number }[];
+  /** Exact $X.XX strings — prefer these in answers so cents stay correct. */
+  formatted: {
+    net: string;
+    spent: string;
+    income: string;
+    topPayees: { payee: string; total: string; count: number }[];
+    topCategories: { category: string; total: string; count: number }[];
+  };
 }
 
 export interface AnswerQueryRequest {
@@ -472,10 +487,11 @@ class DisabledAiService implements AiService {
     // will generally not call this when AI is disabled.
     const parts: string[] = [];
     if (request.finance) {
+      const f = request.finance;
       parts.push(
-        `Across ${request.finance.count} transaction(s)${
-          request.finance.rangeLabel ? ` (${request.finance.rangeLabel})` : ""
-        } the net total is ${request.finance.total.toFixed(2)}.`,
+        `Across ${f.count} transaction(s)${
+          f.rangeLabel ? ` (${f.rangeLabel})` : ""
+        }: spent ${f.formatted.spent}, income ${f.formatted.income}, net ${f.formatted.net}.`,
       );
     }
     if (request.records.length) {

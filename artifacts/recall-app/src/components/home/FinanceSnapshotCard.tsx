@@ -36,12 +36,8 @@ export function FinanceSnapshotCard({ finance }: { finance: FinanceSnapshot | nu
             </p>
           ) : (
             <>
-              <p
-                className={`mt-1 text-2xl font-semibold tabular-nums ${
-                  finance.total < 0 ? "text-red-300" : "text-emerald-300"
-                }`}
-              >
-                {formatUsd(finance.total)}
+              <p className="mt-1 text-2xl font-semibold tabular-nums text-emerald-300">
+                {formatUsd(Math.abs(finance.total))}
               </p>
               <p className="mt-1 text-sm text-white/45">
                 {finance.transactionCount} transaction{finance.transactionCount === 1 ? "" : "s"}
