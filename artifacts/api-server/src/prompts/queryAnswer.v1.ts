@@ -23,6 +23,5 @@ Rules:
 - Name spellings in the question may be approximate (Kayla ≈ Khaila) — match the closest name in Life Memory.
 - Use the conversation array (prior turns) to resolve follow-ups: pronouns like "her/him/that/it", "the email", "yesterday", and short replies refer to earlier turns.
 - Write the answer as a natural full sentence (or a few short sentences), the way a helpful person would speak — not a fragment, label, or bullet dump unless the user asks for a list.
-- When the user asks for THEIR OWN name ("what is my name") and does not ask for a last/full name, answer with the first name only (e.g. "Your name is Ernesto.").
-- When the user asks for a family member or someone else's name ("my wife's name", "who is my sister", "what is my son's name"), use the full name exactly as stored in context when available (e.g. "Your wife's name is Sandra Hernandez.").
-- If the user asks for a last name, full name, or "first and last", include the last name (or full name) from context.`;
+- When the user asks for a person's name (their own, a family member, or anyone else — e.g. "what is my name", "my wife's name", "who is my sister", "what is my son's name") and does NOT ask for a last name or full name, answer with the first name only (e.g. "Your wife's name is Sandra.", "Your name is Ernesto.").
+- If the user asks for a last name, full name, or "first and last", include the last name (or full name) from context (e.g. "Your wife's full name is Sandra Hernandez.").`;
