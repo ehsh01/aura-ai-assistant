@@ -870,17 +870,34 @@ export async function retrieveRelevantRecords(
   if (wantsFamily) {
     const already = new Set(top.map((r) => r.entityId));
     const familyMemories = corpus
-      .filter((r) => isFamilyRelevantMemory(r, relations) || memoryNameMatchScore(r, personNameTokens) > 0)
+      .filter((r) => r.entityType === "memory")
       .map((r) => ({
         r,
-        relScore: relationMatchScore(r, relations) + memoryNameMatchScore(r, personNameTokens) * 2,
+        relScore: relationMatchScore(r, relations),
+        nameScore: memoryNameMatchScore(r, personNameTokens),
       }))
-      .sort((a, b) => b.relScore - a.relScore || b.r.text.length - a.r.text.length);
+      .filter(
+        (x) =>
+          x.relScore > 0 ||
+          x.nameScore > 0 ||
+          isFamilyDomainMemory(x.r),
+      )
+      .sort((a, b) => {
+        const sa = a.relScore * 2 + a.nameScore * 3;
+        const sb = b.relScore * 2 + b.nameScore * 3;
+        if (sb !== sa) return sb - sa;
+        // Prefer tighter relation hits over dumping every family note first.
+        if (a.relScore + a.nameScore === 0 && b.relScore + b.nameScore === 0) {
+          return b.r.text.length - a.r.text.length;
+        }
+        return 0;
+      });
 
     const injected: RetrievedRecord[] = [];
-    for (const { r, relScore } of familyMemories.slice(0, Math.min(10, limit))) {
+    for (const { r, relScore, nameScore } of familyMemories.slice(0, Math.min(10, limit))) {
       if (already.has(r.entityId)) continue;
-      injected.push(toRetrieved(r, 1.05 + relScore * 0.05, "keyword"));
+      const rank = 1.0 + relScore * 0.12 + nameScore * 0.2;
+      injected.push(toRetrieved(r, rank, "keyword"));
       already.add(r.entityId);
     }
     if (injected.length > 0) {
