@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregateFinance,
+  FINANCE_BREAKDOWN_INTENT,
   FINANCE_INTENT,
   financeMetricForQuestion,
   formatMoney,
@@ -99,6 +100,12 @@ describe("formatMoney / financeMetricForQuestion", () => {
     expect(financeMetricForQuestion("How much did I spend this month?")).toBe("spent");
     expect(financeMetricForQuestion("What was my income last month?")).toBe("income");
     expect(financeMetricForQuestion("What is my net for this month?")).toBe("net");
+  });
+
+  it("detects breakdown questions", () => {
+    expect(FINANCE_BREAKDOWN_INTENT.test("Give me a breakdown of that")).toBe(true);
+    expect(FINANCE_BREAKDOWN_INTENT.test("Show me all the transactions")).toBe(true);
+    expect(FINANCE_BREAKDOWN_INTENT.test("How much did I spend?")).toBe(false);
   });
 });
 

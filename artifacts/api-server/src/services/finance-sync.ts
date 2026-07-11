@@ -2,7 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { sourceRecords } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { listConnectorsForUser } from "./connectors";
-import { aggregateFinance, parseFinanceDateRange } from "./query-utils";
+import { aggregateFinance, formatMoney, parseFinanceDateRange } from "./query-utils";
 import type { QueryFinanceAggregate } from "./ai";
 
 export type SyncedFinanceResult = {
@@ -28,6 +28,26 @@ export function extractPayeeHint(question: string): string | null {
   }
   return null;
 }
+
+const emptyFinance = (rangeLabel: string | null): QueryFinanceAggregate => ({
+  total: 0,
+  spent: 0,
+  income: 0,
+  count: 0,
+  expenseCount: 0,
+  incomeCount: 0,
+  rangeLabel,
+  topPayees: [],
+  topCategories: [],
+  formatted: {
+    net: "$0.00",
+    spent: "$0.00",
+    income: "$0.00",
+    topPayees: [],
+    topCategories: [],
+  },
+  transactions: [],
+});
 
 /**
  * Aggregate finance from already-synced source_records.
@@ -63,24 +83,7 @@ export async function loadSyncedFinanceAggregate(
 
   if (rows.length === 0) {
     return {
-      finance: {
-        total: 0,
-        spent: 0,
-        income: 0,
-        count: 0,
-        expenseCount: 0,
-        incomeCount: 0,
-        rangeLabel: range.label,
-        topPayees: [],
-        topCategories: [],
-        formatted: {
-          net: "$0.00",
-          spent: "$0.00",
-          income: "$0.00",
-          topPayees: [],
-          topCategories: [],
-        },
-      },
+      finance: emptyFinance(range.label),
       connectorId: financeConn.id,
       needsSync: true,
       payeeFilter,
@@ -104,6 +107,7 @@ export async function loadSyncedFinanceAggregate(
       const payee = typeof meta.payee === "string" ? meta.payee : null;
       if (payeeLower && !(payee ?? "").toLowerCase().includes(payeeLower)) return null;
       return {
+        date,
         amount,
         payee,
         category: typeof meta.category === "string" ? meta.category : null,
@@ -113,6 +117,20 @@ export async function loadSyncedFinanceAggregate(
 
   const labelParts = [range.label, payeeFilter ? `at ${payeeFilter}` : null].filter(Boolean);
   const finance = aggregateFinance(txns, labelParts.length ? labelParts.join(" ") : null);
+
+  // Newest first; keep a generous cap so breakdown answers can list everything practical.
+  const MAX_TX_LINES = 300;
+  finance.transactions = txns
+    .slice()
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+    .slice(0, MAX_TX_LINES)
+    .map((t) => ({
+      date: t.date,
+      payee: (t.payee ?? "Unknown").trim() || "Unknown",
+      amount: t.amount,
+      amountFormatted: formatMoney(t.amount),
+      category: t.category,
+    }));
 
   return {
     finance,

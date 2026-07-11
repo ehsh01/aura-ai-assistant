@@ -487,8 +487,8 @@ function fallbackSummary(attentionCount: number, parts: string[]): string {
 
 /** This-month finance snapshot from already-synced source_records. */
 async function buildFinanceSnapshot(userId: string, today: string): Promise<FinanceSnapshot | null> {
-  // Kick a background refresh if the connector is stale (non-blocking).
-  ensureUserFinanceFresh(userId);
+  // Refresh from MyFamilyBudget before reading (await so Home shows fresh totals).
+  await ensureUserFinanceFresh(userId, { awaitSync: true });
   const synced = await loadSyncedFinanceAggregate(userId, "this month", today);
   if (!synced) return null;
   const top = synced.finance.topPayees[0] ?? null;

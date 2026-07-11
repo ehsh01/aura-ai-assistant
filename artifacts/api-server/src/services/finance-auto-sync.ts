@@ -4,7 +4,10 @@ import { getDb } from "../lib/db";
 import { syncConnectorForUser } from "./connectors";
 import { logger } from "../lib/logger";
 
+/** Background scheduler: only re-sync if older than this. */
 const STALE_MS = 6 * 60 * 60 * 1000; // 6 hours
+/** App-open / Ask: skip only if synced within this window (avoid double-hit). */
+const OPEN_COOLDOWN_MS = 45 * 1000;
 const TICK_MS = 30 * 60 * 1000; // every 30 minutes
 const MAX_PER_TICK = 3;
 
@@ -58,9 +61,24 @@ export async function syncStaleFinanceConnectors(): Promise<number> {
   }
 }
 
-/** Ensure a specific user's finance connector is fresh enough for Ask/Home. */
-export async function ensureUserFinanceFresh(userId: string): Promise<void> {
-  const cutoff = new Date(Date.now() - STALE_MS);
+export type EnsureFinanceFreshOptions = {
+  /** Skip sync if last sync was within this many ms. Default: 45s cooldown. */
+  maxAgeMs?: number;
+  /** Wait for sync to finish before returning (Home / Ask). Default true. */
+  awaitSync?: boolean;
+};
+
+/**
+ * Refresh the user's finance connector from MyFamilyBudget.
+ * Used on app open and before finance Ask answers.
+ */
+export async function ensureUserFinanceFresh(
+  userId: string,
+  opts?: EnsureFinanceFreshOptions,
+): Promise<{ synced: boolean; skipped: boolean }> {
+  const maxAgeMs = opts?.maxAgeMs ?? OPEN_COOLDOWN_MS;
+  const awaitSync = opts?.awaitSync !== false;
+
   const rows = await getDb()
     .select({
       id: connectors.id,
@@ -77,13 +95,31 @@ export async function ensureUserFinanceFresh(userId: string): Promise<void> {
     .limit(1);
 
   const conn = rows[0];
-  if (!conn) return;
-  if (conn.lastSyncAt && conn.lastSyncAt >= cutoff) return;
+  if (!conn) return { synced: false, skipped: true };
 
-  // Fire-and-forget so Ask/Home aren't blocked by a full sync.
-  void syncConnectorForUser(userId, conn.id).catch((err) => {
+  if (
+    maxAgeMs > 0 &&
+    conn.lastSyncAt &&
+    Date.now() - conn.lastSyncAt.getTime() < maxAgeMs
+  ) {
+    return { synced: false, skipped: true };
+  }
+
+  const run = syncConnectorForUser(userId, conn.id);
+  if (awaitSync) {
+    try {
+      await run;
+      return { synced: true, skipped: false };
+    } catch (err) {
+      logger.warn({ err, userId, connectorId: conn.id }, "On-demand finance sync failed");
+      return { synced: false, skipped: false };
+    }
+  }
+
+  void run.catch((err) => {
     logger.warn({ err, userId, connectorId: conn.id }, "On-demand finance sync failed");
   });
+  return { synced: true, skipped: false };
 }
 
 export function startFinanceAutoSync(): void {

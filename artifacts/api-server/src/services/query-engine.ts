@@ -3,6 +3,7 @@ import type { EvidenceDto } from "./evidence";
 import { aiService, type QueryFinanceAggregate } from "./ai";
 import {
   FINANCE_INTENT,
+  FINANCE_BREAKDOWN_INTENT,
   FAMILY_RELATION_INTENT,
   PERSON_INTENT,
   WAITING_INTENT,
@@ -24,6 +25,40 @@ import {
   retrievalQueryFromHistory,
   type ConversationTurn,
 } from "./ask-threads";
+
+function buildFinanceBreakdownAnswer(
+  finance: QueryFinanceAggregate,
+  metric: "spent" | "income" | "net",
+): string {
+  const primary = primaryFinanceFigure(finance, metric);
+  const lines = finance.transactions
+    .filter((t) => {
+      if (metric === "spent") return t.amount < 0;
+      if (metric === "income") return t.amount > 0;
+      return true;
+    })
+    .map(
+      (t) =>
+        `• ${t.date} — ${t.payee} — ${t.amountFormatted}${
+          t.category ? ` (${t.category})` : ""
+        }`,
+    );
+  const head =
+    metric === "spent"
+      ? `You spent ${primary.formatted} across ${lines.length} transaction(s)`
+      : metric === "income"
+        ? `Your income was ${primary.formatted} across ${lines.length} transaction(s)`
+        : `Net total is ${primary.formatted} across ${lines.length} transaction(s)`;
+  const range = finance.rangeLabel ? ` for ${finance.rangeLabel}` : "";
+  if (lines.length === 0) {
+    return `${head}${range}. No matching transactions were found.`;
+  }
+  const truncated =
+    finance.count > finance.transactions.length
+      ? `\n\n(Showing ${finance.transactions.length} of ${finance.count} matching transactions.)`
+      : "";
+  return `${head}${range}:\n\n${lines.join("\n")}${truncated}`;
+}
 
 export type QueryAnswer = {
   answer: string;
@@ -182,15 +217,20 @@ export async function queryRecallForUser(
     }
   }
 
-  if (FINANCE_INTENT.test(question)) {
-    ensureUserFinanceFresh(userId);
+  if (
+    FINANCE_INTENT.test(question) ||
+    FINANCE_BREAKDOWN_INTENT.test(question) ||
+    FINANCE_INTENT.test(retrievalQuestion)
+  ) {
+    await ensureUserFinanceFresh(userId, { awaitSync: true });
     try {
-      const synced = await loadSyncedFinanceAggregate(userId, question, today);
+      const synced = await loadSyncedFinanceAggregate(userId, retrievalQuestion, today);
       if (synced) {
         finance = synced.finance;
         financeNeedsSync = synced.needsSync;
-        const metric = financeMetricForQuestion(question);
+        const metric = financeMetricForQuestion(retrievalQuestion);
         const primary = primaryFinanceFigure(finance, metric);
+        const wantsBreakdown = FINANCE_BREAKDOWN_INTENT.test(question);
         evidence.push(
           makeEvidence({
             claimType: "amount_calculated_from",
@@ -208,6 +248,8 @@ export async function queryRecallForUser(
               formatted: finance.formatted,
               topPayees: finance.formatted.topPayees.slice(0, 5),
               topCategories: finance.formatted.topCategories.slice(0, 5),
+              transactionCount: finance.transactions.length,
+              wantsBreakdown,
               connectorId: synced.connectorId,
               payeeFilter: synced.payeeFilter,
               needsSync: synced.needsSync,
@@ -215,6 +257,24 @@ export async function queryRecallForUser(
             },
           }),
         );
+        if (wantsBreakdown) {
+          for (const t of finance.transactions.slice(0, 80)) {
+            evidence.push(
+              makeEvidence({
+                claimType: "amount_calculated_from",
+                evidenceText: `${t.date} | ${t.payee} | ${t.amountFormatted}${
+                  t.category ? ` | ${t.category}` : ""
+                }`,
+                metadata: {
+                  relatedEntityType: "finance_transaction",
+                  payee: t.payee,
+                  date: t.date,
+                  amount: t.amount,
+                },
+              }),
+            );
+          }
+        }
       }
     } catch {
       // Finance data unavailable — proceed without it.
@@ -357,6 +417,26 @@ export async function queryRecallForUser(
         ? "Open People → Waiting on"
         : null;
 
+  // Full transaction lists are deterministic — don't let the model truncate them.
+  if (finance && !financeNeedsSync && FINANCE_BREAKDOWN_INTENT.test(question)) {
+    return finish({
+      answer: buildFinanceBreakdownAnswer(
+        finance,
+        financeMetricForQuestion(retrievalQuestion),
+      ),
+      confidence: 0.95,
+      caveats:
+        finance.count > finance.transactions.length
+          ? `Listed ${finance.transactions.length} of ${finance.count} matching transactions.`
+          : null,
+      evidence,
+      relatedRecords,
+      suggestedNextAction: "Open Connectors → Finance",
+      promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+      degraded: false,
+    });
+  }
+
   // AI synthesis when available.
   if (!degraded) {
     try {
@@ -421,28 +501,35 @@ export async function queryRecallForUser(
     caveats = "No synced finance records.";
     suggestedNextAction = "Open Connectors → Sync Finance";
   } else if (finance) {
-    const metric = financeMetricForQuestion(question);
-    const primary = primaryFinanceFigure(finance, metric);
-    const topPayee = finance.formatted.topPayees[0];
-    if (metric === "spent") {
-      answer =
-        `You spent ${primary.formatted} across ${finance.expenseCount} expense(s)` +
-        `${finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""}.` +
-        (topPayee ? ` Largest: ${topPayee.payee} (${topPayee.total}).` : "");
-    } else if (metric === "income") {
-      answer =
-        `Your income was ${primary.formatted} across ${finance.incomeCount} credit(s)` +
-        `${finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""}.` +
-        (topPayee ? ` Largest: ${topPayee.payee} (${topPayee.total}).` : "");
+    const metric = financeMetricForQuestion(retrievalQuestion);
+    if (FINANCE_BREAKDOWN_INTENT.test(question)) {
+      answer = buildFinanceBreakdownAnswer(finance, metric);
+      confidence = 0.95;
+      suggestedNextAction = "Open Connectors → Finance";
     } else {
-      answer =
-        `Net total is ${primary.formatted} across ${finance.count} transaction(s)` +
-        `${finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""}` +
-        ` (spent ${finance.formatted.spent}, income ${finance.formatted.income}).` +
-        (topPayee ? ` Largest: ${topPayee.payee} (${topPayee.total}).` : "");
+      const primary = primaryFinanceFigure(finance, metric);
+      const topPayee = finance.formatted.topPayees[0];
+      if (metric === "spent") {
+        answer =
+          `You spent ${primary.formatted} across ${finance.expenseCount} expense(s)` +
+          `${finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""}.` +
+          (topPayee ? ` Largest: ${topPayee.payee} (${topPayee.total}).` : "") +
+          ` Ask for a breakdown to see every transaction.`;
+      } else if (metric === "income") {
+        answer =
+          `Your income was ${primary.formatted} across ${finance.incomeCount} credit(s)` +
+          `${finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""}.` +
+          (topPayee ? ` Largest: ${topPayee.payee} (${topPayee.total}).` : "");
+      } else {
+        answer =
+          `Net total is ${primary.formatted} across ${finance.count} transaction(s)` +
+          `${finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""}` +
+          ` (spent ${finance.formatted.spent}, income ${finance.formatted.income}).` +
+          (topPayee ? ` Largest: ${topPayee.payee} (${topPayee.total}).` : "");
+      }
+      confidence = 0.85;
+      suggestedNextAction = "Ask for a breakdown to see every transaction";
     }
-    confidence = 0.85;
-    suggestedNextAction = "Open Connectors → Finance for the full breakdown";
   } else if (personIntent && (relevant.length > 0 || waitingItems.length > 0)) {
     const who = namedPeople[0]?.displayName ?? "them";
     const bits: string[] = [];

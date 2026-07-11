@@ -3,6 +3,10 @@ import type { QueryFinanceAggregate } from "./ai";
 export const FINANCE_INTENT =
   /\b(spend|spent|spending|cost|costs?|paid|pay(?:ing)?|budget|transactions?|expenses?|income|earn(?:ed)?|money|dollars?|grocer|restaurant|bought|purchase|bill|\$)\b/i;
 
+/** Ask wants every matching transaction listed, not just a total. */
+export const FINANCE_BREAKDOWN_INTENT =
+  /\b(breakdown|break\s*(it\s*)?down|details?|list(?:\s+them)?|itemize|itemi[sz]e|show(?:\s+me)?(?:\s+all)?(?:\s+the)?\s+transactions?|what (?:made|makes) up|where did .{0,40}(?:go|come from)|itemize|line[- ]?items?)\b/i;
+
 /** “What do I know about X?” / contact-focused / family name questions. */
 export const PERSON_INTENT =
   /\b(what do i know about|tell me about|who is|who'?s|what(?:'s| is) my|name of my|about\s+[A-Z]|about\s+my|contact for|contact with|my (?:wife|husband|spouse|son|daughter|sister|brother|mom|mother|dad|father|nephew|niece|aunt|uncle|cousin))\b/i;
@@ -202,6 +206,7 @@ export function aggregateFinance(
         count: c.count,
       })),
     },
+    transactions: [],
   };
 }
 

@@ -17,6 +17,7 @@ import {
   syncConnectorForUser,
   writeGoogleConnectAudit,
 } from "../services/connectors";
+import { ensureUserFinanceFresh } from "../services/finance-auto-sync";
 
 const CreateConnectorBody = z.object({
   name: z.string().min(1).max(255),
@@ -213,6 +214,19 @@ router.post("/connectors/:connectorId/sync", async (req, res, next) => {
     const body = SyncConnectorBody.parse(req.body ?? {});
     const result = await syncConnectorForUser(req.user!.id, req.params.connectorId, body);
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Refresh finance from MyFamilyBudget (called when the app opens). */
+router.post("/finance/refresh", async (req, res, next) => {
+  try {
+    const result = await ensureUserFinanceFresh(req.user!.id, {
+      maxAgeMs: 0,
+      awaitSync: true,
+    });
+    res.json({ ok: true, ...result });
   } catch (err) {
     next(err);
   }

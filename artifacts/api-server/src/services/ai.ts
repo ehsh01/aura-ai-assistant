@@ -178,6 +178,14 @@ export interface QueryFinanceAggregate {
     topPayees: { payee: string; total: string; count: number }[];
     topCategories: { category: string; total: string; count: number }[];
   };
+  /** Matching transactions for breakdown answers (newest first). */
+  transactions: {
+    date: string;
+    payee: string;
+    amount: number;
+    amountFormatted: string;
+    category: string | null;
+  }[];
 }
 
 export interface AnswerQueryRequest {

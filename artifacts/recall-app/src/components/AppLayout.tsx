@@ -8,6 +8,7 @@ import { RecallLogo } from "@/components/RecallLogo";
 import { useAuth } from "@/context/AuthContext";
 import { useRecallData } from "@/context/RecallDataContext";
 import { subscribeCaptureQueue } from "@/lib/capture-queue";
+import { refreshFinance } from "@/lib/recall-api";
 import { notesPath, readSearchParam } from "@/lib/recall-nav";
 
 interface AppLayoutProps {
@@ -237,6 +238,14 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
   }, [immersive, location]);
 
   useEffect(() => subscribeCaptureQueue(setQueuedCaptures), []);
+
+  // Refresh finance from MyFamilyBudget whenever the signed-in app shell mounts.
+  useEffect(() => {
+    if (!user) return;
+    void refreshFinance().catch(() => {
+      // Non-blocking — Ask/Home will still try on demand.
+    });
+  }, [user?.id]);
 
   React.useEffect(() => {
     if (location === "/notebooks" || (onNotesPage && activeNotebook !== "all")) {

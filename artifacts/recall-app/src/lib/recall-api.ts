@@ -244,6 +244,11 @@ export async function fetchHome(): Promise<HomeBriefingResponse> {
   return apiFetch("/home");
 }
 
+/** Pull latest MyFamilyBudget transactions into Recall (app open / manual refresh). */
+export async function refreshFinance(): Promise<{ ok: boolean; synced: boolean; skipped: boolean }> {
+  return apiFetch("/finance/refresh", { method: "POST", body: "{}" });
+}
+
 export async function queryRecall(
   question: string,
   options?: { threadId?: string | null },
