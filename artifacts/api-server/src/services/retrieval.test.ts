@@ -91,6 +91,10 @@ describe("family relation retrieval helpers", () => {
     expect(namesFuzzyMatch("kayla", "khaila")).toBe(true);
     expect(textFuzzyHasName("my daughter khaila's boyfriend is Luis", "kayla")).toBe(true);
   });
+
+  it("fuzzy-matches boyfrind to boyfriend in memory text", () => {
+    expect(namesFuzzyMatch("boyfrind", "boyfriend")).toBe(true);
+  });
 });
 
 describe("PERSON_INTENT / FAMILY_RELATION_INTENT / WAITING_INTENT", () => {

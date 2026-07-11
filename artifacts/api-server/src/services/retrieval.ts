@@ -408,9 +408,15 @@ function isFamilyDomainMemory(r: ContextRecord): boolean {
 function relationMatchScore(r: ContextRecord, relations: string[]): number {
   if (relations.length === 0) return 0;
   const hay = `${r.title}\n${r.text}`.toLowerCase();
+  const words = hay.split(/[^a-z0-9]+/).filter((w) => w.length >= 4);
   let hits = 0;
   for (const rel of relations) {
-    if (hay.includes(rel)) hits += 1;
+    if (hay.includes(rel)) {
+      hits += 1;
+      continue;
+    }
+    // Tolerate typos like "boyfrind" ≈ "boyfriend".
+    if (words.some((w) => namesFuzzyMatch(w, rel))) hits += 1;
   }
   return hits;
 }
