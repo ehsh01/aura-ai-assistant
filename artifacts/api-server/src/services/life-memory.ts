@@ -59,7 +59,7 @@ const DOMAIN_SET = new Set<string>(LIFE_MEMORY_DOMAINS);
 
 const DOMAIN_KEYWORDS: { domain: LifeMemoryDomain; re: RegExp }[] = [
   { domain: "vehicles", re: /\b(car|truck|vin|tesla|toyota|honda|bmw|ford|vehicle|license plate|registration|mileage|oil change)\b/i },
-  { domain: "family", re: /\b(wife|husband|spouse|son|daughter|kids?|child|mom|dad|mother|father|brother|sister|family|birthday|anniversary)\b/i },
+  { domain: "family", re: /\b(wife|husband|spouse|son|daughter|kids?|child|mom|dad|mother|father|brother|sister|family|birthday|anniversary|niece|nephew|cousin|aunt|uncle|grandson|granddaughter|grandchild|in-?laws?|boyfriend|girlfriend)\b/i },
   { domain: "home", re: /\b(house|home|apartment|mortgage|landlord|lease|plumber|hvac|yard|fence|renovation|address)\b/i },
   { domain: "health", re: /\b(doctor|dentist|medication|prescription|allergy|clinic|hospital|therapy|insurance|health)\b/i },
   { domain: "work", re: /\b(work|job|office|coworker|boss|meeting|project|client|employer|salary|career)\b/i },

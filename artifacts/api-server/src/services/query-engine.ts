@@ -3,6 +3,7 @@ import type { EvidenceDto } from "./evidence";
 import { aiService, type QueryFinanceAggregate } from "./ai";
 import {
   FINANCE_INTENT,
+  FAMILY_RELATION_INTENT,
   PERSON_INTENT,
   WAITING_INTENT,
   todayIso,
@@ -93,6 +94,7 @@ export async function queryRecallForUser(
   const degraded = status.degraded;
   const waitingIntent = WAITING_INTENT.test(question);
   const personIntent = PERSON_INTENT.test(question);
+  const familyIntent = FAMILY_RELATION_INTENT.test(question);
 
   const thread = await ensureAskThreadForUser(userId, options?.threadId, question);
   const priorTurns = await listRecentTurnsForThread(userId, thread.id);
@@ -107,16 +109,26 @@ export async function queryRecallForUser(
   });
 
   const [
-    { records: relevant, usedSemantic, namedPeople },
+    { records: relevantRaw, usedSemantic, namedPeople },
     tasks,
     waitingRaw,
   ] = await Promise.all([
-    retrieveRelevantRecords(userId, retrievalQuestion, 12),
+    retrieveRelevantRecords(userId, retrievalQuestion, familyIntent ? 16 : 12),
     listTasksForUser(userId),
     waitingIntent || personIntent
       ? listWaitingOnForUser(userId, 12)
       : Promise.resolve([]),
   ]);
+
+  // Prefer Life Memories for family/relation questions so names aren't crowded out.
+  const relevant = familyIntent
+    ? [...relevantRaw].sort((a, b) => {
+        const aMem = a.entityType === "memory" ? 1 : 0;
+        const bMem = b.entityType === "memory" ? 1 : 0;
+        if (aMem !== bMem) return bMem - aMem;
+        return b.score - a.score;
+      })
+    : relevantRaw;
   const openTasks = tasks.filter((t) => !t.completed);
 
   // When asking about a specific person, only keep their waiting items.
@@ -198,9 +210,11 @@ export async function queryRecallForUser(
   }
 
   if (includeRetrieval) {
-    const retrievalSlots = personIntent
-      ? Math.max(3, 6 - Math.min(waitingItems.length, 3))
-      : 5;
+    const retrievalSlots = familyIntent
+      ? 10
+      : personIntent
+        ? Math.max(3, 6 - Math.min(waitingItems.length, 3))
+        : 5;
     for (const rec of relevant.slice(0, retrievalSlots)) {
       const personMeta =
         rec.entityType === "person"
@@ -265,7 +279,7 @@ export async function queryRecallForUser(
   }));
   const contextRecords = waitingOnly
     ? waitingContext
-    : [...waitingContext, ...retrievalContext].slice(0, 14);
+    : [...waitingContext, ...retrievalContext].slice(0, familyIntent ? 16 : 14);
 
   const finish = async (
     result: Omit<QueryAnswer, "privacy" | "threadId"> & {

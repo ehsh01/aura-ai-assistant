@@ -9,7 +9,7 @@ export const PERSON_INTENT =
 
 /** Family / relationship questions that should pull Life Memory (domain=family). */
 export const FAMILY_RELATION_INTENT =
-  /\b(wife|husband|spouse|son|daughter|sister|brother|mom|mother|dad|father|nephew|niece|aunt|uncle|cousin|kids|children|family|boyfriend|girlfriend|in-?laws?)\b/i;
+  /\b(wife|husband|spouse|son|daughter|sister|brother|mom|mother|dad|father|nephew|niece|aunt|uncle|cousin|kids|children|family|boyfriend|girlfriend|grandson|granddaughter|grandchild|in-?laws?)\b/i;
 
 export const WAITING_INTENT =
   /\b(waiting|follow[- ]?up|awaiting|who.*(owe|owed|pending)|what.*(pending|waiting))\b/i;

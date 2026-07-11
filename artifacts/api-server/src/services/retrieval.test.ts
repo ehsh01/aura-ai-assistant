@@ -78,6 +78,13 @@ describe("family relation retrieval helpers", () => {
     expect(keywordScore("What is my wife's name?", memory)).toBeGreaterThan(0.2);
     expect(memory.toLowerCase()).toContain("sandra hernandez");
   });
+
+  it("treats relation words in domain=other memories as family-relevant", () => {
+    expect(relationTermsInQuestion("What is my niece's name?")).toEqual(["niece"]);
+    const other =
+      "domain=other my niece's name is Melissa Rodrigues\nmy brother in lae's name is Paul Rodrigues";
+    expect(keywordScore("What is my niece's name?", other)).toBeGreaterThan(0.15);
+  });
 });
 
 describe("PERSON_INTENT / FAMILY_RELATION_INTENT / WAITING_INTENT", () => {

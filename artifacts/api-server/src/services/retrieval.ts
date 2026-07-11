@@ -115,6 +115,12 @@ const FAMILY_RELATION_TERMS = [
   "family",
   "boyfriend",
   "girlfriend",
+  "grandson",
+  "granddaughter",
+  "grandchild",
+  "grandchildren",
+  "in-law",
+  "inlaw",
 ] as const;
 
 /** Relation words present in the question (handles "wife's", "sons", etc.). */
@@ -378,7 +384,7 @@ export function keywordScore(question: string, text: string): number {
   return terms.reduce((s, t) => (hay.includes(t) ? s + 1 : s), 0) / terms.length;
 }
 
-function isFamilyOrPeopleMemory(r: ContextRecord): boolean {
+function isFamilyDomainMemory(r: ContextRecord): boolean {
   return (
     r.entityType === "memory" &&
     (r.text.includes("domain=family") || r.text.includes("domain=people"))
@@ -393,6 +399,13 @@ function relationMatchScore(r: ContextRecord, relations: string[]): number {
     if (hay.includes(rel)) hits += 1;
   }
   return hits;
+}
+
+/** Family facts often land in domain=other — match by relation words in the text too. */
+function isFamilyRelevantMemory(r: ContextRecord, relations: string[]): boolean {
+  if (r.entityType !== "memory") return false;
+  if (isFamilyDomainMemory(r)) return true;
+  return relationMatchScore(r, relations) > 0;
 }
 
 /** Soft caps — embeddings are persisted, so a larger corpus is affordable. */
@@ -616,14 +629,14 @@ export async function retrieveRelevantRecords(
 
   const personBoost = (r: ContextRecord): number => {
     // Family memories: boost even when no People row is named (facts live in Memory).
-    if (wantsFamily && isFamilyOrPeopleMemory(r)) {
+    if (wantsFamily && isFamilyRelevantMemory(r, relations)) {
       const relHits = relationMatchScore(r, relations);
       if (relHits > 0) return 0.55 + Math.min(relHits, 2) * 0.05;
-      return 0.35;
+      return isFamilyDomainMemory(r) ? 0.35 : 0;
     }
     if (named.length === 0) return 0;
     if (r.entityType === "person" && namedIds.has(r.entityId)) return 0.45;
-    if (isFamilyOrPeopleMemory(r)) {
+    if (isFamilyDomainMemory(r) || relationMatchScore(r, relations) > 0) {
       const hay = `${r.title}\n${r.text}`.toLowerCase();
       for (const token of namedTokens) {
         if (hay.includes(token)) return 0.4;
@@ -685,7 +698,7 @@ export async function retrieveRelevantRecords(
           candidates.push(r);
           continue;
         }
-        if (wantsFamily && isFamilyOrPeopleMemory(r)) {
+        if (wantsFamily && isFamilyRelevantMemory(r, relations)) {
           shortlistIds.add(id);
           candidates.push(r);
           continue;
@@ -805,16 +818,16 @@ export async function retrieveRelevantRecords(
     }
   }
 
-  // Force-include family/people Life Memories for relationship questions.
+  // Force-include Life Memories for relationship questions (any domain if text matches).
   if (wantsFamily) {
     const already = new Set(top.map((r) => r.entityId));
     const familyMemories = corpus
-      .filter(isFamilyOrPeopleMemory)
+      .filter((r) => isFamilyRelevantMemory(r, relations))
       .map((r) => ({ r, relScore: relationMatchScore(r, relations) }))
       .sort((a, b) => b.relScore - a.relScore || b.r.text.length - a.r.text.length);
 
     const injected: RetrievedRecord[] = [];
-    for (const { r, relScore } of familyMemories.slice(0, Math.min(8, limit))) {
+    for (const { r, relScore } of familyMemories.slice(0, Math.min(10, limit))) {
       if (already.has(r.entityId)) continue;
       injected.push(toRetrieved(r, 1.05 + relScore * 0.05, "keyword"));
       already.add(r.entityId);
