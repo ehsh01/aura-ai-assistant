@@ -314,7 +314,7 @@ export function Ask() {
           <div className="border-b border-white/10 px-4 py-4 md:px-8">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-sm uppercase tracking-[0.3em] text-indigo-300/70">Ask Recall</p>
+                <p className="text-sm uppercase tracking-[0.3em] text-indigo-300/70">Threads</p>
                 <h1 className="mt-1 text-2xl font-semibold md:text-3xl">Ask anything about your world</h1>
                 <p className="mt-1 text-sm text-white/45">
                   Each ask shows only the current answer. Open a chat in Recent to browse history.

@@ -279,7 +279,7 @@ export function Tasks() {
           <header className="pt-6 pb-4 px-4 md:pt-10 md:pb-6 md:px-10 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 border-b border-white/[0.04]">
             <div>
               <div className="flex items-center gap-3 mb-2">
-                <h1 className="text-3xl font-semibold tracking-tight">Today</h1>
+                <h1 className="text-3xl font-semibold tracking-tight">Tasks</h1>
                 <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-xs font-medium border border-indigo-500/20">
                   {openTasks.length} remaining
                 </span>
@@ -359,7 +359,7 @@ export function Tasks() {
 
           {/* Filters */}
           <div className="px-4 md:px-10 py-3 flex gap-4 md:gap-6 text-sm font-medium border-b border-white/[0.04] overflow-x-auto">
-            <button className="text-white border-b-2 border-indigo-500 pb-3 -mb-[13px]">Today</button>
+            <button className="text-white border-b-2 border-indigo-500 pb-3 -mb-[13px]">Open</button>
             <button className="text-white/40 hover:text-white/70 transition-colors pb-3">Upcoming</button>
             <button className="text-white/40 hover:text-white/70 transition-colors pb-3">All</button>
             <button className="text-white/40 hover:text-white/70 transition-colors pb-3 ml-auto flex items-center gap-1">

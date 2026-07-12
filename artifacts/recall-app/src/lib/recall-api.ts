@@ -48,12 +48,16 @@ export type PersonRecord = {
   notes: string | null;
 };
 
-export type TodayResponse = {
-  mustDo: { id: string; kind: string; title: string; reason: string; href: string }[];
-  overdue: { id: string; kind: string; title: string; reason: string; href: string }[];
-  waiting: { id: string; kind: string; title: string; reason: string; href: string }[];
-  inbox: { id: string; kind: string; title: string; reason: string; href: string }[];
-  suggestedFocus: { id: string; kind: string; title: string; reason: string; href: string } | null;
+export type WaitingOnRecord = {
+  id: string;
+  person: string;
+  personId: string | null;
+  item: string;
+  days: number;
+  href: string;
+  followUp: string;
+  sourceType: "note" | "knowledge" | "task";
+  evidenceText: string;
 };
 
 export async function ingestCapture(input: {
@@ -79,18 +83,6 @@ export async function listEntityEvidence(
 export async function listPeople(): Promise<{ people: PersonRecord[] }> {
   return apiFetch("/people");
 }
-
-export type WaitingOnRecord = {
-  id: string;
-  person: string;
-  personId: string | null;
-  item: string;
-  days: number;
-  href: string;
-  followUp: string;
-  sourceType: "note" | "knowledge" | "task";
-  evidenceText: string;
-};
 
 export async function listWaitingOn(): Promise<{ items: WaitingOnRecord[] }> {
   return apiFetch("/people/waiting-on");
@@ -164,10 +156,6 @@ export type PersonRelated = {
 
 export async function getPersonRelated(personId: string): Promise<PersonRelated> {
   return apiFetch(`/people/${encodeURIComponent(personId)}/related`);
-}
-
-export async function fetchToday(): Promise<TodayResponse> {
-  return apiFetch("/today");
 }
 
 export interface HomeBriefingItem {

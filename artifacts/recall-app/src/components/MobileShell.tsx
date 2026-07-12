@@ -5,6 +5,7 @@ import {
   BookMarked,
   Brain,
   Cable,
+  CheckSquare,
   FileText,
   FolderKanban,
   Home,
@@ -193,30 +194,57 @@ export function MobileMoreSheet({
         </SheetHeader>
 
         <div className="mt-4 space-y-1">
+          <p className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
+            Ask
+          </p>
           <Link href="/ask" onClick={close} className={linkClass(location === "/ask")}>
             <Sparkles size={18} />
-            <span className="flex-1 text-sm font-medium">Ask Recall</span>
+            <span className="flex-1 text-sm font-medium">Threads</span>
           </Link>
           <Link href="/today" onClick={close} className={linkClass(location === "/today")}>
             <LayoutGrid size={18} />
             <span className="flex-1 text-sm font-medium">Today</span>
           </Link>
-          <Link href="/documents" onClick={close} className={linkClass(location === "/documents")}>
-            <FileText size={18} />
-            <span className="flex-1 text-sm font-medium">Documents</span>
+
+          <p className="px-1 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
+            Organize
+          </p>
+          <Link href={notesPath()} onClick={close} className={linkClass(location === "/notes")}>
+            <Search size={18} />
+            <span className="flex-1 text-sm font-medium">Notes</span>
+          </Link>
+          <Link href="/notebooks" onClick={close} className={linkClass(location === "/notebooks")}>
+            <Library size={18} />
+            <span className="flex-1 text-sm font-medium">Notebooks</span>
           </Link>
           <Link href="/memory" onClick={close} className={linkClass(location === "/memory")}>
             <Brain size={18} />
-            <span className="flex-1 text-sm font-medium">Memory</span>
+            <span className="flex-1 text-sm font-medium">Life Memory</span>
           </Link>
           <Link href="/knowledge" onClick={close} className={linkClass(location === "/knowledge")}>
             <BookMarked size={18} />
             <span className="flex-1 text-sm font-medium">Knowledge</span>
           </Link>
+          <Link href="/documents" onClick={close} className={linkClass(location === "/documents")}>
+            <FileText size={18} />
+            <span className="flex-1 text-sm font-medium">Documents</span>
+          </Link>
           <Link href="/people" onClick={close} className={linkClass(location === "/people")}>
             <Users size={18} />
             <span className="flex-1 text-sm font-medium">People</span>
           </Link>
+          <Link href="/projects" onClick={close} className={linkClass(location === "/projects" || location.startsWith("/projects/"))}>
+            <FolderKanban size={18} />
+            <span className="flex-1 text-sm font-medium">Projects</span>
+          </Link>
+          <Link href="/tasks" onClick={close} className={linkClass(location === "/tasks")}>
+            <CheckSquare size={18} />
+            <span className="flex-1 text-sm font-medium">Tasks</span>
+          </Link>
+
+          <p className="px-1 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
+            System
+          </p>
           <Link href="/activity" onClick={close} className={linkClass(location === "/activity")}>
             <Activity size={18} />
             <span className="flex-1 text-sm font-medium">Activity</span>
@@ -225,25 +253,9 @@ export function MobileMoreSheet({
             <Cable size={18} />
             <span className="flex-1 text-sm font-medium">Connectors</span>
           </Link>
-          <Link href="/projects" onClick={close} className={linkClass(location === "/projects" || location.startsWith("/projects/"))}>
-            <FolderKanban size={18} />
-            <span className="flex-1 text-sm font-medium">Projects</span>
-          </Link>
-          <Link href="/notebooks" onClick={close} className={linkClass(location === "/notebooks")}>
-            <Library size={18} />
-            <span className="flex-1 text-sm font-medium">Notebooks</span>
-          </Link>
-          <Link href="/tasks" onClick={close} className={linkClass(location === "/tasks")}>
-            <LayoutGrid size={18} />
-            <span className="flex-1 text-sm font-medium">Today</span>
-          </Link>
           <Link href="/canvas" onClick={close} className={linkClass(location === "/canvas")}>
             <PenLine size={18} />
             <span className="flex-1 text-sm font-medium">Canvas</span>
-          </Link>
-          <Link href={notesPath()} onClick={close} className={linkClass(false)}>
-            <Search size={18} />
-            <span className="flex-1 text-sm font-medium">Search notes</span>
           </Link>
           <button
             type="button"

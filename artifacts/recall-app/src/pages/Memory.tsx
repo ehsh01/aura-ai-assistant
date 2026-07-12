@@ -219,10 +219,11 @@ export function Memory() {
               <p className="text-sm uppercase tracking-[0.3em] text-indigo-300/70">Permanent</p>
               <h1 className="mt-2 flex items-center gap-3 text-3xl font-semibold">
                 <Brain className="text-indigo-300" size={28} />
-                Memory
+                Life Memory
               </h1>
               <p className="mt-2 max-w-xl text-white/50">
                 Teach Recall once — cars, family, preferences, procedures — and ask forever.
+                Separate from Notes: these facts stay permanent until you correct them.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">

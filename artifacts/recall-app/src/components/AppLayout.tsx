@@ -40,10 +40,25 @@ type NavGroup = {
 const notebooksIcon = <Library width={18} height={18} strokeWidth={1.8} />;
 const notebookItemIcon = <BookOpen width={18} height={18} strokeWidth={1.8} />;
 
-const staticNavItems = [
+type NavSection = "ask" | "capture" | "organize" | "system";
+
+const NAV_SECTION_LABELS: Record<NavSection, string> = {
+  ask: "Ask",
+  capture: "Capture",
+  organize: "Organize",
+  system: "System",
+};
+
+const staticNavItems: Array<{
+  id: string;
+  label: string;
+  icon: React.ReactNode;
+  section: NavSection;
+}> = [
   {
     id: "/",
     label: "Home",
+    section: "ask",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="3" width="7" height="7" rx="1.5"/>
@@ -54,8 +69,15 @@ const staticNavItems = [
     ),
   },
   {
+    id: "/ask",
+    label: "Threads",
+    section: "ask",
+    icon: <Sparkles width={18} height={18} strokeWidth={1.8} />,
+  },
+  {
     id: "/today",
     label: "Today",
+    section: "ask",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="4" width="18" height="18" rx="2"/>
@@ -65,13 +87,15 @@ const staticNavItems = [
     ),
   },
   {
-    id: "/ask",
-    label: "Ask Recall",
-    icon: <Sparkles width={18} height={18} strokeWidth={1.8} />,
+    id: "/inbox",
+    label: "AI Inbox",
+    section: "capture",
+    icon: <Inbox width={18} height={18} strokeWidth={1.8} />,
   },
   {
     id: "/notes",
-    label: "Memory",
+    label: "Notes",
+    section: "organize",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
@@ -84,31 +108,31 @@ const staticNavItems = [
   {
     id: "/notebooks",
     label: "Notebooks",
+    section: "organize",
     icon: notebooksIcon,
   },
   {
-    id: "/inbox",
-    label: "AI Inbox",
-    icon: <Inbox width={18} height={18} strokeWidth={1.8} />,
-  },
-  {
-    id: "/documents",
-    label: "Documents",
-    icon: <FileText width={18} height={18} strokeWidth={1.8} />,
-  },
-  {
     id: "/memory",
-    label: "Memory",
+    label: "Life Memory",
+    section: "organize",
     icon: <Brain width={18} height={18} strokeWidth={1.8} />,
   },
   {
     id: "/knowledge",
     label: "Knowledge",
+    section: "organize",
     icon: <BookMarked width={18} height={18} strokeWidth={1.8} />,
+  },
+  {
+    id: "/documents",
+    label: "Documents",
+    section: "organize",
+    icon: <FileText width={18} height={18} strokeWidth={1.8} />,
   },
   {
     id: "/people",
     label: "People",
+    section: "organize",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
@@ -119,13 +143,32 @@ const staticNavItems = [
     ),
   },
   {
+    id: "/projects",
+    label: "Projects",
+    section: "organize",
+    icon: <FolderKanban width={18} height={18} strokeWidth={1.8} />,
+  },
+  {
+    id: "/tasks",
+    label: "Tasks",
+    section: "organize",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M9 11l3 3L22 4"/>
+        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+      </svg>
+    ),
+  },
+  {
     id: "/activity",
     label: "Activity",
+    section: "system",
     icon: <Activity width={18} height={18} strokeWidth={1.8} />,
   },
   {
     id: "/connectors",
     label: "Connectors",
+    section: "system",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <path d="M12 22v-5"/>
@@ -136,23 +179,9 @@ const staticNavItems = [
     ),
   },
   {
-    id: "/projects",
-    label: "Projects",
-    icon: <FolderKanban width={18} height={18} strokeWidth={1.8} />,
-  },
-  {
-    id: "/tasks",
-    label: "Tasks",
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M9 11l3 3L22 4"/>
-        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-      </svg>
-    ),
-  },
-  {
     id: "/canvas",
     label: "Canvas",
+    section: "system",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="12" cy="12" r="10"/>
@@ -273,16 +302,30 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
     setSidebarQuery("");
   };
 
-  const navItems: Array<{ type: "entry"; entry: NavEntry } | { type: "group"; group: NavGroup }> = [];
+  const navItems: Array<
+    | { type: "section"; key: string; label: string }
+    | { type: "entry"; entry: NavEntry }
+    | { type: "group"; group: NavGroup }
+  > = [];
 
+  let lastSection: NavSection | null = null;
   for (const item of staticNavItems) {
+    if (item.section !== lastSection) {
+      lastSection = item.section;
+      navItems.push({
+        type: "section",
+        key: `section-${item.section}`,
+        label: NAV_SECTION_LABELS[item.section],
+      });
+    }
+
     if (item.id === "/notes") {
       navItems.push({
         type: "entry",
         entry: {
           key: "/notes",
           href: notesPath(),
-          label: "Memory",
+          label: "Notes",
           icon: item.icon,
           isActive: onNotesPage && activeNotebook === "all",
           count: notes.length,
@@ -324,7 +367,10 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
         href: item.id,
         label: item.label,
         icon: item.icon,
-        isActive: location === item.id,
+        isActive:
+          item.id === "/projects"
+            ? location === "/projects" || location.startsWith("/projects/")
+            : location === item.id,
       },
     });
   }
@@ -418,6 +464,26 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
 
         <nav className="flex-1 px-2 py-2 space-y-0.5 overflow-y-auto recall-scrollbar">
           {navItems.map((item) => {
+            if (item.type === "section") {
+              if (collapsed) {
+                return (
+                  <div
+                    key={item.key}
+                    className="my-2 mx-2 border-t border-white/[0.06]"
+                    aria-hidden
+                  />
+                );
+              }
+              return (
+                <p
+                  key={item.key}
+                  className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/25"
+                >
+                  {item.label}
+                </p>
+              );
+            }
+
             if (item.type === "entry") {
               const entry = item.entry;
               return (

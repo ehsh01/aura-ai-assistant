@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { AppLayout } from "@/components/AppLayout";
+import { PersonContextCard } from "@/components/PersonContextCard";
 import {
   createPerson,
   createWaitingFollowUp,
@@ -12,17 +13,12 @@ import {
   type WaitingOnRecord,
 } from "@/lib/recall-api";
 import {
-  askPath,
-  knowledgePath,
-  memoryPath,
-  notesPath,
   peoplePath,
   readSearchParam,
-  tasksPath,
 } from "@/lib/recall-nav";
 import { invalidatePeopleCache } from "@/components/PersonTagLink";
 import { toast } from "@/hooks/use-toast";
-import { Pencil, Sparkles } from "lucide-react";
+import { Pencil } from "lucide-react";
 
 type OpenTask = { id: string; title: string; time: string | null };
 type TaggedNote = { id: string; title: string; preview: string };
@@ -401,37 +397,6 @@ export function People() {
 
                   {isSelected && (
                     <div className="mt-4 space-y-4 border-t border-white/10 pt-4">
-                      <div className="flex flex-wrap gap-2">
-                        <Link
-                          href={askPath({
-                            q: `What do I know about ${person.displayName}? What am I waiting on from them?`,
-                          })}
-                          className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-500/20 px-3 py-1.5 text-xs font-medium text-indigo-200 no-underline hover:bg-indigo-500/30"
-                        >
-                          <Sparkles size={12} />
-                          Ask about {person.displayName.split(" ")[0]}
-                        </Link>
-                        {openTasks.length > 0 && (
-                          <Link
-                            href={tasksPath({ personId: person.id })}
-                            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs text-white/60 no-underline hover:bg-white/5 hover:text-white/80"
-                          >
-                            View on Today
-                          </Link>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => (editing ? setEditing(false) : startEdit(person))}
-                          className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs text-white/60 hover:bg-white/5 hover:text-white/80"
-                        >
-                          <Pencil size={12} />
-                          {editing ? "Cancel" : "Edit"}
-                        </button>
-                      </div>
-                      {relatedLoadingId === person.id && (
-                        <p className="text-xs text-white/40">Loading related records…</p>
-                      )}
-
                       {editing && (
                         <div className="space-y-2 rounded-xl border border-white/10 bg-black/20 p-3">
                           {(
@@ -480,150 +445,28 @@ export function People() {
                         </div>
                       )}
 
-                      <div>
-                        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/40">
-                          Open tasks
-                        </h3>
-                        {openTasks.length === 0 ? (
-                          <p className="text-sm text-white/35">No linked open tasks.</p>
-                        ) : (
-                          <ul className="space-y-1.5">
-                            {openTasks.map((t) => (
-                              <li key={t.id}>
-                                <Link
-                                  href={tasksPath({ taskId: t.id })}
-                                  className="block truncate text-sm text-indigo-200 no-underline hover:underline"
-                                >
-                                  {t.title}
-                                  {t.time ? (
-                                    <span className="ml-2 text-white/35">{t.time}</span>
-                                  ) : null}
-                                </Link>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-
-                      <div>
-                        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/40">
-                          Tagged notes
-                        </h3>
-                        {taggedNotes.length === 0 ? (
-                          <p className="text-sm text-white/35">
-                            No notes tagged to this person yet.
-                          </p>
-                        ) : (
-                          <>
-                            <ul className="space-y-1.5">
-                              {taggedNotes.map((n) => (
-                                <li key={n.id}>
-                                  <Link
-                                    href={notesPath({ noteId: n.id })}
-                                    className="block no-underline"
-                                  >
-                                    <p className="truncate text-sm text-indigo-200 hover:underline">
-                                      {n.title}
-                                    </p>
-                                    {n.preview && (
-                                      <p className="mt-0.5 line-clamp-1 text-xs text-white/40">
-                                        {n.preview}
-                                      </p>
-                                    )}
-                                  </Link>
-                                </li>
-                              ))}
-                            </ul>
-                            <Link
-                              href={notesPath({ person: person.displayName })}
-                              className="mt-2 inline-block text-xs text-sky-300 no-underline hover:underline"
-                            >
-                              View all notes for {person.displayName.split(" ")[0]}
-                            </Link>
-                          </>
-                        )}
-                      </div>
-
-                      {taggedKnowledge.length > 0 && (
-                        <div>
-                          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/40">
-                            Knowledge
-                          </h3>
-                          <ul className="space-y-1.5">
-                            {taggedKnowledge.map((k) => (
-                              <li key={k.id}>
-                                <Link
-                                  href={knowledgePath({ knowledgeId: k.id })}
-                                  className="block truncate text-sm text-indigo-200 no-underline hover:underline"
-                                >
-                                  {k.title}
-                                  <span className="ml-2 text-white/35">{k.itemType}</span>
-                                </Link>
-                              </li>
-                            ))}
-                          </ul>
-                          <Link
-                            href={knowledgePath({ person: person.displayName })}
-                            className="mt-2 inline-block text-xs text-sky-300 no-underline hover:underline"
+                      <PersonContextCard
+                        displayName={person.displayName}
+                        personId={person.id}
+                        loading={relatedLoadingId === person.id}
+                        openTasks={openTasks}
+                        taggedNotes={taggedNotes}
+                        taggedKnowledge={taggedKnowledge}
+                        linkedMemories={linkedMemories}
+                        waiting={personWaiting}
+                        onFollowUp={(w) => void followUp(w)}
+                        creatingFollowUpId={creatingId}
+                        actions={
+                          <button
+                            type="button"
+                            onClick={() => (editing ? setEditing(false) : startEdit(person))}
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs text-white/60 hover:bg-white/5 hover:text-white/80"
                           >
-                            View all knowledge for {person.displayName.split(" ")[0]}
-                          </Link>
-                        </div>
-                      )}
-
-                      {linkedMemories.length > 0 && (
-                        <div>
-                          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/40">
-                            Life Memory
-                          </h3>
-                          <ul className="space-y-1.5">
-                            {linkedMemories.map((m) => (
-                              <li key={m.id}>
-                                <Link
-                                  href={memoryPath({ memoryId: m.id })}
-                                  className="block truncate text-sm text-indigo-200 no-underline hover:underline"
-                                >
-                                  {m.title}
-                                  <span className="ml-2 text-white/35">{m.domain}</span>
-                                </Link>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-
-                      <div>
-                        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/40">
-                          Waiting on
-                        </h3>
-                        {personWaiting.length === 0 ? (
-                          <p className="text-sm text-white/35">Nothing waiting from them.</p>
-                        ) : (
-                          <ul className="space-y-2">
-                            {personWaiting.map((w) => (
-                              <li
-                                key={w.id}
-                                className="flex items-start justify-between gap-3 rounded-xl border border-amber-500/15 bg-amber-500/5 px-3 py-2"
-                              >
-                                <Link href={w.href} className="min-w-0 flex-1 no-underline">
-                                  <p className="truncate text-sm font-medium text-white">{w.item}</p>
-                                  <p className="mt-0.5 line-clamp-1 text-xs text-white/45">
-                                    {w.evidenceText}
-                                  </p>
-                                </Link>
-                                <button
-                                  type="button"
-                                  onClick={() => void followUp(w)}
-                                  disabled={creatingId === w.id}
-                                  className="flex-shrink-0 rounded-lg bg-indigo-500 px-2.5 py-1.5 text-[11px] font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
-                                >
-                                  {creatingId === w.id ? "…" : "Follow up"}
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
+                            <Pencil size={12} />
+                            {editing ? "Cancel" : "Edit"}
+                          </button>
+                        }
+                      />
                     </div>
                   )}
                 </article>
