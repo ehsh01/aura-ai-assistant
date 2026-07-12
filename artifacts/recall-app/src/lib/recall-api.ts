@@ -1,14 +1,10 @@
-import { getStoredToken } from "./auth-storage";
-
 const API_BASE = "/api";
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getStoredToken();
   const headers: Record<string, string> = {
     Accept: "application/json",
     ...(init?.headers as Record<string, string> | undefined),
   };
-  if (token) headers.Authorization = `Bearer ${token}`;
   if (init?.body && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
@@ -558,9 +554,7 @@ export async function classifyMemory(
 }
 
 export async function exportLifeMemoryMarkdown(): Promise<string> {
-  const token = getStoredToken();
   const headers: Record<string, string> = { Accept: "text/markdown" };
-  if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${API_BASE}/memory/export.md`, {
     headers,
     credentials: "include",

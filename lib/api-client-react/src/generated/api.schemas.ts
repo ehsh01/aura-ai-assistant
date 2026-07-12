@@ -24,7 +24,6 @@ export interface RegisterRequest {
 
 export interface RegisterResponse {
   user: User;
-  token: string;
 }
 
 export interface LoginRequest {
@@ -35,7 +34,113 @@ export interface LoginRequest {
 
 export interface LoginResponse {
   user: User;
+}
+
+export type ExtensionTokenScope = typeof ExtensionTokenScope[keyof typeof ExtensionTokenScope];
+
+
+export const ExtensionTokenScope = {
+  'capture:create': 'capture:create',
+} as const;
+
+export interface ExtensionToken {
+  id: string;
+  name: string;
+  scope: ExtensionTokenScope;
+  expiresAt: string;
+  lastUsedAt?: string | null;
+  revokedAt?: string | null;
+  createdAt: string;
+}
+
+export interface CreateExtensionTokenRequest {
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  name?: string;
+  /**
+     * @minimum 1
+     * @maximum 365
+     */
+  expiresInDays?: number;
+}
+
+export interface CreateExtensionTokenResponse {
+  /** One-time raw capture token. Recall never stores this value. */
   token: string;
+  item: ExtensionToken;
+}
+
+export interface ListExtensionTokensResponse {
+  items: ExtensionToken[];
+}
+
+export type CaptureProcessedStatus = typeof CaptureProcessedStatus[keyof typeof CaptureProcessedStatus];
+
+
+export const CaptureProcessedStatus = {
+  pending: 'pending',
+  processing: 'processing',
+  processed: 'processed',
+  failed: 'failed',
+  ignored: 'ignored',
+  archived: 'archived',
+} as const;
+
+export type RawCaptureRawMetadata = { [key: string]: unknown };
+
+export interface RawCapture {
+  id: string;
+  sourceType: string;
+  sourceName?: string | null;
+  sourceUrl?: string | null;
+  title?: string | null;
+  rawText: string;
+  rawHtml?: string | null;
+  rawMetadata: RawCaptureRawMetadata;
+  processedStatus: CaptureProcessedStatus;
+  processingError?: string | null;
+  capturedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CreateRawCaptureRequestRawMetadata = { [key: string]: unknown };
+
+export interface CreateRawCaptureRequest {
+  /**
+     * @minLength 1
+     * @maxLength 1000000
+     */
+  rawText: string;
+  /**
+     * @minLength 1
+     * @maxLength 32
+     */
+  sourceType?: string;
+  /** @maxLength 255 */
+  sourceName?: string | null;
+  /** @maxLength 2048 */
+  sourceUrl?: string | null;
+  /** @maxLength 500 */
+  title?: string | null;
+  /** @maxLength 5000000 */
+  rawHtml?: string | null;
+  rawMetadata?: CreateRawCaptureRequestRawMetadata;
+  capturedAt?: string;
+}
+
+export type CreateRawCaptureResponse = RawCapture & {
+  jobId: string;
+};
+
+export interface UpdateRawCaptureRequest {
+  processedStatus?: CaptureProcessedStatus;
+  /** @maxLength 4000 */
+  processingError?: string | null;
+  /** @maxLength 500 */
+  title?: string | null;
 }
 
 export interface MeResponse {
@@ -790,6 +895,35 @@ export interface BulkTasksRequest {
   /** @maxItems 500 */
   tasks: CreateTaskRequest[];
 }
+
+export type RevokeExtensionToken200 = {
+  ok: boolean;
+};
+
+export type ListRawCapturesParams = {
+status?: CaptureProcessedStatus;
+/**
+ * @minimum 1
+ * @maximum 200
+ */
+limit?: number;
+};
+
+export type ListRawCaptures200 = {
+  items: RawCapture[];
+};
+
+export type RetryRawCaptureExtraction202Status = typeof RetryRawCaptureExtraction202Status[keyof typeof RetryRawCaptureExtraction202Status];
+
+
+export const RetryRawCaptureExtraction202Status = {
+  queued: 'queued',
+} as const;
+
+export type RetryRawCaptureExtraction202 = {
+  jobId: string;
+  status: RetryRawCaptureExtraction202Status;
+};
 
 export type ListMemoriesParams = {
 domain?: string;

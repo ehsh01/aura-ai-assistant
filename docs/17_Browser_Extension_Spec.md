@@ -21,6 +21,19 @@ It should capture context and send it to Recall. Recall performs normalization, 
 7. Recall processes capture in background.
 8. Item appears in Inbox for review.
 
+### 3.1 Authentication
+
+The user creates a browser-extension token from Recall Connectors and pastes it
+into the extension once. The token:
+
+- is scoped to `capture:create`
+- expires and can be revoked independently
+- is returned once; Recall stores only its SHA-256 hash
+- cannot read personal data or call Ask, finance, connector, or account APIs
+
+The web app uses an `HttpOnly` cookie and must never expose its full session
+credential for extension setup.
+
 ## 4. Captured Data
 
 The extension should capture:

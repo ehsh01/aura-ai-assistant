@@ -10,11 +10,16 @@ import { LIFE_MEMORY_DOMAINS } from "@workspace/db/schema";
 import { requireAuth } from "../middleware/auth";
 import {
   acceptCaptureForUser,
-  createCaptureForUser,
+  createCaptureForUser as createInboxItemForUser,
   listCaptureInboxForUser,
   updateCaptureForUser,
 } from "../services/capture-items";
+import {
+  createCaptureForUser as createRawCaptureForUser,
+  updateCaptureStatusForUser,
+} from "../services/captures";
 import { aiService } from "../services/ai";
+import { writeAuditLog } from "../services/audit";
 
 const AcceptBody = AcceptCaptureBody.extend({
   saveAsMemory: z.boolean().optional(),
@@ -26,19 +31,68 @@ const router: IRouter = Router();
 router.use(requireAuth);
 
 router.post("/capture", async (req, res, next) => {
+  let rawCaptureId: string | null = null;
   try {
     const body = CreateCaptureBody.parse(req.body);
+    const rawCapture = await createRawCaptureForUser(req.user!.id, {
+      rawText: body.rawText,
+      sourceType: "manual",
+      sourceName: "legacy_capture_api",
+      rawMetadata: {
+        mode: body.mode,
+        dueDate: body.dueDate ?? null,
+        projectId: body.projectId ?? null,
+        notebookId: body.notebookId ?? null,
+        tags: body.tags ?? [],
+      },
+    });
+    rawCaptureId = rawCapture.id;
+    await updateCaptureStatusForUser(req.user!.id, rawCapture.id, {
+      processedStatus: "processing",
+    });
+    await writeAuditLog({
+      userId: req.user!.id,
+      action: "capture_created",
+      entityType: "capture",
+      entityId: rawCapture.id,
+      metadata: { sourceType: "manual", compatibilityPath: true },
+    });
+
     const classification = await aiService.classifyCapture({
       rawText: body.rawText,
       dueDate: body.dueDate ?? null,
       tags: body.tags ?? [],
     });
-    const item = await createCaptureForUser(req.user!.id, {
+    const item = await createInboxItemForUser(req.user!.id, {
       ...body,
+      rawCaptureId: rawCapture.id,
       classification: classification.degraded ? undefined : classification.item,
     });
+    await updateCaptureStatusForUser(req.user!.id, rawCapture.id, {
+      processedStatus: "processed",
+    });
+    await writeAuditLog({
+      userId: req.user!.id,
+      action: "capture_extracted",
+      entityType: "capture",
+      entityId: rawCapture.id,
+      metadata: { inboxId: item.id, compatibilityPath: true },
+    });
+    res.setHeader("Deprecation", "true");
+    res.setHeader("Sunset", "Wed, 31 Dec 2026 23:59:59 GMT");
+    res.setHeader("Link", '</api/captures>; rel="successor-version"');
     res.status(201).json(item);
   } catch (err) {
+    if (rawCaptureId) {
+      try {
+        await updateCaptureStatusForUser(req.user!.id, rawCaptureId, {
+          processedStatus: "failed",
+          processingError: err instanceof Error ? err.message.slice(0, 1000) : "Capture failed",
+        });
+      } catch {
+        // Preserve the original error; raw capture remains available for manual retry.
+      }
+    }
     next(err);
   }
 });

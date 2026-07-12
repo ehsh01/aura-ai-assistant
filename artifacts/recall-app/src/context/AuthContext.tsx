@@ -15,12 +15,6 @@ import {
   type RegisterRequest,
   type User,
 } from "@workspace/api-client-react";
-import { setAuthTokenGetter } from "@workspace/api-client-react";
-import {
-  clearStoredToken,
-  getStoredToken,
-  setStoredToken,
-} from "@/lib/auth-storage";
 import { isAppPath, normalizeBrowserPath, pathnameOnly } from "@/lib/app-path";
 import { startCaptureQueueSync } from "@/lib/capture-queue";
 import { toast } from "@/hooks/use-toast";
@@ -35,14 +29,13 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const LEGACY_TOKEN_KEY = "recall_auth_token";
 
 async function logoutOnServer(): Promise<void> {
   try {
-    const token = getStoredToken();
     await fetch("/api/auth/logout", {
       method: "POST",
       credentials: "include",
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
   } catch {
     try {
@@ -61,6 +54,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  useEffect(() => {
+    // Remove full-account bearer tokens persisted by older Recall versions.
+    try {
+      localStorage.removeItem(LEGACY_TOKEN_KEY);
+    } catch {
+      // Storage may be unavailable in restricted browser contexts.
+    }
+  }, []);
+
   const syncPathAfterAuth = useCallback(() => {
     normalizeBrowserPath();
     const path = pathnameOnly();
@@ -70,18 +72,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [location, setLocation]);
 
   useEffect(() => {
-    // Bearer fallback for extension / older sessions; cookie is primary.
-    setAuthTokenGetter(() => getStoredToken());
-  }, []);
-
-  useEffect(() => {
-    // Prefer httpOnly cookie session; Bearer token is optional fallback.
+    // Browser sessions are cookie-only; credentials never enter JavaScript storage.
     getCurrentUser()
       .then((res) => {
         setUser(res.user);
       })
       .catch(() => {
-        clearStoredToken();
         setUser(null);
       })
       .finally(() => setIsLoading(false));
@@ -106,8 +102,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(
     async (data: LoginRequest) => {
       const res = await apiLogin(data);
-      // Keep Bearer for extension / offline capture queue; cookie is primary.
-      setStoredToken(res.token);
       setUser(res.user);
       normalizeBrowserPath();
       setLocation("/", { replace: true });
@@ -118,7 +112,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const register = useCallback(
     async (data: RegisterRequest) => {
       const res = await apiRegister(data);
-      setStoredToken(res.token);
       setUser(res.user);
       normalizeBrowserPath();
       setLocation("/", { replace: true });
@@ -128,7 +121,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(() => {
     void logoutOnServer().finally(() => {
-      clearStoredToken();
       setUser(null);
       setLocation("/", { replace: true });
     });

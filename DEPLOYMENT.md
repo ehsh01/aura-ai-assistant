@@ -160,7 +160,10 @@ ALLOW_PUBLIC_REGISTER=false
 SECRETS_ENCRYPTION_KEY=$(openssl rand -hex 32)
 ```
 
-Sessions are issued as `HttpOnly; Secure; SameSite=Lax` cookies (`recall_session`). Bearer tokens remain for the browser extension / offline capture queue.
+Browser sessions are issued only as `HttpOnly; Secure; SameSite=Lax` cookies
+(`recall_session`) and are not exposed to frontend JavaScript. The browser
+extension uses a separate revocable, expiring `capture:create` token created
+from Recall Connectors; only its SHA-256 hash is stored by the API.
 
 **Key rotation:** generate a new `SECRETS_ENCRYPTION_KEY`, re-seal any stored connector secrets with the new key (or re-authorize connectors), then update `.env` and restart `recall-api`.
 

@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requireCaptureAuth } from "../middleware/auth";
 import {
   CaptureStatusTransitionError,
   getCaptureForUser,
@@ -24,9 +24,7 @@ import {
  */
 const router: IRouter = Router();
 
-router.use(requireAuth);
-
-router.post("/captures", async (req, res, next) => {
+router.post("/captures", requireCaptureAuth, async (req, res, next) => {
   try {
     const body = CreateCaptureBody.parse(req.body);
     const { capture, jobId } = await ingestCaptureForUser(req.user!.id, {
@@ -45,7 +43,7 @@ router.post("/captures", async (req, res, next) => {
   }
 });
 
-router.get("/captures", async (req, res, next) => {
+router.get("/captures", requireAuth, async (req, res, next) => {
   try {
     const query = ListCapturesQuery.parse(req.query);
     const items = await listCapturesForUser(req.user!.id, {
@@ -58,9 +56,10 @@ router.get("/captures", async (req, res, next) => {
   }
 });
 
-router.get("/captures/:captureId", async (req, res, next) => {
+router.get("/captures/:captureId", requireAuth, async (req, res, next) => {
   try {
-    const capture = await getCaptureForUser(req.user!.id, req.params.captureId);
+    const captureId = String(req.params.captureId);
+    const capture = await getCaptureForUser(req.user!.id, captureId);
     if (!capture) {
       res.status(404).json({ error: "NOT_FOUND", message: "Capture not found" });
       return;
@@ -71,10 +70,11 @@ router.get("/captures/:captureId", async (req, res, next) => {
   }
 });
 
-router.patch("/captures/:captureId", async (req, res, next) => {
+router.patch("/captures/:captureId", requireAuth, async (req, res, next) => {
   try {
+    const captureId = String(req.params.captureId);
     const body = UpdateCaptureStatusBody.parse(req.body);
-    const capture = await updateCaptureStatusForUser(req.user!.id, req.params.captureId, {
+    const capture = await updateCaptureStatusForUser(req.user!.id, captureId, {
       processedStatus: body.processedStatus,
       processingError: body.processingError,
       title: body.title,
@@ -93,14 +93,15 @@ router.patch("/captures/:captureId", async (req, res, next) => {
   }
 });
 
-router.post("/captures/:captureId/retry-extraction", async (req, res, next) => {
+router.post("/captures/:captureId/retry-extraction", requireAuth, async (req, res, next) => {
   try {
-    const capture = await getCaptureForUser(req.user!.id, req.params.captureId);
+    const captureId = String(req.params.captureId);
+    const capture = await getCaptureForUser(req.user!.id, captureId);
     if (!capture) {
       res.status(404).json({ error: "NOT_FOUND", message: "Capture not found" });
       return;
     }
-    const { jobId } = await retryCaptureExtraction(req.user!.id, req.params.captureId);
+    const { jobId } = await retryCaptureExtraction(req.user!.id, captureId);
     res.status(202).json({ jobId, status: "queued" });
   } catch (err) {
     next(err);

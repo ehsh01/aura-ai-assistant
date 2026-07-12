@@ -80,15 +80,16 @@
 
     <details id="settings">
       <summary>Settings / sign in</summary>
-      <label>API token
-        <input id="token" type="password" placeholder="Paste JWT from Recall → Connectors" autocomplete="off" />
+      <label>Capture-only token
+        <input id="token" type="password" placeholder="Create one in Recall → Connectors" autocomplete="off" />
       </label>
       <label>API base URL
         <input id="apiBase" value="https://recall-app.net/api" />
       </label>
       <button id="save" class="secondary" type="button">Save</button>
       <p class="sub" style="margin-top:8px">
-        In Recall, open <strong>Connectors</strong> and copy your extension token, or paste the value of <code>recall_auth_token</code> from DevTools → Application → Local Storage.
+        In Recall, open <strong>Connectors</strong>, create a browser-extension token, and paste it here.
+        This token can only send captures to Recall.
       </p>
     </details>
 

@@ -31,9 +31,13 @@ import type {
   ClassifyMemoryRequest,
   ClassifyMemoryResponse,
   CreateCaptureRequest,
+  CreateExtensionTokenRequest,
+  CreateExtensionTokenResponse,
   CreateLifeMemoryRequest,
   CreateNoteRequest,
   CreateProjectRequest,
+  CreateRawCaptureRequest,
+  CreateRawCaptureResponse,
   CreateTaskRequest,
   DashboardDigestRequest,
   DashboardDigestResponse,
@@ -48,7 +52,10 @@ import type {
   ImportEnexResponse,
   LifeMemory,
   LifeMemoryListResponse,
+  ListExtensionTokensResponse,
   ListMemoriesParams,
+  ListRawCaptures200,
+  ListRawCapturesParams,
   LoginRequest,
   LoginResponse,
   MeResponse,
@@ -56,12 +63,15 @@ import type {
   NotebookListResponse,
   ProjectDetailResponse,
   ProjectListResponse,
+  RawCapture,
   RecallCaptureItem,
   RecallNote,
   RecallProject,
   RecallTask,
   RegisterRequest,
   RegisterResponse,
+  RetryRawCaptureExtraction202,
+  RevokeExtensionToken200,
   SemanticSearchRequest,
   SemanticSearchResponse,
   SummarizeNoteRequest,
@@ -71,6 +81,7 @@ import type {
   UpdateLifeMemoryRequest,
   UpdateNoteRequest,
   UpdateProjectRequest,
+  UpdateRawCaptureRequest,
   UpdateTaskRequest
 } from './api.schemas';
 
@@ -452,6 +463,600 @@ export function useGetCurrentUser<TData = Awaited<ReturnType<typeof getCurrentUs
 
 
 
+
+export const getListExtensionTokensUrl = () => {
+
+
+
+
+  return `/api/extension-tokens`
+}
+
+/**
+ * @summary List browser-extension capture tokens
+ */
+export const listExtensionTokens = async ( options?: RequestInit): Promise<ListExtensionTokensResponse> => {
+
+  return customFetch<ListExtensionTokensResponse>(getListExtensionTokensUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListExtensionTokensQueryKey = () => {
+    return [
+    `/api/extension-tokens`
+    ] as const;
+    }
+
+
+export const getListExtensionTokensQueryOptions = <TData = Awaited<ReturnType<typeof listExtensionTokens>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listExtensionTokens>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListExtensionTokensQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listExtensionTokens>>> = ({ signal }) => listExtensionTokens({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listExtensionTokens>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListExtensionTokensQueryResult = NonNullable<Awaited<ReturnType<typeof listExtensionTokens>>>
+export type ListExtensionTokensQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List browser-extension capture tokens
+ */
+
+export function useListExtensionTokens<TData = Awaited<ReturnType<typeof listExtensionTokens>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listExtensionTokens>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListExtensionTokensQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getCreateExtensionTokenUrl = () => {
+
+
+
+
+  return `/api/extension-tokens`
+}
+
+/**
+ * The raw token is returned once. Only its SHA-256 hash is stored.
+ * @summary Create a capture-only browser-extension token
+ */
+export const createExtensionToken = async (createExtensionTokenRequest?: CreateExtensionTokenRequest, options?: RequestInit): Promise<CreateExtensionTokenResponse> => {
+
+  return customFetch<CreateExtensionTokenResponse>(getCreateExtensionTokenUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      createExtensionTokenRequest,)
+  }
+);}
+
+
+
+
+export const getCreateExtensionTokenMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createExtensionToken>>, TError,{data?: BodyType<CreateExtensionTokenRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createExtensionToken>>, TError,{data?: BodyType<CreateExtensionTokenRequest>}, TContext> => {
+
+const mutationKey = ['createExtensionToken'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createExtensionToken>>, {data?: BodyType<CreateExtensionTokenRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createExtensionToken(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateExtensionTokenMutationResult = NonNullable<Awaited<ReturnType<typeof createExtensionToken>>>
+    export type CreateExtensionTokenMutationBody = BodyType<CreateExtensionTokenRequest> | undefined
+    export type CreateExtensionTokenMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Create a capture-only browser-extension token
+ */
+export const useCreateExtensionToken = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createExtensionToken>>, TError,{data?: BodyType<CreateExtensionTokenRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createExtensionToken>>,
+        TError,
+        {data?: BodyType<CreateExtensionTokenRequest>},
+        TContext
+      > => {
+      return useMutation(getCreateExtensionTokenMutationOptions(options));
+    }
+
+export const getRevokeExtensionTokenUrl = (tokenId: string,) => {
+
+
+
+
+  return `/api/extension-tokens/${tokenId}`
+}
+
+/**
+ * @summary Revoke a browser-extension token
+ */
+export const revokeExtensionToken = async (tokenId: string, options?: RequestInit): Promise<RevokeExtensionToken200> => {
+
+  return customFetch<RevokeExtensionToken200>(getRevokeExtensionTokenUrl(tokenId),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+export const getRevokeExtensionTokenMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof revokeExtensionToken>>, TError,{tokenId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof revokeExtensionToken>>, TError,{tokenId: string}, TContext> => {
+
+const mutationKey = ['revokeExtensionToken'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof revokeExtensionToken>>, {tokenId: string}> = (props) => {
+          const {tokenId} = props ?? {};
+
+          return  revokeExtensionToken(tokenId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RevokeExtensionTokenMutationResult = NonNullable<Awaited<ReturnType<typeof revokeExtensionToken>>>
+
+    export type RevokeExtensionTokenMutationError = ErrorType<void>
+
+    /**
+ * @summary Revoke a browser-extension token
+ */
+export const useRevokeExtensionToken = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof revokeExtensionToken>>, TError,{tokenId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof revokeExtensionToken>>,
+        TError,
+        {tokenId: string},
+        TContext
+      > => {
+      return useMutation(getRevokeExtensionTokenMutationOptions(options));
+    }
+
+export const getIngestRawCaptureUrl = () => {
+
+
+
+
+  return `/api/captures`
+}
+
+/**
+ * Raw source is committed before any AI processing begins.
+ * @summary Store a raw capture and queue extraction
+ */
+export const ingestRawCapture = async (createRawCaptureRequest: CreateRawCaptureRequest, options?: RequestInit): Promise<CreateRawCaptureResponse> => {
+
+  return customFetch<CreateRawCaptureResponse>(getIngestRawCaptureUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      createRawCaptureRequest,)
+  }
+);}
+
+
+
+
+export const getIngestRawCaptureMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof ingestRawCapture>>, TError,{data: BodyType<CreateRawCaptureRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof ingestRawCapture>>, TError,{data: BodyType<CreateRawCaptureRequest>}, TContext> => {
+
+const mutationKey = ['ingestRawCapture'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof ingestRawCapture>>, {data: BodyType<CreateRawCaptureRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  ingestRawCapture(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type IngestRawCaptureMutationResult = NonNullable<Awaited<ReturnType<typeof ingestRawCapture>>>
+    export type IngestRawCaptureMutationBody = BodyType<CreateRawCaptureRequest>
+    export type IngestRawCaptureMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Store a raw capture and queue extraction
+ */
+export const useIngestRawCapture = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof ingestRawCapture>>, TError,{data: BodyType<CreateRawCaptureRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof ingestRawCapture>>,
+        TError,
+        {data: BodyType<CreateRawCaptureRequest>},
+        TContext
+      > => {
+      return useMutation(getIngestRawCaptureMutationOptions(options));
+    }
+
+export const getListRawCapturesUrl = (params?: ListRawCapturesParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/captures?${stringifiedParams}` : `/api/captures`
+}
+
+/**
+ * @summary List raw captures
+ */
+export const listRawCaptures = async (params?: ListRawCapturesParams, options?: RequestInit): Promise<ListRawCaptures200> => {
+
+  return customFetch<ListRawCaptures200>(getListRawCapturesUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListRawCapturesQueryKey = (params?: ListRawCapturesParams,) => {
+    return [
+    `/api/captures`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListRawCapturesQueryOptions = <TData = Awaited<ReturnType<typeof listRawCaptures>>, TError = ErrorType<unknown>>(params?: ListRawCapturesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listRawCaptures>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListRawCapturesQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listRawCaptures>>> = ({ signal }) => listRawCaptures(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listRawCaptures>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListRawCapturesQueryResult = NonNullable<Awaited<ReturnType<typeof listRawCaptures>>>
+export type ListRawCapturesQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List raw captures
+ */
+
+export function useListRawCaptures<TData = Awaited<ReturnType<typeof listRawCaptures>>, TError = ErrorType<unknown>>(
+ params?: ListRawCapturesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listRawCaptures>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListRawCapturesQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getGetRawCaptureUrl = (captureId: string,) => {
+
+
+
+
+  return `/api/captures/${captureId}`
+}
+
+/**
+ * @summary Get a raw capture
+ */
+export const getRawCapture = async (captureId: string, options?: RequestInit): Promise<RawCapture> => {
+
+  return customFetch<RawCapture>(getGetRawCaptureUrl(captureId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetRawCaptureQueryKey = (captureId: string,) => {
+    return [
+    `/api/captures/${captureId}`
+    ] as const;
+    }
+
+
+export const getGetRawCaptureQueryOptions = <TData = Awaited<ReturnType<typeof getRawCapture>>, TError = ErrorType<void>>(captureId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getRawCapture>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetRawCaptureQueryKey(captureId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getRawCapture>>> = ({ signal }) => getRawCapture(captureId, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: !!(captureId), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getRawCapture>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetRawCaptureQueryResult = NonNullable<Awaited<ReturnType<typeof getRawCapture>>>
+export type GetRawCaptureQueryError = ErrorType<void>
+
+
+/**
+ * @summary Get a raw capture
+ */
+
+export function useGetRawCapture<TData = Awaited<ReturnType<typeof getRawCapture>>, TError = ErrorType<void>>(
+ captureId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getRawCapture>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetRawCaptureQueryOptions(captureId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getUpdateRawCaptureStatusUrl = (captureId: string,) => {
+
+
+
+
+  return `/api/captures/${captureId}`
+}
+
+/**
+ * @summary Update mutable processing state for a raw capture
+ */
+export const updateRawCaptureStatus = async (captureId: string,
+    updateRawCaptureRequest: UpdateRawCaptureRequest, options?: RequestInit): Promise<RawCapture> => {
+
+  return customFetch<RawCapture>(getUpdateRawCaptureStatusUrl(captureId),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      updateRawCaptureRequest,)
+  }
+);}
+
+
+
+
+export const getUpdateRawCaptureStatusMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateRawCaptureStatus>>, TError,{captureId: string;data: BodyType<UpdateRawCaptureRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateRawCaptureStatus>>, TError,{captureId: string;data: BodyType<UpdateRawCaptureRequest>}, TContext> => {
+
+const mutationKey = ['updateRawCaptureStatus'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateRawCaptureStatus>>, {captureId: string;data: BodyType<UpdateRawCaptureRequest>}> = (props) => {
+          const {captureId,data} = props ?? {};
+
+          return  updateRawCaptureStatus(captureId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateRawCaptureStatusMutationResult = NonNullable<Awaited<ReturnType<typeof updateRawCaptureStatus>>>
+    export type UpdateRawCaptureStatusMutationBody = BodyType<UpdateRawCaptureRequest>
+    export type UpdateRawCaptureStatusMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Update mutable processing state for a raw capture
+ */
+export const useUpdateRawCaptureStatus = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateRawCaptureStatus>>, TError,{captureId: string;data: BodyType<UpdateRawCaptureRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateRawCaptureStatus>>,
+        TError,
+        {captureId: string;data: BodyType<UpdateRawCaptureRequest>},
+        TContext
+      > => {
+      return useMutation(getUpdateRawCaptureStatusMutationOptions(options));
+    }
+
+export const getRetryRawCaptureExtractionUrl = (captureId: string,) => {
+
+
+
+
+  return `/api/captures/${captureId}/retry-extraction`
+}
+
+/**
+ * @summary Retry extraction for a raw capture
+ */
+export const retryRawCaptureExtraction = async (captureId: string, options?: RequestInit): Promise<RetryRawCaptureExtraction202> => {
+
+  return customFetch<RetryRawCaptureExtraction202>(getRetryRawCaptureExtractionUrl(captureId),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getRetryRawCaptureExtractionMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retryRawCaptureExtraction>>, TError,{captureId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof retryRawCaptureExtraction>>, TError,{captureId: string}, TContext> => {
+
+const mutationKey = ['retryRawCaptureExtraction'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof retryRawCaptureExtraction>>, {captureId: string}> = (props) => {
+          const {captureId} = props ?? {};
+
+          return  retryRawCaptureExtraction(captureId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RetryRawCaptureExtractionMutationResult = NonNullable<Awaited<ReturnType<typeof retryRawCaptureExtraction>>>
+
+    export type RetryRawCaptureExtractionMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Retry extraction for a raw capture
+ */
+export const useRetryRawCaptureExtraction = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retryRawCaptureExtraction>>, TError,{captureId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof retryRawCaptureExtraction>>,
+        TError,
+        {captureId: string},
+        TContext
+      > => {
+      return useMutation(getRetryRawCaptureExtractionMutationOptions(options));
+    }
 
 export const getGetAiStatusUrl = () => {
 

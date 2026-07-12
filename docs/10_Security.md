@@ -60,6 +60,7 @@ Rules:
 - encrypt stored tokens
 - avoid logging secrets
 - rotate credentials when needed
+- fail production startup when connector-secret encryption is not configured
 
 ## 6. Browser Extension Security
 
@@ -71,6 +72,12 @@ The extension should:
 - send data only to configured Recall endpoint
 - avoid broad background scraping
 - avoid storing sensitive data longer than necessary
+- use a revocable, expiring, capture-only token rather than a full account session
+
+Recall stores only a SHA-256 hash of each extension token. A capture token may
+create raw captures and cannot read notes, Ask history, finance, connectors, or
+account data. Browser sessions remain in `HttpOnly` cookies and must not be
+copied into `localStorage`.
 
 ## 7. Data Classification
 

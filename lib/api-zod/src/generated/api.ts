@@ -49,8 +49,7 @@ export const LoginResponse = zod.object({
   "id": zod.string().uuid(),
   "email": zod.string().email(),
   "name": zod.string()
-}),
-  "token": zod.string()
+})
 })
 
 
@@ -63,6 +62,179 @@ export const GetCurrentUserResponse = zod.object({
   "email": zod.string().email(),
   "name": zod.string()
 })
+})
+
+
+/**
+ * @summary List browser-extension capture tokens
+ */
+export const ListExtensionTokensResponse = zod.object({
+  "items": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "scope": zod.enum(['capture:create']),
+  "expiresAt": zod.coerce.date(),
+  "lastUsedAt": zod.coerce.date().nullish(),
+  "revokedAt": zod.coerce.date().nullish(),
+  "createdAt": zod.coerce.date()
+}))
+})
+
+
+/**
+ * The raw token is returned once. Only its SHA-256 hash is stored.
+ * @summary Create a capture-only browser-extension token
+ */
+export const createExtensionTokenBodyNameMax = 120;
+
+export const createExtensionTokenBodyExpiresInDaysMax = 365;
+
+
+
+export const CreateExtensionTokenBody = zod.object({
+  "name": zod.string().min(1).max(createExtensionTokenBodyNameMax).optional(),
+  "expiresInDays": zod.number().min(1).max(createExtensionTokenBodyExpiresInDaysMax).optional()
+})
+
+
+/**
+ * @summary Revoke a browser-extension token
+ */
+export const RevokeExtensionTokenParams = zod.object({
+  "tokenId": zod.coerce.string()
+})
+
+export const RevokeExtensionTokenResponse = zod.object({
+  "ok": zod.boolean()
+})
+
+
+/**
+ * Raw source is committed before any AI processing begins.
+ * @summary Store a raw capture and queue extraction
+ */
+export const ingestRawCaptureBodyRawTextMax = 1000000;
+
+export const ingestRawCaptureBodySourceTypeMax = 32;
+
+export const ingestRawCaptureBodySourceNameMax = 255;
+
+export const ingestRawCaptureBodySourceUrlMax = 2048;
+
+export const ingestRawCaptureBodyTitleMax = 500;
+
+export const ingestRawCaptureBodyRawHtmlMax = 5000000;
+
+
+
+export const IngestRawCaptureBody = zod.object({
+  "rawText": zod.string().min(1).max(ingestRawCaptureBodyRawTextMax),
+  "sourceType": zod.string().min(1).max(ingestRawCaptureBodySourceTypeMax).optional(),
+  "sourceName": zod.string().max(ingestRawCaptureBodySourceNameMax).nullish(),
+  "sourceUrl": zod.string().max(ingestRawCaptureBodySourceUrlMax).nullish(),
+  "title": zod.string().max(ingestRawCaptureBodyTitleMax).nullish(),
+  "rawHtml": zod.string().max(ingestRawCaptureBodyRawHtmlMax).nullish(),
+  "rawMetadata": zod.record(zod.string(), zod.unknown()).optional(),
+  "capturedAt": zod.coerce.date().optional()
+})
+
+
+/**
+ * @summary List raw captures
+ */
+export const listRawCapturesQueryLimitMax = 200;
+
+
+
+export const ListRawCapturesQueryParams = zod.object({
+  "status": zod.enum(['pending', 'processing', 'processed', 'failed', 'ignored', 'archived']).optional(),
+  "limit": zod.coerce.number().min(1).max(listRawCapturesQueryLimitMax).optional()
+})
+
+export const ListRawCapturesResponse = zod.object({
+  "items": zod.array(zod.object({
+  "id": zod.string(),
+  "sourceType": zod.string(),
+  "sourceName": zod.string().nullish(),
+  "sourceUrl": zod.string().nullish(),
+  "title": zod.string().nullish(),
+  "rawText": zod.string(),
+  "rawHtml": zod.string().nullish(),
+  "rawMetadata": zod.record(zod.string(), zod.unknown()),
+  "processedStatus": zod.enum(['pending', 'processing', 'processed', 'failed', 'ignored', 'archived']),
+  "processingError": zod.string().nullish(),
+  "capturedAt": zod.coerce.date(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date()
+}))
+})
+
+
+/**
+ * @summary Get a raw capture
+ */
+export const GetRawCaptureParams = zod.object({
+  "captureId": zod.coerce.string()
+})
+
+export const GetRawCaptureResponse = zod.object({
+  "id": zod.string(),
+  "sourceType": zod.string(),
+  "sourceName": zod.string().nullish(),
+  "sourceUrl": zod.string().nullish(),
+  "title": zod.string().nullish(),
+  "rawText": zod.string(),
+  "rawHtml": zod.string().nullish(),
+  "rawMetadata": zod.record(zod.string(), zod.unknown()),
+  "processedStatus": zod.enum(['pending', 'processing', 'processed', 'failed', 'ignored', 'archived']),
+  "processingError": zod.string().nullish(),
+  "capturedAt": zod.coerce.date(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Update mutable processing state for a raw capture
+ */
+export const UpdateRawCaptureStatusParams = zod.object({
+  "captureId": zod.coerce.string()
+})
+
+export const updateRawCaptureStatusBodyProcessingErrorMax = 4000;
+
+export const updateRawCaptureStatusBodyTitleMax = 500;
+
+
+
+export const UpdateRawCaptureStatusBody = zod.object({
+  "processedStatus": zod.enum(['pending', 'processing', 'processed', 'failed', 'ignored', 'archived']).optional(),
+  "processingError": zod.string().max(updateRawCaptureStatusBodyProcessingErrorMax).nullish(),
+  "title": zod.string().max(updateRawCaptureStatusBodyTitleMax).nullish()
+})
+
+export const UpdateRawCaptureStatusResponse = zod.object({
+  "id": zod.string(),
+  "sourceType": zod.string(),
+  "sourceName": zod.string().nullish(),
+  "sourceUrl": zod.string().nullish(),
+  "title": zod.string().nullish(),
+  "rawText": zod.string(),
+  "rawHtml": zod.string().nullish(),
+  "rawMetadata": zod.record(zod.string(), zod.unknown()),
+  "processedStatus": zod.enum(['pending', 'processing', 'processed', 'failed', 'ignored', 'archived']),
+  "processingError": zod.string().nullish(),
+  "capturedAt": zod.coerce.date(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Retry extraction for a raw capture
+ */
+export const RetryRawCaptureExtractionParams = zod.object({
+  "captureId": zod.coerce.string()
 })
 
 
@@ -634,6 +806,7 @@ export const AcceptCaptureResponse = zod.object({
   "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
+  "attachmentText": zod.string().optional().describe('Capped searchable text extracted from attached images, PDFs, and documents.'),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 }).optional(),
@@ -856,6 +1029,7 @@ export const GetProjectResponse = zod.object({
   "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
+  "attachmentText": zod.string().optional().describe('Capped searchable text extracted from attached images, PDFs, and documents.'),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })),

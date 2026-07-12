@@ -23,6 +23,8 @@ export interface RecallNote {
   primaryPersonName?: string | null;
   contentFormat: RecallNoteContentFormat;
   attachmentCount: number;
+  /** Capped searchable text extracted from attached images, PDFs, and documents. */
+  attachmentText?: string;
   createdAt: string;
   updatedAt: string;
 }

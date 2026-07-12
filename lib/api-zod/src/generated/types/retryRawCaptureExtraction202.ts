@@ -5,8 +5,9 @@
  * Recall API — health, auth, notebooks, notes, tasks, capture, memory, projects, and AI operations
  * OpenAPI spec version: 0.7.0
  */
-import type { User } from './user';
+import type { RetryRawCaptureExtraction202Status } from './retryRawCaptureExtraction202Status';
 
-export interface RegisterResponse {
-  user: User;
-}
+export type RetryRawCaptureExtraction202 = {
+  jobId: string;
+  status: RetryRawCaptureExtraction202Status;
+};

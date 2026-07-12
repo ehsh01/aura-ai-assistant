@@ -44,7 +44,7 @@ function clearSessionCookie(res: Response): void {
 
 const router: IRouter = Router();
 
-router.post("/auth/register", async (req, res, next) => {
+router.post("/auth/register", loginRateLimiter, async (req, res, next) => {
   try {
     assertAuthConfigured();
     const body = RegisterWithInviteBody.parse(req.body);
@@ -87,7 +87,6 @@ router.post("/auth/register", async (req, res, next) => {
     res.status(201).json(
       LoginResponse.parse({
         user: result.user,
-        token: result.token,
       }),
     );
   } catch (err) {
@@ -118,7 +117,6 @@ router.post("/auth/login", loginRateLimiter, async (req, res, next) => {
     res.json(
       LoginResponse.parse({
         user: result.user,
-        token: result.token,
       }),
     );
   } catch (err) {

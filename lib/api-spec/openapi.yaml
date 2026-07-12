@@ -106,6 +106,191 @@ paths:
                 $ref: "#/components/schemas/MeResponse"
         "401":
           description: Not authenticated
+  /extension-tokens:
+    get:
+      operationId: listExtensionTokens
+      tags: [auth]
+      summary: List browser-extension capture tokens
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Extension token metadata (never raw token values)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListExtensionTokensResponse"
+    post:
+      operationId: createExtensionToken
+      tags: [auth]
+      summary: Create a capture-only browser-extension token
+      description: The raw token is returned once. Only its SHA-256 hash is stored.
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExtensionTokenRequest"
+      responses:
+        "201":
+          description: Extension token created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateExtensionTokenResponse"
+  /extension-tokens/{tokenId}:
+    delete:
+      operationId: revokeExtensionToken
+      tags: [auth]
+      summary: Revoke a browser-extension token
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: tokenId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Token revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                required: [ok]
+        "404":
+          description: Token not found
+  /captures:
+    post:
+      operationId: ingestRawCapture
+      tags: [capture]
+      summary: Store a raw capture and queue extraction
+      description: Raw source is committed before any AI processing begins.
+      security:
+        - bearerAuth: []
+        - extensionTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRawCaptureRequest"
+      responses:
+        "201":
+          description: Raw capture stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateRawCaptureResponse"
+    get:
+      operationId: listRawCaptures
+      tags: [capture]
+      summary: List raw captures
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            $ref: "#/components/schemas/CaptureProcessedStatus"
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        "200":
+          description: Raw captures
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RawCapture"
+                required: [items]
+  /captures/{captureId}:
+    get:
+      operationId: getRawCapture
+      tags: [capture]
+      summary: Get a raw capture
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: captureId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Raw capture
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RawCapture"
+        "404":
+          description: Capture not found
+    patch:
+      operationId: updateRawCaptureStatus
+      tags: [capture]
+      summary: Update mutable processing state for a raw capture
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: captureId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRawCaptureRequest"
+      responses:
+        "200":
+          description: Updated raw capture
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RawCapture"
+  /captures/{captureId}/retry-extraction:
+    post:
+      operationId: retryRawCaptureExtraction
+      tags: [capture]
+      summary: Retry extraction for a raw capture
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: captureId
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Extraction queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                  status:
+                    type: string
+                    enum: [queued]
+                required: [jobId, status]
   /ai/status:
     get:
       operationId: getAiStatus
@@ -834,9 +1019,14 @@ paths:
 components:
   securitySchemes:
     bearerAuth:
+      type: apiKey
+      in: cookie
+      name: recall_session
+      description: HttpOnly Recall browser session cookie.
+    extensionTokenAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+      description: Revocable capture-only token accepted only by POST /captures.
   schemas:
     User:
       type: object
@@ -875,11 +1065,8 @@ components:
       properties:
         user:
           $ref: "#/components/schemas/User"
-        token:
-          type: string
       required:
         - user
-        - token
     LoginRequest:
       type: object
       properties:
@@ -897,11 +1084,166 @@ components:
       properties:
         user:
           $ref: "#/components/schemas/User"
-        token:
-          type: string
       required:
         - user
-        - token
+    ExtensionToken:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        scope:
+          type: string
+          enum: [capture:create]
+        expiresAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          type: string
+          format: date-time
+          nullable: true
+        revokedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, scope, expiresAt, createdAt]
+    CreateExtensionTokenRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        expiresInDays:
+          type: integer
+          minimum: 1
+          maximum: 365
+    CreateExtensionTokenResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: One-time raw capture token. Recall never stores this value.
+        item:
+          $ref: "#/components/schemas/ExtensionToken"
+      required: [token, item]
+    ListExtensionTokensResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExtensionToken"
+      required: [items]
+    CaptureProcessedStatus:
+      type: string
+      enum: [pending, processing, processed, failed, ignored, archived]
+    RawCapture:
+      type: object
+      properties:
+        id:
+          type: string
+        sourceType:
+          type: string
+        sourceName:
+          type: string
+          nullable: true
+        sourceUrl:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        rawText:
+          type: string
+        rawHtml:
+          type: string
+          nullable: true
+        rawMetadata:
+          type: object
+          additionalProperties: true
+        processedStatus:
+          $ref: "#/components/schemas/CaptureProcessedStatus"
+        processingError:
+          type: string
+          nullable: true
+        capturedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - sourceType
+        - rawText
+        - rawMetadata
+        - processedStatus
+        - capturedAt
+        - createdAt
+        - updatedAt
+    CreateRawCaptureRequest:
+      type: object
+      properties:
+        rawText:
+          type: string
+          minLength: 1
+          maxLength: 1000000
+        sourceType:
+          type: string
+          minLength: 1
+          maxLength: 32
+        sourceName:
+          type: string
+          maxLength: 255
+          nullable: true
+        sourceUrl:
+          type: string
+          maxLength: 2048
+          nullable: true
+        title:
+          type: string
+          maxLength: 500
+          nullable: true
+        rawHtml:
+          type: string
+          maxLength: 5000000
+          nullable: true
+        rawMetadata:
+          type: object
+          additionalProperties: true
+        capturedAt:
+          type: string
+          format: date-time
+      required: [rawText]
+    CreateRawCaptureResponse:
+      allOf:
+        - $ref: "#/components/schemas/RawCapture"
+        - type: object
+          properties:
+            jobId:
+              type: string
+          required: [jobId]
+    UpdateRawCaptureRequest:
+      type: object
+      properties:
+        processedStatus:
+          $ref: "#/components/schemas/CaptureProcessedStatus"
+        processingError:
+          type: string
+          maxLength: 4000
+          nullable: true
+        title:
+          type: string
+          maxLength: 500
+          nullable: true
     MeResponse:
       type: object
       properties:

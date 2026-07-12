@@ -1,4 +1,3 @@
-import { getStoredToken } from "./auth-storage";
 import {
   isSpeechSynthesisSupported,
   pickPreferredVoice,
@@ -56,12 +55,10 @@ export type SpeakOptions = {
 };
 
 async function fetchOpenAiTts(text: string, voice?: string): Promise<Blob> {
-  const token = getStoredToken();
   const headers: Record<string, string> = {
     Accept: "audio/mpeg",
     "Content-Type": "application/json",
   };
-  if (token) headers.Authorization = `Bearer ${token}`;
 
   const res = await fetch(`${API_BASE}/ai/tts`, {
     method: "POST",

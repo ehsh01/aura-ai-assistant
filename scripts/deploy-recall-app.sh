@@ -36,21 +36,31 @@ if [ -f "$ENV_FILE" ]; then
   source "$ENV_FILE"
   set +a
 fi
-if [ -n "${DATABASE_URL:-}" ] && command -v psql >/dev/null; then
-  for mig in \
-    lib/db/migrations/0002_capture_layer.sql \
-    lib/db/migrations/0003_evidence_and_platform.sql \
-    lib/db/migrations/0004_entity_embeddings.sql \
-    lib/db/migrations/0005_note_knowledge_person.sql \
-    lib/db/migrations/0006_life_memories.sql \
-    lib/db/migrations/0007_ask_threads.sql \
-    lib/db/migrations/0008_note_attachment_text.sql
-  do
-    echo "--> Applying $mig"
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$mig"
-  done
-else
-  echo "WARN: Skipping migrations (DATABASE_URL unset or psql missing)"
+if [ -z "${DATABASE_URL:-}" ]; then
+  echo "ERROR: DATABASE_URL is required; refusing to deploy without migrations" >&2
+  exit 1
+fi
+if ! command -v psql >/dev/null; then
+  echo "ERROR: psql is required; refusing to deploy without migrations" >&2
+  exit 1
+fi
+for mig in \
+  lib/db/migrations/0002_capture_layer.sql \
+  lib/db/migrations/0003_evidence_and_platform.sql \
+  lib/db/migrations/0004_entity_embeddings.sql \
+  lib/db/migrations/0005_note_knowledge_person.sql \
+  lib/db/migrations/0006_life_memories.sql \
+  lib/db/migrations/0007_ask_threads.sql \
+  lib/db/migrations/0008_note_attachment_text.sql \
+  lib/db/migrations/0009_extension_tokens.sql
+do
+  echo "--> Applying $mig"
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$mig"
+done
+
+if [ -z "${SECRETS_ENCRYPTION_KEY:-}" ]; then
+  echo "ERROR: SECRETS_ENCRYPTION_KEY is required before replacing the production API" >&2
+  exit 1
 fi
 
 pnpm run build:prod

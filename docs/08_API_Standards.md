@@ -50,12 +50,29 @@ Use authenticated sessions or API tokens depending on endpoint type.
 
 Browser extension endpoints may use:
 
-- user session token
-- extension token
-- short-lived API token
+- revocable, expiring extension token scoped to `capture:create`
 - local development token
 
 Secrets must not be hardcoded.
+
+Browser sessions use the `HttpOnly` session cookie. Full-account session JWTs
+must not be returned to or persisted by browser JavaScript.
+
+Extension-token management:
+
+```text
+GET    /api/extension-tokens
+POST   /api/extension-tokens
+DELETE /api/extension-tokens/:tokenId
+```
+
+Only `POST /api/captures` accepts an extension token. All other personal-data
+routes require the normal authenticated session.
+
+Migration note: full-session bearer JWTs issued by older Recall versions are
+temporarily accepted by `POST /api/captures` only so installed extensions do
+not fail immediately. New extension setup must use scoped tokens; remove this
+compatibility after the documented sunset period.
 
 ## 5. Capture API
 

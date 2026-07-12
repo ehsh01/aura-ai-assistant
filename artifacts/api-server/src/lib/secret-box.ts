@@ -16,6 +16,13 @@ function resolveKey(): Buffer | null {
   return scryptSync(raw, "recall-secrets-v1", KEY_LEN);
 }
 
+/** Production must never silently persist OAuth or API credentials in plaintext. */
+export function assertSecretEncryptionConfigured(isProduction: boolean): void {
+  if (isProduction && !resolveKey()) {
+    throw new Error("SECRETS_ENCRYPTION_KEY is required in production");
+  }
+}
+
 /**
  * Encrypt a UTF-8 string for storage (AES-256-GCM).
  * Returns a versioned base64 blob: v1.<iv>.<tag>.<ciphertext>

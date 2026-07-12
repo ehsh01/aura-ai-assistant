@@ -1,4 +1,3 @@
-import { getStoredToken } from "@/lib/auth-storage";
 import { ApiError } from "@workspace/api-client-react";
 
 /** Stay under Cloudflare's ~100MB proxy upload limit per request. */
@@ -29,11 +28,6 @@ export type EnexUploadResult = {
   }>;
   errors: string[];
 };
-
-async function authHeaders(): Promise<HeadersInit> {
-  const token = getStoredToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
 
 async function parseUploadResponse(res: Response): Promise<EnexUploadResult | ImportJobPending> {
   const raw = await res.text();
@@ -88,7 +82,7 @@ async function pollImportJob(
 
   while (Date.now() - started < maxWaitMs) {
     const res = await fetch(`/api/notes/import/enex/status/${encodeURIComponent(jobId)}`, {
-      headers: await authHeaders(),
+      credentials: "include",
     });
 
     const raw = await res.text();
@@ -164,7 +158,7 @@ async function uploadSingleFile(
 
   const res = await fetch("/api/notes/import/enex-file", {
     method: "POST",
-    headers: await authHeaders(),
+    credentials: "include",
     body: form,
   });
 
@@ -194,7 +188,7 @@ async function uploadChunkedFile(
 
     const res = await fetch("/api/notes/import/enex/chunk", {
       method: "POST",
-      headers: await authHeaders(),
+      credentials: "include",
       body: form,
     });
 

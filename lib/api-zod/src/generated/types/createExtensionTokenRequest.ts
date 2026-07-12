@@ -5,8 +5,16 @@
  * Recall API — health, auth, notebooks, notes, tasks, capture, memory, projects, and AI operations
  * OpenAPI spec version: 0.7.0
  */
-import type { User } from './user';
 
-export interface RegisterResponse {
-  user: User;
+export interface CreateExtensionTokenRequest {
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  name?: string;
+  /**
+     * @minimum 1
+     * @maximum 365
+     */
+  expiresInDays?: number;
 }

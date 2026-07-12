@@ -7,7 +7,12 @@ import {
   syncConnector,
   type FinanceSummary,
 } from "@/lib/recall-api";
-import { getStoredToken } from "@/lib/auth-storage";
+import {
+  createExtensionToken,
+  listExtensionTokens,
+  revokeExtensionToken,
+  type ExtensionToken,
+} from "@workspace/api-client-react";
 import { toast } from "@/hooks/use-toast";
 import { readSearchParam } from "@/lib/recall-nav";
 
@@ -38,6 +43,9 @@ export function Connectors() {
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [summary, setSummary] = useState<{ connectorId: string; data: FinanceSummary } | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [extensionTokens, setExtensionTokens] = useState<ExtensionToken[]>([]);
+  const [creatingExtensionToken, setCreatingExtensionToken] = useState(false);
+  const [newExtensionToken, setNewExtensionToken] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -45,6 +53,8 @@ export function Connectors() {
       const res = await listConnectors();
       setConnectors(res.connectors);
       setGoogleOAuthConfigured(Boolean(res.googleOAuthConfigured));
+      const tokenRes = await listExtensionTokens().catch(() => null);
+      if (tokenRes) setExtensionTokens(tokenRes.items);
     } finally {
       setLoading(false);
     }
@@ -119,6 +129,56 @@ export function Connectors() {
       });
     } finally {
       setSummaryLoading(false);
+    }
+  };
+
+  const generateExtensionToken = async () => {
+    setCreatingExtensionToken(true);
+    try {
+      const created = await createExtensionToken({
+        name: "Recall browser extension",
+        expiresInDays: 90,
+      });
+      setExtensionTokens((items) => [created.item, ...items]);
+      setNewExtensionToken(created.token);
+      try {
+        await navigator.clipboard.writeText(created.token);
+        toast({
+          title: "Capture-only token copied",
+          description: "Paste it into the Recall extension. It cannot access notes, Ask, or account data.",
+        });
+      } catch {
+        toast({
+          title: "Token created",
+          description: "Copy the one-time token shown below.",
+        });
+      }
+    } catch (err) {
+      toast({
+        title: "Could not create extension token",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setCreatingExtensionToken(false);
+    }
+  };
+
+  const revokeToken = async (tokenId: string) => {
+    try {
+      await revokeExtensionToken(tokenId);
+      setExtensionTokens((items) =>
+        items.map((item) =>
+          item.id === tokenId ? { ...item, revokedAt: new Date().toISOString() } : item,
+        ),
+      );
+      toast({ title: "Extension token revoked" });
+    } catch (err) {
+      toast({
+        title: "Could not revoke extension token",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     }
   };
 
@@ -262,27 +322,78 @@ export function Connectors() {
             <h2 className="text-lg font-semibold">Browser extension</h2>
             <p className="mt-2 text-sm text-white/55">
               Load the unpacked extension from <code className="text-indigo-200">artifacts/recall-extension</code>,
-              then paste your session token into the popup. One click captures the current tab into AI Inbox.
+              then create and paste a capture-only token into the popup. The token cannot read your
+              notes, Ask history, connectors, finances, or account settings.
             </p>
             <button
               type="button"
-              onClick={async () => {
-                const token = getStoredToken();
-                if (!token) {
-                  toast({ title: "No session token found — sign in again", variant: "destructive" });
-                  return;
-                }
-                try {
-                  await navigator.clipboard.writeText(token);
-                  toast({ title: "Extension token copied" });
-                } catch {
-                  toast({ title: "Could not copy token", variant: "destructive" });
-                }
-              }}
+              onClick={() => void generateExtensionToken()}
+              disabled={creatingExtensionToken}
               className="mt-4 rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400"
             >
-              Copy extension token
+              {creatingExtensionToken ? "Creating…" : "Create and copy token"}
             </button>
+            {newExtensionToken && (
+              <div className="mt-4 rounded-xl border border-indigo-400/20 bg-black/20 p-3">
+                <p className="text-xs text-indigo-200">
+                  One-time token — copy it now. Recall cannot show it again.
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <input
+                    readOnly
+                    value={newExtensionToken}
+                    className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 font-mono text-xs text-white/70"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void navigator.clipboard.writeText(newExtensionToken)}
+                    className="rounded-lg bg-white/10 px-3 text-xs hover:bg-white/15"
+                  >
+                    Copy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewExtensionToken(null)}
+                    className="px-2 text-xs text-white/45 hover:text-white/70"
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            )}
+            {extensionTokens.length > 0 && (
+              <div className="mt-5 space-y-2 border-t border-white/10 pt-4">
+                <p className="text-xs font-medium uppercase tracking-wider text-white/40">
+                  Issued tokens
+                </p>
+                {extensionTokens.map((item) => {
+                  const inactive =
+                    Boolean(item.revokedAt) || new Date(item.expiresAt).getTime() <= Date.now();
+                  return (
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between gap-3 rounded-xl bg-black/15 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm text-white/75">{item.name}</p>
+                        <p className="text-xs text-white/40">
+                          {inactive ? "Inactive" : `Expires ${new Date(item.expiresAt).toLocaleDateString()}`}
+                        </p>
+                      </div>
+                      {!inactive && (
+                        <button
+                          type="button"
+                          onClick={() => void revokeToken(item.id)}
+                          className="text-xs text-red-300 hover:text-red-200"
+                        >
+                          Revoke
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </div>

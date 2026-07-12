@@ -7,7 +7,7 @@ Lightweight collector per `docs/17_Browser_Extension_Spec.md`. Sends raw page co
 1. Open `chrome://extensions`
 2. Enable Developer mode
 3. Load unpacked → select `artifacts/recall-extension`
-4. In Recall → **Connectors**, click **Copy extension token**
+4. In Recall → **Connectors**, click **Create and copy token**
 5. Paste the token into the extension popup Settings and Save
 6. Click **Capture current tab** on any page
 
@@ -19,3 +19,5 @@ Lightweight collector per `docs/17_Browser_Extension_Spec.md`. Sends raw page co
 ## API
 
 Posts to `/api/captures` with `sourceType: browser_extension`.
+The credential is scoped to `capture:create`, expires independently, and can
+be revoked from Connectors. It is not a Recall account/session token.

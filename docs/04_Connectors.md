@@ -58,6 +58,11 @@ Payload:
 
 The extension should remain lightweight.
 
+Authentication uses a revocable, expiring `capture:create` extension token.
+The raw token is returned once and stored only in the extension; Recall stores
+its SHA-256 hash. Extension tokens may call raw capture intake only and must
+not grant access to notes, Ask, finance, connectors, or account settings.
+
 ### 3.3 Finance API Connector
 
 Connects to Ernesto’s existing finance app API.

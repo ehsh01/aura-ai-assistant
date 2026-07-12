@@ -1,5 +1,3 @@
-import { getStoredToken } from "@/lib/auth-storage";
-
 export type NoteAttachmentMeta = {
   id: string;
   noteId: string;
@@ -9,14 +7,9 @@ export type NoteAttachmentMeta = {
   isImage: boolean;
 };
 
-async function authHeaders(): Promise<HeadersInit> {
-  const token = getStoredToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
 export async function fetchNoteAttachments(noteId: string): Promise<NoteAttachmentMeta[]> {
   const res = await fetch(`/api/notes/${encodeURIComponent(noteId)}/attachments`, {
-    headers: await authHeaders(),
+    credentials: "include",
   });
   if (!res.ok) return [];
   const data = (await res.json()) as { attachments?: NoteAttachmentMeta[] };
@@ -29,7 +22,7 @@ export function attachmentUrl(attachmentId: string): string {
 
 export async function fetchAttachmentBlob(attachmentId: string): Promise<Blob | null> {
   const res = await fetch(attachmentUrl(attachmentId), {
-    headers: await authHeaders(),
+    credentials: "include",
   });
   if (!res.ok) return null;
   return res.blob();

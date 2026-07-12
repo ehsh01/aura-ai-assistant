@@ -4,6 +4,26 @@ import helmet from "helmet";
 import type { Express, RequestHandler } from "express";
 import { config } from "../lib/config";
 
+export function evaluateCorsRequest(input: {
+  origin?: string;
+  path: string;
+  method: string;
+}): { allowed: boolean; browserExtension: boolean } {
+  const browserExtension = Boolean(
+    input.origin && /^(chrome|moz)-extension:\/\//i.test(input.origin),
+  );
+  const sameOriginOrServer =
+    !input.origin || config.corsOrigins.includes(input.origin);
+  const extensionCaptureRequest =
+    browserExtension &&
+    input.path === "/api/captures" &&
+    (input.method === "POST" || input.method === "OPTIONS");
+  return {
+    allowed: sameOriginOrServer || extensionCaptureRequest,
+    browserExtension,
+  };
+}
+
 export function applySecurityMiddleware(app: Express): void {
   // nginx / Cloudflare terminate TLS and set X-Forwarded-For
   app.set("trust proxy", 1);
@@ -16,20 +36,24 @@ export function applySecurityMiddleware(app: Express): void {
   );
 
   app.use(
-    cors({
-      origin(origin, callback) {
-        // Same-origin and server-to-server (no Origin header)
-        if (!origin) {
-          callback(null, true);
-          return;
-        }
-        if (config.corsOrigins.includes(origin)) {
-          callback(null, true);
-          return;
-        }
+    cors((req, callback) => {
+      const origin = req.headers.origin;
+      const decision = evaluateCorsRequest({
+        origin,
+        path: req.path,
+        method: req.method,
+      });
+
+      if (!decision.allowed) {
         callback(new Error(`CORS blocked for origin: ${origin}`));
-      },
-      credentials: true,
+        return;
+      }
+
+      callback(null, {
+        origin: true,
+        // Extension auth is bearer-only; never expose browser cookies to it.
+        credentials: !decision.browserExtension,
+      });
     }),
   );
 }

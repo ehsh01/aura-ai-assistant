@@ -1,21 +1,23 @@
 # Recall AI App — Implementation Checklist
 
+Last verified against the production codebase: 2026-07-12.
+
 ## Foundation
 
-- [ ] Create `/docs` folder
-- [ ] Add engineering playbook files
-- [ ] Confirm project stack
-- [ ] Define environment variables
-- [ ] Set up database migrations
-- [ ] Create core models
+- [x] Create `/docs` folder
+- [x] Add engineering playbook files
+- [x] Confirm project stack
+- [x] Define environment variables
+- [x] Set up database migrations
+- [x] Create core models
 
 ## Capture
 
-- [ ] Create Capture model
-- [ ] Build manual paste capture UI
-- [ ] Create capture API endpoint
-- [ ] Store raw text
-- [ ] Track processing status
+- [x] Create Capture model
+- [x] Build manual paste capture UI
+- [x] Create capture API endpoint
+- [x] Store raw text before processing
+- [x] Track processing status
 
 ## AI Extraction
 
@@ -59,10 +61,10 @@
 
 ## Browser Extension
 
-- [ ] Create extension project
-- [ ] Capture selected text
-- [ ] Capture page URL/title
-- [ ] Post to Recall API
+- [x] Create extension project
+- [x] Capture selected text
+- [x] Capture page URL/title
+- [x] Post to Recall API with a scoped, revocable capture token
 - [ ] Add retry queue
 - [ ] Add Outlook collector
 - [ ] Add Teams collector

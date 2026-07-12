@@ -6,6 +6,7 @@ import capturesRouter from "./captures";
 import connectorsRouter from "./connectors";
 import documentsRouter from "./documents";
 import evidenceRouter from "./evidence";
+import extensionTokensRouter from "./extension-tokens";
 import healthRouter from "./health";
 import notesRouter from "./notes";
 import attachmentsRouter from "./attachments";
@@ -23,6 +24,7 @@ const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(authRouter);
+router.use(extensionTokensRouter);
 router.use(notebooksRouter);
 router.use(notesRouter);
 router.use(attachmentsRouter);
