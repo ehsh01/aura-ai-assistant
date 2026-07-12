@@ -460,7 +460,7 @@ const CORPUS = {
   documents: 100,
   captures: 100,
   /** Per connected Google mailbox — keeps ehernandez2 + REI + others searchable. */
-  gmailPerMailbox: 120,
+  gmailPerMailbox: 150,
   contactsTotal: 40,
   driveTotal: 40,
   calendarTotal: 40,

@@ -145,66 +145,100 @@ function headerValue(
   return hit?.value ?? null;
 }
 
+async function fetchGmailMessageDetails(
+  accessToken: string,
+  messageId: string,
+): Promise<GoogleRawRecord | null> {
+  try {
+    const full = await googleGet<{
+      id: string;
+      snippet?: string;
+      internalDate?: string;
+      payload?: { headers?: { name?: string; value?: string }[] };
+    }>(
+      accessToken,
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,
+    );
+    const subject = headerValue(full.payload?.headers, "Subject") ?? "(no subject)";
+    const from = headerValue(full.payload?.headers, "From") ?? "";
+    const to = headerValue(full.payload?.headers, "To") ?? "";
+    const date = headerValue(full.payload?.headers, "Date");
+    const snippet = (full.snippet ?? "").slice(0, 800);
+    const fromParsed = (() => {
+      const angle = from.match(/^(.*?)\s*<([^>]+)>/);
+      if (angle) {
+        return {
+          name: angle[1]!.replace(/^["']|["']$/g, "").trim(),
+          email: angle[2]!.trim().toLowerCase(),
+        };
+      }
+      if (from.includes("@")) return { name: "", email: from.toLowerCase() };
+      return { name: from, email: "" };
+    })();
+    return {
+      externalId: `gmail:${full.id}`,
+      recordType: "gmail_message",
+      recordTitle: subject.slice(0, 400),
+      recordText: [
+        "Email message",
+        `From: ${from}`,
+        to ? `To: ${to}` : null,
+        fromParsed.name ? `sender_name: ${fromParsed.name}` : null,
+        fromParsed.email ? `sender_email: ${fromParsed.email}` : null,
+        `Subject: ${subject}`,
+        snippet,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      sourceUrl: `https://mail.google.com/mail/u/0/#inbox/${full.id}`,
+      sourceCreatedAt: full.internalDate
+        ? new Date(Number(full.internalDate)).toISOString()
+        : date,
+      metadata: {
+        from,
+        to,
+        subject,
+        senderName: fromParsed.name || null,
+        senderEmail: fromParsed.email || null,
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchGmail(accessToken: string): Promise<GoogleRawRecord[]> {
+  // Broader inbox window so Ask has more than the last ~100 messages.
   const list = await googleGet<{ messages?: { id: string }[] }>(
     accessToken,
-    "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=100&q=newer_than:90d",
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=300&q=newer_than:365d",
   );
   const out: GoogleRawRecord[] = [];
-  for (const msg of (list.messages ?? []).slice(0, 100)) {
-    try {
-      const full = await googleGet<{
-        id: string;
-        snippet?: string;
-        internalDate?: string;
-        payload?: { headers?: { name?: string; value?: string }[] };
-      }>(
-        accessToken,
-        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
-      );
-      const subject = headerValue(full.payload?.headers, "Subject") ?? "(no subject)";
-      const from = headerValue(full.payload?.headers, "From") ?? "";
-      const date = headerValue(full.payload?.headers, "Date");
-      const snippet = (full.snippet ?? "").slice(0, 800);
-      const fromParsed = (() => {
-        const angle = from.match(/^(.*?)\s*<([^>]+)>/);
-        if (angle) {
-          return {
-            name: angle[1]!.replace(/^["']|["']$/g, "").trim(),
-            email: angle[2]!.trim().toLowerCase(),
-          };
-        }
-        if (from.includes("@")) return { name: "", email: from.toLowerCase() };
-        return { name: from, email: "" };
-      })();
-      out.push({
-        externalId: `gmail:${full.id}`,
-        recordType: "gmail_message",
-        recordTitle: subject.slice(0, 400),
-        recordText: [
-          "Email message",
-          `From: ${from}`,
-          fromParsed.name ? `sender_name: ${fromParsed.name}` : null,
-          fromParsed.email ? `sender_email: ${fromParsed.email}` : null,
-          `Subject: ${subject}`,
-          snippet,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-        sourceUrl: `https://mail.google.com/mail/u/0/#inbox/${full.id}`,
-        sourceCreatedAt: full.internalDate
-          ? new Date(Number(full.internalDate)).toISOString()
-          : date,
-        metadata: {
-          from,
-          subject,
-          senderName: fromParsed.name || null,
-          senderEmail: fromParsed.email || null,
-        },
-      });
-    } catch {
-      // Skip individual message failures.
-    }
+  for (const msg of (list.messages ?? []).slice(0, 300)) {
+    const row = await fetchGmailMessageDetails(accessToken, msg.id);
+    if (row) out.push(row);
+  }
+  return out;
+}
+
+/**
+ * Live Gmail search (used when Ask asks for mail from/about someone not in the sync cache).
+ */
+export async function searchGmailMessages(
+  accessToken: string,
+  query: string,
+  maxResults = 25,
+): Promise<GoogleRawRecord[]> {
+  const q = query.trim();
+  if (!q) return [];
+  const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
+  url.searchParams.set("maxResults", String(Math.min(Math.max(maxResults, 1), 50)));
+  url.searchParams.set("q", q);
+  const list = await googleGet<{ messages?: { id: string }[] }>(accessToken, url.toString());
+  const out: GoogleRawRecord[] = [];
+  for (const msg of list.messages ?? []) {
+    const row = await fetchGmailMessageDetails(accessToken, msg.id);
+    if (row) out.push(row);
   }
   return out;
 }

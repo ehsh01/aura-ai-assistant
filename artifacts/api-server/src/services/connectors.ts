@@ -13,6 +13,7 @@ import {
   fetchGoogleBundle,
   googleConnector,
   refreshGoogleAccessToken,
+  searchGmailMessages,
 } from "../connectors/google";
 import { manualConnector } from "../connectors/manual";
 import type { RecallConnector } from "../connectors/types";
@@ -110,8 +111,11 @@ export async function getConnectorForUser(
   return rows[0] ? toDto(rows[0]) : null;
 }
 
-/** Resolve a fresh Google access token and fetch the sync bundle. */
-async function fetchGoogleRecordsForConnector(conn: Connector): Promise<unknown[]> {
+/** Resolve a fresh Google access token for a connector row. */
+async function ensureGoogleAccessToken(conn: Connector): Promise<{
+  accessToken: string;
+  mailbox: string | null;
+}> {
   const settings = openConnectorSettings(
     (conn.settings ?? {}) as Record<string, unknown>,
   );
@@ -123,6 +127,10 @@ async function fetchGoogleRecordsForConnector(conn: Connector): Promise<unknown[
     typeof settings.accessTokenExpiresAt === "string"
       ? Date.parse(settings.accessTokenExpiresAt)
       : 0;
+  const mailbox =
+    typeof settings.googleEmail === "string"
+      ? settings.googleEmail.trim().toLowerCase()
+      : null;
 
   if (!refreshToken && !accessToken) {
     throw new Error("Google connector is missing OAuth tokens — reconnect Google");
@@ -131,7 +139,9 @@ async function fetchGoogleRecordsForConnector(conn: Connector): Promise<unknown[
   const needsRefresh = !accessToken || !expiresAt || expiresAt < Date.now() + 60_000;
   if (needsRefresh) {
     if (!refreshToken) {
-      throw new Error("Google access token expired and no refresh token is stored — reconnect Google");
+      throw new Error(
+        "Google access token expired and no refresh token is stored — reconnect Google",
+      );
     }
     const refreshed = await refreshGoogleAccessToken(refreshToken);
     accessToken = refreshed.accessToken;
@@ -147,10 +157,114 @@ async function fetchGoogleRecordsForConnector(conn: Connector): Promise<unknown[
       .where(eq(connectors.id, conn.id));
   }
 
-  return fetchGoogleBundle(
-    accessToken!,
-    typeof settings.googleEmail === "string" ? settings.googleEmail : null,
+  return { accessToken: accessToken!, mailbox };
+}
+
+/** Resolve a fresh Google access token and fetch the sync bundle. */
+async function fetchGoogleRecordsForConnector(conn: Connector): Promise<unknown[]> {
+  const { accessToken, mailbox } = await ensureGoogleAccessToken(conn);
+  return fetchGoogleBundle(accessToken, mailbox);
+}
+
+export type LiveGmailHit = {
+  mailbox: string;
+  title: string;
+  text: string;
+  externalId: string;
+  sourceUrl: string | null;
+  sourceCreatedAt: string | null;
+};
+
+/**
+ * Live-search Gmail across every connected Google account.
+ * Used when Ask asks for mail that may not be in the sync cache.
+ */
+export async function liveSearchGmailForUser(
+  userId: string,
+  query: string,
+  opts?: { mailboxHint?: string | null; maxPerMailbox?: number },
+): Promise<LiveGmailHit[]> {
+  const q = query.trim();
+  if (!q) return [];
+
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(
+      and(
+        eq(connectors.userId, userId),
+        eq(connectors.type, "google"),
+        eq(connectors.enabled, true),
+      ),
+    );
+
+  const hint = opts?.mailboxHint?.trim().toLowerCase() || null;
+  const maxPer = opts?.maxPerMailbox ?? 15;
+  const hits: LiveGmailHit[] = [];
+
+  for (const row of rows) {
+    const settings = openConnectorSettings(
+      (row.settings ?? {}) as Record<string, unknown>,
+    );
+    const mailbox =
+      typeof settings.googleEmail === "string"
+        ? settings.googleEmail.trim().toLowerCase()
+        : null;
+    if (hint && mailbox && mailbox !== hint) continue;
+
+    try {
+      const { accessToken } = await ensureGoogleAccessToken(row);
+      const found = await searchGmailMessages(accessToken, q, maxPer);
+      for (const r of found) {
+        const text = mailbox ? `Mailbox: ${mailbox}\n${r.recordText}` : r.recordText;
+        hits.push({
+          mailbox: mailbox ?? "unknown",
+          title: r.recordTitle,
+          text,
+          externalId: r.externalId,
+          sourceUrl: r.sourceUrl ?? null,
+          sourceCreatedAt: r.sourceCreatedAt ?? null,
+        });
+      }
+    } catch {
+      // Skip mailboxes that fail auth/search; others may still succeed.
+    }
+  }
+
+  return hits;
+}
+
+/**
+ * Build a Gmail API query from a natural-language Ask question.
+ * e.g. "emails from Nancy Bryant" → `from:Nancy Bryant`
+ */
+export function buildGmailSearchQuery(question: string): string | null {
+  const q = question.trim();
+  if (!q) return null;
+
+  const fromMatch =
+    q.match(/\blook(?:ing)?\s+for\s+emails?\s+from\s+(.+?)(?:\?|[.!]|$)/i) ??
+    q.match(/\b(?:emails?|e-mails?|mail|messages?|inbox)\s+from\s+(.+?)(?:\?|[.!]|looking|please|$)/i) ??
+    q.match(/\bfrom\s+([A-Za-z][A-Za-z0-9.'\-\s]{1,60}?)(?:\s*\?|\s*$)/i);
+
+  if (fromMatch?.[1]) {
+    let who = fromMatch[1].trim().replace(/[?.!]+$/, "").trim();
+    who = who
+      .replace(/\b(please|in my (?:inbox|email|mail)|for me)\b/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (who.length >= 2) return `from:(${who})`;
+  }
+
+  const aboutMatch = q.match(
+    /\b(?:emails?|mail|messages?)\s+(?:about|regarding|re)\s+(.+?)(?:\?|[.!]|$)/i,
   );
+  if (aboutMatch?.[1]) {
+    const topic = aboutMatch[1].trim().replace(/[?.!]+$/, "").trim();
+    if (topic.length >= 2) return topic;
+  }
+
+  return null;
 }
 
 export async function findGoogleConnectorByEmail(

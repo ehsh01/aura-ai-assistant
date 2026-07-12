@@ -13,7 +13,12 @@ import {
 } from "./query-utils";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
 import { ensureUserFinanceFresh } from "./finance-auto-sync";
+import {
+  buildGmailSearchQuery,
+  liveSearchGmailForUser,
+} from "./connectors";
 import { retrieveRelevantRecords } from "./retrieval";
+import { extractMailboxHint } from "./retrieval";
 import { listWaitingOnForUser } from "./waiting-on";
 import { writeAuditLog } from "./audit";
 import { QUERY_ANSWER_PROMPT_VERSION } from "../prompts/queryAnswer.v1";
@@ -353,9 +358,75 @@ export async function queryRecallForUser(
     title: r.title,
     text: r.text,
   }));
+
+  // Live Gmail API search across every connected mailbox when Ask names a sender/topic.
+  // Synced cache is only recent mail — this finds people like "Nancy Bryant" who aren't in the cache.
+  const liveMailContext: {
+    entityType: string;
+    entityId: string;
+    title: string;
+    text: string;
+  }[] = [];
+  const wantsEmailAsk =
+    /\b(email|emails|e-mails?|gmail|inbox|mail|message|messages)\b/i.test(question) ||
+    /\b(email|emails|e-mails?|gmail|inbox|mail|message|messages)\b/i.test(retrievalQuestion);
+  const gmailQuery =
+    buildGmailSearchQuery(question) ?? buildGmailSearchQuery(retrievalQuestion);
+  if (wantsEmailAsk && gmailQuery) {
+    try {
+      const liveHits = await liveSearchGmailForUser(userId, gmailQuery, {
+        mailboxHint: extractMailboxHint(question, [
+          "ehernandez2@gmail.com",
+          "reiinvestorsllc@gmail.com",
+          "discoveryunlocked@gmail.com",
+        ]),
+        maxPerMailbox: 12,
+      });
+      for (const hit of liveHits.slice(0, 24)) {
+        liveMailContext.push({
+          entityType: "source_record",
+          entityId: hit.externalId,
+          title: `[${hit.mailbox}] ${hit.title}`,
+          text: `email gmail inbox mail message source=gmail_message mailbox=${hit.mailbox}\n${hit.text}`,
+        });
+        evidence.push(
+          makeEvidence({
+            claimType: "source_excerpt",
+            evidenceText: `[${hit.mailbox}] ${hit.title}\n${hit.text.slice(0, 450)}`,
+            metadata: {
+              relatedEntityType: "gmail_message",
+              mailbox: hit.mailbox,
+              retrievalMethod: "live_gmail_search",
+              gmailQuery,
+              sourceUrl: hit.sourceUrl,
+            },
+          }),
+        );
+      }
+      if (liveHits.length === 0) {
+        evidence.push(
+          makeEvidence({
+            claimType: "summary_based_on",
+            evidenceText: `Live Gmail search for "${gmailQuery}" returned no messages across your connected Google accounts (including ehernandez2@gmail.com and reiinvestorsllc@gmail.com).`,
+            metadata: {
+              retrievalMethod: "live_gmail_search",
+              gmailQuery,
+              hitCount: 0,
+            },
+          }),
+        );
+      }
+    } catch {
+      // Live search unavailable — fall back to synced corpus only.
+    }
+  }
+
   const contextRecords = waitingOnly
     ? waitingContext
-    : [...waitingContext, ...retrievalContext].slice(0, familyIntent ? 16 : 14);
+    : [...liveMailContext, ...waitingContext, ...retrievalContext].slice(
+        0,
+        liveMailContext.length > 0 ? 22 : familyIntent ? 16 : 14,
+      );
 
   const finish = async (
     result: Omit<QueryAnswer, "privacy" | "threadId"> & {
