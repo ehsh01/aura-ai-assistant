@@ -182,7 +182,12 @@ export type LiveGmailHit = {
 export async function liveSearchGmailForUser(
   userId: string,
   query: string,
-  opts?: { mailboxHint?: string | null; maxPerMailbox?: number },
+  opts?: {
+    mailboxHint?: string | null;
+    maxPerMailbox?: number;
+    /** When set, rank hits so inbound mail matching this person rises first. */
+    personName?: string | null;
+  },
 ): Promise<LiveGmailHit[]> {
   const q = query.trim();
   if (!q) return [];
@@ -231,12 +236,99 @@ export async function liveSearchGmailForUser(
     }
   }
 
-  return hits;
+  if (opts?.personName?.trim()) {
+    return rankLiveGmailHitsForPerson(hits, opts.personName);
+  }
+  return hits.sort((a, b) => {
+    const ta = a.sourceCreatedAt ? Date.parse(a.sourceCreatedAt) : 0;
+    const tb = b.sourceCreatedAt ? Date.parse(b.sourceCreatedAt) : 0;
+    return tb - ta;
+  });
+}
+
+/** Normalize a person/name fragment from Ask phrasing. */
+export function cleanMailPersonName(raw: string): string | null {
+  const who = raw
+    .trim()
+    .replace(/[?.!]+$/g, "")
+    .replace(/\b(please|in my (?:inbox|email|mail)|for me)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return who.length >= 2 ? who : null;
+}
+
+/**
+ * Extract the person the user is asking about for mail ("emails from X", "how about X").
+ */
+export function extractMailPersonName(question: string): string | null {
+  const q = question.trim();
+  if (!q) return null;
+
+  const fromMatch =
+    q.match(/\blook(?:ing)?\s+for\s+emails?\s+from\s+(.+?)(?:\?|[.!]|$)/i) ??
+    q.match(/\b(?:emails?|e-mails?|mail|messages?|inbox)\s+from\s+(.+?)(?:\?|[.!]|looking|please|$)/i) ??
+    q.match(/\bfrom\s+([A-Za-z][A-Za-z0-9.'\-\s]{1,60}?)(?:\s*\?|\s*$)/i);
+
+  if (fromMatch?.[1]) return cleanMailPersonName(fromMatch[1]);
+
+  const aboutPerson =
+    q.match(
+      /\b(?:how about|what about|any (?:from|for)|and)\s+([A-Za-z][A-Za-z0-9.'\-]+(?:\s+[A-Za-z][A-Za-z0-9.'\-]+){0,3})\s*$/i,
+    ) ??
+    q.match(
+      /^\s*([A-Za-z][A-Za-z0-9.'\-]+(?:\s+[A-Za-z][A-Za-z0-9.'\-]+){0,3})\s*$/,
+    );
+  if (aboutPerson?.[1] && !/\b(email|mail|spend|finance|calendar)\b/i.test(aboutPerson[1])) {
+    return cleanMailPersonName(aboutPerson[1]);
+  }
+
+  return null;
+}
+
+/**
+ * Prefer inbound mail whose From/display name/email overlaps the asked-for person,
+ * then newest first. Display names often differ (e.g. "Bryant Permit Service" for Nancy Bryant).
+ */
+export function rankLiveGmailHitsForPerson(
+  hits: LiveGmailHit[],
+  personName: string,
+): LiveGmailHit[] {
+  const tokens = personName
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3);
+  const score = (hit: LiveGmailHit): number => {
+    const text = hit.text.toLowerCase();
+    const fromLine = (text.match(/^from:\s*(.+)$/im)?.[1] ?? "").toLowerCase();
+    const senderEmail = (text.match(/sender_email:\s*(\S+)/i)?.[1] ?? "").toLowerCase();
+    const senderName = (text.match(/sender_name:\s*(.+)$/im)?.[1] ?? "").toLowerCase();
+    const mailbox = hit.mailbox.toLowerCase();
+    let s = 0;
+    const fromBlob = `${fromLine} ${senderName} ${senderEmail}`;
+    for (const t of tokens) {
+      if (fromBlob.includes(t)) s += 40;
+      else if (text.includes(t)) s += 8;
+    }
+    // Inbound (not sent by the connected mailbox) for "emails from X".
+    if (mailbox && fromBlob.includes(mailbox)) s -= 25;
+    else if (fromLine && !fromBlob.includes(mailbox)) s += 20;
+    const ts = hit.sourceCreatedAt ? Date.parse(hit.sourceCreatedAt) : 0;
+    s += Math.min(15, Math.floor(ts / 1e11)); // slight recency nudge
+    return s;
+  };
+  return [...hits].sort((a, b) => {
+    const d = score(b) - score(a);
+    if (d !== 0) return d;
+    const ta = a.sourceCreatedAt ? Date.parse(a.sourceCreatedAt) : 0;
+    const tb = b.sourceCreatedAt ? Date.parse(b.sourceCreatedAt) : 0;
+    return tb - ta;
+  });
 }
 
 /**
  * Build a Gmail API query from a natural-language Ask question.
- * e.g. "emails from Nancy Bryant" → `from:Nancy Bryant`
+ * "emails from Nancy Bryant" searches From + body/name tokens — From display
+ * names often omit the person's first name (e.g. Bryant Permit Service).
  */
 export function buildGmailSearchQuery(question: string): string | null {
   const q = question.trim();
@@ -248,23 +340,33 @@ export function buildGmailSearchQuery(question: string): string | null {
     q.match(/\bfrom\s+([A-Za-z][A-Za-z0-9.'\-\s]{1,60}?)(?:\s*\?|\s*$)/i);
 
   if (fromMatch?.[1]) {
-    let who = fromMatch[1].trim().replace(/[?.!]+$/, "").trim();
-    who = who
-      .replace(/\b(please|in my (?:inbox|email|mail)|for me)\b/gi, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (who.length >= 2) return `from:(${who})`;
+    const who = cleanMailPersonName(fromMatch[1]);
+    if (who) return buildGmailPersonQuery(who);
   }
 
   const aboutMatch = q.match(
     /\b(?:emails?|mail|messages?)\s+(?:about|regarding|re)\s+(.+?)(?:\?|[.!]|$)/i,
   );
   if (aboutMatch?.[1]) {
-    const topic = aboutMatch[1].trim().replace(/[?.!]+$/, "").trim();
+    const topic = aboutMatch[1].trim().replace(/[?.!]+$/g, "").trim();
     if (topic.length >= 2) return topic;
   }
 
   return null;
+}
+
+/** Build a Gmail query for an explicit person name (follow-ups / history). */
+export function buildGmailPersonQuery(personName: string): string | null {
+  const who = cleanMailPersonName(personName);
+  if (!who) return null;
+  const tokens = who.split(/\s+/).filter(Boolean);
+  const fromParts = [
+    `from:(${who})`,
+    ...tokens.map((t) => `from:${t}`),
+    `"${who}"`,
+    `(${who})`,
+  ];
+  return `(${[...new Set(fromParts)].join(" OR ")})`;
 }
 
 export async function findGoogleConnectorByEmail(

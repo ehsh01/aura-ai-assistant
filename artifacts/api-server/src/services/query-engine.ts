@@ -14,11 +14,12 @@ import {
 import { loadSyncedFinanceAggregate } from "./finance-sync";
 import { ensureUserFinanceFresh } from "./finance-auto-sync";
 import {
+  buildGmailPersonQuery,
   buildGmailSearchQuery,
+  extractMailPersonName,
   liveSearchGmailForUser,
 } from "./connectors";
-import { retrieveRelevantRecords } from "./retrieval";
-import { extractMailboxHint } from "./retrieval";
+import { extractMailboxHint, retrieveRelevantRecords } from "./retrieval";
 import { listWaitingOnForUser } from "./waiting-on";
 import { writeAuditLog } from "./audit";
 import { QUERY_ANSWER_PROMPT_VERSION } from "../prompts/queryAnswer.v1";
@@ -370,8 +371,12 @@ export async function queryRecallForUser(
   const wantsEmailAsk =
     /\b(email|emails|e-mails?|gmail|inbox|mail|message|messages)\b/i.test(question) ||
     /\b(email|emails|e-mails?|gmail|inbox|mail|message|messages)\b/i.test(retrievalQuestion);
+  const mailPerson =
+    extractMailPersonName(question) ?? extractMailPersonName(retrievalQuestion);
   const gmailQuery =
-    buildGmailSearchQuery(question) ?? buildGmailSearchQuery(retrievalQuestion);
+    buildGmailSearchQuery(question) ??
+    buildGmailSearchQuery(retrievalQuestion) ??
+    (wantsEmailAsk && mailPerson ? buildGmailPersonQuery(mailPerson) : null);
   if (wantsEmailAsk && gmailQuery) {
     try {
       const liveHits = await liveSearchGmailForUser(userId, gmailQuery, {
@@ -381,24 +386,26 @@ export async function queryRecallForUser(
           "discoveryunlocked@gmail.com",
         ]),
         maxPerMailbox: 12,
+        personName: mailPerson,
       });
       for (const hit of liveHits.slice(0, 24)) {
         liveMailContext.push({
           entityType: "source_record",
           entityId: hit.externalId,
           title: `[${hit.mailbox}] ${hit.title}`,
-          text: `email gmail inbox mail message source=gmail_message mailbox=${hit.mailbox}\n${hit.text}`,
+          text: `email gmail inbox mail message source=gmail_message mailbox=${hit.mailbox}\n${hit.text}${hit.sourceCreatedAt ? `\nDate: ${hit.sourceCreatedAt}` : ""}`,
         });
         evidence.push(
           makeEvidence({
             claimType: "source_excerpt",
-            evidenceText: `[${hit.mailbox}] ${hit.title}\n${hit.text.slice(0, 450)}`,
+            evidenceText: `[${hit.mailbox}] ${hit.title}${hit.sourceCreatedAt ? ` (${hit.sourceCreatedAt})` : ""}\n${hit.text.slice(0, 450)}`,
             metadata: {
               relatedEntityType: "gmail_message",
               mailbox: hit.mailbox,
               retrievalMethod: "live_gmail_search",
               gmailQuery,
               sourceUrl: hit.sourceUrl,
+              sourceCreatedAt: hit.sourceCreatedAt,
             },
           }),
         );
