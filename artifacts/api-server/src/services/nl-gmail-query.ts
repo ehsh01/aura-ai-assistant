@@ -112,6 +112,79 @@ function combineQueryParts(parts: string[]): string {
   return `(${uniq.join(" ")})`;
 }
 
+const DATE_MONTHS: Record<string, string> = {
+  jan: "01",
+  january: "01",
+  feb: "02",
+  february: "02",
+  mar: "03",
+  march: "03",
+  apr: "04",
+  april: "04",
+  may: "05",
+  jun: "06",
+  june: "06",
+  jul: "07",
+  july: "07",
+  aug: "08",
+  august: "08",
+  sep: "09",
+  sept: "09",
+  september: "09",
+  oct: "10",
+  october: "10",
+  nov: "11",
+  november: "11",
+  dec: "12",
+  december: "12",
+};
+
+export type ParsedDateRange =
+  | { kind: "relativeDays"; days: number }
+  | { kind: "day"; year: number; month: number; day: number };
+
+/**
+ * Shared spoken-date parser used by both Gmail and Drive query builders.
+ * Returns either a relative window (days back) or a single calendar day.
+ */
+export function parseDateRange(text: string): ParsedDateRange | null {
+  const q = text.trim();
+  const rel = q.match(/\b(?:last|past)\s+(\d+)\s+days?\b/i);
+  if (rel?.[1]) return { kind: "relativeDays", days: Number(rel[1]) };
+  if (/\byesterday\b/i.test(q)) return { kind: "relativeDays", days: 2 };
+  if (/\btoday\b/i.test(q)) return { kind: "relativeDays", days: 1 };
+  if (/\blast\s+week\b/i.test(q)) return { kind: "relativeDays", days: 7 };
+  if (/\blast\s+month\b/i.test(q)) return { kind: "relativeDays", days: 30 };
+  if (/\blast\s+year\b/i.test(q)) return { kind: "relativeDays", days: 365 };
+
+  const named = q.match(
+    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(20\d{2}))?\b/i,
+  );
+  if (named) {
+    const mon = DATE_MONTHS[named[1]!.toLowerCase()];
+    if (mon) {
+      return {
+        kind: "day",
+        year: named[3] ? Number(named[3]) : new Date().getFullYear(),
+        month: Number(mon),
+        day: Number(named[2]),
+      };
+    }
+  }
+
+  const numeric = q.match(/\b(20\d{2})[\/\-](\d{1,2})[\/\-](\d{1,2})\b/);
+  if (numeric) {
+    return {
+      kind: "day",
+      year: Number(numeric[1]),
+      month: Number(numeric[2]),
+      day: Number(numeric[3]),
+    };
+  }
+
+  return null;
+}
+
 /**
  * Fast rule-based NL → Gmail query for common phrasings.
  */

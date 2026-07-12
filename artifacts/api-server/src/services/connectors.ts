@@ -13,6 +13,7 @@ import {
   fetchGoogleBundle,
   googleConnector,
   refreshGoogleAccessToken,
+  searchDriveFiles,
   searchGmailMessages,
 } from "../connectors/google";
 import { manualConnector } from "../connectors/manual";
@@ -175,8 +176,86 @@ export type LiveGmailHit = {
   sourceCreatedAt: string | null;
 };
 
+export type LiveDriveHit = {
+  /** Owning connected account (Google email). */
+  account: string;
+  title: string;
+  text: string;
+  externalId: string;
+  sourceUrl: string | null;
+  sourceCreatedAt: string | null;
+  mimeType: string | null;
+};
+
+/** Per-account Google API budget so one slow account can't stall an Ask. */
+const LIVE_SEARCH_TIMEOUT_MS = 6000;
+/** Short cache so repeat/follow-up asks return instantly. */
+const LIVE_SEARCH_TTL_MS = 60_000;
+const liveSearchCache = new Map<string, { at: number; value: unknown }>();
+
+async function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function liveCacheGet<T>(key: string): T | null {
+  const hit = liveSearchCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > LIVE_SEARCH_TTL_MS) {
+    liveSearchCache.delete(key);
+    return null;
+  }
+  return hit.value as T;
+}
+
+function liveCacheSet(key: string, value: unknown): void {
+  liveSearchCache.set(key, { at: Date.now(), value });
+  if (liveSearchCache.size > 200) {
+    const oldest = liveSearchCache.keys().next().value;
+    if (oldest) liveSearchCache.delete(oldest);
+  }
+}
+
+/** All enabled Google connector rows for a user. */
+async function loadEnabledGoogleConnectors(userId: string): Promise<Connector[]> {
+  return getDb()
+    .select()
+    .from(connectors)
+    .where(
+      and(
+        eq(connectors.userId, userId),
+        eq(connectors.type, "google"),
+        eq(connectors.enabled, true),
+      ),
+    );
+}
+
+function connectorMailbox(row: Connector): string | null {
+  const settings = openConnectorSettings(
+    (row.settings ?? {}) as Record<string, unknown>,
+  );
+  return typeof settings.googleEmail === "string"
+    ? settings.googleEmail.trim().toLowerCase()
+    : null;
+}
+
+/** Connected Google account emails (for mailbox-hint matching in Ask). */
+export async function getConnectedGoogleMailboxes(userId: string): Promise<string[]> {
+  const rows = await loadEnabledGoogleConnectors(userId);
+  return rows
+    .map((r) => connectorMailbox(r))
+    .filter((m): m is string => Boolean(m));
+}
+
 /**
- * Live-search Gmail across every connected Google account.
+ * Live-search Gmail across every connected Google account, in parallel.
  * Used when Ask asks for mail that may not be in the sync cache.
  */
 export async function liveSearchGmailForUser(
@@ -192,58 +271,107 @@ export async function liveSearchGmailForUser(
   const q = query.trim();
   if (!q) return [];
 
-  const rows = await getDb()
-    .select()
-    .from(connectors)
-    .where(
-      and(
-        eq(connectors.userId, userId),
-        eq(connectors.type, "google"),
-        eq(connectors.enabled, true),
-      ),
-    );
-
   const hint = opts?.mailboxHint?.trim().toLowerCase() || null;
   const maxPer = opts?.maxPerMailbox ?? 15;
-  const hits: LiveGmailHit[] = [];
+  const cacheKey = `gmail:${userId}:${hint ?? ""}:${maxPer}:${q}`;
 
-  for (const row of rows) {
-    const settings = openConnectorSettings(
-      (row.settings ?? {}) as Record<string, unknown>,
+  let hits = liveCacheGet<LiveGmailHit[]>(cacheKey);
+  if (!hits) {
+    const rows = await loadEnabledGoogleConnectors(userId);
+    const perAccount = await Promise.all(
+      rows.map(async (row): Promise<LiveGmailHit[]> => {
+        const mailbox = connectorMailbox(row);
+        if (hint && mailbox && mailbox !== hint) return [];
+        try {
+          const { accessToken } = await ensureGoogleAccessToken(row);
+          const found = await withTimeout(
+            searchGmailMessages(accessToken, q, maxPer),
+            LIVE_SEARCH_TIMEOUT_MS,
+            [],
+          );
+          return found.map((r) => ({
+            mailbox: mailbox ?? "unknown",
+            title: r.recordTitle,
+            text: mailbox ? `Mailbox: ${mailbox}\n${r.recordText}` : r.recordText,
+            externalId: r.externalId,
+            sourceUrl: r.sourceUrl ?? null,
+            sourceCreatedAt: r.sourceCreatedAt ?? null,
+          }));
+        } catch {
+          // Skip mailboxes that fail auth/search; others may still succeed.
+          return [];
+        }
+      }),
     );
-    const mailbox =
-      typeof settings.googleEmail === "string"
-        ? settings.googleEmail.trim().toLowerCase()
-        : null;
-    if (hint && mailbox && mailbox !== hint) continue;
-
-    try {
-      const { accessToken } = await ensureGoogleAccessToken(row);
-      const found = await searchGmailMessages(accessToken, q, maxPer);
-      for (const r of found) {
-        const text = mailbox ? `Mailbox: ${mailbox}\n${r.recordText}` : r.recordText;
-        hits.push({
-          mailbox: mailbox ?? "unknown",
-          title: r.recordTitle,
-          text,
-          externalId: r.externalId,
-          sourceUrl: r.sourceUrl ?? null,
-          sourceCreatedAt: r.sourceCreatedAt ?? null,
-        });
-      }
-    } catch {
-      // Skip mailboxes that fail auth/search; others may still succeed.
-    }
+    hits = perAccount.flat();
+    liveCacheSet(cacheKey, hits);
   }
 
   if (opts?.personName?.trim()) {
     return rankLiveGmailHitsForPerson(hits, opts.personName);
   }
-  return hits.sort((a, b) => {
+  return [...hits].sort((a, b) => {
     const ta = a.sourceCreatedAt ? Date.parse(a.sourceCreatedAt) : 0;
     const tb = b.sourceCreatedAt ? Date.parse(b.sourceCreatedAt) : 0;
     return tb - ta;
   });
+}
+
+/**
+ * Live-search Google Drive across every connected account, in parallel.
+ * Uses Drive's native full-text index (searches inside Docs/Sheets/Slides/PDFs
+ * and OCR'd scans) so there are no size or scannability limits.
+ */
+export async function liveSearchDriveForUser(
+  userId: string,
+  query: string,
+  opts?: { mailboxHint?: string | null; maxPerAccount?: number },
+): Promise<LiveDriveHit[]> {
+  const q = query.trim();
+  if (!q) return [];
+
+  const hint = opts?.mailboxHint?.trim().toLowerCase() || null;
+  const maxPer = opts?.maxPerAccount ?? 15;
+  const cacheKey = `drive:${userId}:${hint ?? ""}:${maxPer}:${q}`;
+
+  const cached = liveCacheGet<LiveDriveHit[]>(cacheKey);
+  if (cached) return cached;
+
+  const rows = await loadEnabledGoogleConnectors(userId);
+  const perAccount = await Promise.all(
+    rows.map(async (row): Promise<LiveDriveHit[]> => {
+      const account = connectorMailbox(row);
+      if (hint && account && account !== hint) return [];
+      try {
+        const { accessToken } = await ensureGoogleAccessToken(row);
+        const found = await withTimeout(
+          searchDriveFiles(accessToken, q, maxPer),
+          LIVE_SEARCH_TIMEOUT_MS,
+          [],
+        );
+        return found.map((r) => ({
+          account: account ?? "unknown",
+          title: r.recordTitle,
+          text: account ? `Account: ${account}\n${r.recordText}` : r.recordText,
+          externalId: r.externalId,
+          sourceUrl: r.sourceUrl ?? null,
+          sourceCreatedAt: r.sourceCreatedAt ?? null,
+          mimeType:
+            typeof r.metadata?.mimeType === "string" ? r.metadata.mimeType : null,
+        }));
+      } catch {
+        return [];
+      }
+    }),
+  );
+
+  const hits = perAccount.flat().sort((a, b) => {
+    const ta = a.sourceCreatedAt ? Date.parse(a.sourceCreatedAt) : 0;
+    const tb = b.sourceCreatedAt ? Date.parse(b.sourceCreatedAt) : 0;
+    return tb - ta;
+  });
+  liveCacheSet(cacheKey, hits);
+  return hits;
 }
 
 /** Normalize a person/name fragment from Ask phrasing. */

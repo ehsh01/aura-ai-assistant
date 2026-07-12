@@ -145,25 +145,87 @@ function headerValue(
   return hit?.value ?? null;
 }
 
+/** Max decoded email body length we surface to Ask (keeps context bounded). */
+const MAX_EMAIL_BODY_CHARS = 4000;
+
+type GmailPart = {
+  mimeType?: string;
+  filename?: string;
+  body?: { data?: string; size?: number };
+  parts?: GmailPart[];
+};
+
+function decodeBase64Url(data: string): string {
+  try {
+    return Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString(
+      "utf-8",
+    );
+  } catch {
+    return "";
+  }
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Walk a Gmail payload tree and extract readable body text (prefer text/plain). */
+function extractGmailBody(payload: GmailPart | undefined): string {
+  if (!payload) return "";
+  const plains: string[] = [];
+  const htmls: string[] = [];
+
+  const walk = (part: GmailPart) => {
+    const mime = part.mimeType ?? "";
+    // Skip attachments (they have a filename) — we only want the message body.
+    if (!part.filename && part.body?.data) {
+      if (mime === "text/plain") plains.push(decodeBase64Url(part.body.data));
+      else if (mime === "text/html") htmls.push(decodeBase64Url(part.body.data));
+    }
+    for (const child of part.parts ?? []) walk(child);
+  };
+  walk(payload);
+
+  const plain = plains.join("\n").trim();
+  if (plain) return plain.slice(0, MAX_EMAIL_BODY_CHARS);
+  const html = htmls.join("\n").trim();
+  if (html) return stripHtml(html).slice(0, MAX_EMAIL_BODY_CHARS);
+  return "";
+}
+
 async function fetchGmailMessageDetails(
   accessToken: string,
   messageId: string,
+  opts?: { full?: boolean },
 ): Promise<GoogleRawRecord | null> {
   try {
+    const wantFull = opts?.full === true;
+    const detailUrl = wantFull
+      ? `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}?format=full`
+      : `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`;
     const full = await googleGet<{
       id: string;
       snippet?: string;
       internalDate?: string;
-      payload?: { headers?: { name?: string; value?: string }[] };
-    }>(
-      accessToken,
-      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,
-    );
+      payload?: GmailPart & { headers?: { name?: string; value?: string }[] };
+    }>(accessToken, detailUrl);
     const subject = headerValue(full.payload?.headers, "Subject") ?? "(no subject)";
     const from = headerValue(full.payload?.headers, "From") ?? "";
     const to = headerValue(full.payload?.headers, "To") ?? "";
     const date = headerValue(full.payload?.headers, "Date");
     const snippet = (full.snippet ?? "").slice(0, 800);
+    const body = wantFull ? extractGmailBody(full.payload) : "";
     const fromParsed = (() => {
       const angle = from.match(/^(.*?)\s*<([^>]+)>/);
       if (angle) {
@@ -186,7 +248,7 @@ async function fetchGmailMessageDetails(
         fromParsed.name ? `sender_name: ${fromParsed.name}` : null,
         fromParsed.email ? `sender_email: ${fromParsed.email}` : null,
         `Subject: ${subject}`,
-        snippet,
+        body || snippet,
       ]
         .filter(Boolean)
         .join("\n"),
@@ -200,6 +262,7 @@ async function fetchGmailMessageDetails(
         subject,
         senderName: fromParsed.name || null,
         senderEmail: fromParsed.email || null,
+        hasFullBody: Boolean(body),
       },
     };
   } catch {
@@ -223,11 +286,14 @@ async function fetchGmail(accessToken: string): Promise<GoogleRawRecord[]> {
 
 /**
  * Live Gmail search (used when Ask asks for mail from/about someone not in the sync cache).
+ * Gmail's `q` already searches full message bodies server-side; we then fetch the full
+ * decoded body for the top `fullBodyCount` hits so Ask can read/quote real content.
  */
 export async function searchGmailMessages(
   accessToken: string,
   query: string,
   maxResults = 25,
+  opts?: { fullBodyCount?: number },
 ): Promise<GoogleRawRecord[]> {
   const q = query.trim();
   if (!q) return [];
@@ -235,12 +301,14 @@ export async function searchGmailMessages(
   url.searchParams.set("maxResults", String(Math.min(Math.max(maxResults, 1), 50)));
   url.searchParams.set("q", q);
   const list = await googleGet<{ messages?: { id: string }[] }>(accessToken, url.toString());
-  const out: GoogleRawRecord[] = [];
-  for (const msg of list.messages ?? []) {
-    const row = await fetchGmailMessageDetails(accessToken, msg.id);
-    if (row) out.push(row);
-  }
-  return out;
+  const ids = (list.messages ?? []).map((m) => m.id);
+  const fullBodyCount = Math.max(0, opts?.fullBodyCount ?? 8);
+  const rows = await Promise.all(
+    ids.map((id, idx) =>
+      fetchGmailMessageDetails(accessToken, id, { full: idx < fullBodyCount }),
+    ),
+  );
+  return rows.filter((r): r is GoogleRawRecord => r !== null);
 }
 
 async function fetchCalendar(accessToken: string): Promise<GoogleRawRecord[]> {
@@ -403,6 +471,135 @@ async function fetchDrive(accessToken: string): Promise<GoogleRawRecord[]> {
       sourceUrl: f.webViewLink ?? null,
       sourceCreatedAt: f.modifiedTime ?? null,
       metadata: { mimeType: f.mimeType ?? null },
+    });
+  }
+  return out;
+}
+
+/** Max text we pull per Drive file (Docs/Sheets/Slides/text) for the top hits. */
+const MAX_DRIVE_TEXT_CHARS = 4000;
+
+const DRIVE_EXPORT_MIME: Record<string, string> = {
+  "application/vnd.google-apps.document": "text/plain",
+  "application/vnd.google-apps.presentation": "text/plain",
+  "application/vnd.google-apps.spreadsheet": "text/csv",
+};
+
+const DRIVE_DOWNLOADABLE_TEXT =
+  /^(text\/|application\/(json|xml|rtf|csv))/i;
+
+/**
+ * Pull readable text for a single Drive file (top-hit enrichment only).
+ * Google-native docs are exported to text; small text files are downloaded.
+ * PDFs/images are intentionally skipped — Google's index already searched their
+ * content, but the raw OCR text is not retrievable via the read-only API.
+ */
+export async function fetchDriveFileText(
+  accessToken: string,
+  fileId: string,
+  mimeType: string | null | undefined,
+): Promise<string> {
+  const mime = mimeType ?? "";
+  try {
+    const exportMime = DRIVE_EXPORT_MIME[mime];
+    if (exportMime) {
+      const res = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=${encodeURIComponent(exportMime)}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      if (res.ok) return (await res.text()).slice(0, MAX_DRIVE_TEXT_CHARS);
+      return "";
+    }
+    if (DRIVE_DOWNLOADABLE_TEXT.test(mime)) {
+      const res = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      if (res.ok) return (await res.text()).slice(0, MAX_DRIVE_TEXT_CHARS);
+    }
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Live Drive search across a single account. Uses Drive's own full-text index
+ * (`fullText contains`) which matches content inside Docs, Sheets, Slides, PDFs,
+ * and scanned images Google has OCR'd — no size or scannability limits.
+ * The top `fullTextCount` non-folder hits are enriched with exportable text.
+ */
+export async function searchDriveFiles(
+  accessToken: string,
+  query: string,
+  maxResults = 25,
+  opts?: { fullTextCount?: number },
+): Promise<GoogleRawRecord[]> {
+  const q = query.trim();
+  if (!q) return [];
+  const url = new URL("https://www.googleapis.com/drive/v3/files");
+  url.searchParams.set(
+    "fields",
+    "files(id,name,mimeType,modifiedTime,createdTime,webViewLink,description,owners(emailAddress,displayName),size)",
+  );
+  url.searchParams.set("pageSize", String(Math.min(Math.max(maxResults, 1), 50)));
+  url.searchParams.set("orderBy", "modifiedTime desc");
+  url.searchParams.set("q", q);
+  url.searchParams.set("includeItemsFromAllDrives", "true");
+  url.searchParams.set("supportsAllDrives", "true");
+  url.searchParams.set("corpora", "allDrives");
+  url.searchParams.set("spaces", "drive");
+
+  const data = await googleGet<{
+    files?: {
+      id?: string;
+      name?: string;
+      mimeType?: string;
+      modifiedTime?: string;
+      createdTime?: string;
+      webViewLink?: string;
+      description?: string;
+      owners?: { emailAddress?: string; displayName?: string }[];
+      size?: string;
+    }[];
+  }>(accessToken, url.toString());
+
+  const files = (data.files ?? []).filter((f) => f.id);
+  const fullTextCount = Math.max(0, opts?.fullTextCount ?? 6);
+  let enriched = 0;
+
+  const out: GoogleRawRecord[] = [];
+  for (const f of files) {
+    const isFolder = f.mimeType === "application/vnd.google-apps.folder";
+    let extra = "";
+    if (!isFolder && enriched < fullTextCount) {
+      extra = await fetchDriveFileText(accessToken, f.id!, f.mimeType);
+      if (extra) enriched += 1;
+    }
+    const title = f.name ?? "Untitled";
+    const owner = f.owners?.[0]?.emailAddress ?? f.owners?.[0]?.displayName ?? null;
+    out.push({
+      externalId: `gdrive:${f.id}`,
+      recordType: "drive_file",
+      recordTitle: title.slice(0, 400),
+      recordText: [
+        `Drive file: ${title}`,
+        f.mimeType ? `Type: ${f.mimeType}` : null,
+        f.modifiedTime ? `Modified: ${f.modifiedTime}` : null,
+        owner ? `Owner: ${owner}` : null,
+        f.description ? f.description.slice(0, 400) : null,
+        extra || null,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      sourceUrl: f.webViewLink ?? null,
+      sourceCreatedAt: f.modifiedTime ?? f.createdTime ?? null,
+      metadata: {
+        mimeType: f.mimeType ?? null,
+        owner,
+        size: f.size ?? null,
+        isFolder,
+      },
     });
   }
   return out;

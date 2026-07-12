@@ -13,8 +13,13 @@ import {
 } from "./query-utils";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
 import { ensureUserFinanceFresh } from "./finance-auto-sync";
-import { liveSearchGmailForUser } from "./connectors";
+import {
+  getConnectedGoogleMailboxes,
+  liveSearchDriveForUser,
+  liveSearchGmailForUser,
+} from "./connectors";
 import { isEmailSearchIntent, planGmailSearch } from "./nl-gmail-query";
+import { isDriveSearchIntent, planDriveSearch } from "./nl-drive-query";
 import { extractMailboxHint, retrieveRelevantRecords } from "./retrieval";
 import { listWaitingOnForUser } from "./waiting-on";
 import { writeAuditLog } from "./audit";
@@ -356,8 +361,10 @@ export async function queryRecallForUser(
     text: r.text,
   }));
 
-  // Natural-language live Gmail search across every connected mailbox.
-  // AI (+ heuristics) turn "find Nancy's Apr 23 permit email" into a real Gmail query.
+  // Natural-language live search across every connected Google account.
+  // Gmail: "find Nancy's Apr 23 permit email"; Drive: "find the contract PDF".
+  // Both use Google's own indexes (Gmail full body, Drive full-text + OCR),
+  // run in parallel, so there are no size/scannability limits.
   const liveMailContext: {
     entityType: string;
     entityId: string;
@@ -366,62 +373,119 @@ export async function queryRecallForUser(
   }[] = [];
   const wantsEmailAsk =
     isEmailSearchIntent(question) || isEmailSearchIntent(retrievalQuestion);
-  if (wantsEmailAsk) {
-    try {
-      const planned =
-        (await planGmailSearch(question)) ??
-        (await planGmailSearch(retrievalQuestion));
-      if (planned?.query) {
-        const gmailQuery = planned.query;
-        const liveHits = await liveSearchGmailForUser(userId, gmailQuery, {
-          mailboxHint: extractMailboxHint(question, [
-            "ehernandez2@gmail.com",
-            "reiinvestorsllc@gmail.com",
-            "discoveryunlocked@gmail.com",
-          ]),
-          maxPerMailbox: 15,
-          personName: planned.personName,
+  const wantsDriveAsk =
+    isDriveSearchIntent(question) || isDriveSearchIntent(retrievalQuestion);
+
+  if (wantsEmailAsk || wantsDriveAsk) {
+    const mailboxes = await getConnectedGoogleMailboxes(userId);
+    const mailboxHint = extractMailboxHint(question, mailboxes);
+    const accountsLabel =
+      mailboxes.length > 0 ? mailboxes.join(", ") : "your connected Google accounts";
+
+    const [gmailPlan, drivePlan] = await Promise.all([
+      wantsEmailAsk
+        ? planGmailSearch(question).then((p) => p ?? planGmailSearch(retrievalQuestion))
+        : Promise.resolve(null),
+      wantsDriveAsk
+        ? planDriveSearch(question).then((p) => p ?? planDriveSearch(retrievalQuestion))
+        : Promise.resolve(null),
+    ]);
+
+    const [gmailHits, driveHits] = await Promise.all([
+      gmailPlan?.query
+        ? liveSearchGmailForUser(userId, gmailPlan.query, {
+            mailboxHint,
+            maxPerMailbox: 15,
+            personName: gmailPlan.personName,
+          }).catch(() => [])
+        : Promise.resolve([]),
+      drivePlan?.query
+        ? liveSearchDriveForUser(userId, drivePlan.query, {
+            mailboxHint,
+            maxPerAccount: 15,
+          }).catch(() => [])
+        : Promise.resolve([]),
+    ]);
+
+    if (gmailPlan?.query) {
+      for (const hit of gmailHits.slice(0, 24)) {
+        liveMailContext.push({
+          entityType: "source_record",
+          entityId: hit.externalId,
+          title: `[${hit.mailbox}] ${hit.title}`,
+          text: `email gmail inbox mail message source=gmail_message mailbox=${hit.mailbox}\n${hit.text}${hit.sourceCreatedAt ? `\nDate: ${hit.sourceCreatedAt}` : ""}`,
         });
-        for (const hit of liveHits.slice(0, 24)) {
-          liveMailContext.push({
-            entityType: "source_record",
-            entityId: hit.externalId,
-            title: `[${hit.mailbox}] ${hit.title}`,
-            text: `email gmail inbox mail message source=gmail_message mailbox=${hit.mailbox}\n${hit.text}${hit.sourceCreatedAt ? `\nDate: ${hit.sourceCreatedAt}` : ""}`,
-          });
-          evidence.push(
-            makeEvidence({
-              claimType: "source_excerpt",
-              evidenceText: `[${hit.mailbox}] ${hit.title}${hit.sourceCreatedAt ? ` (${hit.sourceCreatedAt})` : ""}\n${hit.text.slice(0, 450)}`,
-              metadata: {
-                relatedEntityType: "gmail_message",
-                mailbox: hit.mailbox,
-                retrievalMethod: "live_gmail_search",
-                gmailQuery,
-                querySource: planned.source,
-                sourceUrl: hit.sourceUrl,
-                sourceCreatedAt: hit.sourceCreatedAt,
-              },
-            }),
-          );
-        }
-        if (liveHits.length === 0) {
-          evidence.push(
-            makeEvidence({
-              claimType: "summary_based_on",
-              evidenceText: `Live Gmail search for "${gmailQuery}" returned no messages across your connected Google accounts (including ehernandez2@gmail.com and reiinvestorsllc@gmail.com).`,
-              metadata: {
-                retrievalMethod: "live_gmail_search",
-                gmailQuery,
-                querySource: planned.source,
-                hitCount: 0,
-              },
-            }),
-          );
-        }
+        evidence.push(
+          makeEvidence({
+            claimType: "source_excerpt",
+            evidenceText: `[${hit.mailbox}] ${hit.title}${hit.sourceCreatedAt ? ` (${hit.sourceCreatedAt})` : ""}\n${hit.text.slice(0, 450)}`,
+            metadata: {
+              relatedEntityType: "gmail_message",
+              mailbox: hit.mailbox,
+              retrievalMethod: "live_gmail_search",
+              gmailQuery: gmailPlan.query,
+              querySource: gmailPlan.source,
+              sourceUrl: hit.sourceUrl,
+              sourceCreatedAt: hit.sourceCreatedAt,
+            },
+          }),
+        );
       }
-    } catch {
-      // Live search unavailable — fall back to synced corpus only.
+      if (gmailHits.length === 0) {
+        evidence.push(
+          makeEvidence({
+            claimType: "summary_based_on",
+            evidenceText: `Live Gmail search for "${gmailPlan.query}" returned no messages across ${accountsLabel}.`,
+            metadata: {
+              retrievalMethod: "live_gmail_search",
+              gmailQuery: gmailPlan.query,
+              querySource: gmailPlan.source,
+              hitCount: 0,
+            },
+          }),
+        );
+      }
+    }
+
+    if (drivePlan?.query) {
+      for (const hit of driveHits.slice(0, 24)) {
+        liveMailContext.push({
+          entityType: "source_record",
+          entityId: hit.externalId,
+          title: `[${hit.account}] ${hit.title}`,
+          text: `drive file document google drive pdf attachment source=drive_file account=${hit.account}${hit.mimeType ? ` type=${hit.mimeType}` : ""}\n${hit.text}${hit.sourceCreatedAt ? `\nModified: ${hit.sourceCreatedAt}` : ""}${hit.sourceUrl ? `\nLink: ${hit.sourceUrl}` : ""}`,
+        });
+        evidence.push(
+          makeEvidence({
+            claimType: "source_excerpt",
+            evidenceText: `[${hit.account}] ${hit.title}${hit.sourceCreatedAt ? ` (${hit.sourceCreatedAt})` : ""}\n${hit.text.slice(0, 450)}`,
+            metadata: {
+              relatedEntityType: "drive_file",
+              account: hit.account,
+              mimeType: hit.mimeType,
+              retrievalMethod: "live_drive_search",
+              driveQuery: drivePlan.query,
+              querySource: drivePlan.source,
+              sourceUrl: hit.sourceUrl,
+              sourceCreatedAt: hit.sourceCreatedAt,
+            },
+          }),
+        );
+      }
+      if (driveHits.length === 0) {
+        evidence.push(
+          makeEvidence({
+            claimType: "summary_based_on",
+            evidenceText: `Live Google Drive search for "${drivePlan.query}" returned no files across ${accountsLabel}.`,
+            metadata: {
+              retrievalMethod: "live_drive_search",
+              driveQuery: drivePlan.query,
+              querySource: drivePlan.source,
+              hitCount: 0,
+            },
+          }),
+        );
+      }
     }
   }
 
@@ -429,7 +493,7 @@ export async function queryRecallForUser(
     ? waitingContext
     : [...liveMailContext, ...waitingContext, ...retrievalContext].slice(
         0,
-        liveMailContext.length > 0 ? 22 : familyIntent ? 16 : 14,
+        liveMailContext.length > 0 ? 26 : familyIntent ? 16 : 14,
       );
 
   const finish = async (
