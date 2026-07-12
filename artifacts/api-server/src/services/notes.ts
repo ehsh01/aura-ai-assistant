@@ -19,6 +19,7 @@ import {
   resolvePersonIdFromTags,
   syncPersonTag,
 } from "./person-tags";
+import { normalizeKeywordToken } from "./keyword-match";
 
 export type RecallNoteDto = {
   id: string;
@@ -172,11 +173,56 @@ const SEARCH_STOP_WORDS = new Set([
 ]);
 
 function extractSearchTerms(query: string): string[] {
-  return query
-    .toLowerCase()
-    .replace(/['']/g, "")
-    .split(/[^a-z0-9]+/)
-    .filter((term) => term.length >= 2 && !SEARCH_STOP_WORDS.has(term));
+  return [
+    ...new Set(
+      query
+        .toLowerCase()
+        .replace(/['']/g, "")
+        .split(/[^a-z0-9]+/)
+        .map((term) => normalizeKeywordToken(term))
+        .filter((term) => term.length >= 2 && !SEARCH_STOP_WORDS.has(term)),
+    ),
+  ];
+}
+
+function noteTextMatchesTerm(term: string) {
+  if (term === "vin") {
+    return or(
+      ilike(notes.title, "%vin%"),
+      ilike(notes.preview, "%vin%"),
+      ilike(notes.content, "%vin%"),
+      sql`${notes.tags}::text ilike ${"%vin%"}`,
+      sql`${notes.title} ~* ${"\\m(?:WP0[A-Z0-9]{14}|[A-HJ-NPR-Z0-9]{17})\\M"}`,
+      sql`${notes.preview} ~* ${"\\m(?:WP0[A-Z0-9]{14}|[A-HJ-NPR-Z0-9]{17})\\M"}`,
+      sql`${notes.content} ~* ${"\\m(?:WP0[A-Z0-9]{14}|[A-HJ-NPR-Z0-9]{17})\\M"}`,
+      sql`exists (
+        select 1 from note_attachments na
+        where na.note_id = ${notes.id}
+          and (
+            na.file_name ilike ${"%vin%"}
+            or coalesce(na.extracted_text, '') ilike ${"%vin%"}
+            or coalesce(na.extracted_text, '') ~* ${"\\m(?:WP0[A-Z0-9]{14}|[A-HJ-NPR-Z0-9]{17})\\M"}
+            or na.file_name ~* ${"\\m(?:WP0[A-Z0-9]{14}|[A-HJ-NPR-Z0-9]{17})\\M"}
+          )
+      )`,
+    );
+  }
+
+  const pattern = `%${term}%`;
+  return or(
+    ilike(notes.title, pattern),
+    ilike(notes.preview, pattern),
+    ilike(notes.content, pattern),
+    sql`${notes.tags}::text ilike ${pattern}`,
+    sql`exists (
+      select 1 from note_attachments na
+      where na.note_id = ${notes.id}
+        and (
+          na.file_name ilike ${pattern}
+          or coalesce(na.extracted_text, '') ilike ${pattern}
+        )
+    )`,
+  );
 }
 
 /** Keyword search across the user's full note library (title, preview, tags, attachment text). */
@@ -189,23 +235,7 @@ export async function searchNotesForUser(
   if (terms.length === 0) return [];
 
   const db = getDb();
-  const termFilters = terms.map((term) => {
-    const pattern = `%${term}%`;
-    return or(
-      ilike(notes.title, pattern),
-      ilike(notes.preview, pattern),
-      ilike(notes.content, pattern),
-      sql`${notes.tags}::text ilike ${pattern}`,
-      sql`exists (
-        select 1 from note_attachments na
-        where na.note_id = ${notes.id}
-          and (
-            na.file_name ilike ${pattern}
-            or coalesce(na.extracted_text, '') ilike ${pattern}
-          )
-      )`,
-    );
-  });
+  const termFilters = terms.map((term) => noteTextMatchesTerm(term));
 
   const rows = await db
     .select()

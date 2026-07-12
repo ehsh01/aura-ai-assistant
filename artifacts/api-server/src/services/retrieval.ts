@@ -2,19 +2,26 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { connectors, sourceRecords } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { listTasksForUser } from "./tasks";
-import { listNotesForUser } from "./notes";
+import { listNotesForUser, searchNotesForUser } from "./notes";
 import { listPeopleForUser } from "./people";
 import { listKnowledgeForUser } from "./knowledge";
 import { listDocumentsForUser } from "./documents";
 import { listCapturesForUser } from "./captures";
 import { listMemoriesForUser } from "./life-memory";
 import { noteRetrievalText } from "./note-retrieval";
+import { keywordScore } from "./keyword-match";
 import {
   cosineSimilarity,
   embedItemsCached,
   embedQuery,
 } from "./embedding-cache";
 import { FAMILY_RELATION_INTENT } from "./query-utils";
+
+export {
+  extractVinCandidates,
+  keywordScore,
+  normalizeKeywordToken,
+} from "./keyword-match";
 
 export type RetrievedRecord = {
   entityType: string;
@@ -381,26 +388,6 @@ function personMatchOnRecord(
   return null;
 }
 
-/** Strip possessives/punctuation so "wife's" matches "wife". */
-export function normalizeKeywordToken(t: string): string {
-  return t
-    .toLowerCase()
-    .replace(/^[^\w@]+|[^\w@]+$/g, "")
-    .replace(/['']s$/i, "")
-    .replace(/['']/g, "");
-}
-
-export function keywordScore(question: string, text: string): number {
-  const terms = question
-    .toLowerCase()
-    .split(/\s+/)
-    .map(normalizeKeywordToken)
-    .filter((t) => t.length > 2);
-  if (terms.length === 0) return 0;
-  const hay = text.toLowerCase();
-  return terms.reduce((s, t) => (hay.includes(t) ? s + 1 : s), 0) / terms.length;
-}
-
 function isFamilyDomainMemory(r: ContextRecord): boolean {
   return (
     r.entityType === "memory" &&
@@ -758,7 +745,25 @@ export async function retrieveRelevantRecords(
   usedSemantic: boolean;
   namedPeople: { id: string; displayName: string }[];
 }> {
-  const { records: corpus, people } = await collectCorpus(userId);
+  const [{ records: baseCorpus, people }, noteSearchHits] = await Promise.all([
+    collectCorpus(userId),
+    searchNotesForUser(userId, question, 12).catch(() => []),
+  ]);
+  const corpus = [...baseCorpus];
+  const corpusNoteIds = new Set(
+    corpus.filter((r) => r.entityType === "note").map((r) => r.entityId),
+  );
+  // Full-library note search covers older notes outside the recency corpus cap.
+  for (const note of noteSearchHits) {
+    if (corpusNoteIds.has(note.id)) continue;
+    corpus.push({
+      entityType: "note",
+      entityId: note.id,
+      title: note.title,
+      text: noteRetrievalText(note),
+    });
+    corpusNoteIds.add(note.id);
+  }
   if (corpus.length === 0) {
     return { records: [], usedSemantic: false, namedPeople: [] };
   }

@@ -18,6 +18,10 @@ export const FAMILY_RELATION_INTENT =
 export const WAITING_INTENT =
   /\b(waiting|follow[- ]?up|awaiting|who.*(owe|owed|pending)|what.*(pending|waiting))\b/i;
 
+/** Capability question with no search topic; do not misreport an empty corpus. */
+export const NOTE_CAPABILITY_INTENT =
+  /^\s*(?:can|could|would|will|are)\s+you\s+(?:able\s+to\s+)?(?:check|search|read|review|look\s+(?:at|in|through))\s+(?:(?:my|the)\s+)?notes?\s*[?.!]*\s*$/i;
+
 export function todayIso(now: Date = new Date()): string {
   const tz = process.env.RECALL_TIMEZONE?.trim() || "America/New_York";
   try {

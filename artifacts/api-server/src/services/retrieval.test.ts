@@ -73,6 +73,7 @@ describe("family relation retrieval helpers", () => {
   it("normalizes possessive keyword tokens", () => {
     expect(normalizeKeywordToken("wife's")).toBe("wife");
     expect(normalizeKeywordToken("son's")).toBe("son");
+    expect(normalizeKeywordToken("porsches")).toBe("porsche");
   });
 
   it("scores wife questions against family memory text", () => {

@@ -3,12 +3,26 @@ import {
   aggregateFinance,
   FINANCE_BREAKDOWN_INTENT,
   FINANCE_INTENT,
+  NOTE_CAPABILITY_INTENT,
   financeMetricForQuestion,
   formatMoney,
   parseDateRange,
   parseFinanceDateRange,
   primaryFinanceFigure,
 } from "./query-utils";
+
+describe("NOTE_CAPABILITY_INTENT", () => {
+  it("recognizes note capability questions without a search topic", () => {
+    expect(NOTE_CAPABILITY_INTENT.test("can you check the notes")).toBe(true);
+    expect(NOTE_CAPABILITY_INTENT.test("Could you search my notes?")).toBe(true);
+    expect(NOTE_CAPABILITY_INTENT.test("Are you able to read my notes?")).toBe(true);
+  });
+
+  it("leaves actual note searches to retrieval", () => {
+    expect(NOTE_CAPABILITY_INTENT.test("Check my notes for the Porsche VIN")).toBe(false);
+    expect(NOTE_CAPABILITY_INTENT.test("Summarize my meeting notes")).toBe(false);
+  });
+});
 
 describe("FINANCE_INTENT", () => {
   it("matches money-related questions", () => {

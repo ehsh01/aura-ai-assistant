@@ -5,6 +5,7 @@ import {
   FINANCE_INTENT,
   FINANCE_BREAKDOWN_INTENT,
   FAMILY_RELATION_INTENT,
+  NOTE_CAPABILITY_INTENT,
   PERSON_INTENT,
   WAITING_INTENT,
   financeMetricForQuestion,
@@ -556,6 +557,20 @@ export async function queryRecallForUser(
       : waitingItems.length > 0
         ? "Open People → Waiting on"
         : null;
+
+  if (NOTE_CAPABILITY_INTENT.test(question)) {
+    return finish({
+      answer:
+        "Yes. I can search note titles, full note text, and text extracted from attached images, PDFs, and documents. Tell me what you want to find—for example, “What is the VIN in my Porsche notes?”",
+      confidence: 1,
+      caveats: null,
+      evidence: [],
+      relatedRecords: [],
+      suggestedNextAction: "Ask what you want to find in your notes",
+      promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+      degraded: false,
+    });
+  }
 
   // Full transaction lists are deterministic — don't let the model truncate them.
   if (finance && !financeNeedsSync && FINANCE_BREAKDOWN_INTENT.test(question)) {
