@@ -159,6 +159,7 @@ export type PersonRelated = {
   openTasks: { id: string; title: string; time: string | null }[];
   taggedNotes?: { id: string; title: string; preview: string }[];
   taggedKnowledge?: { id: string; title: string; itemType: string }[];
+  linkedMemories?: { id: string; title: string; domain: string }[];
 };
 
 export async function getPersonRelated(personId: string): Promise<PersonRelated> {

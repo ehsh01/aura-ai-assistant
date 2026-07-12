@@ -7,8 +7,10 @@ import { listPeopleForUser } from "./people";
 import { listPersonNameAliases, peopleWithAliasNames } from "./user-corrections";
 import {
   linkedEntityKeySet,
-  listEntitiesLinkedToPeople,
 } from "./entity-links";
+import {
+  loadLinkedContextRecordsForPeople,
+} from "./shared-context";
 import { listKnowledgeForUser } from "./knowledge";
 import { listDocumentsForUser } from "./documents";
 import { listCapturesForUser } from "./captures";
@@ -787,12 +789,24 @@ export async function retrieveRelevantRecords(
   for (const p of [...namedByMention, ...namedByRelation]) namedMap.set(p.id, p);
   const named = [...namedMap.values()];
   const namedIds = new Set(named.map((p) => p.id));
-  const linkedToNamed =
+  const linkedBundle =
     named.length > 0
-      ? linkedEntityKeySet(
-          await listEntitiesLinkedToPeople(userId, [...namedIds]),
-        )
-      : new Set<string>();
+      ? await loadLinkedContextRecordsForPeople(userId, [...namedIds], {
+          excludeKeys: new Set(corpus.map((r) => `${r.entityType}:${r.entityId}`)),
+          limit: 40,
+        })
+      : { links: [], records: [] };
+  const linkedToNamed = linkedEntityKeySet(linkedBundle.links);
+  // Force older person-linked records into the corpus (beyond recency caps).
+  for (const r of linkedBundle.records) {
+    corpus.push({
+      entityType: r.entityType,
+      entityId: r.entityId,
+      title: r.title,
+      text: r.text,
+      pinned: r.pinned,
+    });
+  }
   const namedTokens = named.flatMap((p) => {
     const parts = p.displayName.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
     return [p.displayName.toLowerCase(), ...parts];
@@ -1076,6 +1090,33 @@ export async function retrieveRelevantRecords(
     }
     if (injected.length > 0) {
       top = [...injected, ...top].slice(0, limit);
+    }
+  }
+
+  // Force-include entity-linked records for named people (beyond corpus recency).
+  if (named.length > 0 && linkedBundle.records.length > 0) {
+    const already = new Set(top.map((r) => `${r.entityType}:${r.entityId}`));
+    const injected: RetrievedRecord[] = [];
+    for (const r of linkedBundle.records.slice(0, Math.min(10, limit))) {
+      const key = `${r.entityType}:${r.entityId}`;
+      if (already.has(key)) continue;
+      injected.push(
+        toRetrieved(
+          {
+            entityType: r.entityType,
+            entityId: r.entityId,
+            title: r.title,
+            text: r.text,
+            pinned: r.pinned,
+          },
+          1.05,
+          "keyword",
+        ),
+      );
+      already.add(key);
+    }
+    if (injected.length > 0) {
+      top = [...injected, ...top].slice(0, Math.max(limit, Math.min(16, injected.length + 4)));
     }
   }
 

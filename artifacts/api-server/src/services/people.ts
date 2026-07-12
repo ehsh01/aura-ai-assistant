@@ -1,6 +1,7 @@
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import {
   knowledgeItems,
+  lifeMemories,
   notes,
   people,
   tasks,
@@ -11,6 +12,7 @@ import { newPersonId } from "../lib/recall-format";
 import { recordUserCorrection, listPersonNameAliases } from "./user-corrections";
 import { writeAuditLog } from "./audit";
 import { warmEntityEmbedding } from "./embedding-cache";
+import { listEntitiesLinkedToPeople } from "./entity-links";
 
 export type PersonDto = {
   id: string;
@@ -308,6 +310,7 @@ export async function getPersonRelatedForUser(
   openTasks: { id: string; title: string; time: string | null }[];
   taggedNotes: { id: string; title: string; preview: string }[];
   taggedKnowledge: { id: string; title: string; itemType: string }[];
+  linkedMemories: { id: string; title: string; domain: string }[];
 } | null> {
   const person = await getPersonForUser(userId, personId);
   if (!person) return null;
@@ -324,7 +327,7 @@ export async function getPersonRelatedForUser(
 
   // Prefer FK; fall back to person: tags for rows not yet backfilled.
   const tagNeedle = `%person:${person.displayName}%`;
-  const [taggedNotes, taggedKnowledge] = await Promise.all([
+  const [taggedNotes, taggedKnowledge, linkedMemories, entityLinks] = await Promise.all([
     getDb()
       .select({
         id: notes.id,
@@ -361,6 +364,72 @@ export async function getPersonRelatedForUser(
       )
       .orderBy(desc(knowledgeItems.updatedAt))
       .limit(12),
+    getDb()
+      .select({
+        id: lifeMemories.id,
+        title: lifeMemories.title,
+        domain: lifeMemories.domain,
+      })
+      .from(lifeMemories)
+      .where(
+        and(eq(lifeMemories.userId, userId), eq(lifeMemories.primaryPersonId, personId)),
+      )
+      .orderBy(desc(lifeMemories.updatedAt))
+      .limit(12),
+    listEntitiesLinkedToPeople(userId, [personId]),
+  ]);
+
+  // Prefer FK/tag results; fill gaps from entity_links when backfill is ahead of tags.
+  const noteIds = new Set(taggedNotes.map((n) => n.id));
+  const knowledgeIds = new Set(taggedKnowledge.map((k) => k.id));
+  const memoryIds = new Set(linkedMemories.map((m) => m.id));
+  const linkNoteIds = entityLinks
+    .filter((l) => l.entityType === "note" && !noteIds.has(l.entityId))
+    .map((l) => l.entityId)
+    .slice(0, 12);
+  const linkKnowledgeIds = entityLinks
+    .filter((l) => l.entityType === "knowledge" && !knowledgeIds.has(l.entityId))
+    .map((l) => l.entityId)
+    .slice(0, 12);
+  const linkMemoryIds = entityLinks
+    .filter((l) => l.entityType === "memory" && !memoryIds.has(l.entityId))
+    .map((l) => l.entityId)
+    .slice(0, 12);
+
+  const [extraNotes, extraKnowledge, extraMemories] = await Promise.all([
+    linkNoteIds.length === 0
+      ? Promise.resolve([])
+      : getDb()
+          .select({ id: notes.id, title: notes.title, preview: notes.preview })
+          .from(notes)
+          .where(and(eq(notes.userId, userId), inArray(notes.id, linkNoteIds))),
+    linkKnowledgeIds.length === 0
+      ? Promise.resolve([])
+      : getDb()
+          .select({
+            id: knowledgeItems.id,
+            title: knowledgeItems.title,
+            itemType: knowledgeItems.itemType,
+          })
+          .from(knowledgeItems)
+          .where(
+            and(
+              eq(knowledgeItems.userId, userId),
+              inArray(knowledgeItems.id, linkKnowledgeIds),
+            ),
+          ),
+    linkMemoryIds.length === 0
+      ? Promise.resolve([])
+      : getDb()
+          .select({
+            id: lifeMemories.id,
+            title: lifeMemories.title,
+            domain: lifeMemories.domain,
+          })
+          .from(lifeMemories)
+          .where(
+            and(eq(lifeMemories.userId, userId), inArray(lifeMemories.id, linkMemoryIds)),
+          ),
   ]);
 
   return {
@@ -370,15 +439,20 @@ export async function getPersonRelatedForUser(
       title: t.title,
       time: t.time ?? null,
     })),
-    taggedNotes: taggedNotes.map((n) => ({
+    taggedNotes: [...taggedNotes, ...extraNotes].slice(0, 12).map((n) => ({
       id: n.id,
       title: n.title,
       preview: n.preview,
     })),
-    taggedKnowledge: taggedKnowledge.map((k) => ({
+    taggedKnowledge: [...taggedKnowledge, ...extraKnowledge].slice(0, 12).map((k) => ({
       id: k.id,
       title: k.title,
       itemType: k.itemType,
+    })),
+    linkedMemories: [...linkedMemories, ...extraMemories].slice(0, 12).map((m) => ({
+      id: m.id,
+      title: m.title,
+      domain: m.domain,
     })),
   };
 }

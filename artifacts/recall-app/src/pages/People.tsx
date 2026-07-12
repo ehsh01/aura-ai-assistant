@@ -14,6 +14,7 @@ import {
 import {
   askPath,
   knowledgePath,
+  memoryPath,
   notesPath,
   peoplePath,
   readSearchParam,
@@ -26,6 +27,7 @@ import { Pencil, Sparkles } from "lucide-react";
 type OpenTask = { id: string; title: string; time: string | null };
 type TaggedNote = { id: string; title: string; preview: string };
 type TaggedKnowledge = { id: string; title: string; itemType: string };
+type LinkedMemory = { id: string; title: string; domain: string };
 
 function waitingForPerson(
   waiting: WaitingOnRecord[],
@@ -49,6 +51,9 @@ export function People() {
   const [notesByPerson, setNotesByPerson] = useState<Record<string, TaggedNote[]>>({});
   const [knowledgeByPerson, setKnowledgeByPerson] = useState<
     Record<string, TaggedKnowledge[]>
+  >({});
+  const [memoriesByPerson, setMemoriesByPerson] = useState<
+    Record<string, LinkedMemory[]>
   >({});
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
@@ -81,6 +86,7 @@ export function People() {
       setOpenByPerson({});
       setNotesByPerson({});
       setKnowledgeByPerson({});
+      setMemoriesByPerson({});
     } finally {
       setLoading(false);
     }
@@ -101,11 +107,16 @@ export function People() {
         ...prev,
         [personId]: r.taggedKnowledge ?? [],
       }));
+      setMemoriesByPerson((prev) => ({
+        ...prev,
+        [personId]: r.linkedMemories ?? [],
+      }));
     } catch {
       relatedLoaded.current[personId] = true;
       setOpenByPerson((prev) => ({ ...prev, [personId]: [] }));
       setNotesByPerson((prev) => ({ ...prev, [personId]: [] }));
       setKnowledgeByPerson((prev) => ({ ...prev, [personId]: [] }));
+      setMemoriesByPerson((prev) => ({ ...prev, [personId]: [] }));
     } finally {
       setRelatedLoadingId((cur) => (cur === personId ? null : cur));
     }
@@ -350,6 +361,7 @@ export function People() {
               const openTasks = openByPerson[person.id] ?? [];
               const taggedNotes = notesByPerson[person.id] ?? [];
               const taggedKnowledge = knowledgeByPerson[person.id] ?? [];
+              const linkedMemories = memoriesByPerson[person.id] ?? [];
               const personWaiting = waitingForPerson(waiting, person);
               const isSelected = selected?.id === person.id;
               const isHighlighted = highlightedId === person.id;
@@ -556,6 +568,27 @@ export function People() {
                           >
                             View all knowledge for {person.displayName.split(" ")[0]}
                           </Link>
+                        </div>
+                      )}
+
+                      {linkedMemories.length > 0 && (
+                        <div>
+                          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/40">
+                            Life Memory
+                          </h3>
+                          <ul className="space-y-1.5">
+                            {linkedMemories.map((m) => (
+                              <li key={m.id}>
+                                <Link
+                                  href={memoryPath({ memoryId: m.id })}
+                                  className="block truncate text-sm text-indigo-200 no-underline hover:underline"
+                                >
+                                  {m.title}
+                                  <span className="ml-2 text-white/35">{m.domain}</span>
+                                </Link>
+                              </li>
+                            ))}
+                          </ul>
                         </div>
                       )}
 
