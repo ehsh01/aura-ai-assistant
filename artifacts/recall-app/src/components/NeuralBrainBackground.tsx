@@ -54,6 +54,45 @@ function drawTriangle(
   }
 }
 
+type DisplayPoint = ProjectedPoint & { dx: number; dy: number };
+
+/**
+ * Push triangles away from the cursor. Synapses always draw between these
+ * displaced positions, so connections stay attached while nodes move aside.
+ */
+function withCursorRepel(
+  projected: ProjectedPoint[],
+  width: number,
+  height: number,
+  cursor: { x: number; y: number; active: boolean },
+): DisplayPoint[] {
+  const repelR = Math.min(width, height) * 0.14;
+  const repelR2 = repelR * repelR;
+  const maxPush = repelR * 0.7;
+
+  return projected.map((pt) => {
+    let dx = 0;
+    let dy = 0;
+    if (cursor.active) {
+      const ox = pt.x - cursor.x;
+      const oy = pt.y - cursor.y;
+      const d2 = ox * ox + oy * oy;
+      if (d2 < repelR2 && d2 > 0.0001) {
+        const d = Math.sqrt(d2);
+        const falloff = 1 - d / repelR;
+        // Smooth falloff: strong near the cursor, gentle at the edge.
+        const push = falloff * falloff * maxPush;
+        dx = (ox / d) * push;
+        dy = (oy / d) * push;
+      } else if (d2 <= 0.0001) {
+        // Cursor dead-center on a particle — nudge it up so it doesn't stick.
+        dy = -maxPush;
+      }
+    }
+    return { ...pt, dx, dy };
+  });
+}
+
 function renderFrame(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -63,7 +102,7 @@ function renderFrame(
   time: number,
   vivid: boolean,
   fillScreen: boolean,
-  /** Cursor in canvas CSS pixels; only synapses near this get disturbed. */
+  /** Cursor in canvas CSS pixels; nearby triangles move aside. */
   cursor: { x: number; y: number; active: boolean },
 ) {
   ctx.clearRect(0, 0, width, height);
@@ -86,10 +125,7 @@ function renderFrame(
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
 
-  const byIndex = projected;
-  // Local disturbance radius — only connections the cursor touches.
-  const disturbR = Math.min(width, height) * 0.11;
-  const disturbR2 = disturbR * disturbR;
+  const byIndex = withCursorRepel(projected, width, height, cursor);
 
   ctx.save();
   ctx.globalCompositeOperation = additive ? "lighter" : "source-over";
@@ -106,65 +142,24 @@ function renderFrame(
       ),
     );
     const pulse = 0.8 + 0.2 * Math.sin(time * 1.6 + s.a * 0.05);
-
-    let ax = a.x;
-    let ay = a.y;
-    let bx = b.x;
-    let by = b.y;
-    let cpx = (ax + bx) * 0.5;
-    let cpy = (ay + by) * 0.5;
-    let disturbed = false;
-
-    if (cursor.active) {
-      const mx = cursor.x;
-      const my = cursor.y;
-      // Distance from cursor to the segment (closest point).
-      const abx = bx - ax;
-      const aby = by - ay;
-      const apx = mx - ax;
-      const apy = my - ay;
-      const abLen2 = abx * abx + aby * aby || 1;
-      let t = (apx * abx + apy * aby) / abLen2;
-      t = Math.max(0, Math.min(1, t));
-      const closestX = ax + abx * t;
-      const closestY = ay + aby * t;
-      const dx = closestX - mx;
-      const dy = closestY - my;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < disturbR2) {
-        disturbed = true;
-        const d = Math.sqrt(d2) || 0.0001;
-        const falloff = 1 - d / disturbR;
-        const push = falloff * falloff * disturbR * 0.55;
-        // Push the line away from the cursor along the radial direction.
-        const nx = dx / d;
-        const ny = dy / d;
-        const endPush = push * 0.35;
-        ax += nx * endPush * (1 - t);
-        ay += ny * endPush * (1 - t);
-        bx += nx * endPush * t;
-        by += ny * endPush * t;
-        cpx = closestX + nx * push;
-        cpy = closestY + ny * push;
-      }
-    }
+    const ax = a.x + a.dx;
+    const ay = a.y + a.dy;
+    const bx = b.x + b.dx;
+    const by = b.y + b.dy;
+    const nudged = Math.abs(a.dx) + Math.abs(a.dy) + Math.abs(b.dx) + Math.abs(b.dy) > 0.5;
 
     ctx.beginPath();
     ctx.moveTo(ax, ay);
-    if (disturbed) {
-      ctx.quadraticCurveTo(cpx, cpy, bx, by);
-    } else {
-      ctx.lineTo(bx, by);
-    }
+    ctx.lineTo(bx, by);
     ctx.strokeStyle = fillScreen
-      ? `hsla(${disturbed ? 280 : 265}, ${disturbed ? 90 : 75}%, ${disturbed ? 78 : 72}%, ${alpha * pulse * (disturbed ? 1.35 : 1)})`
+      ? `hsla(${nudged ? 280 : 265}, ${nudged ? 85 : 75}%, ${nudged ? 76 : 72}%, ${alpha * pulse * (nudged ? 1.2 : 1)})`
       : `hsla(265, 80%, 72%, ${alpha * pulse})`;
     ctx.lineWidth =
       a.particle.kind === "entity" || b.particle.kind === "entity"
         ? 1.15
         : fillScreen
-          ? disturbed
-            ? 1.05
+          ? nudged
+            ? 0.9
             : 0.75
           : 0.55;
     ctx.stroke();
@@ -173,8 +168,10 @@ function renderFrame(
 
   ctx.save();
   ctx.globalCompositeOperation = additive ? "lighter" : "source-over";
-  for (const pt of projected) {
+  for (const pt of byIndex) {
     const { particle: p } = pt;
+    const x = pt.x + pt.dx;
+    const y = pt.y + pt.dy;
     const depthFade = Math.max(0.35, Math.min(1, 0.85 - pt.depth * 0.28));
     const twinkle =
       p.kind === "entity"
@@ -194,15 +191,15 @@ function renderFrame(
     // Soft colored dots — kept modest so they don't stack to white.
     if (p.kind === "entity" || (fillScreen && size > 1.8)) {
       ctx.beginPath();
-      ctx.arc(pt.x, pt.y, size * (p.kind === "entity" ? 2.4 : 1.9), 0, Math.PI * 2);
+      ctx.arc(x, y, size * (p.kind === "entity" ? 2.4 : 1.9), 0, Math.PI * 2);
       ctx.fillStyle = `hsla(${p.hue}, 90%, 70%, ${alpha * (p.kind === "entity" ? 0.24 : 0.16)})`;
       ctx.fill();
     }
 
     drawTriangle(
       ctx,
-      pt.x,
-      pt.y,
+      x,
+      y,
       size,
       p.hue,
       Math.min(fillScreen ? 0.92 : 0.85, alpha),
@@ -294,8 +291,13 @@ export function NeuralBrainBackground({
         }
       }
       lastPointerRef.current = { x, y, t: now };
-      // Disturb synapses only while the mouse is moving — stop = leave the brain alone.
-      cursorRef.current = { x, y, active: moving, movedAt: moving ? now : cursorRef.current.movedAt };
+      // Repel triangles only while the mouse is moving — idle = normal mesh.
+      cursorRef.current = {
+        x,
+        y,
+        active: moving,
+        movedAt: moving ? now : cursorRef.current.movedAt,
+      };
     };
 
     const onPointerLeave = () => {
@@ -336,10 +338,10 @@ export function NeuralBrainBackground({
         if (Math.abs(drift.velX) < 0.003) drift.velX = 0;
       }
 
-      // Local bend only during recent movement — idle cursor leaves the mesh alone.
+      // Repel nearby triangles only during recent mouse movement.
       const cursor = cursorRef.current;
-      const disturb =
-        cursor.active && cursor.movedAt > 0 && now - cursor.movedAt < 120;
+      const repelling =
+        cursor.active && cursor.movedAt > 0 && now - cursor.movedAt < 140;
       const projected = projectParticles(
         particles,
         w,
@@ -351,7 +353,7 @@ export function NeuralBrainBackground({
       renderFrame(ctx, w, h, projected, synapses, time, vivid, fillScreen, {
         x: cursor.x,
         y: cursor.y,
-        active: disturb,
+        active: repelling,
       });
       if (!reduced) raf = requestAnimationFrame(tick);
     };
