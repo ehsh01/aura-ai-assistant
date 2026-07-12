@@ -1068,7 +1068,7 @@ class OpenAiService implements AiService {
         },
       ],
       response_format: { type: "json_object" },
-      max_tokens: 600,
+      max_tokens: 700,
     });
 
     const raw = completion.choices[0]?.message.content ?? "{}";
@@ -1092,16 +1092,40 @@ class OpenAiService implements AiService {
         suggestedNextAction: parsed.suggestedNextAction ?? null,
       };
     } catch {
+      // Never surface raw/partial JSON to the user. If the JSON was truncated,
+      // salvage just the "answer" string; otherwise return a clean message.
+      const salvaged = salvageAnswerField(raw);
       return {
-        degraded: true,
-        degradedReason: "query_answer_parse_failed",
-        answer: raw.slice(0, 800),
-        confidence: 0.3,
-        caveats: "Answer could not be structured.",
+        degraded: !salvaged,
+        degradedReason: salvaged ? null : "query_answer_parse_failed",
+        answer:
+          salvaged ||
+          "I found the information but had trouble formatting the answer. Please ask again.",
+        confidence: salvaged ? 0.5 : 0.3,
+        caveats: null,
         suggestedNextAction: null,
       };
     }
   }
+}
+
+/**
+ * Best-effort extraction of the "answer" string from a malformed/truncated
+ * model JSON response, so users never see raw JSON. Returns null if not found.
+ */
+export function salvageAnswerField(raw: string): string | null {
+  const m = raw.match(/"answer"\s*:\s*"((?:\\.|[^"\\])*)"/);
+  if (!m?.[1]) return null;
+  let value: string;
+  try {
+    value = JSON.parse(`"${m[1]}"`);
+  } catch {
+    value = m[1].replace(/\\"/g, '"').replace(/\\n/g, " ");
+  }
+  const trimmed = value.trim();
+  // Guard against the salvaged value itself being a JSON blob.
+  if (!trimmed || trimmed.startsWith("{") || trimmed.startsWith("[")) return null;
+  return trimmed;
 }
 
 // ---------------------------------------------------------------------------
