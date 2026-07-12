@@ -1,6 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { people } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
+import { listPersonNameAliases } from "./user-corrections";
 
 /** Strip existing person: tags and optionally append person:DisplayName. */
 export function syncPersonTag(
@@ -41,11 +42,16 @@ export async function resolvePersonIdFromTags(
 ): Promise<string | null> {
   const name = firstPersonTagName(tags);
   if (!name) return null;
-  const rows = await getDb()
-    .select({ id: people.id, displayName: people.displayName })
-    .from(people)
-    .where(eq(people.userId, userId));
+  const [rows, aliases] = await Promise.all([
+    getDb()
+      .select({ id: people.id, displayName: people.displayName })
+      .from(people)
+      .where(eq(people.userId, userId)),
+    listPersonNameAliases(userId),
+  ]);
   const lower = name.toLowerCase();
+  const aliasId = aliases.get(lower);
+  if (aliasId) return aliasId;
   const hit = rows.find(
     (p) =>
       p.displayName.toLowerCase() === lower ||

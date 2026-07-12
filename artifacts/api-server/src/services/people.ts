@@ -8,7 +8,7 @@ import {
 } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newPersonId } from "../lib/recall-format";
-import { recordUserCorrection } from "./user-corrections";
+import { recordUserCorrection, listPersonNameAliases } from "./user-corrections";
 import { writeAuditLog } from "./audit";
 import { warmEntityEmbedding } from "./embedding-cache";
 
@@ -269,7 +269,7 @@ async function rewritePersonTagsForUser(
   }
 }
 
-/** Resolve or create a person by display name (conservative dedup). */
+/** Resolve or create a person by display name (conservative dedup + rename aliases). */
 export async function resolvePersonByName(
   userId: string,
   displayName: string,
@@ -289,6 +289,14 @@ export async function resolvePersonByName(
     )
     .limit(1);
   if (rows[0]) return toDto(rows[0]);
+
+  const aliases = await listPersonNameAliases(userId);
+  const aliasId = aliases.get(trimmed.toLowerCase());
+  if (aliasId) {
+    const aliased = await getPersonForUser(userId, aliasId);
+    if (aliased) return aliased;
+  }
+
   return createPersonForUser(userId, { displayName: trimmed });
 }
 

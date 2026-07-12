@@ -9,6 +9,7 @@ import {
   resolvePersonIdFromTags,
   syncPersonTag,
 } from "./person-tags";
+import { syncPrimaryPersonLink } from "./entity-links";
 
 export type KnowledgeDto = {
   id: string;
@@ -121,6 +122,7 @@ export async function createKnowledgeForUser(
       personName ? ` person=${personName}` : ""
     }`,
   });
+  await syncPrimaryPersonLink(userId, "knowledge", dto.id, dto.primaryPersonId);
   return dto;
 }
 
@@ -209,5 +211,8 @@ export async function updateKnowledgeForUser(
       personName ? ` person=${personName}` : ""
     }`,
   });
+  if (primaryPersonIdToWrite !== undefined) {
+    await syncPrimaryPersonLink(userId, "knowledge", dto.id, dto.primaryPersonId);
+  }
   return dto;
 }

@@ -4,6 +4,11 @@ import { getDb } from "../lib/db";
 import { listTasksForUser } from "./tasks";
 import { listNotesForUser, searchNotesForUser } from "./notes";
 import { listPeopleForUser } from "./people";
+import { listPersonNameAliases, peopleWithAliasNames } from "./user-corrections";
+import {
+  linkedEntityKeySet,
+  listEntitiesLinkedToPeople,
+} from "./entity-links";
 import { listKnowledgeForUser } from "./knowledge";
 import { listDocumentsForUser } from "./documents";
 import { listCapturesForUser } from "./captures";
@@ -612,7 +617,7 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
 async function collectCorpus(
   userId: string,
 ): Promise<{ records: ContextRecord[]; people: PersonRef[] }> {
-  const [tasks, notes, people, knowledge, memories, documents, captures, sources] =
+  const [tasks, notes, people, knowledge, memories, documents, captures, sources, aliases] =
     await Promise.all([
       listTasksForUser(userId),
       listNotesForUser(userId),
@@ -622,6 +627,7 @@ async function collectCorpus(
       listDocumentsForUser(userId),
       listCapturesForUser(userId, { limit: CORPUS.captures }),
       loadSourceRecordsBalanced(userId),
+      listPersonNameAliases(userId),
     ]);
 
   const records: ContextRecord[] = [];
@@ -718,17 +724,19 @@ async function collectCorpus(
 
   records.push(...sources);
 
+  const peopleRefs: PersonRef[] = people.map((p) => ({
+    id: p.id,
+    displayName: p.displayName,
+    email: p.email ?? null,
+    firstName: p.firstName ?? null,
+    lastName: p.lastName ?? null,
+    role: p.role ?? null,
+    notes: p.notes ?? null,
+  }));
+
   return {
     records,
-    people: people.map((p) => ({
-      id: p.id,
-      displayName: p.displayName,
-      email: p.email ?? null,
-      firstName: p.firstName ?? null,
-      lastName: p.lastName ?? null,
-      role: p.role ?? null,
-      notes: p.notes ?? null,
-    })),
+    people: peopleWithAliasNames(peopleRefs, aliases),
   };
 }
 
@@ -779,6 +787,12 @@ export async function retrieveRelevantRecords(
   for (const p of [...namedByMention, ...namedByRelation]) namedMap.set(p.id, p);
   const named = [...namedMap.values()];
   const namedIds = new Set(named.map((p) => p.id));
+  const linkedToNamed =
+    named.length > 0
+      ? linkedEntityKeySet(
+          await listEntitiesLinkedToPeople(userId, [...namedIds]),
+        )
+      : new Set<string>();
   const namedTokens = named.flatMap((p) => {
     const parts = p.displayName.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
     return [p.displayName.toLowerCase(), ...parts];
@@ -821,6 +835,7 @@ export async function retrieveRelevantRecords(
     }
     if (named.length === 0) return 0;
     if (r.entityType === "person" && namedIds.has(r.entityId)) return 0.45;
+    if (linkedToNamed.has(`${r.entityType}:${r.entityId}`)) return 0.42;
     if (isFamilyDomainMemory(r) || relationMatchScore(r, relations) > 0) {
       const hay = `${r.title}\n${r.text}`.toLowerCase();
       for (const token of namedTokens) {

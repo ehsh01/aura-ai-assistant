@@ -20,3 +20,4 @@ export * from "./audit-log";
 export * from "./entity-embeddings";
 export * from "./ask-threads";
 export * from "./extension-tokens";
+export * from "./entity-links";

@@ -4,6 +4,7 @@ import { createPersonForUser, listPeopleForUser } from "./people";
 import { createTaskForUser, listTasksForUser, type RecallTaskDto } from "./tasks";
 import { createEvidenceForUser } from "./evidence";
 import { writeAuditLog } from "./audit";
+import { listPersonNameAliases, peopleWithAliasNames } from "./user-corrections";
 
 const WAITING_RE =
   /\b(waiting|follow[- ]?up|awaiting|need(?:s)? (?:a |the )?(?:quote|reply|response|call|email)|still need|pending (?:from|on)|haven't heard|no response)\b/i;
@@ -81,8 +82,11 @@ export function extractPerson(text: string, peopleNames: string[]): string {
 export function matchPersonId(
   personName: string,
   people: { id: string; displayName: string }[],
+  aliases?: Map<string, string>,
 ): string | null {
   const lower = personName.toLowerCase();
+  const aliasId = aliases?.get(lower);
+  if (aliasId) return aliasId;
   const hit = people.find(
     (p) =>
       p.displayName.toLowerCase() === lower ||
@@ -99,14 +103,16 @@ export async function listWaitingOnForUser(
   userId: string,
   limit = 20,
 ): Promise<WaitingOnItem[]> {
-  const [notes, knowledge, people, tasks] = await Promise.all([
+  const [notes, knowledge, people, tasks, aliases] = await Promise.all([
     listNoteMetadataForUser(userId),
     listKnowledgeForUser(userId),
     listPeopleForUser(userId),
     listTasksForUser(userId),
+    listPersonNameAliases(userId),
   ]);
 
-  const peopleNames = people.map((p) => p.displayName).filter(Boolean);
+  const peopleForMatch = peopleWithAliasNames(people, aliases);
+  const peopleNames = peopleForMatch.map((p) => p.displayName).filter(Boolean);
   const items: WaitingOnItem[] = [];
 
   for (const n of notes) {
@@ -118,7 +124,7 @@ export async function listWaitingOnForUser(
     items.push({
       id: `note:${n.id}`,
       person,
-      personId: matchPersonId(person, people),
+      personId: matchPersonId(person, people, aliases),
       item: n.title,
       days: age,
       href: `/notes?note=${encodeURIComponent(n.id)}`,
@@ -137,7 +143,7 @@ export async function listWaitingOnForUser(
     items.push({
       id: `knowledge:${k.id}`,
       person,
-      personId: matchPersonId(person, people),
+      personId: matchPersonId(person, people, aliases),
       item: k.title,
       days: age,
       href: "/knowledge",
@@ -152,7 +158,7 @@ export async function listWaitingOnForUser(
     items.push({
       id: `task:${t.id}`,
       person,
-      personId: matchPersonId(person, people),
+      personId: matchPersonId(person, people, aliases),
       item: t.title,
       days: 0,
       href: `/tasks?task=${encodeURIComponent(t.id)}`,

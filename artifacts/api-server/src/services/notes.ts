@@ -19,6 +19,7 @@ import {
   resolvePersonIdFromTags,
   syncPersonTag,
 } from "./person-tags";
+import { syncPrimaryPersonLink } from "./entity-links";
 import { normalizeKeywordToken } from "./keyword-match";
 
 export type RecallNoteDto = {
@@ -353,6 +354,7 @@ export async function createNoteForUser(
     entityId: dto.id,
     text: noteRetrievalText(dto),
   });
+  await syncPrimaryPersonLink(userId, "note", dto.id, dto.primaryPersonId);
   return dto;
 }
 
@@ -565,6 +567,9 @@ export async function updateNoteForUser(
       entityId: dto.id,
       text: noteRetrievalText(dto),
     });
+  }
+  if (primaryPersonIdToWrite !== undefined) {
+    await syncPrimaryPersonLink(userId, "note", dto.id, dto.primaryPersonId);
   }
   return dto;
 }

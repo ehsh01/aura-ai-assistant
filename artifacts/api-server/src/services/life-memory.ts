@@ -11,6 +11,7 @@ import { newMemoryId } from "../lib/recall-format";
 import { aiService } from "./ai";
 import { writeAuditLog } from "./audit";
 import { warmEntityEmbedding } from "./embedding-cache";
+import { syncPrimaryPersonLink } from "./entity-links";
 
 export type LifeMemoryDto = {
   id: string;
@@ -243,6 +244,7 @@ export async function createMemoryForUser(
     metadata: { domain: dto.domain, title: dto.title, sourceType: dto.sourceType },
   });
   warmMemory(userId, dto);
+  await syncPrimaryPersonLink(userId, "memory", dto.id, dto.primaryPersonId);
   return dto;
 }
 
@@ -308,6 +310,9 @@ export async function updateMemoryForUser(
   if (!row) return null;
   const dto = toDto(row);
   warmMemory(userId, dto);
+  if (input.primaryPersonId !== undefined) {
+    await syncPrimaryPersonLink(userId, "memory", dto.id, dto.primaryPersonId);
+  }
   return dto;
 }
 

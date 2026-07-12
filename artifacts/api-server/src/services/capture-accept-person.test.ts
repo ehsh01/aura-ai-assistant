@@ -43,6 +43,13 @@ describe("inbox accept person resolution", () => {
     expect(id).toBe("p1");
   });
 
+  it("matches renamed people via aliases", () => {
+    const aliases = new Map([["mike h", "p1"]]);
+    expect(
+      matchPersonId("Mike H", [{ id: "p1", displayName: "Michael Hernandez" }], aliases),
+    ).toBe("p1");
+  });
+
   it("returns null when no person signal", () => {
     expect(
       resolveNameFromCapture("Buy groceries", "milk eggs bread", []),

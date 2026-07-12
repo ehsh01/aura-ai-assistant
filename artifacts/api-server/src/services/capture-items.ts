@@ -14,6 +14,7 @@ import {
 import { recordUserCorrection } from "./user-corrections";
 import { createTaskForUser, type RecallTaskDto } from "./tasks";
 import { extractPerson, matchPersonId } from "./waiting-on";
+import { listPersonNameAliases, peopleWithAliasNames } from "./user-corrections";
 import { writeAuditLog } from "./audit";
 
 export type CaptureSuggestedType =
@@ -119,8 +120,12 @@ export async function resolvePersonForAccept(
     if (byId) return byId;
   }
 
-  const people = await listPeopleForUser(userId);
-  const peopleNames = people.map((p) => p.displayName);
+  const [people, aliases] = await Promise.all([
+    listPeopleForUser(userId),
+    listPersonNameAliases(userId),
+  ]);
+  const peopleForMatch = peopleWithAliasNames(people, aliases);
+  const peopleNames = peopleForMatch.map((p) => p.displayName);
 
   // Explicit empty / null personName means the user cleared the suggestion.
   if (input.skipPerson || input.personName === null || input.personName === "") {
@@ -129,7 +134,7 @@ export async function resolvePersonForAccept(
 
   const explicit = input.personName?.trim();
   if (explicit && explicit.toLowerCase() !== "someone") {
-    const matched = matchPersonId(explicit, people);
+    const matched = matchPersonId(explicit, people, aliases);
     if (matched) {
       const hit = people.find((p) => p.id === matched);
       if (hit) return hit;
@@ -141,7 +146,7 @@ export async function resolvePersonForAccept(
   const extracted = extractPerson(blob, peopleNames);
   if (!extracted || extracted === "Someone") return null;
 
-  const matched = matchPersonId(extracted, people);
+  const matched = matchPersonId(extracted, people, aliases);
   if (matched) {
     const hit = people.find((p) => p.id === matched);
     if (hit) return hit;

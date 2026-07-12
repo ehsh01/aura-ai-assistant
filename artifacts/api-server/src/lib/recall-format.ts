@@ -72,6 +72,10 @@ export function newCorrectionId(): string {
   return `corr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function newEntityLinkId(): string {
+  return `elink-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function newAuditId(): string {
   return `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

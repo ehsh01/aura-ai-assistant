@@ -4,6 +4,7 @@ import { getDb } from "../lib/db";
 import { newTaskId } from "../lib/recall-format";
 import { writeAuditLog } from "./audit";
 import { warmEntityEmbedding } from "./embedding-cache";
+import { syncPrimaryPersonLink } from "./entity-links";
 
 export type RecallTaskDto = {
   id: string;
@@ -167,6 +168,7 @@ export async function createTaskForUser(
       personBits ? ` person=${personBits}` : ""
     }`,
   });
+  await syncPrimaryPersonLink(userId, "task", dto.id, dto.requesterPersonId);
   return dto;
 }
 
@@ -288,6 +290,10 @@ export async function updateTaskForUser(
         personBits ? ` person=${personBits}` : ""
       }`,
     });
+  }
+
+  if (input.requesterPersonId !== undefined) {
+    await syncPrimaryPersonLink(userId, "task", dto.id, dto.requesterPersonId);
   }
 
   return dto;
