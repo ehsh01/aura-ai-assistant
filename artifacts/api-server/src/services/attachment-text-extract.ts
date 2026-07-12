@@ -268,6 +268,9 @@ export async function processPendingAttachmentExtractions(
       logger.info({ processed: done, remainingBatch: rows.length }, "Attachment text backfill tick");
     }
     return done;
+  } catch (err) {
+    logger.warn({ err }, "Attachment text backfill tick failed");
+    return 0;
   } finally {
     backfillRunning = false;
   }

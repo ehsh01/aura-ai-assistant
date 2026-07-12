@@ -36,4 +36,7 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             cd /var/www/recall-app
-            bash scripts/deploy-recall-app.sh
+            # Pull first so the deploy script itself (migrations list, etc.) is current.
+            # Running an already-started bash file after git pull keeps the pre-pull version.
+            git pull --ff-only
+            RECALL_DEPLOY_ALREADY_PULLED=1 bash scripts/deploy-recall-app.sh

@@ -11,7 +11,10 @@ API_PORT="5008"
 echo "==> Clone or update repo"
 if [ -d "$DEPLOY_PATH/.git" ]; then
   cd "$DEPLOY_PATH"
-  git pull --ff-only
+  # If the workflow already pulled, stay put; otherwise update before build/migrate.
+  if [ "${RECALL_DEPLOY_ALREADY_PULLED:-}" != "1" ]; then
+    git pull --ff-only
+  fi
 else
   mkdir -p "$(dirname "$DEPLOY_PATH")"
   git clone "$REPO_URL" "$DEPLOY_PATH"
