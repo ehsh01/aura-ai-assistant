@@ -13,6 +13,7 @@ import {
 import { attachmentSearchTextForNotes } from "./attachment-text-extract";
 import { writeAuditLog } from "./audit";
 import { warmEntityEmbedding } from "./embedding-cache";
+import { noteRetrievalText } from "./note-retrieval";
 import {
   personNamesById,
   resolvePersonIdFromTags,
@@ -320,9 +321,7 @@ export async function createNoteForUser(
   warmEntityEmbedding(userId, {
     entityType: "note",
     entityId: dto.id,
-    text: `${dto.title}\n${dto.preview}\ntags=${dto.tags.join(",")}${
-      personName ? ` person=${personName}` : ""
-    }`,
+    text: noteRetrievalText(dto),
   });
   return dto;
 }
@@ -517,7 +516,13 @@ export async function updateNoteForUser(
     const names = await personNamesById(userId, [row.primaryPersonId]);
     personName = names.get(row.primaryPersonId) ?? null;
   }
-  const dto = toDto(row, counts.get(row.id) ?? 0, personName);
+  const attachmentTextByNote = await attachmentSearchTextForNotes([row.id]);
+  const dto = toDto(
+    row,
+    counts.get(row.id) ?? 0,
+    personName,
+    attachmentTextByNote.get(row.id) ?? "",
+  );
   if (
     input.title !== undefined ||
     input.content !== undefined ||
@@ -528,9 +533,7 @@ export async function updateNoteForUser(
     warmEntityEmbedding(userId, {
       entityType: "note",
       entityId: dto.id,
-      text: `${dto.title}\n${dto.preview}\ntags=${dto.tags.join(",")}${
-        personName ? ` person=${personName}` : ""
-      }`,
+      text: noteRetrievalText(dto),
     });
   }
   return dto;

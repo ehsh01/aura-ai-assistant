@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { evidence, type Evidence } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newEvidenceId } from "../lib/recall-format";
@@ -56,6 +56,19 @@ function toDto(row: Evidence): EvidenceDto {
   };
 }
 
+export function dedupeEvidenceBySourceClaim<
+  T extends { sourceRecordId: string | null; claimType: string },
+>(rows: T[]): T[] {
+  const seenSourceClaims = new Set<string>();
+  return rows.filter((row) => {
+    if (!row.sourceRecordId) return true;
+    const key = `${row.sourceRecordId}:${row.claimType}`;
+    if (seenSourceClaims.has(key)) return false;
+    seenSourceClaims.add(key);
+    return true;
+  });
+}
+
 export async function createEvidenceForUser(
   userId: string,
   input: CreateEvidenceInput,
@@ -81,6 +94,49 @@ export async function createEvidenceForUser(
       createdAt: now,
       updatedAt: now,
     })
+    .returning();
+  return toDto(row!);
+}
+
+/**
+ * Connector syncs are repeatable. Keep one current evidence record per
+ * source-record claim instead of appending duplicates on every sync.
+ */
+export async function upsertEvidenceForSourceRecord(
+  userId: string,
+  input: CreateEvidenceInput & { sourceRecordId: string },
+): Promise<EvidenceDto> {
+  const [existing] = await getDb()
+    .select()
+    .from(evidence)
+    .where(
+      and(
+        eq(evidence.userId, userId),
+        eq(evidence.sourceRecordId, input.sourceRecordId),
+        eq(evidence.claimType, input.claimType),
+      ),
+    )
+    .orderBy(desc(evidence.updatedAt))
+    .limit(1);
+
+  if (!existing) return createEvidenceForUser(userId, input);
+
+  const [row] = await getDb()
+    .update(evidence)
+    .set({
+      entityType: input.entityType,
+      entityId: input.entityId,
+      sourceCaptureId: input.sourceCaptureId ?? null,
+      evidenceText: input.evidenceText ?? null,
+      evidenceMetadata: input.evidenceMetadata ?? {},
+      fileName: input.fileName ?? null,
+      fileId: input.fileId ?? null,
+      rowNumber: input.rowNumber ?? null,
+      pageNumber: input.pageNumber ?? null,
+      url: input.url ?? null,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(evidence.id, existing.id), eq(evidence.userId, userId)))
     .returning();
   return toDto(row!);
 }
@@ -111,6 +167,8 @@ export async function listEvidenceForEntity(
         eq(evidence.entityType, entityType),
         eq(evidence.entityId, entityId),
       ),
-    );
-  return rows.map(toDto);
+    )
+    .orderBy(desc(evidence.updatedAt));
+
+  return dedupeEvidenceBySourceClaim(rows).map(toDto);
 }

@@ -13,11 +13,15 @@ import {
   createGoogleConnectorForUser,
   getConnectorForUser,
   listConnectorsForUser,
-  queryFinanceSummaryForUser,
   syncConnectorForUser,
   writeGoogleConnectAudit,
 } from "../services/connectors";
 import { ensureUserFinanceFresh } from "../services/finance-auto-sync";
+import {
+  financeSummaryFromSynced,
+  loadSyncedFinanceAggregate,
+} from "../services/finance-sync";
+import { todayIso } from "../services/query-utils";
 
 const CreateConnectorBody = z.object({
   name: z.string().min(1).max(255),
@@ -239,12 +243,28 @@ router.get("/finance/summary", async (req, res, next) => {
       res.status(400).json({ error: "VALIDATION_ERROR", message: "connectorId is required" });
       return;
     }
-    const summary = await queryFinanceSummaryForUser(req.user!.id, connectorId, {
+    const connector = await getConnectorForUser(req.user!.id, connectorId);
+    if (!connector || connector.type !== "finance_api") {
+      res.status(404).json({ error: "NOT_FOUND", message: "Finance connector not found" });
+      return;
+    }
+    await ensureUserFinanceFresh(req.user!.id, { awaitSync: true });
+    const synced = await loadSyncedFinanceAggregate(
+      req.user!.id,
+      "this month",
+      todayIso(),
+      {
+        connectorId,
       startDate: typeof req.query.startDate === "string" ? req.query.startDate : undefined,
       endDate: typeof req.query.endDate === "string" ? req.query.endDate : undefined,
       payee: typeof req.query.payee === "string" ? req.query.payee : undefined,
-    });
-    res.json(summary);
+      },
+    );
+    if (!synced) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Finance summary unavailable" });
+      return;
+    }
+    res.json(financeSummaryFromSynced(synced));
   } catch (err) {
     next(err);
   }

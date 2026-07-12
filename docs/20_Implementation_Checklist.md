@@ -30,11 +30,13 @@ Last verified against the production codebase: 2026-07-12.
 
 ## Evidence
 
-- [ ] Create Evidence model
-- [ ] Link task to source capture
-- [ ] Build evidence drawer
-- [ ] Add Show Evidence action
-- [ ] Test evidence integrity
+- [x] Create Evidence model
+- [x] Link task to source capture
+- [x] Build evidence drawer
+- [x] Add Show Evidence action
+- [x] Persist Ask evidence across thread reloads
+- [x] Prevent repeated connector syncs from adding duplicate evidence
+- [x] Test evidence integrity
 
 ## Tasks
 
@@ -71,19 +73,22 @@ Last verified against the production codebase: 2026-07-12.
 
 ## Connectors
 
-- [ ] Create connector registry
-- [ ] Create sync run table
-- [ ] Add finance connector
-- [ ] Add CSV import
+- [x] Create connector registry
+- [x] Create sync run table
+- [x] Add finance connector
+- [x] Use one synced finance snapshot across Ask, Home, and Connectors
+- [x] Add CSV import
 - [ ] Add ticket email parser
 
 ## Query
 
-- [ ] Build ask Recall interface
-- [ ] Query tasks
-- [ ] Query finance
-- [ ] Return evidence
-- [ ] Show related records
+- [x] Build ask Recall interface
+- [x] Query tasks
+- [x] Query finance
+- [x] Return evidence
+- [x] Restore evidence when a saved thread is reopened
+- [x] Search OCR and extracted note-attachment text
+- [x] Show related records
 
 ## Hardening
 

@@ -33,6 +33,32 @@ type AnswerMeta = {
   };
 };
 
+function answerMetaFromMessage(message: AskMessageRecord | undefined): AnswerMeta | null {
+  if (!message || message.role !== "assistant") return null;
+  const metadata = message.metadata ?? {};
+  if (typeof metadata.confidence !== "number") return null;
+
+  const privacy =
+    metadata.privacy && typeof metadata.privacy === "object"
+      ? (metadata.privacy as AnswerMeta["privacy"])
+      : undefined;
+  return {
+    confidence: metadata.confidence,
+    caveats: typeof metadata.caveats === "string" ? metadata.caveats : null,
+    evidence: Array.isArray(metadata.evidence)
+      ? (metadata.evidence as EvidenceRecord[])
+      : [],
+    relatedRecords: Array.isArray(metadata.relatedRecords)
+      ? (metadata.relatedRecords as AnswerMeta["relatedRecords"])
+      : [],
+    suggestedNextAction:
+      typeof metadata.suggestedNextAction === "string"
+        ? metadata.suggestedNextAction
+        : null,
+    privacy,
+  };
+}
+
 function privacyChipLabel(privacy: NonNullable<AnswerMeta["privacy"]>): string {
   const cats = privacy.categoriesSent
     .map((c) => {
@@ -95,7 +121,11 @@ export function Ask() {
     setThreadId(detail.thread.id);
     setStoredAskThreadId(detail.thread.id);
     setMessages(detail.messages);
-    setLatestMeta(null);
+    setLatestMeta(
+      answerMetaFromMessage(
+        [...detail.messages].reverse().find((message) => message.role === "assistant"),
+      ),
+    );
   };
 
   useEffect(() => {
@@ -172,6 +202,10 @@ export function Ask() {
           metadata: {
             confidence: res.confidence,
             caveats: res.caveats,
+            evidence: res.evidence,
+            relatedRecords: res.relatedRecords,
+            suggestedNextAction: res.suggestedNextAction,
+            privacy: res.privacy,
           },
           createdAt: new Date().toISOString(),
         },
@@ -196,7 +230,9 @@ export function Ask() {
     void Promise.all([
       listWaitingOn().catch(() => ({ items: [] })),
       fetchHome().catch(() => null),
-      listPeople().catch(() => ({ people: [] })),
+      listPeople().catch(
+        (): Awaited<ReturnType<typeof listPeople>> => ({ people: [] }),
+      ),
     ]).then(([waiting, home, peopleRes]) => {
       const next: string[] = [];
       const topWait = waiting.items[0];

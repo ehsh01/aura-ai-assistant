@@ -32,6 +32,7 @@ import {
   retrievalQueryFromHistory,
   type ConversationTurn,
 } from "./ask-threads";
+import { buildAskAnswerMetadata } from "./ask-answer-metadata";
 
 function buildFinanceBreakdownAnswer(
   finance: QueryFinanceAggregate,
@@ -525,11 +526,7 @@ export async function queryRecallForUser(
       threadId: thread.id,
       role: "assistant",
       content: withPrivacy.answer,
-      metadata: {
-        confidence: withPrivacy.confidence,
-        caveats: withPrivacy.caveats,
-        relatedRecords: withPrivacy.relatedRecords.slice(0, 8),
-      },
+      metadata: buildAskAnswerMetadata(withPrivacy),
     });
 
     await writeAuditLog({

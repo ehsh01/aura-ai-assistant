@@ -8,6 +8,7 @@ import { listKnowledgeForUser } from "./knowledge";
 import { listDocumentsForUser } from "./documents";
 import { listCapturesForUser } from "./captures";
 import { listMemoriesForUser } from "./life-memory";
+import { noteRetrievalText } from "./note-retrieval";
 import {
   cosineSimilarity,
   embedItemsCached,
@@ -670,15 +671,11 @@ async function collectCorpus(
     });
   }
   for (const n of notes.slice(0, CORPUS.notes)) {
-    const tags = Array.isArray(n.tags) ? n.tags.join(",") : "";
-    const personBits = [n.primaryPersonName, n.primaryPersonId].filter(Boolean).join(" ");
     records.push({
       entityType: "note",
       entityId: n.id,
       title: n.title,
-      text: `${n.title}\n${(n.preview ?? n.content ?? "").slice(0, 600)}\ntags=${tags}${
-        personBits ? ` person=${personBits}` : ""
-      }`,
+      text: noteRetrievalText(n),
     });
   }
   for (const p of people.slice(0, CORPUS.people)) {

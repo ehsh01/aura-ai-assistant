@@ -2,10 +2,12 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { eq, inArray, isNull } from "drizzle-orm";
 import OpenAI from "openai";
-import { noteAttachments } from "@workspace/db/schema";
+import { noteAttachments, notes } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { config } from "../lib/config";
 import { logger } from "../lib/logger";
+import { warmEntityEmbedding } from "./embedding-cache";
+import { noteRetrievalText } from "./note-retrieval";
 
 const MAX_EXTRACTED_CHARS = 12_000;
 const MIN_IMAGE_BYTES_FOR_OCR = 2_500;
@@ -182,6 +184,23 @@ export async function extractAndStoreAttachmentText(attachmentId: string): Promi
     sizeBytes: row.sizeBytes,
   });
   await persistAttachmentExtractedText(attachmentId, text);
+
+  const [note] = await getDb()
+    .select()
+    .from(notes)
+    .where(eq(notes.id, row.noteId))
+    .limit(1);
+  if (note) {
+    const attachmentText = await attachmentSearchTextForNotes([row.noteId]);
+    warmEntityEmbedding(row.userId, {
+      entityType: "note",
+      entityId: row.noteId,
+      text: noteRetrievalText({
+        ...note,
+        attachmentText: attachmentText.get(row.noteId) ?? "",
+      }),
+    });
+  }
   return text;
 }
 

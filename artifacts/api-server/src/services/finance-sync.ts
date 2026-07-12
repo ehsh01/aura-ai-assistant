@@ -12,6 +12,35 @@ export type SyncedFinanceResult = {
   payeeFilter: string | null;
 };
 
+export function financeSummaryFromSynced(result: SyncedFinanceResult): {
+  total: number;
+  transactionCount: number;
+  transactions: {
+    id: string;
+    date: string;
+    amount: number;
+    payee: string | null;
+    category: string | null;
+    notes: null;
+  }[];
+  evidenceNote: string;
+} {
+  const expenses = result.finance.transactions.filter((tx) => tx.amount < 0);
+  return {
+    total: result.finance.spent,
+    transactionCount: result.finance.expenseCount,
+    transactions: expenses.map((tx, index) => ({
+      id: `synced-${tx.date}-${index}`,
+      date: tx.date,
+      amount: tx.amount,
+      payee: tx.payee,
+      category: tx.category,
+      notes: null,
+    })),
+    evidenceNote: `Spent total computed from ${result.finance.expenseCount} synced transaction(s) for ${result.finance.rangeLabel ?? "the selected period"}. Last successful sync is the source snapshot.`,
+  };
+}
+
 /** Pull a likely payee/merchant name out of a spending question. */
 export function extractPayeeHint(question: string): string | null {
   const patterns = [
@@ -57,13 +86,31 @@ export async function loadSyncedFinanceAggregate(
   userId: string,
   question: string,
   today: string,
+  options?: {
+    connectorId?: string;
+    startDate?: string;
+    endDate?: string;
+    payee?: string;
+  },
 ): Promise<SyncedFinanceResult | null> {
   const connectors = await listConnectorsForUser(userId);
-  const financeConn = connectors.find((c) => c.type === "finance_api");
+  const financeConn = connectors.find(
+    (c) =>
+      c.type === "finance_api" &&
+      (!options?.connectorId || c.id === options.connectorId),
+  );
   if (!financeConn) return null;
 
-  const range = parseFinanceDateRange(question, today);
-  const payeeFilter = extractPayeeHint(question);
+  const parsedRange = parseFinanceDateRange(question, today);
+  const hasExplicitRange = Boolean(options?.startDate || options?.endDate);
+  const range = hasExplicitRange
+    ? {
+        startDate: options?.startDate ?? null,
+        endDate: options?.endDate ?? null,
+        label: [options?.startDate, options?.endDate].filter(Boolean).join(" to "),
+      }
+    : parsedRange;
+  const payeeFilter = options?.payee?.trim() || extractPayeeHint(question);
 
   const rows = await getDb()
     .select({

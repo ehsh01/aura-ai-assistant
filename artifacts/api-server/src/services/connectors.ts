@@ -18,7 +18,7 @@ import {
 } from "../connectors/google";
 import { manualConnector } from "../connectors/manual";
 import type { RecallConnector } from "../connectors/types";
-import { createEvidenceForUser } from "./evidence";
+import { upsertEvidenceForSourceRecord } from "./evidence";
 import { writeAuditLog } from "./audit";
 import { openConnectorSettings, sealConnectorSettings } from "../lib/secret-box";
 
@@ -696,7 +696,7 @@ export async function syncConnectorForUser(
         else recordsCreated++;
 
         for (const ev of impl.mapEvidence(record)) {
-          await createEvidenceForUser(userId, {
+          await upsertEvidenceForSourceRecord(userId, {
             entityType: "source_record",
             entityId: sourceRecordId,
             claimType: ev.claimType,

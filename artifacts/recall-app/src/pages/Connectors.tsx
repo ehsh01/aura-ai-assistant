@@ -259,17 +259,17 @@ export function Connectors() {
           {(summaryLoading || summary) && (
             <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
               <h2 className="text-lg font-semibold">Spending summary</h2>
-              {summaryLoading && <p className="mt-3 text-white/40">Loading from your finance app…</p>}
+              {summaryLoading && (
+                <p className="mt-3 text-white/40">Refreshing the synced finance snapshot…</p>
+              )}
               {summary && !summaryLoading && (
                 <>
                   <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
                     <div className="rounded-xl border border-white/10 bg-black/20 p-4">
-                      <p className="text-xs uppercase tracking-wider text-white/40">Net total</p>
-                      <p
-                        className={`mt-1 text-2xl font-semibold ${
-                          summary.data.total < 0 ? "text-red-300" : "text-emerald-300"
-                        }`}
-                      >
+                      <p className="text-xs uppercase tracking-wider text-white/40">
+                        Spent this month
+                      </p>
+                      <p className="mt-1 text-2xl font-semibold text-red-300">
                         {formatUsd(summary.data.total)}
                       </p>
                     </div>

@@ -383,6 +383,9 @@ export async function acceptCaptureForUser(
 
   const peopleNames = await peopleNamesForUser(userId);
   const item = toDto(existing, peopleNames);
+  if (existing.status === "accepted") {
+    return { item };
+  }
   const type = normalizeType(input.type ?? item.suggestedType);
   const title = input.title?.trim() || item.cleanedTitle;
   const content = input.content ?? item.rawText;

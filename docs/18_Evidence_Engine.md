@@ -85,3 +85,17 @@ Avoid:
 - tasks without capture links
 - evidence hidden deep in UI
 - source text overwritten by AI output
+
+## 9. Implemented Durability Rules
+
+- Ask stores the exact evidence excerpts, source metadata, privacy details,
+  confidence, caveats, and prompt version with each assistant message.
+- Reopening an Ask thread restores the evidence used for that answer instead of
+  rebuilding it from records that may have changed.
+- Connector sync updates the current evidence for a source-record claim rather
+  than appending another copy on every sync.
+- Legacy duplicate connector evidence is collapsed when displayed.
+- Finance totals shown by Ask, Home, and Connectors use the synced
+  `source_records` snapshot and expose the period used for the calculation.
+- Note text used by Ask includes the full searchable note body plus capped OCR
+  and extracted text from attached images, PDFs, and documents.
