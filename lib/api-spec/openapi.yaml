@@ -1704,6 +1704,9 @@ components:
           enum: [plain, html]
         attachmentCount:
           type: integer
+        attachmentText:
+          type: string
+          description: Capped searchable text extracted from attached images, PDFs, and documents.
         createdAt:
           type: string
         updatedAt:
@@ -1757,6 +1760,9 @@ components:
           enum: [plain, html]
         attachmentCount:
           type: integer
+        attachmentText:
+          type: string
+          description: Capped searchable text extracted from attached images, PDFs, and documents.
         createdAt:
           type: string
         updatedAt:

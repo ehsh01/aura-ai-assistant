@@ -1,5 +1,5 @@
 import { createWriteStream } from "node:fs";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
@@ -7,6 +7,7 @@ import { and, eq } from "drizzle-orm";
 import { noteAttachments } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { config } from "../lib/config";
+import { queueAttachmentTextExtraction } from "./attachment-text-extract";
 
 export type NoteAttachmentDto = {
   id: string;
@@ -101,6 +102,7 @@ export async function registerNoteAttachments(
   if (items.length === 0) return;
 
   const db = getDb();
+  const ids: string[] = [];
   for (const item of items) {
     await db
       .insert(noteAttachments)
@@ -121,9 +123,14 @@ export async function registerNoteAttachments(
           mimeType: item.mimeType,
           sizeBytes: item.sizeBytes,
           storagePath: item.storagePath,
+          // Re-extract when file bytes change on re-import.
+          extractedText: null,
+          extractedAt: null,
         },
       });
+    ids.push(item.id);
   }
+  queueAttachmentTextExtraction(ids);
 }
 
 export async function saveNoteAttachment(opts: {

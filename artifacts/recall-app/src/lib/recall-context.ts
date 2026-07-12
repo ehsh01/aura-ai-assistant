@@ -26,6 +26,8 @@ export interface RecallNote {
   primaryPersonId?: string | null;
   primaryPersonName?: string | null;
   attachmentCount?: number;
+  /** Searchable text from attached images/PDFs/docs. */
+  attachmentText?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -112,7 +114,7 @@ export function noteMatchesQuery(note: RecallNote, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   const terms = q.split(/\s+/).filter(Boolean);
-  const hay = `${note.title}\n${note.preview}\n${note.content}\n${note.tags.join(" ")}`.toLowerCase();
+  const hay = `${note.title}\n${note.preview}\n${note.content}\n${note.tags.join(" ")}\n${note.attachmentText ?? ""}`.toLowerCase();
   return terms.every((term) => hay.includes(term));
 }
 

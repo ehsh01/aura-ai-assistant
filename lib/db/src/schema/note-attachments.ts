@@ -1,4 +1,4 @@
-import { integer, pgTable, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { integer, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { notes } from "./notes";
 import { users } from "./users";
 
@@ -15,6 +15,9 @@ export const noteAttachments = pgTable("note_attachments", {
   mimeType: varchar("mime_type", { length: 128 }).notNull().default("application/octet-stream"),
   sizeBytes: integer("size_bytes").notNull().default(0),
   storagePath: varchar("storage_path", { length: 1024 }).notNull(),
+  /** OCR / PDF / plain-text extracted for Notes search. */
+  extractedText: text("extracted_text"),
+  extractedAt: timestamp("extracted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

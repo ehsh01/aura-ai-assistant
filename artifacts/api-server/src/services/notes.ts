@@ -10,6 +10,7 @@ import {
   registerNoteAttachments,
   type PendingNoteAttachment,
 } from "./note-attachments";
+import { attachmentSearchTextForNotes } from "./attachment-text-extract";
 import { writeAuditLog } from "./audit";
 import { warmEntityEmbedding } from "./embedding-cache";
 import {
@@ -32,6 +33,8 @@ export type RecallNoteDto = {
   primaryPersonId: string | null;
   primaryPersonName: string | null;
   attachmentCount: number;
+  /** Capped searchable text from attached images/PDFs/docs. */
+  attachmentText?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -66,6 +69,7 @@ function toDto(
   row: Note,
   attachmentCount = 0,
   personName: string | null = null,
+  attachmentText = "",
 ): RecallNoteDto {
   const format = row.contentFormat === "html" ? "html" : "plain";
   return {
@@ -82,6 +86,7 @@ function toDto(
     primaryPersonId: row.primaryPersonId ?? null,
     primaryPersonName: personName,
     attachmentCount,
+    ...(attachmentText ? { attachmentText } : {}),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -112,7 +117,9 @@ export async function listNotesForUser(userId: string): Promise<RecallNoteDto[]>
     .from(notes)
     .where(eq(notes.userId, userId))
     .orderBy(desc(notes.updatedAt));
-  const counts = await attachmentCountsForNotes(rows.map((row) => row.id));
+  const noteIds = rows.map((row) => row.id);
+  const counts = await attachmentCountsForNotes(noteIds);
+  const attachmentTexts = await attachmentSearchTextForNotes(noteIds);
   const names = await personNamesById(
     userId,
     rows.map((r) => r.primaryPersonId).filter((id): id is string => Boolean(id)),
@@ -122,6 +129,7 @@ export async function listNotesForUser(userId: string): Promise<RecallNoteDto[]>
       row,
       counts.get(row.id) ?? 0,
       row.primaryPersonId ? names.get(row.primaryPersonId) ?? null : null,
+      attachmentTexts.get(row.id) ?? "",
     ),
   );
 }
@@ -170,7 +178,7 @@ function extractSearchTerms(query: string): string[] {
     .filter((term) => term.length >= 2 && !SEARCH_STOP_WORDS.has(term));
 }
 
-/** Keyword search across the user's full note library (title, preview, tags). */
+/** Keyword search across the user's full note library (title, preview, tags, attachment text). */
 export async function searchNotesForUser(
   userId: string,
   query: string,
@@ -185,7 +193,16 @@ export async function searchNotesForUser(
     return or(
       ilike(notes.title, pattern),
       ilike(notes.preview, pattern),
+      ilike(notes.content, pattern),
       sql`${notes.tags}::text ilike ${pattern}`,
+      sql`exists (
+        select 1 from note_attachments na
+        where na.note_id = ${notes.id}
+          and (
+            na.file_name ilike ${pattern}
+            or coalesce(na.extracted_text, '') ilike ${pattern}
+          )
+      )`,
     );
   });
 
@@ -196,7 +213,9 @@ export async function searchNotesForUser(
     .orderBy(desc(notes.updatedAt))
     .limit(limit);
 
-  const counts = await attachmentCountsForNotes(rows.map((row) => row.id));
+  const noteIds = rows.map((row) => row.id);
+  const counts = await attachmentCountsForNotes(noteIds);
+  const attachmentTexts = await attachmentSearchTextForNotes(noteIds);
   const names = await personNamesById(
     userId,
     rows.map((r) => r.primaryPersonId).filter((id): id is string => Boolean(id)),
@@ -207,6 +226,7 @@ export async function searchNotesForUser(
         row,
         counts.get(row.id) ?? 0,
         row.primaryPersonId ? names.get(row.primaryPersonId) ?? null : null,
+        attachmentTexts.get(row.id) ?? "",
       ),
     ),
   );
@@ -223,12 +243,18 @@ export async function getNoteForUser(
     .limit(1);
   if (!row[0]) return null;
   const counts = await attachmentCountsForNotes([noteId]);
+  const attachmentTexts = await attachmentSearchTextForNotes([noteId]);
   let personName: string | null = null;
   if (row[0].primaryPersonId) {
     const names = await personNamesById(userId, [row[0].primaryPersonId]);
     personName = names.get(row[0].primaryPersonId) ?? null;
   }
-  return toDto(row[0], counts.get(noteId) ?? 0, personName);
+  return toDto(
+    row[0],
+    counts.get(noteId) ?? 0,
+    personName,
+    attachmentTexts.get(noteId) ?? "",
+  );
 }
 
 export async function createNoteForUser(

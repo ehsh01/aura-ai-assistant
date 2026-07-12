@@ -314,6 +314,7 @@ export const ListNotesResponse = zod.object({
   "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
+  "attachmentText": zod.string().optional().describe('Capped searchable text extracted from attached images, PDFs, and documents.'),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 }))
@@ -371,6 +372,7 @@ export const BulkUpsertNotesResponse = zod.object({
   "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
+  "attachmentText": zod.string().optional().describe('Capped searchable text extracted from attached images, PDFs, and documents.'),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 }))
@@ -414,6 +416,7 @@ export const ImportEnexNotesResponse = zod.object({
   "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
+  "attachmentText": zod.string().optional().describe('Capped searchable text extracted from attached images, PDFs, and documents.'),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })),
@@ -442,6 +445,7 @@ export const GetNoteResponse = zod.object({
   "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
+  "attachmentText": zod.string().optional().describe('Capped searchable text extracted from attached images, PDFs, and documents.'),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })
@@ -479,6 +483,7 @@ export const UpdateNoteResponse = zod.object({
   "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
+  "attachmentText": zod.string().optional().describe('Capped searchable text extracted from attached images, PDFs, and documents.'),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })

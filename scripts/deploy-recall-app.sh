@@ -40,7 +40,8 @@ if [ -n "${DATABASE_URL:-}" ] && command -v psql >/dev/null; then
     lib/db/migrations/0004_entity_embeddings.sql \
     lib/db/migrations/0005_note_knowledge_person.sql \
     lib/db/migrations/0006_life_memories.sql \
-    lib/db/migrations/0007_ask_threads.sql
+    lib/db/migrations/0007_ask_threads.sql \
+    lib/db/migrations/0008_note_attachment_text.sql
   do
     echo "--> Applying $mig"
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$mig"
