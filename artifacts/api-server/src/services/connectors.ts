@@ -267,7 +267,18 @@ export function extractMailPersonName(question: string): string | null {
   const fromMatch =
     q.match(/\blook(?:ing)?\s+for\s+emails?\s+from\s+(.+?)(?:\?|[.!]|$)/i) ??
     q.match(/\b(?:emails?|e-mails?|mail|messages?|inbox)\s+from\s+(.+?)(?:\?|[.!]|looking|please|$)/i) ??
-    q.match(/\bfrom\s+([A-Za-z][A-Za-z0-9.'\-\s]{1,60}?)(?:\s*\?|\s*$)/i);
+    q.match(
+      /\bfrom\s+([A-Za-z][A-Za-z0-9.'\-]+(?:\s+[A-Za-z][A-Za-z0-9.'\-]+){0,3}?)(?=\s+(?:about|regarding|re|on|last|yesterday|today|in|at|around)|[?!.]|$)/i,
+    ) ??
+    q.match(
+      /\b(?:sent|emailed)\s+(?:to me\s+)?by\s+([A-Za-z][A-Za-z0-9.'\-]+(?:\s+[A-Za-z][A-Za-z0-9.'\-]+){0,3}?)(?:\?|[.!]|$)/i,
+    ) ??
+    q.match(
+      /\b(?:email|emails|mail|message)\s+([A-Za-z][A-Za-z0-9.'\-]+(?:\s+[A-Za-z][A-Za-z0-9.'\-]+)?)\s+sent\b/i,
+    ) ??
+    q.match(
+      /\b([A-Za-z][A-Za-z0-9.'\-]+(?:\s+[A-Za-z][A-Za-z0-9.'\-]+)?)\s+(?:sent|emailed)\b/i,
+    );
 
   if (fromMatch?.[1]) return cleanMailPersonName(fromMatch[1]);
 
@@ -337,7 +348,9 @@ export function buildGmailSearchQuery(question: string): string | null {
   const fromMatch =
     q.match(/\blook(?:ing)?\s+for\s+emails?\s+from\s+(.+?)(?:\?|[.!]|$)/i) ??
     q.match(/\b(?:emails?|e-mails?|mail|messages?|inbox)\s+from\s+(.+?)(?:\?|[.!]|looking|please|$)/i) ??
-    q.match(/\bfrom\s+([A-Za-z][A-Za-z0-9.'\-\s]{1,60}?)(?:\s*\?|\s*$)/i);
+    q.match(
+      /\bfrom\s+([A-Za-z][A-Za-z0-9.'\-]+(?:\s+[A-Za-z][A-Za-z0-9.'\-]+){0,3}?)(?=\s+(?:about|regarding|re|on|last|yesterday|today|in|at|around)|[?!.]|$)/i,
+    );
 
   if (fromMatch?.[1]) {
     const who = cleanMailPersonName(fromMatch[1]);
