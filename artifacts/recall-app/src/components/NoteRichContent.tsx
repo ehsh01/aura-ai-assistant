@@ -60,6 +60,9 @@ function sanitizeNoteHtml(html: string): string {
           attr.value.trim().toLowerCase().startsWith("javascript:")
         ) {
           child.removeAttribute(attr.name);
+        } else if (name === "href") {
+          const rewritten = rewriteEvernoteHref(attr.value);
+          if (rewritten) child.setAttribute("href", rewritten);
         }
       }
       walk(child);
@@ -68,6 +71,25 @@ function sanitizeNoteHtml(html: string): string {
 
   walk(root);
   return root.innerHTML;
+}
+
+/**
+ * Map Evernote deep links (evernote:///view/…/{guid}/…) to in-app note URLs.
+ * Prefer the last UUID in the path (the note guid).
+ */
+function rewriteEvernoteHref(href: string): string | null {
+  const raw = href.trim();
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  if (!lower.startsWith("evernote:") && !lower.includes("evernote.com")) {
+    return null;
+  }
+  const uuidMatch = raw.match(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+  );
+  const guid = uuidMatch?.[uuidMatch.length - 1];
+  if (!guid) return null;
+  return `/notes?note=${encodeURIComponent(`note-en-${guid}`)}`;
 }
 
 function useAttachmentBlob(attachmentId: string): string | null {

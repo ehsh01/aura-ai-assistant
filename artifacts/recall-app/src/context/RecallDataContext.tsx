@@ -345,7 +345,7 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
 
   const loadNote = useCallback(async (id: string): Promise<RecallNote | null> => {
     try {
-      const note = (await apiGetNote(id)) as RecallNote;
+      const note = (await apiGetNote(encodeURIComponent(id))) as RecallNote;
       setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, ...note } : n)));
       return note;
     } catch {

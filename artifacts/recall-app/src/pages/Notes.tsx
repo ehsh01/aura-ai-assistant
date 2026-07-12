@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { AppLayout } from "@/components/AppLayout";
 import { MicButton } from "@/components/MicButton";
 import { useAiChat, useSummarizeNote, useSemanticSearch } from "@workspace/api-client-react";
@@ -44,6 +44,8 @@ const TAGS = ["All", "Work", "Personal", "Ideas", "Meeting", "Code", "Recipes"];
 
 export function Notes() {
   const [location, navigate] = useLocation();
+  /** Wouter pathname ignores ?query — search must be a separate dependency for deep links. */
+  const searchString = useSearch();
   const { user } = useAuth();
   const userName = firstName(user?.name);
   const { notes, notebooks, tasks, addNote, updateNote, importEnexUpload, isReady, loadNote } = useRecallData();
@@ -58,19 +60,42 @@ export function Notes() {
   const [editingContent, setEditingContent] = useState(false);
   const [semanticMatchIds, setSemanticMatchIds] = useState<string[] | null>(null);
   const appliedSearchRef = useRef("");
+  const pendingNoteIdRef = useRef<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const summarizeNote = useSummarizeNote();
   const aiChat = useAiChat();
   const semanticSearch = useSemanticSearch();
   const isMobile = useIsMobile();
 
+  const openNote = (noteId: string, notebook?: NotebookFilter | null) => {
+    setActiveNoteId(noteId);
+    setAiSuggestion(null);
+    const note = notes.find((n) => n.id === noteId);
+    const notebookForUrl =
+      notebook === undefined
+        ? note?.notebookId || (activeNotebook === "all" ? undefined : activeNotebook)
+        : notebook === "all"
+          ? undefined
+          : notebook;
+    navigate(
+      notesPath({
+        noteId,
+        notebook: notebookForUrl || undefined,
+        q: searchQuery || undefined,
+        person: personFilter || undefined,
+      }),
+    );
+  };
+
   useEffect(() => {
     setEditingContent(false);
   }, [activeNoteId]);
 
+  // Apply ?note= / ?notebook= deep links. Depend on searchString so query-only
+  // navigations (e.g. Home → /notes?note=note-en-…) work while already on /notes.
   useEffect(() => {
-    const search = window.location.search;
-    if (appliedSearchRef.current === search) return;
+    const fullSearch = window.location.search;
+    if (appliedSearchRef.current === fullSearch && !pendingNoteIdRef.current) return;
 
     const noteId = readSearchParam("note");
     const notebookParam = readSearchParam("notebook");
@@ -88,12 +113,13 @@ export function Notes() {
 
     if (notebookParam) {
       setActiveNotebook(notebookParam);
-    } else {
+    } else if (!noteId) {
       setActiveNotebook("all");
     }
 
     if (isNew) {
-      appliedSearchRef.current = search;
+      appliedSearchRef.current = fullSearch;
+      pendingNoteIdRef.current = null;
       const notebookId = notebookParam && notebookParam !== "unfiled" ? notebookParam : null;
       const note = addNote({ title: "Untitled", content: "", tags: [], notebookId });
       setActiveNoteId(note.id);
@@ -102,23 +128,40 @@ export function Notes() {
     }
 
     if (noteId) {
-      if (!notes.some((n) => n.id === noteId)) return;
-      appliedSearchRef.current = search;
+      pendingNoteIdRef.current = noteId;
+      if (!isReady) return;
+      const hit = notes.find((n) => n.id === noteId);
+      if (!hit) {
+        pendingNoteIdRef.current = null;
+        appliedSearchRef.current = fullSearch;
+        return;
+      }
+      appliedSearchRef.current = fullSearch;
+      pendingNoteIdRef.current = null;
       setActiveNoteId(noteId);
+      if (!notebookParam && hit.notebookId) {
+        setActiveNotebook(hit.notebookId);
+      }
       return;
     }
 
     if (pinned) {
-      appliedSearchRef.current = search;
+      if (!isReady) return;
+      appliedSearchRef.current = fullSearch;
+      pendingNoteIdRef.current = null;
       const firstPinned = notes.find((n) => n.pinned);
       if (firstPinned) setActiveNoteId(firstPinned.id);
       return;
     }
 
-    appliedSearchRef.current = search;
-  }, [location, notes, addNote]);
+    appliedSearchRef.current = fullSearch;
+    pendingNoteIdRef.current = null;
+  }, [location, searchString, notes, addNote, isReady]);
 
   useEffect(() => {
+    if (!isReady) return;
+    // Don't clobber a deep-linked Evernote/note id before the list has it.
+    if (pendingNoteIdRef.current) return;
     if (notes.length === 0) {
       setActiveNoteId(null);
       return;
@@ -131,7 +174,7 @@ export function Notes() {
     if (!activeNoteId && !isMobile) {
       setActiveNoteId(notes[0]!.id);
     }
-  }, [notes, activeNoteId, isMobile]);
+  }, [notes, activeNoteId, isMobile, isReady]);
 
   const activeNote = notes.find((n) => n.id === activeNoteId) ?? null;
 
@@ -145,8 +188,7 @@ export function Notes() {
   const handleNewNote = () => {
     const notebookId = notebookIdFromFilter(activeNotebook);
     const note = addNote({ title: "Untitled", content: "", tags: [], notebookId });
-    setActiveNoteId(note.id);
-    setAiSuggestion(null);
+    openNote(note.id, activeNotebook);
   };
 
   const handleEvernoteImport = (files: FileList | null) =>
@@ -157,8 +199,20 @@ export function Notes() {
       onSuccess: async (result) => {
         setActiveTag("All");
         setSearchQuery("");
-        if (result.notebookId) navigate(notesPath({ notebook: result.notebookId }));
-        if (result.firstNoteId) setActiveNoteId(result.firstNoteId);
+        setPersonFilter(null);
+        setSemanticMatchIds(null);
+        if (result.firstNoteId) {
+          pendingNoteIdRef.current = result.firstNoteId;
+          setActiveNoteId(result.firstNoteId);
+          navigate(
+            notesPath({
+              noteId: result.firstNoteId,
+              notebook: result.notebookId || undefined,
+            }),
+          );
+        } else if (result.notebookId) {
+          navigate(notesPath({ notebook: result.notebookId }));
+        }
       },
       onFinally: () => {
         if (importInputRef.current) importInputRef.current.value = "";
@@ -198,9 +252,7 @@ export function Notes() {
         },
       });
       if (res.openNote?.id) {
-        setActiveNoteId(res.openNote.id);
-        setAiSuggestion(null);
-        navigate(notesPath({ noteId: res.openNote.id, notebook: activeNotebook }));
+        openNote(res.openNote.id);
         return;
       }
       setAiSuggestion(res.message.content);
@@ -507,7 +559,7 @@ export function Notes() {
                       key={note.id}
                       note={note}
                       isActive={activeNoteId === note.id}
-                      onClick={() => setActiveNoteId(note.id)}
+                      onClick={() => openNote(note.id)}
                       onPersonClick={(name) => navigate(notesPath({ person: name }))}
                       index={i}
                     />
@@ -525,7 +577,7 @@ export function Notes() {
                       key={note.id}
                       note={note}
                       isActive={activeNoteId === note.id}
-                      onClick={() => setActiveNoteId(note.id)}
+                      onClick={() => openNote(note.id)}
                       onPersonClick={(name) => navigate(notesPath({ person: name }))}
                       index={i + pinnedNotes.length}
                     />

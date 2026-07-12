@@ -237,12 +237,14 @@ async function parseNoteBlock(
   ctx: EnexParseContext,
 ): Promise<CreateNoteInput> {
   const title = extractDecodedTag(block, "title") || "Untitled";
-  const guid = extractTag(block, "guid");
+  const guidRaw = extractTag(block, "guid");
   const created = extractTag(block, "created") ?? "";
   const updated = extractTag(block, "updated") ?? "";
   const rawContent = extractTag(block, "content") ?? "";
   const tags = extractTags(block);
   const stableKey = hashNoteKey(title, created || updated, index);
+  // Prefer Evernote's note GUID so evernote:// deep links can resolve in-app.
+  const guid = guidRaw?.trim().toLowerCase() || "";
   const id = guid ? `note-en-${guid}` : `note-en-${stableKey}`;
 
   const { hashToId, saved, pending } = await extractResources(block, ctx.userId, id);

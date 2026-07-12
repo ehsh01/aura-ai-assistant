@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { AppLayout } from "@/components/AppLayout";
 import { useRecallData } from "@/context/RecallDataContext";
 import { importEvernoteFiles } from "@/lib/evernote-import-ui";
@@ -7,6 +7,7 @@ import { notesPath } from "@/lib/recall-nav";
 import { BookOpen, Download, Library, Loader2 } from "lucide-react";
 
 export function Notebooks() {
+  const [, navigate] = useLocation();
   const { notebooks, importEnexUpload, isReady } = useRecallData();
   const [importing, setImporting] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -16,7 +17,18 @@ export function Notebooks() {
       importing,
       setImporting,
       importFile: importEnexUpload,
-      onSuccess: async () => {},
+      onSuccess: async (result) => {
+        if (result.firstNoteId) {
+          navigate(
+            notesPath({
+              noteId: result.firstNoteId,
+              notebook: result.notebookId || undefined,
+            }),
+          );
+        } else if (result.notebookId) {
+          navigate(notesPath({ notebook: result.notebookId }));
+        }
+      },
       onFinally: () => {
         if (importInputRef.current) importInputRef.current.value = "";
       },
