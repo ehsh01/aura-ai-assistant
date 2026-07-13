@@ -76,6 +76,14 @@ export function newEntityLinkId(): string {
   return `elink-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function newVehicleId(): string {
+  return `vehicle-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newWarrantyId(): string {
+  return `warranty-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function newAuditId(): string {
   return `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

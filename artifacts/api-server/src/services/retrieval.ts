@@ -4,6 +4,8 @@ import { getDb } from "../lib/db";
 import { listTasksForUser } from "./tasks";
 import { listNotesForUser, searchNotesForUser } from "./notes";
 import { listPeopleForUser } from "./people";
+import { listVehiclesForUser } from "./vehicles";
+import { listWarrantiesForUser } from "./warranties";
 import { listPersonNameAliases, peopleWithAliasNames } from "./user-corrections";
 import {
   linkedEntityKeySet,
@@ -60,6 +62,7 @@ function typeBoost(entityType: string, pinned?: boolean): number {
   if (entityType === "memory") return pinned ? 0.35 : 0.22;
   if (entityType === "knowledge") return 0.08;
   if (entityType === "person") return 0.05;
+  if (entityType === "vehicle" || entityType === "warranty") return 0.12;
   return 0;
 }
 
@@ -454,6 +457,8 @@ const CORPUS = {
   memories: 200,
   documents: 100,
   captures: 100,
+  vehicles: 40,
+  warranties: 40,
   /** Per connected Google mailbox — keeps ehernandez2 + REI + others searchable. */
   gmailPerMailbox: 150,
   contactsTotal: 40,
@@ -619,7 +624,7 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
 async function collectCorpus(
   userId: string,
 ): Promise<{ records: ContextRecord[]; people: PersonRef[] }> {
-  const [tasks, notes, people, knowledge, memories, documents, captures, sources, aliases] =
+  const [tasks, notes, people, knowledge, memories, documents, captures, vehiclesList, warrantiesList, sources, aliases] =
     await Promise.all([
       listTasksForUser(userId),
       listNotesForUser(userId),
@@ -628,6 +633,8 @@ async function collectCorpus(
       listMemoriesForUser(userId, { limit: CORPUS.memories }),
       listDocumentsForUser(userId),
       listCapturesForUser(userId, { limit: CORPUS.captures }),
+      listVehiclesForUser(userId),
+      listWarrantiesForUser(userId),
       loadSourceRecordsBalanced(userId),
       listPersonNameAliases(userId),
     ]);
@@ -721,6 +728,41 @@ async function collectCorpus(
       entityId: c.id,
       title: c.title || "Capture",
       text: `${c.title ?? ""}\n${(c.rawText ?? "").slice(0, 500)}`,
+    });
+  }
+  for (const v of vehiclesList.slice(0, CORPUS.vehicles)) {
+    records.push({
+      entityType: "vehicle",
+      entityId: v.id,
+      title: v.displayName,
+      text: [
+        `vehicle ${v.displayName}`,
+        v.year ? `year=${v.year}` : null,
+        v.make ? `make=${v.make}` : null,
+        v.model ? `model=${v.model}` : null,
+        v.vin ? `vin=${v.vin}` : null,
+        v.licensePlate ? `plate=${v.licensePlate}` : null,
+        v.notes ? `notes=${v.notes.slice(0, 400)}` : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    });
+  }
+  for (const w of warrantiesList.slice(0, CORPUS.warranties)) {
+    records.push({
+      entityType: "warranty",
+      entityId: w.id,
+      title: w.title,
+      text: [
+        `warranty ${w.title}`,
+        `subject=${w.subjectType}`,
+        w.subjectName ? `for=${w.subjectName}` : null,
+        w.provider ? `provider=${w.provider}` : null,
+        w.expiresAt ? `expires=${w.expiresAt}` : null,
+        w.notes ? `notes=${w.notes.slice(0, 400)}` : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
     });
   }
 

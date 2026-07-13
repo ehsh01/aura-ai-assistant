@@ -19,6 +19,7 @@ import {
   Search,
   Sparkles,
   Users,
+  Car,
 } from "lucide-react";
 import {
   Sheet,
@@ -232,6 +233,10 @@ export function MobileMoreSheet({
           <Link href="/people" onClick={close} className={linkClass(location === "/people")}>
             <Users size={18} />
             <span className="flex-1 text-sm font-medium">People</span>
+          </Link>
+          <Link href="/vehicles" onClick={close} className={linkClass(location === "/vehicles")}>
+            <Car size={18} />
+            <span className="flex-1 text-sm font-medium">Vehicles</span>
           </Link>
           <Link href="/projects" onClick={close} className={linkClass(location === "/projects" || location.startsWith("/projects/"))}>
             <FolderKanban size={18} />

@@ -18,7 +18,12 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const err = (await res.json().catch(() => ({}))) as { message?: string };
     throw new Error(err.message ?? `Request failed (${res.status})`);
   }
-  return res.json() as Promise<T>;
+  if (res.status === 204) {
+    return undefined as T;
+  }
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text) as T;
 }
 
 export type EvidenceRecord = {
@@ -46,6 +51,32 @@ export type PersonRecord = {
   department: string | null;
   role: string | null;
   notes: string | null;
+};
+
+export type VehicleRecord = {
+  id: string;
+  displayName: string;
+  year: string | null;
+  make: string | null;
+  model: string | null;
+  vin: string | null;
+  licensePlate: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WarrantyRecord = {
+  id: string;
+  title: string;
+  subjectType: "vehicle" | "home" | "other";
+  subjectId: string | null;
+  subjectName: string | null;
+  provider: string | null;
+  expiresAt: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type WaitingOnRecord = {
@@ -156,6 +187,80 @@ export type PersonRelated = {
 
 export async function getPersonRelated(personId: string): Promise<PersonRelated> {
   return apiFetch(`/people/${encodeURIComponent(personId)}/related`);
+}
+
+export async function listVehicles(): Promise<{ vehicles: VehicleRecord[] }> {
+  return apiFetch("/vehicles");
+}
+
+export async function createVehicle(input: {
+  displayName: string;
+  year?: string | null;
+  make?: string | null;
+  model?: string | null;
+  vin?: string | null;
+  licensePlate?: string | null;
+  notes?: string | null;
+}): Promise<VehicleRecord> {
+  return apiFetch("/vehicles", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function updateVehicle(
+  vehicleId: string,
+  input: Partial<{
+    displayName: string;
+    year: string | null;
+    make: string | null;
+    model: string | null;
+    vin: string | null;
+    licensePlate: string | null;
+    notes: string | null;
+  }>,
+): Promise<VehicleRecord> {
+  return apiFetch(`/vehicles/${encodeURIComponent(vehicleId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteVehicle(vehicleId: string): Promise<void> {
+  await apiFetch(`/vehicles/${encodeURIComponent(vehicleId)}`, { method: "DELETE" });
+}
+
+export async function listWarranties(): Promise<{ warranties: WarrantyRecord[] }> {
+  return apiFetch("/warranties");
+}
+
+export async function createWarranty(input: {
+  title: string;
+  subjectType?: "vehicle" | "home" | "other";
+  subjectId?: string | null;
+  provider?: string | null;
+  expiresAt?: string | null;
+  notes?: string | null;
+}): Promise<WarrantyRecord> {
+  return apiFetch("/warranties", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function updateWarranty(
+  warrantyId: string,
+  input: Partial<{
+    title: string;
+    subjectType: "vehicle" | "home" | "other";
+    subjectId: string | null;
+    provider: string | null;
+    expiresAt: string | null;
+    notes: string | null;
+  }>,
+): Promise<WarrantyRecord> {
+  return apiFetch(`/warranties/${encodeURIComponent(warrantyId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteWarranty(warrantyId: string): Promise<void> {
+  await apiFetch(`/warranties/${encodeURIComponent(warrantyId)}`, { method: "DELETE" });
 }
 
 export interface HomeBriefingItem {

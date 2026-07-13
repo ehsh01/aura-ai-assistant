@@ -60,6 +60,14 @@ export function peoplePath(opts?: { personId?: string }): string {
   return q ? `/people?${q}` : "/people";
 }
 
+export function vehiclesPath(opts?: { vehicleId?: string; warrantyId?: string }): string {
+  const params = new URLSearchParams();
+  if (opts?.vehicleId) params.set("vehicle", opts.vehicleId);
+  if (opts?.warrantyId) params.set("warranty", opts.warrantyId);
+  const q = params.toString();
+  return q ? `/vehicles?${q}` : "/vehicles";
+}
+
 export function askPath(opts?: { q?: string }): string {
   const params = new URLSearchParams();
   if (opts?.q?.trim()) params.set("q", opts.q.trim());
@@ -105,6 +113,10 @@ export function entityPath(entityType: string, entityId: string): string | null 
       return knowledgePath({ knowledgeId: entityId });
     case "memory":
       return memoryPath({ memoryId: entityId });
+    case "vehicle":
+      return vehiclesPath({ vehicleId: entityId });
+    case "warranty":
+      return vehiclesPath({ warrantyId: entityId });
     case "capture":
     case "capture_item":
       return inboxPath({ captureId: entityId });

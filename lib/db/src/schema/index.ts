@@ -21,3 +21,5 @@ export * from "./entity-embeddings";
 export * from "./ask-threads";
 export * from "./extension-tokens";
 export * from "./entity-links";
+export * from "./vehicles";
+export * from "./warranties";

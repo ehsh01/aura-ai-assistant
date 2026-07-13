@@ -1,6 +1,5 @@
 /**
- * Phase 4 Slice A — evidence-backed proactive insights from existing data.
- * Domain tables (Vehicle/Home/Warranty CRUD) stay deferred until structured dates exist.
+ * Phase 4 — evidence-backed proactive insights from existing data + structured warranties.
  */
 import { and, desc, eq } from "drizzle-orm";
 import { sourceRecords } from "@workspace/db/schema";
@@ -11,6 +10,10 @@ import type { RecallNoteMetadataDto } from "./notes";
 import type { RecallProjectDto } from "./projects";
 import type { RecallTaskDto } from "./tasks";
 import { listWaitingOnForUser } from "./waiting-on";
+import {
+  findExpiringWarranties,
+  listDatedWarrantiesForUser,
+} from "./warranties";
 
 export type ProactiveInsightKind =
   | "no-task"
@@ -219,21 +222,45 @@ export async function buildProactiveInsights(
     });
   }
 
-  // 4) Soft warranty hints from Life Memory (only when a date is present).
-  const [vehicleMemories, homeMemories] = await Promise.all([
-    listMemoriesForUser(userId, { domain: "vehicles", limit: 40 }).catch(() => []),
-    listMemoriesForUser(userId, { domain: "home", limit: 40 }).catch(() => []),
-  ]);
-  for (const m of [...vehicleMemories, ...homeMemories]) {
-    const hint = extractWarrantyHint(m.title, m.content);
-    if (!hint) continue;
+  // 4) Structured warranties first; fall back to soft Life Memory hints.
+  const datedWarranties = await listDatedWarrantiesForUser(userId).catch(() => []);
+  const expiring = findExpiringWarranties(datedWarranties, {
+    upcomingDays: 90,
+    pastGraceDays: 14,
+  });
+  for (const w of expiring.slice(0, 3)) {
+    const when =
+      w.daysUntil < 0
+        ? `expired ${Math.abs(w.daysUntil)} day${Math.abs(w.daysUntil) === 1 ? "" : "s"} ago`
+        : w.daysUntil === 0
+          ? "expires today"
+          : `expires in ${w.daysUntil} day${w.daysUntil === 1 ? "" : "s"}`;
+    const subjectBit = w.subjectName ? ` (${w.subjectName})` : "";
     push({
-      id: `warranty-${m.id}`,
+      id: `warranty-${w.id}`,
       kind: "warranty",
-      text: `Warranty note “${hint.summary}” mentions ${hint.dateToken} — worth confirming it’s still active.`,
-      href: `/memory?memory=${encodeURIComponent(m.id)}`,
-      evidence: m.content.slice(0, 200),
+      text: `Warranty “${w.title}”${subjectBit} ${when} (${w.expiresAt}).`,
+      href: `/vehicles?warranty=${encodeURIComponent(w.id)}`,
+      evidence: `expiresAt=${w.expiresAt}`,
     });
+  }
+
+  if (expiring.length === 0) {
+    const [vehicleMemories, homeMemories] = await Promise.all([
+      listMemoriesForUser(userId, { domain: "vehicles", limit: 40 }).catch(() => []),
+      listMemoriesForUser(userId, { domain: "home", limit: 40 }).catch(() => []),
+    ]);
+    for (const m of [...vehicleMemories, ...homeMemories]) {
+      const hint = extractWarrantyHint(m.title, m.content);
+      if (!hint) continue;
+      push({
+        id: `warranty-mem-${m.id}`,
+        kind: "warranty",
+        text: `Warranty note “${hint.summary}” mentions ${hint.dateToken} — worth confirming it’s still active.`,
+        href: `/memory?memory=${encodeURIComponent(m.id)}`,
+        evidence: m.content.slice(0, 200),
+      });
+    }
   }
 
   // 5) Fill remaining slots with classic heuristics (skip weak keyword follow-ups if we have evidence).
