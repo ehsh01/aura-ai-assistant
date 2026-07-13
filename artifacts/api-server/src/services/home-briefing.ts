@@ -19,6 +19,7 @@ import { listTasksForUser, type RecallTaskDto } from "./tasks";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
 import { ensureUserFinanceFresh } from "./finance-auto-sync";
 import { listWaitingOnForUser } from "./waiting-on";
+import { buildProactiveInsights } from "./proactive-insights";
 import { todayIso } from "./query-utils";
 import { aiService } from "./ai";
 
@@ -74,13 +75,21 @@ export interface WaitingItem {
   followUp: string;
 }
 
-export type InsightKind = "no-task" | "stale" | "follow-up" | "related";
+export type InsightKind =
+  | "no-task"
+  | "stale"
+  | "follow-up"
+  | "related"
+  | "recurring-payment"
+  | "project-change"
+  | "warranty";
 
 export interface InsightItem {
   id: string;
   kind: InsightKind;
   text: string;
   href?: string;
+  evidence?: string;
 }
 
 export interface ContextArea {
@@ -599,6 +608,13 @@ export async function buildHomeBriefing(
   };
 
   const waiting = await buildWaitingOn(userId);
+  const classicInsights = buildInsights(tasks, notes, captures, projects);
+  const insights = await buildProactiveInsights(userId, {
+    tasks,
+    notes,
+    projects,
+    classic: classicInsights,
+  });
 
   return {
     date: new Date().toLocaleDateString("en-US", {
@@ -611,7 +627,7 @@ export async function buildHomeBriefing(
     timeline: buildTimeline(tasks, captures, today),
     waiting,
     dontForget: buildDontForget(notes, captures),
-    insights: buildInsights(tasks, notes, captures, projects),
+    insights,
     contextAreas: buildContextAreas(notes, tasks, captures, projects),
     finance,
   };

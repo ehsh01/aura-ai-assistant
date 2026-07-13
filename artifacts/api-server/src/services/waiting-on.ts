@@ -101,8 +101,16 @@ export function matchPersonId(
  */
 export async function listWaitingOnForUser(
   userId: string,
-  limit = 20,
+  limitOrOpts: number | { limit?: number; maxAgeDays?: number; minAgeDays?: number } = 20,
 ): Promise<WaitingOnItem[]> {
+  const opts =
+    typeof limitOrOpts === "number"
+      ? { limit: limitOrOpts }
+      : limitOrOpts;
+  const limit = opts.limit ?? 20;
+  const maxAgeDays = opts.maxAgeDays ?? WAITING_MAX_AGE_DAYS;
+  const minAgeDays = opts.minAgeDays ?? 0;
+
   const [notes, knowledge, people, tasks, aliases] = await Promise.all([
     listNoteMetadataForUser(userId),
     listKnowledgeForUser(userId),
@@ -119,7 +127,7 @@ export async function listWaitingOnForUser(
     const blob = `${n.title} ${n.preview}`;
     if (!WAITING_RE.test(blob)) continue;
     const age = daysSince(n.updatedAt ?? n.createdAt);
-    if (age > WAITING_MAX_AGE_DAYS) continue;
+    if (age < minAgeDays || age > maxAgeDays) continue;
     const person = extractPerson(blob, peopleNames);
     items.push({
       id: `note:${n.id}`,
@@ -138,7 +146,7 @@ export async function listWaitingOnForUser(
     const blob = `${k.title} ${k.content}`;
     if (!WAITING_RE.test(blob)) continue;
     const age = daysSince(k.updatedAt ?? k.createdAt);
-    if (age > WAITING_MAX_AGE_DAYS) continue;
+    if (age < minAgeDays || age > maxAgeDays) continue;
     const person = extractPerson(blob, peopleNames);
     items.push({
       id: `knowledge:${k.id}`,
@@ -169,7 +177,7 @@ export async function listWaitingOnForUser(
   }
 
   return items
-    .sort((a, b) => a.days - b.days)
+    .sort((a, b) => b.days - a.days)
     .slice(0, limit);
 }
 

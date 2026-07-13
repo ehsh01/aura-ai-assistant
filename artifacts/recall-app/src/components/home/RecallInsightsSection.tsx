@@ -1,5 +1,14 @@
 import { Link } from "wouter";
-import { Sparkles, ListPlus, Timer, CornerUpRight, GitBranch } from "lucide-react";
+import {
+  Sparkles,
+  ListPlus,
+  Timer,
+  CornerUpRight,
+  GitBranch,
+  RefreshCw,
+  FolderKanban,
+  ShieldCheck,
+} from "lucide-react";
 import type { InsightItem, InsightKind } from "@/lib/home-briefing";
 
 type Props = {
@@ -16,6 +25,12 @@ function insightIcon(kind: InsightKind) {
       return <CornerUpRight className="h-4 w-4 text-sky-300" />;
     case "related":
       return <GitBranch className="h-4 w-4 text-violet-300" />;
+    case "recurring-payment":
+      return <RefreshCw className="h-4 w-4 text-teal-300" />;
+    case "project-change":
+      return <FolderKanban className="h-4 w-4 text-orange-300" />;
+    case "warranty":
+      return <ShieldCheck className="h-4 w-4 text-rose-300" />;
   }
 }
 

@@ -204,9 +204,17 @@ export interface HomeBriefingResponse {
   dontForget: HomeBriefingItem[];
   insights: {
     id: string;
-    kind: "no-task" | "stale" | "follow-up" | "related";
+    kind:
+      | "no-task"
+      | "stale"
+      | "follow-up"
+      | "related"
+      | "recurring-payment"
+      | "project-change"
+      | "warranty";
     text: string;
     href?: string;
+    evidence?: string;
   }[];
   contextAreas: {
     id: string;

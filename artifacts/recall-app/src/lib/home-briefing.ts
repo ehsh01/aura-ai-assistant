@@ -59,13 +59,21 @@ export interface WaitingItem {
   followUp: string;
 }
 
-export type InsightKind = "no-task" | "stale" | "follow-up" | "related";
+export type InsightKind =
+  | "no-task"
+  | "stale"
+  | "follow-up"
+  | "related"
+  | "recurring-payment"
+  | "project-change"
+  | "warranty";
 
 export interface InsightItem {
   id: string;
   kind: InsightKind;
   text: string;
   href?: string;
+  evidence?: string;
 }
 
 export interface ContextArea {
