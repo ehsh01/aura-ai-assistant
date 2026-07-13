@@ -1,11 +1,33 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { RecallLogo } from "@/components/RecallLogo";
+import { needsFormBasedAuth } from "@/lib/pwa-env";
 
 type Mode = "login" | "register";
 
+const inputClassName =
+  "w-full px-4 py-3 rounded-xl bg-black/30 border border-white/10 focus:border-indigo-500/50 outline-none text-sm";
+
+function readFormAuthError(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  const message = params.get("message")?.trim();
+  if (message) return message;
+  const code = params.get("error")?.trim();
+  return code ? "Sign in failed. Try again." : null;
+}
+
+function clearFormAuthErrorFromUrl(): void {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("error") && !url.searchParams.has("message")) return;
+  url.searchParams.delete("error");
+  url.searchParams.delete("message");
+  const next = `${url.pathname}${url.search}${url.hash}`;
+  window.history.replaceState(null, "", next);
+}
+
 export function Login() {
   const { login, register } = useAuth();
+  const useFormAuth = needsFormBasedAuth();
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -13,7 +35,17 @@ export function Login() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    if (!useFormAuth) return;
+    const message = readFormAuthError();
+    if (message) {
+      setError(message);
+      clearFormAuthErrorFromUrl();
+    }
+  }, [useFormAuth]);
+
   const onSubmit = async (e: React.FormEvent) => {
+    if (useFormAuth) return;
     e.preventDefault();
     setError(null);
     setSubmitting(true);
@@ -33,6 +65,9 @@ export function Login() {
       setSubmitting(false);
     }
   };
+
+  const formAction =
+    mode === "login" ? "/api/auth/login-form" : "/api/auth/register-form";
 
   return (
     <div className="min-h-[100dvh] flex items-center justify-center bg-[#0a0a0f] text-white p-4 sm:p-6 recall-safe-top recall-safe-bottom">
@@ -66,16 +101,22 @@ export function Login() {
           ))}
         </div>
 
-        <form onSubmit={onSubmit} className="space-y-4">
+        <form
+          action={useFormAuth ? formAction : undefined}
+          method={useFormAuth ? "post" : undefined}
+          onSubmit={onSubmit}
+          className="space-y-4"
+        >
           {mode === "register" && (
             <div>
               <label className="text-xs text-white/50 mb-1 block">Name</label>
               <input
                 type="text"
+                name={useFormAuth ? "name" : undefined}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
-                className="w-full px-4 py-3 rounded-xl bg-black/30 border border-white/10 focus:border-indigo-500/50 outline-none text-sm"
+                className={inputClassName}
               />
             </div>
           )}
@@ -83,23 +124,25 @@ export function Login() {
             <label className="text-xs text-white/50 mb-1 block">Email</label>
             <input
               type="email"
+              name={useFormAuth ? "email" : undefined}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
               autoComplete="email"
-              className="w-full px-4 py-3 rounded-xl bg-black/30 border border-white/10 focus:border-indigo-500/50 outline-none text-sm"
+              className={inputClassName}
             />
           </div>
           <div>
             <label className="text-xs text-white/50 mb-1 block">Password</label>
             <input
               type="password"
+              name={useFormAuth ? "password" : undefined}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
               minLength={8}
               autoComplete={mode === "login" ? "current-password" : "new-password"}
-              className="w-full px-4 py-3 rounded-xl bg-black/30 border border-white/10 focus:border-indigo-500/50 outline-none text-sm"
+              className={inputClassName}
             />
           </div>
 
@@ -111,10 +154,10 @@ export function Login() {
 
           <button
             type="submit"
-            disabled={submitting}
+            disabled={!useFormAuth && submitting}
             className="w-full py-3 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 font-medium text-sm transition-colors"
           >
-            {submitting
+            {!useFormAuth && submitting
               ? "Please wait…"
               : mode === "login"
                 ? "Sign in"
