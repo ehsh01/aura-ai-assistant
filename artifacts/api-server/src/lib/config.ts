@@ -49,6 +49,10 @@ export const config = {
   /** Optional one-time invite code when registration is locked. */
   registerInviteCode: process.env.REGISTER_INVITE_CODE?.trim() || null,
   sessionCookieName: process.env.SESSION_COOKIE_NAME ?? "recall_session",
+  /** Host-only when unset; production defaults to parent domain for www + apex. */
+  sessionCookieDomain:
+    process.env.SESSION_COOKIE_DOMAIN?.trim() ||
+    (isProduction ? ".recall-app.net" : undefined),
   sessionCookieSecure:
     process.env.SESSION_COOKIE_SECURE != null
       ? process.env.SESSION_COOKIE_SECURE === "true"
