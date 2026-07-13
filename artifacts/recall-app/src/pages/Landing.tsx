@@ -1,5 +1,5 @@
 import React from "react";
-import { useLocation } from "wouter";
+import { Link } from "wouter";
 import { RecallLogo } from "@/components/RecallLogo";
 
 /**
@@ -8,8 +8,6 @@ import { RecallLogo } from "@/components/RecallLogo";
  * the app name and description without signing in.
  */
 export function Landing() {
-  const [, setLocation] = useLocation();
-
   return (
     <div className="min-h-[100dvh] bg-[#0a0a0f] text-white recall-safe-top recall-safe-bottom">
       <header className="mx-auto flex max-w-3xl items-center justify-between px-5 py-6">
@@ -17,13 +15,12 @@ export function Landing() {
           <RecallLogo size={40} />
           <span className="text-lg font-semibold tracking-tight">Recall</span>
         </div>
-        <button
-          type="button"
-          onClick={() => setLocation("/login")}
-          className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400"
+        <Link
+          href="/login"
+          className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white no-underline hover:bg-indigo-400"
         >
           Sign in
-        </button>
+        </Link>
       </header>
 
       <main className="mx-auto max-w-3xl px-5 pb-16 pt-10">
@@ -64,13 +61,12 @@ export function Landing() {
           </section>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setLocation("/login")}
-          className="mt-12 rounded-xl bg-indigo-500 px-6 py-3 text-sm font-medium text-white hover:bg-indigo-400"
+        <Link
+          href="/login"
+          className="mt-12 inline-block rounded-xl bg-indigo-500 px-6 py-3 text-sm font-medium text-white no-underline hover:bg-indigo-400"
         >
           Sign in to Recall
-        </button>
+        </Link>
       </main>
 
       <footer className="mx-auto max-w-3xl border-t border-white/10 px-5 py-6 text-sm text-white/40">

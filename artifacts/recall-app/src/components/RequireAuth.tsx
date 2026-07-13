@@ -1,12 +1,15 @@
 import React from "react";
+import { useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { Login } from "@/pages/Login";
 import { Landing } from "@/pages/Landing";
-import { pathnameOnly } from "@/lib/app-path";
 
 export function RequireAuth({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
-  const path = pathnameOnly();
+  // Must subscribe to wouter — reading window.location alone does not re-render
+  // when Sign in navigates to /login (parent children-prop bailout).
+  const [location] = useLocation();
+  const path = location.split("?")[0]?.split("#")[0] || "/";
 
   if (isLoading) {
     return (
@@ -19,7 +22,6 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated) {
     // Public home for Google OAuth branding / crawlers — no login wall.
     if (path === "/" || path === "") return <Landing />;
-    if (path === "/login") return <Login />;
     return <Login />;
   }
 

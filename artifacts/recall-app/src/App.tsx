@@ -1,6 +1,6 @@
 import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { Fragment, useEffect } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RecallDataProvider } from "@/context/RecallDataContext";
@@ -44,7 +44,9 @@ function RouteNormalizer({ children }: { children: React.ReactNode }) {
     return null;
   }
 
-  return <>{children}</>;
+  // Key by location so nested routes re-render even when parents bail out on
+  // stable children element references (Sign in → /login must remount auth gate).
+  return <Fragment key={location}>{children}</Fragment>;
 }
 
 function RedirectHome() {
@@ -89,6 +91,8 @@ function AuthedRoutes() {
         <Route path="/projects/:projectId" component={ProjectDetail} />
         <Route path="/tasks" component={Tasks} />
         <Route path="/canvas" component={Canvas} />
+        {/* Signed-in users hitting /login land on Home */}
+        <Route path="/login" component={RedirectHome} />
         <Route component={RedirectHome} />
       </Switch>
     </RequireAuth>
