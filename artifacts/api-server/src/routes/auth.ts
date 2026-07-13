@@ -23,23 +23,39 @@ const RegisterWithInviteBody = RegisterBody.extend({
   inviteCode: z.string().optional(),
 });
 
-function setSessionCookie(res: Response, token: string): void {
-  res.cookie(config.sessionCookieName, token, {
+function sessionCookieOptions() {
+  return {
     httpOnly: true,
     secure: config.sessionCookieSecure,
-    sameSite: "lax",
+    sameSite: "lax" as const,
     maxAge: config.sessionCookieMaxAgeMs,
     path: "/",
-  });
+    ...(config.sessionCookieDomain
+      ? { domain: config.sessionCookieDomain }
+      : {}),
+  };
+}
+
+function setSessionCookie(res: Response, token: string): void {
+  res.cookie(config.sessionCookieName, token, sessionCookieOptions());
 }
 
 function clearSessionCookie(res: Response): void {
-  res.clearCookie(config.sessionCookieName, {
-    httpOnly: true,
-    secure: config.sessionCookieSecure,
-    sameSite: "lax",
-    path: "/",
-  });
+  res.clearCookie(config.sessionCookieName, sessionCookieOptions());
+}
+
+const FORM_AUTH_ERRORS: Record<string, string> = {
+  INVALID_CREDENTIALS: "Invalid email or password",
+  WEAK_PASSWORD: "Password must be at least 8 characters",
+  REGISTRATION_DISABLED: "Public registration is disabled",
+  EMAIL_IN_USE: "An account with this email already exists",
+  LOGIN_RATE_LIMITED: "Too many login attempts — try again later",
+};
+
+function redirectFormAuthError(res: Response, code: string): void {
+  const message = FORM_AUTH_ERRORS[code] ?? "Something went wrong. Try again.";
+  const params = new URLSearchParams({ error: code, message });
+  res.redirect(303, `${config.appPublicUrl}/login?${params.toString()}`);
 }
 
 const router: IRouter = Router();
@@ -135,6 +151,107 @@ router.post("/auth/login", loginRateLimiter, async (req, res, next) => {
       });
     }
     handleAuthRouteError(err, res, next);
+  }
+});
+
+/**
+ * Browser form POST for installed PWAs. iOS standalone apps often drop cookies
+ * set via fetch(), but persist cookies from full-page navigation responses.
+ */
+router.post("/auth/login-form", loginRateLimiter, async (req, res, next) => {
+  try {
+    assertAuthConfigured();
+    const email = typeof req.body?.email === "string" ? req.body.email : "";
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    const body = LoginBody.parse({ email, password });
+    const result = await loginUser(body);
+    setSessionCookie(res, result.token);
+    await writeAuditLog({
+      userId: result.user.id,
+      action: "login_success",
+      entityType: "auth",
+      entityId: result.user.id,
+      metadata: { viaForm: true },
+    });
+    res.redirect(303, `${config.appPublicUrl}/today`);
+  } catch (err) {
+    if (err instanceof AuthError && err.code === "INVALID_CREDENTIALS") {
+      await writeAuditLog({
+        userId: null,
+        action: "login_failure",
+        entityType: "auth",
+        entityId: null,
+        metadata: {
+          email:
+            typeof req.body?.email === "string"
+              ? req.body.email.slice(0, 120)
+              : null,
+          viaForm: true,
+        },
+      });
+      redirectFormAuthError(res, err.code);
+      return;
+    }
+    if (err instanceof AuthError) {
+      redirectFormAuthError(res, err.code);
+      return;
+    }
+    next(err);
+  }
+});
+
+router.post("/auth/register-form", loginRateLimiter, async (req, res, next) => {
+  try {
+    assertAuthConfigured();
+    const email = typeof req.body?.email === "string" ? req.body.email : "";
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    const name = typeof req.body?.name === "string" ? req.body.name : "";
+    const inviteCode =
+      typeof req.body?.inviteCode === "string" ? req.body.inviteCode : undefined;
+    const body = RegisterWithInviteBody.parse({ email, password, name, inviteCode });
+
+    const inviteOk =
+      config.registerInviteCode != null &&
+      body.inviteCode != null &&
+      body.inviteCode === config.registerInviteCode;
+
+    if (!config.allowPublicRegister && !inviteOk) {
+      await writeAuditLog({
+        userId: null,
+        action: "register_blocked",
+        entityType: "auth",
+        entityId: null,
+        metadata: { email: body.email.slice(0, 120), viaForm: true },
+      });
+      redirectFormAuthError(res, "REGISTRATION_DISABLED");
+      return;
+    }
+
+    if (body.password.length < 8) {
+      redirectFormAuthError(res, "WEAK_PASSWORD");
+      return;
+    }
+
+    const result = await registerUser(body);
+    setSessionCookie(res, result.token);
+    await writeAuditLog({
+      userId: result.user.id,
+      action: "register_success",
+      entityType: "auth",
+      entityId: result.user.id,
+      metadata: { viaInvite: inviteOk, viaForm: true },
+    });
+    res.redirect(303, `${config.appPublicUrl}/today`);
+  } catch (err) {
+    if (err instanceof DatabaseError && err.code === "23505") {
+      redirectFormAuthError(res, "EMAIL_IN_USE");
+      return;
+    }
+    if (err instanceof AuthError) {
+      redirectFormAuthError(res, err.code);
+      return;
+    }
+    next(err);
   }
 });
 
