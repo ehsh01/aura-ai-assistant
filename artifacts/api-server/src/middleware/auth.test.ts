@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   getUserById: vi.fn(),
   verifyAccessToken: vi.fn(),
   authenticateExtensionToken: vi.fn(),
+  assertAuthSessionActive: vi.fn(),
 }));
 
 vi.mock("../services/auth", () => ({
@@ -18,6 +19,10 @@ vi.mock("../services/auth", () => ({
   },
   getUserById: mocks.getUserById,
   verifyAccessToken: mocks.verifyAccessToken,
+}));
+
+vi.mock("../services/auth-sessions", () => ({
+  assertAuthSessionActive: mocks.assertAuthSessionActive,
 }));
 
 vi.mock("../services/extension-tokens", () => ({
@@ -55,7 +60,13 @@ beforeEach(() => {
     email: "person@example.com",
     name: "Person",
   });
-  mocks.verifyAccessToken.mockReturnValue({ sub: "user-1" });
+  mocks.verifyAccessToken.mockReturnValue({
+    sub: "user-1",
+    email: "person@example.com",
+    name: "Person",
+    jti: "sess-1",
+  });
+  mocks.assertAuthSessionActive.mockResolvedValue(true);
 });
 
 describe("authentication boundaries", () => {
@@ -79,8 +90,21 @@ describe("authentication boundaries", () => {
     await requireAuth(req, res, next);
 
     expect(mocks.verifyAccessToken).toHaveBeenCalledWith("session.jwt.value");
-    expect(req.authContext).toEqual({ kind: "session" });
+    expect(mocks.assertAuthSessionActive).toHaveBeenCalledWith("sess-1");
+    expect(req.authContext).toEqual({ kind: "session", sessionId: "sess-1" });
     expect(next).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a cookie when the server session was revoked", async () => {
+    mocks.assertAuthSessionActive.mockResolvedValue(false);
+    const req = requestDouble({ cookie: "session.jwt.value" });
+    const res = responseDouble();
+    const next = vi.fn() as NextFunction;
+
+    await requireAuth(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
   });
 
   it("temporarily accepts a legacy bearer JWT at the capture boundary only", async () => {

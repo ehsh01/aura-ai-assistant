@@ -96,6 +96,10 @@ export function newInvoiceId(): string {
   return `invoice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function newAuthSessionId(): string {
+  return `sess-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function newAuditId(): string {
   return `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

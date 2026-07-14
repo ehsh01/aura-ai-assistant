@@ -16,7 +16,12 @@ import {
   loginUser,
   registerUser,
   toPublicUser,
+  verifyAccessToken,
 } from "../services/auth";
+import {
+  revokeAllAuthSessionsForUser,
+  revokeAuthSession,
+} from "../services/auth-sessions";
 import { writeAuditLog } from "../services/audit";
 
 const RegisterWithInviteBody = RegisterBody.extend({
@@ -140,13 +145,17 @@ router.post("/auth/login", loginRateLimiter, async (req, res, next) => {
 
 router.post("/auth/logout", requireAuth, async (req, res, next) => {
   try {
+    const sessionId = req.authContext?.sessionId;
+    if (sessionId) {
+      await revokeAuthSession(sessionId, req.user!.id);
+    }
     clearSessionCookie(res);
     await writeAuditLog({
       userId: req.user!.id,
       action: "logout",
       entityType: "auth",
       entityId: req.user!.id,
-      metadata: {},
+      metadata: { sessionId: sessionId ?? null },
     });
     res.json({ ok: true });
   } catch (err) {
@@ -154,8 +163,35 @@ router.post("/auth/logout", requireAuth, async (req, res, next) => {
   }
 });
 
+/** Revoke every browser session for the signed-in user. */
+router.post("/auth/logout-all", requireAuth, async (req, res, next) => {
+  try {
+    const count = await revokeAllAuthSessionsForUser(req.user!.id);
+    clearSessionCookie(res);
+    await writeAuditLog({
+      userId: req.user!.id,
+      action: "logout_all",
+      entityType: "auth",
+      entityId: req.user!.id,
+      metadata: { revokedCount: count },
+    });
+    res.json({ ok: true, revokedCount: count });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /** Clear cookie even if session already invalid (best-effort logout). */
-router.post("/auth/logout/public", (_req, res) => {
+router.post("/auth/logout/public", async (req, res) => {
+  const cookie = req.cookies?.[config.sessionCookieName];
+  if (typeof cookie === "string" && cookie.trim()) {
+    try {
+      const payload = verifyAccessToken(cookie.trim());
+      await revokeAuthSession(payload.jti, payload.sub);
+    } catch {
+      // Cookie may already be invalid / pre-revocation JWT — still clear it.
+    }
+  }
   clearSessionCookie(res);
   res.json({ ok: true });
 });

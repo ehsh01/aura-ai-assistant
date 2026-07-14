@@ -5,6 +5,7 @@ import {
   verifyAccessToken,
   type AuthUser,
 } from "../services/auth";
+import { assertAuthSessionActive } from "../services/auth-sessions";
 import { config } from "../lib/config";
 import {
   authenticateExtensionToken,
@@ -17,6 +18,7 @@ declare global {
       user?: AuthUser;
       authContext?: {
         kind: "session" | "extension";
+        sessionId?: string;
         extensionTokenId?: string;
       };
     }
@@ -46,6 +48,14 @@ async function authenticateSessionToken(
 ): Promise<void> {
   try {
     const payload = verifyAccessToken(token);
+    const sessionOk = await assertAuthSessionActive(payload.jti);
+    if (!sessionOk) {
+      res.status(401).json({
+        error: "UNAUTHORIZED",
+        message: "Session expired — sign in again",
+      });
+      return;
+    }
     const user = await getUserById(payload.sub);
     if (!user) {
       res.status(401).json({
@@ -55,9 +65,16 @@ async function authenticateSessionToken(
       return;
     }
     req.user = user;
-    req.authContext = { kind: "session" };
+    req.authContext = { kind: "session", sessionId: payload.jti };
     next();
-  } catch {
+  } catch (err) {
+    if (err instanceof AuthError && err.code === "SESSION_REVOKED") {
+      res.status(401).json({
+        error: "UNAUTHORIZED",
+        message: err.message,
+      });
+      return;
+    }
     res.status(401).json({
       error: "UNAUTHORIZED",
       message: "Invalid or expired token",

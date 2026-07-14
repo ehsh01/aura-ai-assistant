@@ -3,7 +3,9 @@ import { eq } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { users } from "@workspace/db/schema";
 import { getDb, isDatabaseConfigured } from "../lib/db";
+import { config } from "../lib/config";
 import { ensureDefaultConnectors } from "./connectors";
+import { createAuthSession } from "./auth-sessions";
 
 const BCRYPT_ROUNDS = 12;
 const TOKEN_TTL = process.env.JWT_EXPIRES_IN ?? "7d";
@@ -18,6 +20,8 @@ export interface AuthTokenPayload {
   sub: string;
   email: string;
   name: string;
+  /** Session id — must match an active auth_sessions row. */
+  jti: string;
 }
 
 function getJwtSecret(): string {
@@ -36,19 +40,41 @@ export function toPublicUser(row: {
   return { id: row.id, email: row.email, name: row.name };
 }
 
-export function signAccessToken(user: AuthUser): string {
+export async function issueAccessToken(user: AuthUser): Promise<string> {
+  const expiresAt = new Date(Date.now() + config.sessionCookieMaxAgeMs);
+  const session = await createAuthSession({ userId: user.id, expiresAt });
   const payload: AuthTokenPayload = {
     sub: user.id,
     email: user.email,
     name: user.name,
+    jti: session.id,
   };
   return jwt.sign(payload, getJwtSecret(), {
     expiresIn: TOKEN_TTL as jwt.SignOptions["expiresIn"],
   });
 }
 
+/** @deprecated Prefer issueAccessToken — kept name for callers that already await. */
+export async function signAccessToken(user: AuthUser): Promise<string> {
+  return issueAccessToken(user);
+}
+
 export function verifyAccessToken(token: string): AuthTokenPayload {
-  return jwt.verify(token, getJwtSecret()) as AuthTokenPayload;
+  const payload = jwt.verify(token, getJwtSecret()) as AuthTokenPayload & {
+    jti?: string;
+  };
+  if (!payload.jti || typeof payload.jti !== "string") {
+    throw new AuthError(
+      "SESSION_REVOKED",
+      "Session expired — sign in again",
+    );
+  }
+  return {
+    sub: payload.sub,
+    email: payload.email,
+    name: payload.name,
+    jti: payload.jti,
+  };
 }
 
 export async function registerUser(input: {
@@ -74,7 +100,7 @@ export async function registerUser(input: {
 
   const user = toPublicUser(created);
   await ensureDefaultConnectors(user.id);
-  return { user, token: signAccessToken(user) };
+  return { user, token: await issueAccessToken(user) };
 }
 
 export async function loginUser(input: {
@@ -99,7 +125,7 @@ export async function loginUser(input: {
 
   const user = toPublicUser(row);
   await ensureDefaultConnectors(user.id);
-  return { user, token: signAccessToken(user) };
+  return { user, token: await issueAccessToken(user) };
 }
 
 export async function getUserById(id: string): Promise<AuthUser | null> {
