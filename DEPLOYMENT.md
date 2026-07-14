@@ -204,8 +204,29 @@ Schedule it via cron on the droplet:
 15 3 * * * bash /var/www/recall-app/scripts/backup-recall-db.sh >> /var/log/recall-backup.log 2>&1
 ```
 
-Restore with:
+### Restore drill (safe — never writes production)
+
+`scripts/restore-drill-recall-db.sh` loads the newest dump (or a path you pass) into an **ephemeral** `postgres:18` Docker container, runs table/user sanity checks, then destroys the container. Production `DATABASE_URL` is never restored into.
 
 ```bash
+# On the droplet after at least one backup exists:
+bash /var/www/recall-app/scripts/restore-drill-recall-db.sh
+# or:
+bash /var/www/recall-app/scripts/restore-drill-recall-db.sh /var/backups/recall/recall-YYYYmmdd-HHMMSS.sql.gz
+```
+
+Monthly cron example:
+
+```bash
+0 4 * * 0 bash /var/www/recall-app/scripts/restore-drill-recall-db.sh >> /var/log/recall-restore-drill.log 2>&1
+```
+
+### Disaster restore into production (manual, destructive)
+
+Only when intentionally recovering production:
+
+```bash
+# Stop writes first (pm2 stop recall-api), then:
 gunzip -c /var/backups/recall/recall-YYYYmmdd-HHMMSS.sql.gz | psql "$DATABASE_URL"
+pm2 start recall-api
 ```

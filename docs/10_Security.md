@@ -147,6 +147,11 @@ Backup strategy should include:
 - encryption
 - restore testing
 
+**Current (production):**
+- Daily dump: `scripts/backup-recall-db.sh` → `/var/backups/recall/` (cron documented in `DEPLOYMENT.md`)
+- Safe restore drill: `scripts/restore-drill-recall-db.sh` loads a dump into an ephemeral Docker Postgres and verifies schema/data — never writes production
+- Disaster restore into production remains a manual `psql` step after stopping the API
+
 ## 11. Audit Trail
 
 Important changes should be auditable:

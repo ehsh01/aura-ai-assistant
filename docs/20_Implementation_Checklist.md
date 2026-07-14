@@ -93,7 +93,8 @@ Last verified against the production codebase: 2026-07-12.
 ## Hardening
 
 - [ ] Add tests
-- [ ] Add backup strategy
+- [x] Add backup strategy
+- [x] Add restore drill (ephemeral Docker Postgres)
 - [ ] Add logging
 - [ ] Add security review
 - [ ] Add documentation update process
