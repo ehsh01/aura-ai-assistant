@@ -1,5 +1,8 @@
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { notes } from "@workspace/db/schema";
 import type { CreateNoteInput } from "./notes";
 import { previewFromContent } from "../lib/recall-format";
+import { getDb } from "../lib/db";
 import {
   writeAttachmentFile,
   type NoteAttachmentDto,
@@ -14,6 +17,49 @@ export interface EnexParseResult {
 export type EnexParseContext = {
   userId: string;
 };
+
+/**
+ * Map an ENEX note onto an existing Recall row when possible.
+ * Legacy imports used hash ids (note-en-{base36}); newer code prefers Evernote GUIDs.
+ * Rematch so re-import restores attachments onto the same notes instead of duplicating.
+ */
+async function resolveEnexNoteIdForUser(
+  userId: string,
+  opts: { guid: string; stableKey: string; title: string },
+): Promise<string> {
+  const hashId = `note-en-${opts.stableKey}`;
+  const guidId = opts.guid ? `note-en-${opts.guid}` : null;
+  const candidates = [guidId, hashId].filter((id): id is string => Boolean(id));
+
+  if (candidates.length > 0) {
+    const rows = await getDb()
+      .select({ id: notes.id })
+      .from(notes)
+      .where(and(eq(notes.userId, userId), inArray(notes.id, candidates)));
+    const found = new Set(rows.map((r) => r.id));
+    // Prefer keeping the legacy hash id when that is what was imported originally.
+    if (found.has(hashId)) return hashId;
+    if (guidId && found.has(guidId)) return guidId;
+  }
+
+  const title = opts.title.trim();
+  if (title) {
+    const matches = await getDb()
+      .select({ id: notes.id })
+      .from(notes)
+      .where(
+        and(
+          eq(notes.userId, userId),
+          eq(notes.title, title),
+          sql`${notes.id} LIKE 'note-en-%'`,
+        ),
+      )
+      .limit(3);
+    if (matches.length === 1) return matches[0]!.id;
+  }
+
+  return guidId || hashId;
+}
 
 function stripPrologue(xml: string): string {
   return xml
@@ -243,9 +289,12 @@ async function parseNoteBlock(
   const rawContent = extractTag(block, "content") ?? "";
   const tags = extractTags(block);
   const stableKey = hashNoteKey(title, created || updated, index);
-  // Prefer Evernote's note GUID so evernote:// deep links can resolve in-app.
   const guid = guidRaw?.trim().toLowerCase() || "";
-  const id = guid ? `note-en-${guid}` : `note-en-${stableKey}`;
+  const id = await resolveEnexNoteIdForUser(ctx.userId, {
+    guid,
+    stableKey,
+    title,
+  });
 
   const { hashToId, saved, pending } = await extractResources(block, ctx.userId, id);
 
