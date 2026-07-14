@@ -1913,6 +1913,15 @@ components:
           nullable: true
         pinned:
           type: boolean
+        status:
+          type: string
+          enum: [active, superseded, expired, archived]
+        supersedesId:
+          type: string
+          nullable: true
+        expiresAt:
+          type: string
+          nullable: true
         createdAt:
           type: string
         updatedAt:
@@ -1924,6 +1933,7 @@ components:
         - content
         - tags
         - pinned
+        - status
         - createdAt
         - updatedAt
     LifeMemoryListResponse:

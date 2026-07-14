@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import {
   knowledgeItems,
   lifeMemories,
@@ -95,10 +95,17 @@ export async function loadLinkedContextRecordsForPeople(
               tags: lifeMemories.tags,
               primaryPersonId: lifeMemories.primaryPersonId,
               pinned: lifeMemories.pinned,
+              status: lifeMemories.status,
+              expiresAt: lifeMemories.expiresAt,
             })
             .from(lifeMemories)
             .where(
-              and(eq(lifeMemories.userId, userId), inArray(lifeMemories.id, memoryIds)),
+              and(
+                eq(lifeMemories.userId, userId),
+                inArray(lifeMemories.id, memoryIds),
+                eq(lifeMemories.status, "active"),
+                or(isNull(lifeMemories.expiresAt), gt(lifeMemories.expiresAt, new Date()))!,
+              ),
             ),
       taskIds.length === 0
         ? Promise.resolve([])

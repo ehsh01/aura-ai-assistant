@@ -97,6 +97,7 @@ Last verified against the production codebase: 2026-07-12.
 - [x] Add restore drill (ephemeral Docker Postgres)
 - [x] Durable job queue for capture extraction (Postgres + worker)
 - [x] Notes Postgres full-text search (tsvector + GIN; includes OCR)
+- [x] Life Memory lifecycle (active / superseded / expired / archived)
 - [ ] Add logging
 - [ ] Add security review
 - [ ] Add documentation update process

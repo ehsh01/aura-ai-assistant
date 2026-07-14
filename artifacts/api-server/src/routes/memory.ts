@@ -1,8 +1,9 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
-import { LIFE_MEMORY_DOMAINS } from "@workspace/db/schema";
+import { LIFE_MEMORY_DOMAINS, LIFE_MEMORY_STATUSES } from "@workspace/db/schema";
 import { requireAuth } from "../middleware/auth";
 import {
+  archiveMemoryForUser,
   classifyMemoryText,
   createMemoryForUser,
   deleteMemoryForUser,
@@ -10,10 +11,12 @@ import {
   getMemoryForUser,
   importMemoriesForUser,
   listMemoriesForUser,
+  supersedeMemoryForUser,
   updateMemoryForUser,
 } from "../services/life-memory";
 
 const DomainSchema = z.enum(LIFE_MEMORY_DOMAINS);
+const StatusSchema = z.enum(LIFE_MEMORY_STATUSES);
 
 const CreateBody = z.object({
   title: z.string().max(500).optional(),
@@ -25,6 +28,7 @@ const CreateBody = z.object({
   sourceType: z.enum(["teach", "capture", "ask", "import"]).optional(),
   sourceId: z.string().nullish(),
   pinned: z.boolean().optional(),
+  expiresAt: z.string().nullish(),
 });
 
 const UpdateBody = z.object({
@@ -35,6 +39,8 @@ const UpdateBody = z.object({
   primaryPersonId: z.string().nullish(),
   projectId: z.string().nullish(),
   pinned: z.boolean().optional(),
+  status: StatusSchema.optional(),
+  expiresAt: z.string().nullish(),
 });
 
 const ClassifyBody = z.object({
@@ -64,7 +70,14 @@ router.get("/memory", async (req, res, next) => {
   try {
     const domain = typeof req.query.domain === "string" ? req.query.domain : undefined;
     const q = typeof req.query.q === "string" ? req.query.q : undefined;
-    const items = await listMemoriesForUser(req.user!.id, { domain, q });
+    const statusRaw = typeof req.query.status === "string" ? req.query.status : "active";
+    const status =
+      statusRaw === "all"
+        ? "all"
+        : LIFE_MEMORY_STATUSES.includes(statusRaw as (typeof LIFE_MEMORY_STATUSES)[number])
+          ? (statusRaw as (typeof LIFE_MEMORY_STATUSES)[number])
+          : "active";
+    const items = await listMemoriesForUser(req.user!.id, { domain, q, status });
     res.json({ items });
   } catch (err) {
     next(err);
@@ -147,6 +160,33 @@ router.patch("/memory/:memoryId", async (req, res, next) => {
   try {
     const body = UpdateBody.parse(req.body);
     const item = await updateMemoryForUser(req.user!.id, req.params.memoryId, body);
+    if (!item) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Memory not found" });
+      return;
+    }
+    res.json(item);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/memory/:memoryId/supersede", async (req, res, next) => {
+  try {
+    const body = CreateBody.parse(req.body);
+    const result = await supersedeMemoryForUser(req.user!.id, req.params.memoryId, body);
+    if (!result) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Memory not found" });
+      return;
+    }
+    res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/memory/:memoryId/archive", async (req, res, next) => {
+  try {
+    const item = await archiveMemoryForUser(req.user!.id, req.params.memoryId);
     if (!item) {
       res.status(404).json({ error: "NOT_FOUND", message: "Memory not found" });
       return;

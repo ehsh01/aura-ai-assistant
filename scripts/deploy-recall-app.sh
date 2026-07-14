@@ -59,7 +59,8 @@ for mig in \
   lib/db/migrations/0013_organizations_invoices.sql \
   lib/db/migrations/0014_auth_sessions.sql \
   lib/db/migrations/0015_jobs.sql \
-  lib/db/migrations/0016_notes_fts.sql
+  lib/db/migrations/0016_notes_fts.sql \
+  lib/db/migrations/0017_life_memory_lifecycle.sql
 do
   echo "--> Applying $mig"
   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$mig"

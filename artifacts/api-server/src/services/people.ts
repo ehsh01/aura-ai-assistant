@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import {
   knowledgeItems,
   lifeMemories,
@@ -372,7 +372,12 @@ export async function getPersonRelatedForUser(
       })
       .from(lifeMemories)
       .where(
-        and(eq(lifeMemories.userId, userId), eq(lifeMemories.primaryPersonId, personId)),
+        and(
+          eq(lifeMemories.userId, userId),
+          eq(lifeMemories.primaryPersonId, personId),
+          eq(lifeMemories.status, "active"),
+          or(isNull(lifeMemories.expiresAt), gt(lifeMemories.expiresAt, new Date()))!,
+        ),
       )
       .orderBy(desc(lifeMemories.updatedAt))
       .limit(12),
@@ -428,7 +433,12 @@ export async function getPersonRelatedForUser(
           })
           .from(lifeMemories)
           .where(
-            and(eq(lifeMemories.userId, userId), inArray(lifeMemories.id, linkMemoryIds)),
+            and(
+              eq(lifeMemories.userId, userId),
+              inArray(lifeMemories.id, linkMemoryIds),
+              eq(lifeMemories.status, "active"),
+              or(isNull(lifeMemories.expiresAt), gt(lifeMemories.expiresAt, new Date()))!,
+            ),
           ),
   ]);
 

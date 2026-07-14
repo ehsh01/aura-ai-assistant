@@ -4,12 +4,14 @@ import { Brain, Download, Pin, Trash2, FileUp } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { MemoryImportReview } from "@/components/MemoryImportReview";
 import {
+  archiveMemory,
   classifyMemory,
   createMemory,
   deleteMemory,
   exportLifeMemoryMarkdown,
   LIFE_MEMORY_DOMAINS,
   listMemories,
+  supersedeMemory,
   updateMemory,
   type LifeMemoryDomain,
   type LifeMemoryRecord,
@@ -30,12 +32,20 @@ const DOMAIN_LABELS: Record<LifeMemoryDomain, string> = {
   other: "Other",
 };
 
+const STATUS_LABELS: Record<LifeMemoryRecord["status"], string> = {
+  active: "Active",
+  superseded: "Superseded",
+  expired: "Expired",
+  archived: "Archived",
+};
+
 export function Memory() {
   const [location, navigate] = useLocation();
   const [items, setItems] = useState<LifeMemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [domainFilter, setDomainFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
   const [selected, setSelected] = useState<LifeMemoryRecord | null>(null);
   const [teachText, setTeachText] = useState("");
   const [suggestedDomain, setSuggestedDomain] = useState<LifeMemoryDomain | null>(null);
@@ -46,10 +56,10 @@ export function Memory() {
   const [showImport, setShowImport] = useState(false);
   const openedFromQuery = useRef(false);
 
-  const load = async () => {
+  const load = async (includeHistory = showHistory) => {
     setLoading(true);
     try {
-      const res = await listMemories();
+      const res = await listMemories({ status: includeHistory ? "all" : "active" });
       setItems(res.items);
     } finally {
       setLoading(false);
@@ -58,7 +68,7 @@ export function Memory() {
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [showHistory]);
 
   useEffect(() => {
     const d = readSearchParam("domain");
@@ -175,7 +185,7 @@ export function Memory() {
   };
 
   const remove = async (item: LifeMemoryRecord) => {
-    if (!window.confirm(`Delete “${item.title}”?`)) return;
+    if (!window.confirm(`Permanently delete “${item.title}”? Prefer Archive when possible.`)) return;
     try {
       await deleteMemory(item.id);
       setItems((prev) => prev.filter((i) => i.id !== item.id));
@@ -186,8 +196,66 @@ export function Memory() {
     }
   };
 
+  const archive = async (item: LifeMemoryRecord) => {
+    try {
+      const updated = await archiveMemory(item.id);
+      if (showHistory) {
+        setItems((prev) => prev.map((i) => (i.id === updated.id ? updated : i)));
+        setSelected(updated);
+      } else {
+        setItems((prev) => prev.filter((i) => i.id !== item.id));
+        setSelected(null);
+      }
+      toast({ title: "Memory archived" });
+    } catch {
+      toast({ title: "Could not archive", variant: "destructive" });
+    }
+  };
+
+  const correctSelected = async () => {
+    if (!selected || selected.status !== "active") return;
+    setSaving(true);
+    try {
+      const result = await supersedeMemory(selected.id, {
+        title: selected.title,
+        content: selected.content,
+        domain: selected.domain,
+        pinned: selected.pinned,
+      });
+      if (showHistory) {
+        setItems((prev) => [
+          result.current,
+          ...prev.map((i) => (i.id === result.previous.id ? result.previous : i)),
+        ]);
+      } else {
+        setItems((prev) => [
+          result.current,
+          ...prev.filter((i) => i.id !== selected.id),
+        ]);
+      }
+      setSelected(result.current);
+      toast({ title: "Fact corrected", description: "Prior version marked superseded." });
+    } catch (err) {
+      toast({
+        title: "Could not correct memory",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const saveSelected = async () => {
     if (!selected) return;
+    if (selected.status !== "active") {
+      toast({
+        title: "Inactive memory",
+        description: "Use Correct to replace an active fact, or restore history first.",
+        variant: "destructive",
+      });
+      return;
+    }
     setSaving(true);
     try {
       const updated = await updateMemory(selected.id, {
@@ -223,7 +291,7 @@ export function Memory() {
               </h1>
               <p className="mt-2 max-w-xl text-white/50">
                 Teach Recall once — cars, family, preferences, procedures — and ask forever.
-                Separate from Notes: these facts stay permanent until you correct them.
+                Correct a fact to supersede the old one; Ask only uses active memories.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -339,6 +407,15 @@ export function Memory() {
               placeholder="Search memories…"
               className="ml-auto min-w-[180px] rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-white outline-none focus:border-indigo-400/40"
             />
+            <label className="inline-flex items-center gap-2 text-xs text-white/45">
+              <input
+                type="checkbox"
+                checked={showHistory}
+                onChange={(e) => setShowHistory(e.target.checked)}
+                className="rounded border-white/20"
+              />
+              Show history
+            </label>
           </div>
 
           <div className="mt-6 grid gap-4 lg:grid-cols-[1fr_1.1fr]">
@@ -372,6 +449,7 @@ export function Memory() {
                       <p className="text-xs uppercase tracking-wider text-indigo-300/70">
                         {DOMAIN_LABELS[item.domain]}
                         {item.pinned ? " · pinned" : ""}
+                        {item.status !== "active" ? ` · ${STATUS_LABELS[item.status]}` : ""}
                       </p>
                       <h3 className="mt-1 font-medium text-white">{item.title}</h3>
                       <p className="mt-1 line-clamp-2 text-sm text-white/50">{item.content}</p>
@@ -407,11 +485,21 @@ export function Memory() {
                     <button
                       type="button"
                       onClick={() => void togglePin(selected)}
-                      className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-white/60 hover:bg-white/5"
+                      disabled={selected.status !== "active"}
+                      className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-white/60 hover:bg-white/5 disabled:opacity-40"
                     >
                       <Pin size={12} />
                       {selected.pinned ? "Unpin" : "Pin"}
                     </button>
+                    {selected.status === "active" && (
+                      <button
+                        type="button"
+                        onClick={() => void archive(selected)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-white/60 hover:bg-white/5"
+                      >
+                        Archive
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => void remove(selected)}
@@ -421,6 +509,12 @@ export function Memory() {
                       Delete
                     </button>
                   </div>
+                  {selected.status !== "active" && (
+                    <p className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-100/80">
+                      This memory is {STATUS_LABELS[selected.status].toLowerCase()} and is not used by
+                      Ask. {selected.supersedesId ? "It was replaced by a newer fact." : ""}
+                    </p>
+                  )}
                   <input
                     value={selected.title}
                     onChange={(e) => setSelected({ ...selected, title: e.target.value })}
@@ -432,17 +526,30 @@ export function Memory() {
                     rows={12}
                     className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white/85 outline-none focus:border-indigo-400/40"
                   />
-                  <button
-                    type="button"
-                    onClick={() => void saveSelected()}
-                    disabled={saving}
-                    className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
-                  >
-                    {saving ? "Saving…" : "Save changes"}
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void saveSelected()}
+                      disabled={saving || selected.status !== "active"}
+                      className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
+                    >
+                      {saving ? "Saving…" : "Save changes"}
+                    </button>
+                    {selected.status === "active" && (
+                      <button
+                        type="button"
+                        onClick={() => void correctSelected()}
+                        disabled={saving}
+                        className="rounded-xl border border-indigo-400/40 bg-indigo-500/10 px-4 py-2 text-sm font-medium text-indigo-100 hover:bg-indigo-500/20 disabled:opacity-50"
+                      >
+                        Correct (supersede)
+                      </button>
+                    )}
+                  </div>
                   <p className="text-xs text-white/35">
                     Source: {selected.sourceType}
                     {selected.sourceId ? ` · ${selected.sourceId}` : ""}
+                    {selected.status !== "active" ? ` · ${STATUS_LABELS[selected.status]}` : ""}
                   </p>
                 </div>
               )}

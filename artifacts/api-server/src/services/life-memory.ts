@@ -1,10 +1,12 @@
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import {
   LIFE_MEMORY_DOMAINS,
+  LIFE_MEMORY_STATUSES,
   lifeMemories,
   type LifeMemory,
   type LifeMemoryDomain,
   type LifeMemorySourceType,
+  type LifeMemoryStatus,
 } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newMemoryId } from "../lib/recall-format";
@@ -24,6 +26,9 @@ export type LifeMemoryDto = {
   sourceType: LifeMemorySourceType;
   sourceId: string | null;
   pinned: boolean;
+  status: LifeMemoryStatus;
+  supersedesId: string | null;
+  expiresAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -38,6 +43,8 @@ export type CreateMemoryInput = {
   sourceType?: LifeMemorySourceType;
   sourceId?: string | null;
   pinned?: boolean;
+  expiresAt?: string | Date | null;
+  supersedesId?: string | null;
 };
 
 export type UpdateMemoryInput = {
@@ -48,6 +55,8 @@ export type UpdateMemoryInput = {
   primaryPersonId?: string | null;
   projectId?: string | null;
   pinned?: boolean;
+  status?: LifeMemoryStatus | string;
+  expiresAt?: string | Date | null;
 };
 
 export type ClassifyMemoryResult = {
@@ -57,6 +66,7 @@ export type ClassifyMemoryResult = {
 };
 
 const DOMAIN_SET = new Set<string>(LIFE_MEMORY_DOMAINS);
+const STATUS_SET = new Set<string>(LIFE_MEMORY_STATUSES);
 
 const DOMAIN_KEYWORDS: { domain: LifeMemoryDomain; re: RegExp }[] = [
   { domain: "vehicles", re: /\b(car|truck|vin|tesla|toyota|honda|bmw|ford|vehicle|license plate|registration|mileage|oil change)\b/i },
@@ -75,6 +85,35 @@ function normalizeDomain(value: string | null | undefined): LifeMemoryDomain {
   return DOMAIN_SET.has(d) ? (d as LifeMemoryDomain) : "other";
 }
 
+export function normalizeMemoryStatus(value: string | null | undefined): LifeMemoryStatus {
+  const s = (value ?? "active").trim().toLowerCase();
+  return STATUS_SET.has(s) ? (s as LifeMemoryStatus) : "active";
+}
+
+export function parseExpiresAt(value: string | Date | null | undefined): Date | null {
+  if (value == null || value === "") return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** Active for Ask/insights: status=active and not past expiresAt. */
+export function isMemoryActiveForRetrieval(
+  row: Pick<LifeMemory, "status" | "expiresAt">,
+  now: Date = new Date(),
+): boolean {
+  if (normalizeMemoryStatus(row.status) !== "active") return false;
+  if (row.expiresAt && row.expiresAt.getTime() <= now.getTime()) return false;
+  return true;
+}
+
+/** SQL filter for active (non-expired) memories used by Ask corpus paths. */
+export function activeLifeMemorySql(now: Date = new Date()) {
+  return and(
+    eq(lifeMemories.status, "active"),
+    or(isNull(lifeMemories.expiresAt), gt(lifeMemories.expiresAt, now))!,
+  );
+}
+
 function toDto(row: LifeMemory): LifeMemoryDto {
   return {
     id: row.id,
@@ -87,6 +126,9 @@ function toDto(row: LifeMemory): LifeMemoryDto {
     sourceType: (row.sourceType as LifeMemorySourceType) || "teach",
     sourceId: row.sourceId ?? null,
     pinned: row.pinned,
+    status: normalizeMemoryStatus(row.status),
+    supersedesId: row.supersedesId ?? null,
+    expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -139,6 +181,7 @@ export async function classifyMemoryText(raw: string): Promise<ClassifyMemoryRes
 }
 
 function warmMemory(userId: string, dto: LifeMemoryDto): void {
+  if (dto.status !== "active") return;
   warmEntityEmbedding(userId, {
     entityType: "memory",
     entityId: dto.id,
@@ -150,13 +193,26 @@ function warmMemory(userId: string, dto: LifeMemoryDto): void {
 
 export async function listMemoriesForUser(
   userId: string,
-  opts?: { domain?: string; q?: string; limit?: number },
+  opts?: {
+    domain?: string;
+    q?: string;
+    limit?: number;
+    /** Default active-only. Pass "all" for history UI. */
+    status?: LifeMemoryStatus | "all";
+  },
 ): Promise<LifeMemoryDto[]> {
   const domain = opts?.domain ? normalizeDomain(opts.domain) : null;
   const q = opts?.q?.trim();
   const limit = Math.min(Math.max(opts?.limit ?? 200, 1), 500);
+  const statusOpt = opts?.status ?? "active";
+  const now = new Date();
 
   const filters = [eq(lifeMemories.userId, userId)];
+  if (statusOpt === "active") {
+    filters.push(activeLifeMemorySql(now)!);
+  } else if (statusOpt !== "all") {
+    filters.push(eq(lifeMemories.status, normalizeMemoryStatus(statusOpt)));
+  }
   if (domain && opts?.domain && opts.domain !== "all") {
     filters.push(eq(lifeMemories.domain, domain));
   }
@@ -203,7 +259,6 @@ export async function createMemoryForUser(
   let domain = input.domain ? normalizeDomain(input.domain) : null;
   let title = input.title?.trim() || "";
   if (!domain || !title) {
-    // Prefer heuristic for bulk/import speed; AI only when both missing and not import.
     if (input.sourceType === "import") {
       const classified = classifyMemoryHeuristic(content);
       domain = domain ?? classified.domain;
@@ -230,6 +285,9 @@ export async function createMemoryForUser(
       sourceType: input.sourceType ?? "teach",
       sourceId: input.sourceId ?? null,
       pinned: input.pinned ?? false,
+      status: "active",
+      supersedesId: input.supersedesId ?? null,
+      expiresAt: parseExpiresAt(input.expiresAt),
       createdAt: now,
       updatedAt: now,
     })
@@ -241,7 +299,12 @@ export async function createMemoryForUser(
     action: "memory_created",
     entityType: "memory",
     entityId: dto.id,
-    metadata: { domain: dto.domain, title: dto.title, sourceType: dto.sourceType },
+    metadata: {
+      domain: dto.domain,
+      title: dto.title,
+      sourceType: dto.sourceType,
+      supersedesId: dto.supersedesId,
+    },
   });
   warmMemory(userId, dto);
   await syncPrimaryPersonLink(userId, "memory", dto.id, dto.primaryPersonId);
@@ -302,6 +365,8 @@ export async function updateMemoryForUser(
         : {}),
       ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
       ...(input.pinned !== undefined ? { pinned: input.pinned } : {}),
+      ...(input.status !== undefined ? { status: normalizeMemoryStatus(input.status) } : {}),
+      ...(input.expiresAt !== undefined ? { expiresAt: parseExpiresAt(input.expiresAt) } : {}),
       updatedAt: new Date(),
     })
     .where(and(eq(lifeMemories.id, memoryId), eq(lifeMemories.userId, userId)))
@@ -314,6 +379,64 @@ export async function updateMemoryForUser(
     await syncPrimaryPersonLink(userId, "memory", dto.id, dto.primaryPersonId);
   }
   return dto;
+}
+
+/**
+ * Correct a fact: create a new active memory and mark the prior one superseded.
+ * Prior version stays inspectable but leaves Ask/retrieval.
+ */
+export async function supersedeMemoryForUser(
+  userId: string,
+  previousMemoryId: string,
+  input: CreateMemoryInput,
+): Promise<{ previous: LifeMemoryDto; current: LifeMemoryDto } | null> {
+  const previous = await getMemoryForUser(userId, previousMemoryId);
+  if (!previous) return null;
+
+  const current = await createMemoryForUser(userId, {
+    title: input.title ?? previous.title,
+    content: input.content,
+    domain: input.domain ?? previous.domain,
+    tags: input.tags ?? previous.tags,
+    primaryPersonId:
+      input.primaryPersonId !== undefined ? input.primaryPersonId : previous.primaryPersonId,
+    projectId: input.projectId !== undefined ? input.projectId : previous.projectId,
+    sourceType: input.sourceType ?? "teach",
+    sourceId: input.sourceId ?? previous.sourceId,
+    pinned: input.pinned ?? previous.pinned,
+    expiresAt: input.expiresAt !== undefined ? input.expiresAt : previous.expiresAt,
+    supersedesId: previousMemoryId,
+  });
+
+  const [prevRow] = await getDb()
+    .update(lifeMemories)
+    .set({
+      status: "superseded",
+      pinned: false,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(lifeMemories.id, previousMemoryId), eq(lifeMemories.userId, userId)))
+    .returning();
+
+  await writeAuditLog({
+    userId,
+    action: "memory_superseded",
+    entityType: "memory",
+    entityId: previousMemoryId,
+    metadata: { replacedBy: current.id },
+  });
+
+  return {
+    previous: prevRow ? toDto(prevRow) : { ...previous, status: "superseded", pinned: false },
+    current,
+  };
+}
+
+export async function archiveMemoryForUser(
+  userId: string,
+  memoryId: string,
+): Promise<LifeMemoryDto | null> {
+  return updateMemoryForUser(userId, memoryId, { status: "archived", pinned: false });
 }
 
 export async function deleteMemoryForUser(
@@ -336,9 +459,9 @@ export async function deleteMemoryForUser(
   return deleted.length > 0;
 }
 
-/** Growing Life File — markdown grouped by domain. */
+/** Growing Life File — markdown grouped by domain (active only). */
 export async function exportMemoriesMarkdownForUser(userId: string): Promise<string> {
-  const items = await listMemoriesForUser(userId, { limit: 500 });
+  const items = await listMemoriesForUser(userId, { limit: 500, status: "active" });
   const byDomain = new Map<LifeMemoryDomain, LifeMemoryDto[]>();
   for (const d of LIFE_MEMORY_DOMAINS) byDomain.set(d, []);
   for (const item of items) {
@@ -348,7 +471,7 @@ export async function exportMemoriesMarkdownForUser(userId: string): Promise<str
   const lines: string[] = [
     "# Recall Life Memory",
     "",
-    `_Exported ${new Date().toISOString().slice(0, 10)} · ${items.length} memories_`,
+    `_Exported ${new Date().toISOString().slice(0, 10)} · ${items.length} active memories_`,
     "",
   ];
 
@@ -370,4 +493,12 @@ export async function exportMemoriesMarkdownForUser(userId: string): Promise<str
   }
 
   return lines.join("\n");
+}
+
+/** Drop inactive/expired rows when loading by id (person inject / shared context). */
+export function filterActiveMemoryRows<T extends Pick<LifeMemory, "status" | "expiresAt">>(
+  rows: T[],
+  now: Date = new Date(),
+): T[] {
+  return rows.filter((row) => isMemoryActiveForRetrieval(row, now));
 }

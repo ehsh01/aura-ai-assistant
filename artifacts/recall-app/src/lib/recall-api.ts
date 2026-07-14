@@ -725,6 +725,15 @@ export const LIFE_MEMORY_DOMAINS = [
 
 export type LifeMemoryDomain = (typeof LIFE_MEMORY_DOMAINS)[number];
 
+export const LIFE_MEMORY_STATUSES = [
+  "active",
+  "superseded",
+  "expired",
+  "archived",
+] as const;
+
+export type LifeMemoryStatus = (typeof LIFE_MEMORY_STATUSES)[number];
+
 export type LifeMemoryRecord = {
   id: string;
   domain: LifeMemoryDomain;
@@ -736,6 +745,9 @@ export type LifeMemoryRecord = {
   sourceType: "teach" | "capture" | "ask" | "import";
   sourceId: string | null;
   pinned: boolean;
+  status: LifeMemoryStatus;
+  supersedesId: string | null;
+  expiresAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -743,10 +755,12 @@ export type LifeMemoryRecord = {
 export async function listMemories(opts?: {
   domain?: string;
   q?: string;
+  status?: LifeMemoryStatus | "all";
 }): Promise<{ items: LifeMemoryRecord[] }> {
   const params = new URLSearchParams();
   if (opts?.domain) params.set("domain", opts.domain);
   if (opts?.q?.trim()) params.set("q", opts.q.trim());
+  if (opts?.status) params.set("status", opts.status);
   const q = params.toString();
   return apiFetch(`/memory${q ? `?${q}` : ""}`);
 }
@@ -791,11 +805,36 @@ export async function updateMemory(
     primaryPersonId?: string | null;
     projectId?: string | null;
     pinned?: boolean;
+    status?: LifeMemoryStatus;
+    expiresAt?: string | null;
   },
 ): Promise<LifeMemoryRecord> {
   return apiFetch(`/memory/${encodeURIComponent(memoryId)}`, {
     method: "PATCH",
     body: JSON.stringify(input),
+  });
+}
+
+export async function supersedeMemory(
+  memoryId: string,
+  input: {
+    title?: string;
+    content: string;
+    domain?: string | null;
+    tags?: string[];
+    pinned?: boolean;
+    expiresAt?: string | null;
+  },
+): Promise<{ previous: LifeMemoryRecord; current: LifeMemoryRecord }> {
+  return apiFetch(`/memory/${encodeURIComponent(memoryId)}/supersede`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function archiveMemory(memoryId: string): Promise<LifeMemoryRecord> {
+  return apiFetch(`/memory/${encodeURIComponent(memoryId)}/archive`, {
+    method: "POST",
   });
 }
 
