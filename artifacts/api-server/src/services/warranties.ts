@@ -10,6 +10,7 @@ import { newWarrantyId } from "../lib/recall-format";
 import { writeAuditLog } from "./audit";
 import { warmEntityEmbedding } from "./embedding-cache";
 import { upsertEntityLink } from "./entity-links";
+import { getHomeForUser } from "./homes";
 import { getVehicleForUser } from "./vehicles";
 
 export type WarrantyDto = {
@@ -84,25 +85,61 @@ async function resolveSubjectName(
   subjectType: WarrantySubjectType,
   subjectId: string | null,
 ): Promise<string | null> {
-  if (subjectType !== "vehicle" || !subjectId) return null;
-  const v = await getVehicleForUser(userId, subjectId);
-  return v?.displayName ?? null;
+  if (!subjectId) return null;
+  if (subjectType === "vehicle") {
+    const v = await getVehicleForUser(userId, subjectId);
+    return v?.displayName ?? null;
+  }
+  if (subjectType === "home") {
+    const h = await getHomeForUser(userId, subjectId);
+    return h?.displayName ?? null;
+  }
+  return null;
 }
 
-async function syncVehicleCoverLink(
+async function syncSubjectCoverLink(
   userId: string,
   warrantyId: string,
   subjectType: WarrantySubjectType,
   subjectId: string | null,
 ): Promise<void> {
-  if (subjectType !== "vehicle" || !subjectId) return;
-  await upsertEntityLink(userId, {
-    fromEntityType: "warranty",
-    fromEntityId: warrantyId,
-    toEntityType: "vehicle",
-    toEntityId: subjectId,
-    linkType: "covers",
-  });
+  if (!subjectId) return;
+  if (subjectType === "vehicle") {
+    await upsertEntityLink(userId, {
+      fromEntityType: "warranty",
+      fromEntityId: warrantyId,
+      toEntityType: "vehicle",
+      toEntityId: subjectId,
+      linkType: "covers",
+    });
+    return;
+  }
+  if (subjectType === "home") {
+    await upsertEntityLink(userId, {
+      fromEntityType: "warranty",
+      fromEntityId: warrantyId,
+      toEntityType: "home",
+      toEntityId: subjectId,
+      linkType: "covers",
+    });
+  }
+}
+
+async function resolveSubjectId(
+  userId: string,
+  subjectType: WarrantySubjectType,
+  subjectId: string | null,
+): Promise<string | null> {
+  if (!subjectId) return null;
+  if (subjectType === "vehicle") {
+    const v = await getVehicleForUser(userId, subjectId);
+    return v ? subjectId : null;
+  }
+  if (subjectType === "home") {
+    const h = await getHomeForUser(userId, subjectId);
+    return h ? subjectId : null;
+  }
+  return null;
 }
 
 export async function createWarrantyForUser(
@@ -110,13 +147,7 @@ export async function createWarrantyForUser(
   input: CreateWarrantyInput,
 ): Promise<WarrantyDto> {
   const subjectType = normalizeSubjectType(input.subjectType);
-  let subjectId = input.subjectId ?? null;
-  if (subjectType === "vehicle" && subjectId) {
-    const v = await getVehicleForUser(userId, subjectId);
-    if (!v) subjectId = null;
-  } else if (subjectType !== "vehicle") {
-    subjectId = null;
-  }
+  const subjectId = await resolveSubjectId(userId, subjectType, input.subjectId ?? null);
 
   const now = new Date();
   const [row] = await getDb()
@@ -137,7 +168,7 @@ export async function createWarrantyForUser(
 
   const subjectName = await resolveSubjectName(userId, subjectType, subjectId);
   const dto = toDto(row!, subjectName);
-  await syncVehicleCoverLink(userId, dto.id, subjectType, subjectId);
+  await syncSubjectCoverLink(userId, dto.id, subjectType, subjectId);
   await writeAuditLog({
     userId,
     action: "warranty_created",
@@ -200,14 +231,11 @@ export async function updateWarrantyForUser(
     input.subjectType !== undefined
       ? normalizeSubjectType(input.subjectType)
       : existing.subjectType;
-  let subjectId =
-    input.subjectId !== undefined ? input.subjectId : existing.subjectId;
-  if (subjectType === "vehicle" && subjectId) {
-    const v = await getVehicleForUser(userId, subjectId);
-    if (!v) subjectId = null;
-  } else if (subjectType !== "vehicle") {
-    subjectId = null;
-  }
+  const subjectId = await resolveSubjectId(
+    userId,
+    subjectType,
+    input.subjectId !== undefined ? input.subjectId : existing.subjectId,
+  );
 
   const [row] = await getDb()
     .update(warranties)
@@ -232,7 +260,7 @@ export async function updateWarrantyForUser(
 
   const subjectName = await resolveSubjectName(userId, subjectType, subjectId);
   const dto = toDto(row, subjectName);
-  await syncVehicleCoverLink(userId, dto.id, subjectType, subjectId);
+  await syncSubjectCoverLink(userId, dto.id, subjectType, subjectId);
   warmEntityEmbedding(userId, {
     entityType: "warranty",
     entityId: dto.id,

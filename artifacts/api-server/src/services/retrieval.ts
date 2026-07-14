@@ -5,6 +5,7 @@ import { listTasksForUser } from "./tasks";
 import { listNotesForUser, searchNotesForUser } from "./notes";
 import { listPeopleForUser } from "./people";
 import { listVehiclesForUser } from "./vehicles";
+import { listHomesForUser } from "./homes";
 import { listWarrantiesForUser } from "./warranties";
 import { listPersonNameAliases, peopleWithAliasNames } from "./user-corrections";
 import {
@@ -62,7 +63,7 @@ function typeBoost(entityType: string, pinned?: boolean): number {
   if (entityType === "memory") return pinned ? 0.35 : 0.22;
   if (entityType === "knowledge") return 0.08;
   if (entityType === "person") return 0.05;
-  if (entityType === "vehicle" || entityType === "warranty") return 0.12;
+  if (entityType === "vehicle" || entityType === "warranty" || entityType === "home") return 0.12;
   return 0;
 }
 
@@ -458,6 +459,7 @@ const CORPUS = {
   documents: 100,
   captures: 100,
   vehicles: 40,
+  homes: 20,
   warranties: 40,
   /** Per connected Google mailbox — keeps ehernandez2 + REI + others searchable. */
   gmailPerMailbox: 150,
@@ -624,7 +626,7 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
 async function collectCorpus(
   userId: string,
 ): Promise<{ records: ContextRecord[]; people: PersonRef[] }> {
-  const [tasks, notes, people, knowledge, memories, documents, captures, vehiclesList, warrantiesList, sources, aliases] =
+  const [tasks, notes, people, knowledge, memories, documents, captures, vehiclesList, homesList, warrantiesList, sources, aliases] =
     await Promise.all([
       listTasksForUser(userId),
       listNotesForUser(userId),
@@ -634,6 +636,7 @@ async function collectCorpus(
       listDocumentsForUser(userId),
       listCapturesForUser(userId, { limit: CORPUS.captures }),
       listVehiclesForUser(userId),
+      listHomesForUser(userId),
       listWarrantiesForUser(userId),
       loadSourceRecordsBalanced(userId),
       listPersonNameAliases(userId),
@@ -743,6 +746,24 @@ async function collectCorpus(
         v.vin ? `vin=${v.vin}` : null,
         v.licensePlate ? `plate=${v.licensePlate}` : null,
         v.notes ? `notes=${v.notes.slice(0, 400)}` : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    });
+  }
+  for (const h of homesList.slice(0, CORPUS.homes)) {
+    records.push({
+      entityType: "home",
+      entityId: h.id,
+      title: h.displayName,
+      text: [
+        `home property ${h.displayName}`,
+        h.addressLine1 ? `address=${h.addressLine1}` : null,
+        h.addressLine2 ? h.addressLine2 : null,
+        h.city ? `city=${h.city}` : null,
+        h.region ? `region=${h.region}` : null,
+        h.postalCode ? `postal=${h.postalCode}` : null,
+        h.notes ? `notes=${h.notes.slice(0, 400)}` : null,
       ]
         .filter(Boolean)
         .join(" "),

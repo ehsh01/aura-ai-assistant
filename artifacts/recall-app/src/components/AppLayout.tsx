@@ -144,7 +144,7 @@ const staticNavItems: Array<{
   },
   {
     id: "/vehicles",
-    label: "Vehicles",
+    label: "Home & vehicles",
     section: "organize",
     icon: <Car width={18} height={18} strokeWidth={1.8} />,
   },

@@ -1,13 +1,12 @@
 import { index, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { users } from "./users";
-import { vehicles } from "./vehicles";
 
 export const WARRANTY_SUBJECT_TYPES = ["vehicle", "home", "other"] as const;
 export type WarrantySubjectType = (typeof WARRANTY_SUBJECT_TYPES)[number];
 
 /**
  * Structured warranties with expiry dates for proactive insights.
- * Optionally linked to a vehicle via subjectId when subjectType = vehicle.
+ * subjectId is typed by subjectType (vehicle | home | other) — no single-table FK.
  */
 export const warranties = pgTable(
   "warranties",
@@ -18,9 +17,7 @@ export const warranties = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     title: varchar("title", { length: 500 }).notNull(),
     subjectType: varchar("subject_type", { length: 32 }).notNull().default("other"),
-    subjectId: varchar("subject_id", { length: 64 }).references(() => vehicles.id, {
-      onDelete: "set null",
-    }),
+    subjectId: varchar("subject_id", { length: 64 }),
     provider: varchar("provider", { length: 255 }),
     /** Calendar expiry as YYYY-MM-DD. */
     expiresAt: varchar("expires_at", { length: 10 }),

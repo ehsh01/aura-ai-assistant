@@ -23,3 +23,4 @@ export * from "./extension-tokens";
 export * from "./entity-links";
 export * from "./vehicles";
 export * from "./warranties";
+export * from "./homes";

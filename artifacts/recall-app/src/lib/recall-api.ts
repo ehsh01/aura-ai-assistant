@@ -66,6 +66,19 @@ export type VehicleRecord = {
   updatedAt: string;
 };
 
+export type HomeRecord = {
+  id: string;
+  displayName: string;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  region: string | null;
+  postalCode: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type WarrantyRecord = {
   id: string;
   title: string;
@@ -225,6 +238,44 @@ export async function updateVehicle(
 
 export async function deleteVehicle(vehicleId: string): Promise<void> {
   await apiFetch(`/vehicles/${encodeURIComponent(vehicleId)}`, { method: "DELETE" });
+}
+
+export async function listHomes(): Promise<{ homes: HomeRecord[] }> {
+  return apiFetch("/homes");
+}
+
+export async function createHome(input: {
+  displayName: string;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  region?: string | null;
+  postalCode?: string | null;
+  notes?: string | null;
+}): Promise<HomeRecord> {
+  return apiFetch("/homes", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function updateHome(
+  homeId: string,
+  input: Partial<{
+    displayName: string;
+    addressLine1: string | null;
+    addressLine2: string | null;
+    city: string | null;
+    region: string | null;
+    postalCode: string | null;
+    notes: string | null;
+  }>,
+): Promise<HomeRecord> {
+  return apiFetch(`/homes/${encodeURIComponent(homeId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteHome(homeId: string): Promise<void> {
+  await apiFetch(`/homes/${encodeURIComponent(homeId)}`, { method: "DELETE" });
 }
 
 export async function listWarranties(): Promise<{ warranties: WarrantyRecord[] }> {

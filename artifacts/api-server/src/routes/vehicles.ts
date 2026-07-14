@@ -9,6 +9,13 @@ import {
   updateVehicleForUser,
 } from "../services/vehicles";
 import {
+  createHomeForUser,
+  deleteHomeForUser,
+  getHomeForUser,
+  listHomesForUser,
+  updateHomeForUser,
+} from "../services/homes";
+import {
   createWarrantyForUser,
   deleteWarrantyForUser,
   getWarrantyForUser,
@@ -27,6 +34,18 @@ const CreateVehicleBody = z.object({
 });
 
 const UpdateVehicleBody = CreateVehicleBody.partial();
+
+const CreateHomeBody = z.object({
+  displayName: z.string().min(1).max(255),
+  addressLine1: z.string().max(255).nullish(),
+  addressLine2: z.string().max(255).nullish(),
+  city: z.string().max(128).nullish(),
+  region: z.string().max(64).nullish(),
+  postalCode: z.string().max(32).nullish(),
+  notes: z.string().max(5000).nullish(),
+});
+
+const UpdateHomeBody = CreateHomeBody.partial();
 
 const CreateWarrantyBody = z.object({
   title: z.string().min(1).max(500),
@@ -93,6 +112,65 @@ router.delete("/vehicles/:vehicleId", async (req, res, next) => {
     const ok = await deleteVehicleForUser(req.user!.id, req.params.vehicleId);
     if (!ok) {
       res.status(404).json({ error: "NOT_FOUND", message: "Vehicle not found" });
+      return;
+    }
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/homes", async (req, res, next) => {
+  try {
+    const homes = await listHomesForUser(req.user!.id);
+    res.json({ homes });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/homes", async (req, res, next) => {
+  try {
+    const body = CreateHomeBody.parse(req.body);
+    const home = await createHomeForUser(req.user!.id, body);
+    res.status(201).json(home);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/homes/:homeId", async (req, res, next) => {
+  try {
+    const home = await getHomeForUser(req.user!.id, req.params.homeId);
+    if (!home) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Home not found" });
+      return;
+    }
+    res.json(home);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/homes/:homeId", async (req, res, next) => {
+  try {
+    const body = UpdateHomeBody.parse(req.body);
+    const home = await updateHomeForUser(req.user!.id, req.params.homeId, body);
+    if (!home) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Home not found" });
+      return;
+    }
+    res.json(home);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete("/homes/:homeId", async (req, res, next) => {
+  try {
+    const ok = await deleteHomeForUser(req.user!.id, req.params.homeId);
+    if (!ok) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Home not found" });
       return;
     }
     res.status(204).send();

@@ -84,6 +84,10 @@ export function newWarrantyId(): string {
   return `warranty-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function newHomeId(): string {
+  return `home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function newAuditId(): string {
   return `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

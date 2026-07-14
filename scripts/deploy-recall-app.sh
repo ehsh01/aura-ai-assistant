@@ -54,7 +54,8 @@ for mig in \
   lib/db/migrations/0008_note_attachment_text.sql \
   lib/db/migrations/0009_extension_tokens.sql \
   lib/db/migrations/0010_entity_links.sql \
-  lib/db/migrations/0011_vehicles_warranties.sql
+  lib/db/migrations/0011_vehicles_warranties.sql \
+  lib/db/migrations/0012_homes.sql
 do
   echo "--> Applying $mig"
   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$mig"
