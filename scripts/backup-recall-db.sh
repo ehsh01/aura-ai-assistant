@@ -33,13 +33,14 @@ run_pg_dump() {
   if command -v docker >/dev/null 2>&1; then
     # Prefer Docker so the client major matches DigitalOcean managed Postgres 18
     # even when the host only has older postgresql-client packages.
-    echo "==> Dumping via docker $PG_DUMP_IMAGE"
+    # Progress messages must go to stderr — stdout is the SQL dump.
+    echo "==> Dumping via docker $PG_DUMP_IMAGE" >&2
     docker run --rm "$PG_DUMP_IMAGE" \
       pg_dump "$DATABASE_URL" --no-owner --no-privileges
     return
   fi
   if command -v pg_dump >/dev/null 2>&1; then
-    echo "==> Dumping via host pg_dump"
+    echo "==> Dumping via host pg_dump" >&2
     pg_dump "$DATABASE_URL" --no-owner --no-privileges
     return
   fi
