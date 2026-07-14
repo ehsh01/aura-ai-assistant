@@ -27,3 +27,4 @@ export * from "./homes";
 export * from "./organizations";
 export * from "./invoices";
 export * from "./auth-sessions";
+export * from "./jobs";

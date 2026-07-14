@@ -95,6 +95,7 @@ Last verified against the production codebase: 2026-07-12.
 - [ ] Add tests
 - [x] Add backup strategy
 - [x] Add restore drill (ephemeral Docker Postgres)
+- [x] Durable job queue for capture extraction (Postgres + worker)
 - [ ] Add logging
 - [ ] Add security review
 - [ ] Add documentation update process

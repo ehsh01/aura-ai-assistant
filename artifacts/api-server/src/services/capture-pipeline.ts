@@ -9,14 +9,12 @@ import { writeAuditLog } from "./audit";
 import { createCaptureForUser, getCaptureForUser, updateCaptureStatusForUser } from "./captures";
 import { createEvidenceForUser } from "./evidence";
 import {
-  completeExtractionJob,
-  createExtractionJob,
-  failExtractionJob,
-  loadExtractionJob,
-  markExtractionJobProcessing,
-  releaseExtractionJob,
-  tryAcquireExtractionJob,
-} from "./extraction-jobs";
+  JOB_TYPE_CAPTURE_EXTRACTION,
+  captureIdFromPayload,
+  enqueueJob,
+  getJobForUser,
+} from "./job-queue";
+import { nudgeJobWorker } from "./job-worker";
 import { resolvePersonByName } from "./people";
 import { aiService } from "./ai";
 import type { CaptureClassificationItem } from "./ai";
@@ -34,37 +32,20 @@ function confidenceLabel(score: number | null | undefined): "high" | "needs_revi
   return "uncertain";
 }
 
-/** Queue async extraction for a raw capture (Phase 3). */
+/** Queue async extraction for a raw capture (durable DB job). */
 export async function queueCaptureExtraction(
   userId: string,
   captureId: string,
 ): Promise<{ jobId: string }> {
   const jobId = newExtractionJobId();
-  await createExtractionJob(userId, jobId, captureId);
-  void runCaptureExtractionJob(userId, captureId, jobId);
+  await enqueueJob({
+    id: jobId,
+    userId,
+    type: JOB_TYPE_CAPTURE_EXTRACTION,
+    payload: { captureId },
+  });
+  nudgeJobWorker();
   return { jobId };
-}
-
-async function runCaptureExtractionJob(
-  userId: string,
-  captureId: string,
-  jobId: string,
-): Promise<void> {
-  if (!tryAcquireExtractionJob(jobId)) return;
-  try {
-    await markExtractionJobProcessing(jobId);
-    await processCaptureExtraction(userId, captureId);
-    await completeExtractionJob(jobId);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Extraction failed";
-    await failExtractionJob(jobId, message);
-    await updateCaptureStatusForUser(userId, captureId, {
-      processedStatus: "failed",
-      processingError: message,
-    });
-  } finally {
-    releaseExtractionJob(jobId);
-  }
 }
 
 /**
@@ -182,13 +163,13 @@ export async function getExtractionJobStatus(
   userId: string,
   jobId: string,
 ): Promise<{ jobId: string; status: string; captureId?: string; error?: string } | null> {
-  const job = await loadExtractionJob(userId, jobId);
-  if (!job || job.userId !== userId) return null;
+  const job = await getJobForUser(userId, jobId);
+  if (!job) return null;
   return {
-    jobId,
+    jobId: job.id,
     status: job.status,
-    captureId: job.captureId,
-    error: job.error,
+    captureId: captureIdFromPayload(job.payload) ?? undefined,
+    error: job.lastError ?? undefined,
   };
 }
 
