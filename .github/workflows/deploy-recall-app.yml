@@ -7,8 +7,9 @@ on:
     paths:
       - "artifacts/**"
       - "lib/**"
-      - "scripts/deploy-recall-app.sh"
+      - "scripts/**"
       - "nginx-recall-app.conf"
+      - "DEPLOYMENT.md"
       - ".github/workflows/deploy-recall-app.yml"
 
 jobs:
