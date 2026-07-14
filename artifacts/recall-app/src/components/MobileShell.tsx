@@ -14,7 +14,6 @@ import {
   Library,
   LogOut,
   Menu,
-  PenLine,
   Plus,
   Search,
   Sparkles,
@@ -262,10 +261,6 @@ export function MobileMoreSheet({
           <Link href="/connectors" onClick={close} className={linkClass(location === "/connectors")}>
             <Cable size={18} />
             <span className="flex-1 text-sm font-medium">Connectors</span>
-          </Link>
-          <Link href="/canvas" onClick={close} className={linkClass(location === "/canvas")}>
-            <PenLine size={18} />
-            <span className="flex-1 text-sm font-medium">Canvas</span>
           </Link>
           <button
             type="button"

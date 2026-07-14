@@ -9,6 +9,7 @@ import { requireAuth } from "../middleware/auth";
 import {
   createProjectForUser,
   getProjectDetailForUser,
+  getProjectTimelineForUser,
   listProjectsForUser,
   updateProjectForUser,
 } from "../services/projects";
@@ -44,6 +45,19 @@ router.get("/projects/:projectId", async (req, res, next) => {
       return;
     }
     res.json(GetProjectResponse.parse(detail));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/projects/:projectId/timeline", async (req, res, next) => {
+  try {
+    const timeline = await getProjectTimelineForUser(req.user!.id, req.params.projectId);
+    if (!timeline) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Project not found" });
+      return;
+    }
+    res.json(timeline);
   } catch (err) {
     next(err);
   }

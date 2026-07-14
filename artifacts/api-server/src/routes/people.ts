@@ -5,6 +5,7 @@ import {
   createPersonForUser,
   getPersonForUser,
   getPersonRelatedForUser,
+  getPersonTimelineForUser,
   listPeopleForUser,
   mergePeopleForUser,
   updatePersonForUser,
@@ -102,6 +103,19 @@ router.get("/people/:personId/related", async (req, res, next) => {
       return;
     }
     res.json(related);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/people/:personId/timeline", async (req, res, next) => {
+  try {
+    const timeline = await getPersonTimelineForUser(req.user!.id, req.params.personId);
+    if (!timeline) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Person not found" });
+      return;
+    }
+    res.json(timeline);
   } catch (err) {
     next(err);
   }

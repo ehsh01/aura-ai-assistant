@@ -6,11 +6,13 @@ import {
   createPerson,
   createWaitingFollowUp,
   getPersonRelated,
+  getPersonTimeline,
   listPeople,
   listWaitingOn,
   mergePeople,
   updatePerson,
   type PersonRecord,
+  type TimelineItem,
   type WaitingOnRecord,
 } from "@/lib/recall-api";
 import {
@@ -71,6 +73,7 @@ export function People() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [mergeTargetId, setMergeTargetId] = useState("");
   const [merging, setMerging] = useState(false);
+  const [timelineByPerson, setTimelineByPerson] = useState<Record<string, TimelineItem[]>>({});
   const [relatedLoadingId, setRelatedLoadingId] = useState<string | null>(null);
   const personRefs = useRef<Record<string, HTMLElement | null>>({});
   const relatedLoaded = useRef<Record<string, true>>({});
@@ -86,6 +89,7 @@ export function People() {
       setNotesByPerson({});
       setKnowledgeByPerson({});
       setMemoriesByPerson({});
+      setTimelineByPerson({});
     } finally {
       setLoading(false);
     }
@@ -95,7 +99,10 @@ export function People() {
     if (relatedLoaded.current[personId]) return;
     setRelatedLoadingId(personId);
     try {
-      const r = await getPersonRelated(personId);
+      const [r, timeline] = await Promise.all([
+        getPersonRelated(personId),
+        getPersonTimeline(personId).catch(() => ({ items: [] as TimelineItem[] })),
+      ]);
       relatedLoaded.current[personId] = true;
       setOpenByPerson((prev) => ({ ...prev, [personId]: r.openTasks }));
       setNotesByPerson((prev) => ({
@@ -110,12 +117,14 @@ export function People() {
         ...prev,
         [personId]: r.linkedMemories ?? [],
       }));
+      setTimelineByPerson((prev) => ({ ...prev, [personId]: timeline.items ?? [] }));
     } catch {
       relatedLoaded.current[personId] = true;
       setOpenByPerson((prev) => ({ ...prev, [personId]: [] }));
       setNotesByPerson((prev) => ({ ...prev, [personId]: [] }));
       setKnowledgeByPerson((prev) => ({ ...prev, [personId]: [] }));
       setMemoriesByPerson((prev) => ({ ...prev, [personId]: [] }));
+      setTimelineByPerson((prev) => ({ ...prev, [personId]: [] }));
     } finally {
       setRelatedLoadingId((cur) => (cur === personId ? null : cur));
     }
@@ -390,6 +399,7 @@ export function People() {
               const taggedNotes = notesByPerson[person.id] ?? [];
               const taggedKnowledge = knowledgeByPerson[person.id] ?? [];
               const linkedMemories = memoriesByPerson[person.id] ?? [];
+              const timeline = timelineByPerson[person.id] ?? [];
               const personWaiting = waitingForPerson(waiting, person);
               const isSelected = selected?.id === person.id;
               const isHighlighted = highlightedId === person.id;
@@ -528,6 +538,36 @@ export function People() {
                           </div>
                         }
                       />
+
+                      {timeline.length > 0 && (
+                        <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                          <p className="text-[11px] uppercase tracking-wider text-white/35">
+                            Timeline
+                          </p>
+                          <ul className="mt-2 space-y-2">
+                            {timeline.slice(0, 12).map((item) => (
+                              <li key={`${item.entityType}:${item.entityId}`}>
+                                <Link
+                                  href={item.href}
+                                  className="block no-underline hover:bg-white/[0.03] rounded-lg px-2 py-1.5 -mx-2"
+                                >
+                                  <div className="flex items-baseline justify-between gap-2">
+                                    <span className="text-sm text-white/85">{item.title}</span>
+                                    <span className="shrink-0 text-[10px] uppercase text-white/30">
+                                      {item.entityType}
+                                    </span>
+                                  </div>
+                                  {item.subtitle && (
+                                    <p className="line-clamp-1 text-xs text-white/40">
+                                      {item.subtitle}
+                                    </p>
+                                  )}
+                                </Link>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                     </div>
                   )}
                 </article>

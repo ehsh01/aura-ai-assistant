@@ -67,7 +67,7 @@ Last verified against the production codebase: 2026-07-12.
 - [x] Capture selected text
 - [x] Capture page URL/title
 - [x] Post to Recall API with a scoped, revocable capture token
-- [ ] Add retry queue
+- [x] Add retry queue
 - [ ] Add Outlook collector
 - [ ] Add Teams collector
 
@@ -98,6 +98,9 @@ Last verified against the production codebase: 2026-07-12.
 - [x] Durable job queue for capture extraction (Postgres + worker)
 - [x] Notes Postgres full-text search (tsvector + GIN; includes OCR)
 - [x] Life Memory lifecycle (active / superseded / expired / archived)
+- [x] Person merge / dedup
+- [x] Person + project timeline APIs
+- [x] Deep /ready health (DB + job queue)
 - [ ] Add logging
 - [ ] Add security review
 - [ ] Add documentation update process

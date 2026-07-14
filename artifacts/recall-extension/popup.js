@@ -8,6 +8,9 @@ const authDot = document.getElementById("authDot");
 const authLabel = document.getElementById("authLabel");
 const settingsEl = document.getElementById("settings");
 
+const RETRY_QUEUE_KEY = "recallCaptureRetryQueue";
+const MAX_QUEUE = 40;
+
 function setStatus(text, kind) {
   statusEl.textContent = text;
   statusEl.className = `status${kind ? ` ${kind}` : ""}`;
@@ -21,10 +24,94 @@ function refreshAuthUi(token) {
   if (!signedIn) settingsEl.open = true;
 }
 
+function classifyPageSource(hostname, url) {
+  const host = (hostname || "").toLowerCase();
+  const href = (url || "").toLowerCase();
+  if (
+    host.includes("outlook.office.com") ||
+    host.includes("outlook.live.com") ||
+    host.includes("outlook.office365.com") ||
+    href.includes("outlook.office.com")
+  ) {
+    return { sourceType: "browser_extension", sourceName: "Outlook Web" };
+  }
+  if (
+    host.includes("teams.microsoft.com") ||
+    host.includes("teams.live.com") ||
+    href.includes("teams.microsoft.com")
+  ) {
+    return { sourceType: "browser_extension", sourceName: "Teams Web" };
+  }
+  return { sourceType: "browser_extension", sourceName: hostname || "browser" };
+}
+
+async function readRetryQueue() {
+  const stored = await chrome.storage.local.get([RETRY_QUEUE_KEY]);
+  const list = stored[RETRY_QUEUE_KEY];
+  return Array.isArray(list) ? list : [];
+}
+
+async function writeRetryQueue(items) {
+  await chrome.storage.local.set({ [RETRY_QUEUE_KEY]: items.slice(-MAX_QUEUE) });
+}
+
+async function enqueueFailedCapture(body) {
+  const queue = await readRetryQueue();
+  queue.push({
+    id: `xq-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    body,
+    createdAt: new Date().toISOString(),
+    attempts: 0,
+  });
+  await writeRetryQueue(queue);
+}
+
+async function flushRetryQueue(apiBase, token) {
+  const queue = await readRetryQueue();
+  if (queue.length === 0) return 0;
+  const remaining = [];
+  let sent = 0;
+  for (const item of queue) {
+    try {
+      const res = await fetch(`${apiBase}/captures`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(item.body),
+      });
+      if (res.status === 401) {
+        remaining.push(item);
+        remaining.push(...queue.slice(queue.indexOf(item) + 1));
+        break;
+      }
+      if (!res.ok) {
+        item.attempts = (item.attempts || 0) + 1;
+        if (item.attempts < 5) remaining.push(item);
+        continue;
+      }
+      sent += 1;
+    } catch {
+      item.attempts = (item.attempts || 0) + 1;
+      if (item.attempts < 5) remaining.push(item);
+    }
+  }
+  await writeRetryQueue(remaining);
+  return sent;
+}
+
 chrome.storage.local.get(["recallToken", "recallApiBase"], (stored) => {
   if (stored.recallToken) tokenEl.value = stored.recallToken;
   if (stored.recallApiBase) apiBaseEl.value = stored.recallApiBase;
   refreshAuthUi(stored.recallToken);
+  const token = stored.recallToken?.trim();
+  const apiBase = (stored.recallApiBase || apiBaseEl.value || "").trim().replace(/\/$/, "");
+  if (token && apiBase) {
+    void flushRetryQueue(apiBase, token).then((sent) => {
+      if (sent > 0) setStatus(`Flushed ${sent} queued capture(s).`, "ok");
+    });
+  }
 });
 
 async function saveSettings() {
@@ -67,14 +154,27 @@ captureBtn.addEventListener("click", async () => {
   try {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: () => ({
-        url: location.href,
-        title: document.title,
-        hostname: location.hostname,
-        selectedText: window.getSelection()?.toString() ?? "",
-        visibleText: document.body?.innerText?.slice(0, 8000) ?? "",
-        timestamp: new Date().toISOString(),
-      }),
+      func: () => {
+        const hostname = location.hostname;
+        const subject =
+          document.querySelector('[aria-label="Subject"]')?.textContent?.trim() ||
+          document.querySelector("h1")?.textContent?.trim() ||
+          "";
+        const from =
+          document.querySelector('[aria-label*="From"]')?.textContent?.trim() ||
+          document.querySelector(".allowTextSelection")?.textContent?.trim() ||
+          "";
+        return {
+          url: location.href,
+          title: document.title,
+          hostname,
+          selectedText: window.getSelection()?.toString() ?? "",
+          visibleText: document.body?.innerText?.slice(0, 8000) ?? "",
+          subject,
+          from,
+          timestamp: new Date().toISOString(),
+        };
+      },
     });
     payload = result;
   } catch (err) {
@@ -85,26 +185,33 @@ captureBtn.addEventListener("click", async () => {
     return;
   }
 
+  const pageSource = classifyPageSource(payload.hostname, payload.url);
+  const bits = [];
+  if (payload.subject) bits.push(`Subject: ${payload.subject}`);
+  if (payload.from) bits.push(`From: ${payload.from}`);
   const rawText = payload.selectedText?.trim()
     ? payload.selectedText
-    : `${payload.title}\n\n${payload.visibleText}`.trim();
+    : `${payload.title}\n${bits.join("\n")}\n\n${payload.visibleText}`.trim();
+
+  const body = {
+    rawText,
+    sourceType: pageSource.sourceType,
+    sourceName: pageSource.sourceName,
+    sourceUrl: payload.url,
+    title: payload.title,
+    rawMetadata: { ...payload, sourceLabel: pageSource.sourceName },
+    capturedAt: payload.timestamp,
+  };
 
   try {
+    const flushed = await flushRetryQueue(apiBase, token);
     const res = await fetch(`${apiBase}/captures`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        rawText,
-        sourceType: "browser_extension",
-        sourceName: payload.hostname,
-        sourceUrl: payload.url,
-        title: payload.title,
-        rawMetadata: payload,
-        capturedAt: payload.timestamp,
-      }),
+      body: JSON.stringify(body),
     });
     if (res.status === 401) {
       setStatus("Token rejected — paste a fresh token from Connectors.", "err");
@@ -112,8 +219,16 @@ captureBtn.addEventListener("click", async () => {
       return;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    setStatus("Sent to Recall. Check AI Inbox shortly.", "ok");
+    const suffix = flushed > 0 ? ` Also sent ${flushed} queued.` : "";
+    setStatus(`Sent to Recall (${pageSource.sourceName}). Check AI Inbox shortly.${suffix}`, "ok");
   } catch (err) {
-    setStatus(`Failed: ${err instanceof Error ? err.message : "unknown error"}`, "err");
+    await enqueueFailedCapture(body);
+    const pending = (await readRetryQueue()).length;
+    setStatus(
+      `Queued offline (${pending}). Will retry next capture. ${
+        err instanceof Error ? err.message : ""
+      }`.trim(),
+      "err",
+    );
   }
 });

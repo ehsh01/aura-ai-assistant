@@ -227,3 +227,90 @@ export async function getProjectDetailForUser(
     })),
   };
 }
+
+export type ProjectTimelineItem = {
+  entityType: "note" | "task" | "capture";
+  entityId: string;
+  title: string;
+  subtitle?: string;
+  at: string;
+  href: string;
+};
+
+export async function getProjectTimelineForUser(
+  userId: string,
+  projectId: string,
+  limit = 40,
+): Promise<{ projectId: string; items: ProjectTimelineItem[] } | null> {
+  const exists = await getDb()
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)))
+    .limit(1);
+  if (!exists[0]) return null;
+
+  const [noteRows, taskRows, captureRows] = await Promise.all([
+    getDb()
+      .select({
+        id: notes.id,
+        title: notes.title,
+        preview: notes.preview,
+        updatedAt: notes.updatedAt,
+      })
+      .from(notes)
+      .where(and(eq(notes.userId, userId), eq(notes.projectId, projectId)))
+      .orderBy(desc(notes.updatedAt))
+      .limit(limit),
+    getDb()
+      .select({
+        id: tasks.id,
+        title: tasks.title,
+        completed: tasks.completed,
+        updatedAt: tasks.updatedAt,
+      })
+      .from(tasks)
+      .where(and(eq(tasks.userId, userId), eq(tasks.projectId, projectId)))
+      .orderBy(desc(tasks.updatedAt))
+      .limit(limit),
+    getDb()
+      .select({
+        id: captureItems.id,
+        cleanedTitle: captureItems.cleanedTitle,
+        updatedAt: captureItems.updatedAt,
+      })
+      .from(captureItems)
+      .where(and(eq(captureItems.userId, userId), eq(captureItems.projectId, projectId)))
+      .orderBy(desc(captureItems.updatedAt))
+      .limit(limit),
+  ]);
+
+  const items: ProjectTimelineItem[] = [
+    ...noteRows.map((n) => ({
+      entityType: "note" as const,
+      entityId: n.id,
+      title: n.title,
+      subtitle: n.preview?.slice(0, 120) || undefined,
+      at: n.updatedAt.toISOString(),
+      href: `/notes?note=${encodeURIComponent(n.id)}`,
+    })),
+    ...taskRows.map((t) => ({
+      entityType: "task" as const,
+      entityId: t.id,
+      title: t.title,
+      subtitle: t.completed ? "Completed" : "Open",
+      at: t.updatedAt.toISOString(),
+      href: `/tasks?task=${encodeURIComponent(t.id)}`,
+    })),
+    ...captureRows.map((c) => ({
+      entityType: "capture" as const,
+      entityId: c.id,
+      title: c.cleanedTitle || "Capture",
+      at: c.updatedAt.toISOString(),
+      href: `/inbox?capture=${encodeURIComponent(c.id)}`,
+    })),
+  ]
+    .sort((a, b) => b.at.localeCompare(a.at))
+    .slice(0, limit);
+
+  return { projectId, items };
+}

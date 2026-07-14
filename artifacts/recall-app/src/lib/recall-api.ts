@@ -213,6 +213,27 @@ export async function getPersonRelated(personId: string): Promise<PersonRelated>
   return apiFetch(`/people/${encodeURIComponent(personId)}/related`);
 }
 
+export type TimelineItem = {
+  entityType: string;
+  entityId: string;
+  title: string;
+  subtitle?: string;
+  at: string;
+  href: string;
+};
+
+export async function getPersonTimeline(
+  personId: string,
+): Promise<{ person: PersonRecord; items: TimelineItem[] }> {
+  return apiFetch(`/people/${encodeURIComponent(personId)}/timeline`);
+}
+
+export async function getProjectTimeline(
+  projectId: string,
+): Promise<{ projectId: string; items: TimelineItem[] }> {
+  return apiFetch(`/projects/${encodeURIComponent(projectId)}/timeline`);
+}
+
 export async function listVehicles(): Promise<{ vehicles: VehicleRecord[] }> {
   return apiFetch("/vehicles");
 }

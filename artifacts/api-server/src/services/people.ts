@@ -587,3 +587,128 @@ export async function getPersonRelatedForUser(
     })),
   };
 }
+
+export type PersonTimelineItem = {
+  entityType: "task" | "note" | "knowledge" | "memory";
+  entityId: string;
+  title: string;
+  subtitle?: string;
+  at: string;
+  href: string;
+};
+
+/** Chronological feed across notes/tasks/knowledge/memories for a person. */
+export async function getPersonTimelineForUser(
+  userId: string,
+  personId: string,
+  limit = 40,
+): Promise<{ person: PersonDto; items: PersonTimelineItem[] } | null> {
+  const person = await getPersonForUser(userId, personId);
+  if (!person) return null;
+
+  const tagNeedle = `%person:${person.displayName}%`;
+  const [taskRows, noteRows, knowledgeRows, memoryRows] = await Promise.all([
+    getDb()
+      .select({
+        id: tasks.id,
+        title: tasks.title,
+        updatedAt: tasks.updatedAt,
+        completed: tasks.completed,
+      })
+      .from(tasks)
+      .where(and(eq(tasks.userId, userId), eq(tasks.requesterPersonId, personId)))
+      .orderBy(desc(tasks.updatedAt))
+      .limit(limit),
+    getDb()
+      .select({
+        id: notes.id,
+        title: notes.title,
+        preview: notes.preview,
+        updatedAt: notes.updatedAt,
+      })
+      .from(notes)
+      .where(
+        and(
+          eq(notes.userId, userId),
+          or(eq(notes.primaryPersonId, personId), sql`${notes.tags}::text ilike ${tagNeedle}`),
+        ),
+      )
+      .orderBy(desc(notes.updatedAt))
+      .limit(limit),
+    getDb()
+      .select({
+        id: knowledgeItems.id,
+        title: knowledgeItems.title,
+        itemType: knowledgeItems.itemType,
+        updatedAt: knowledgeItems.updatedAt,
+      })
+      .from(knowledgeItems)
+      .where(
+        and(
+          eq(knowledgeItems.userId, userId),
+          or(
+            eq(knowledgeItems.primaryPersonId, personId),
+            sql`${knowledgeItems.tags}::text ilike ${tagNeedle}`,
+          ),
+        ),
+      )
+      .orderBy(desc(knowledgeItems.updatedAt))
+      .limit(limit),
+    getDb()
+      .select({
+        id: lifeMemories.id,
+        title: lifeMemories.title,
+        domain: lifeMemories.domain,
+        updatedAt: lifeMemories.updatedAt,
+      })
+      .from(lifeMemories)
+      .where(
+        and(
+          eq(lifeMemories.userId, userId),
+          eq(lifeMemories.primaryPersonId, personId),
+          eq(lifeMemories.status, "active"),
+        ),
+      )
+      .orderBy(desc(lifeMemories.updatedAt))
+      .limit(limit),
+  ]);
+
+  const items: PersonTimelineItem[] = [
+    ...taskRows.map((t) => ({
+      entityType: "task" as const,
+      entityId: t.id,
+      title: t.title,
+      subtitle: t.completed ? "Completed task" : "Open task",
+      at: t.updatedAt.toISOString(),
+      href: `/tasks?task=${encodeURIComponent(t.id)}`,
+    })),
+    ...noteRows.map((n) => ({
+      entityType: "note" as const,
+      entityId: n.id,
+      title: n.title,
+      subtitle: n.preview?.slice(0, 120) || undefined,
+      at: n.updatedAt.toISOString(),
+      href: `/notes?note=${encodeURIComponent(n.id)}`,
+    })),
+    ...knowledgeRows.map((k) => ({
+      entityType: "knowledge" as const,
+      entityId: k.id,
+      title: k.title,
+      subtitle: k.itemType,
+      at: k.updatedAt.toISOString(),
+      href: `/knowledge?id=${encodeURIComponent(k.id)}`,
+    })),
+    ...memoryRows.map((m) => ({
+      entityType: "memory" as const,
+      entityId: m.id,
+      title: m.title,
+      subtitle: m.domain,
+      at: m.updatedAt.toISOString(),
+      href: `/memory?memory=${encodeURIComponent(m.id)}`,
+    })),
+  ]
+    .sort((a, b) => b.at.localeCompare(a.at))
+    .slice(0, limit);
+
+  return { person, items };
+}
