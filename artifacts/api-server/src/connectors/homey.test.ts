@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildHomeyAuthUrl,
   homeyConnector,
   isHomeyOAuthConfigured,
   isRiskyHomeyCapability,
@@ -17,6 +18,23 @@ describe("homey connector helpers", () => {
     expect(isHomeyOAuthConfigured()).toBe(false);
     if (prevId) process.env.HOMEY_CLIENT_ID = prevId;
     if (prevSecret) process.env.HOMEY_CLIENT_SECRET = prevSecret;
+  });
+
+  it("builds authorize URL with response_type=code", () => {
+    const prevId = process.env.HOMEY_CLIENT_ID;
+    const prevSecret = process.env.HOMEY_CLIENT_SECRET;
+    process.env.HOMEY_CLIENT_ID = "client-test";
+    process.env.HOMEY_CLIENT_SECRET = "secret-test";
+    const url = new URL(buildHomeyAuthUrl("state-1"));
+    expect(url.origin + url.pathname).toBe("https://api.athom.com/oauth2/authorise");
+    expect(url.searchParams.get("response_type")).toBe("code");
+    expect(url.searchParams.get("client_id")).toBe("client-test");
+    expect(url.searchParams.get("state")).toBe("state-1");
+    expect(url.searchParams.has("authorization_type")).toBe(false);
+    if (prevId) process.env.HOMEY_CLIENT_ID = prevId;
+    else delete process.env.HOMEY_CLIENT_ID;
+    if (prevSecret) process.env.HOMEY_CLIENT_SECRET = prevSecret;
+    else delete process.env.HOMEY_CLIENT_SECRET;
   });
 
   it("normalizes severity aliases", () => {

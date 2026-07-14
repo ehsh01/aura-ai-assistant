@@ -89,8 +89,10 @@ export function verifyHomeyWebhookSecret(
 
 export function buildHomeyAuthUrl(state: string): string {
   const { clientId, redirectUri } = homeyConfig();
+  // Athom's JS SDK + accounts.athom.com expect standard OAuth `response_type=code`.
+  // Docs mention `authorization_type`, but that yields: response_type Invalid value.
   const url = new URL("https://api.athom.com/oauth2/authorise");
-  url.searchParams.set("authorization_type", "code");
+  url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", clientId);
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("state", state);
@@ -111,7 +113,7 @@ export async function exchangeHomeyCode(code: string): Promise<{
   homeyName: string | null;
   remoteUrl: string | null;
 }> {
-  const { clientId, clientSecret, redirectUri } = homeyConfig();
+  const { clientId, clientSecret } = homeyConfig();
   const tokenRes = await fetch("https://api.athom.com/oauth2/token", {
     method: "POST",
     headers: {
@@ -120,9 +122,8 @@ export async function exchangeHomeyCode(code: string): Promise<{
     },
     body: new URLSearchParams({
       grant_type: "authorization_code",
-      authorization_code: code,
-      redirect_uri: redirectUri,
-      client_id: clientId,
+      // Official Athom SDK uses `code` (docs sometimes say authorization_code).
+      code,
     }),
   });
   if (!tokenRes.ok) {
