@@ -161,9 +161,16 @@ SECRETS_ENCRYPTION_KEY=$(openssl rand -hex 32)
 ```
 
 Browser sessions are issued only as `HttpOnly; Secure; SameSite=Lax` cookies
-(`recall_session`) and are not exposed to frontend JavaScript. The browser
+(`recall_session`) and are not exposed to frontend JavaScript. Each cookie JWT
+carries a `jti` that must match an active `auth_sessions` row — logout and
+`POST /api/auth/logout-all` revoke those rows immediately. The browser
 extension uses a separate revocable, expiring `capture:create` token created
 from Recall Connectors; only its SHA-256 hash is stored by the API.
+
+nginx (`nginx-recall-app.conf`) sets a **Content-Security-Policy** on the SPA
+(fonts.googleapis.com / fonts.gstatic.com allowed for Inter; `blob:` for TTS
+and note attachment previews; same-origin `connect-src` for `/api`). Deploy
+reloads nginx from this file automatically.
 
 **Key rotation:** generate a new `SECRETS_ENCRYPTION_KEY`, re-seal any stored connector secrets with the new key (or re-authorize connectors), then update `.env` and restart `recall-api`.
 

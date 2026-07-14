@@ -77,7 +77,22 @@ The extension should:
 Recall stores only a SHA-256 hash of each extension token. A capture token may
 create raw captures and cannot read notes, Ask history, finance, connectors, or
 account data. Browser sessions remain in `HttpOnly` cookies and must not be
-copied into `localStorage`.
+copied into `localStorage`. Session JWTs include a server-tracked `jti`; logout
+revokes the matching `auth_sessions` row so stolen cookies stop working.
+
+## 6.1 Content Security Policy
+
+The SPA is served by nginx with a restrictive `Content-Security-Policy`:
+
+- scripts from `'self'` only (no CDN script tags)
+- styles from `'self'` plus Google Fonts CSS (`'unsafe-inline'` allowed for Tailwind/runtime styles)
+- fonts from `'self'` and `fonts.gstatic.com`
+- API calls via same-origin `connect-src 'self'`
+- `blob:` allowed for TTS audio and attachment image previews
+- `frame-ancestors 'self'` / `object-src 'none'`
+
+Helmet on the API keeps CSP disabled because JSON/API responses are not
+document pages; the HTML shell gets policy from nginx.
 
 ## 7. Data Classification
 

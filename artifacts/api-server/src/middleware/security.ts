@@ -30,7 +30,7 @@ export function applySecurityMiddleware(app: Express): void {
 
   app.use(
     helmet({
-      contentSecurityPolicy: false, // static SPA served by nginx
+      contentSecurityPolicy: false, // SPA CSP is set by nginx-recall-app.conf
       crossOriginEmbedderPolicy: false,
     }),
   );
