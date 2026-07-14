@@ -185,36 +185,47 @@ export async function ensureImportJob(
     return job;
   }
 
+  // This job is actively running in-process.
   if (activeJobs.has(jobId)) {
+    return job;
+  }
+
+  // Another import may own the worker. Do not enqueue a resume on every status poll
+  // (that flooded the queue with dozens of duplicate jobs).
+  const ageMs = Date.now() - job.updatedAt;
+  if (ageMs < STALE_PROCESSING_MS) {
     return job;
   }
 
   if (job.filePath && job.fileName && (await fileExists(job.filePath))) {
     const { enqueueJob, JOB_TYPE_ENEX_IMPORT } = await import("./job-queue");
     const { nudgeJobWorker } = await import("./job-worker");
+    const resumeId = `${safeJobId(jobId)}-resume`.slice(0, 64);
     try {
       await enqueueJob({
-        id: `${jobId}-resume-${Date.now()}`.slice(0, 64),
+        id: resumeId,
         userId,
         type: JOB_TYPE_ENEX_IMPORT,
-        payload: { filePath: job.filePath, fileName: job.fileName, statusJobId: jobId },
+        payload: {
+          filePath: job.filePath,
+          fileName: job.fileName,
+          statusJobId: jobId,
+        },
         maxAttempts: 2,
       });
+      // Refresh stamp so we don't keep re-enqueuing every STALE window while queued.
+      await persistJob(userId, jobId, { ...job, updatedAt: Date.now() });
       nudgeJobWorker();
     } catch {
-      runImportWork(userId, jobId, job.filePath, job.fileName);
+      // Job id already queued/running — fine.
     }
     return job;
   }
 
-  if (Date.now() - job.updatedAt > STALE_PROCESSING_MS) {
-    await failImportJob(
-      jobId,
-      userId,
-      "Import was interrupted. Check Notebooks — your notes may already be there.",
-    );
-    return loadImportJob(jobId, userId);
-  }
-
-  return job;
+  await failImportJob(
+    jobId,
+    userId,
+    "Import was interrupted. Check Notebooks — your notes may already be there.",
+  );
+  return loadImportJob(jobId, userId);
 }

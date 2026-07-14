@@ -85,10 +85,14 @@ export async function enqueueJob(input: EnqueueJobInput): Promise<Job> {
       createdAt: now,
       updatedAt: now,
     })
+    .onConflictDoNothing({ target: jobs.id })
     .returning();
   const row = rows[0];
-  if (!row) throw new Error("Failed to enqueue job");
-  return row;
+  if (row) return row;
+  // Idempotent re-enqueue (e.g. stable ENEX resume id).
+  const existing = await getDb().select().from(jobs).where(eq(jobs.id, id)).limit(1);
+  if (existing[0]) return existing[0];
+  throw new Error("Failed to enqueue job");
 }
 
 export async function getJobForUser(userId: string, jobId: string): Promise<Job | null> {
