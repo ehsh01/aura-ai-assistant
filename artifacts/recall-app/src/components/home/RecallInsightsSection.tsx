@@ -8,6 +8,7 @@ import {
   RefreshCw,
   FolderKanban,
   ShieldCheck,
+  Receipt,
 } from "lucide-react";
 import type { InsightItem, InsightKind } from "@/lib/home-briefing";
 
@@ -31,6 +32,8 @@ function insightIcon(kind: InsightKind) {
       return <FolderKanban className="h-4 w-4 text-orange-300" />;
     case "warranty":
       return <ShieldCheck className="h-4 w-4 text-rose-300" />;
+    case "invoice-due":
+      return <Receipt className="h-4 w-4 text-amber-200" />;
   }
 }
 

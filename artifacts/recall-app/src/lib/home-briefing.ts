@@ -66,7 +66,8 @@ export type InsightKind =
   | "related"
   | "recurring-payment"
   | "project-change"
-  | "warranty";
+  | "warranty"
+  | "invoice-due";
 
 export interface InsightItem {
   id: string;

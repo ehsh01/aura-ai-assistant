@@ -14,6 +14,7 @@ import {
   findExpiringWarranties,
   listDatedWarrantiesForUser,
 } from "./warranties";
+import { findAttentionInvoices, listInvoicesForUser } from "./invoices";
 
 export type ProactiveInsightKind =
   | "no-task"
@@ -22,7 +23,8 @@ export type ProactiveInsightKind =
   | "related"
   | "recurring-payment"
   | "project-change"
-  | "warranty";
+  | "warranty"
+  | "invoice-due";
 
 export type ProactiveInsight = {
   id: string;
@@ -263,7 +265,33 @@ export async function buildProactiveInsights(
     }
   }
 
-  // 5) Fill remaining slots with classic heuristics (skip weak keyword follow-ups if we have evidence).
+  // 5) Open invoices due soon or recently overdue.
+  const invoices = await listInvoicesForUser(userId).catch(() => []);
+  const dueInvoices = findAttentionInvoices(invoices, {
+    upcomingDays: 30,
+    pastGraceDays: 60,
+  });
+  for (const inv of dueInvoices.slice(0, 2)) {
+    const when =
+      inv.daysUntil < 0
+        ? `was due ${Math.abs(inv.daysUntil)} day${Math.abs(inv.daysUntil) === 1 ? "" : "s"} ago`
+        : inv.daysUntil === 0
+          ? "is due today"
+          : `is due in ${inv.daysUntil} day${inv.daysUntil === 1 ? "" : "s"}`;
+    const bits = [
+      inv.organizationName,
+      inv.amountLabel,
+    ].filter(Boolean);
+    push({
+      id: `invoice-due-${inv.id}`,
+      kind: "invoice-due",
+      text: `Invoice “${inv.title}” ${when}${bits.length ? ` (${bits.join(", ")})` : ""}.`,
+      href: `/organizations?invoice=${encodeURIComponent(inv.id)}`,
+      evidence: `dueDate=${inv.dueDate}`,
+    });
+  }
+
+  // 6) Fill remaining slots with classic heuristics (skip weak keyword follow-ups if we have evidence).
   const hasEvidenceFollowUps = insights.some((i) => i.kind === "follow-up");
   for (const c of input.classic) {
     if (hasEvidenceFollowUps && c.kind === "follow-up") continue;

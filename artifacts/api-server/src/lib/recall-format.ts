@@ -88,6 +88,14 @@ export function newHomeId(): string {
   return `home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function newOrganizationId(): string {
+  return `org-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newInvoiceId(): string {
+  return `invoice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function newAuditId(): string {
   return `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

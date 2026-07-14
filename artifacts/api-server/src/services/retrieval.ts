@@ -6,6 +6,8 @@ import { listNotesForUser, searchNotesForUser } from "./notes";
 import { listPeopleForUser } from "./people";
 import { listVehiclesForUser } from "./vehicles";
 import { listHomesForUser } from "./homes";
+import { listOrganizationsForUser } from "./organizations";
+import { listInvoicesForUser } from "./invoices";
 import { listWarrantiesForUser } from "./warranties";
 import { listPersonNameAliases, peopleWithAliasNames } from "./user-corrections";
 import {
@@ -64,6 +66,7 @@ function typeBoost(entityType: string, pinned?: boolean): number {
   if (entityType === "knowledge") return 0.08;
   if (entityType === "person") return 0.05;
   if (entityType === "vehicle" || entityType === "warranty" || entityType === "home") return 0.12;
+  if (entityType === "organization" || entityType === "invoice") return 0.1;
   return 0;
 }
 
@@ -461,6 +464,8 @@ const CORPUS = {
   vehicles: 40,
   homes: 20,
   warranties: 40,
+  organizations: 40,
+  invoices: 40,
   /** Per connected Google mailbox — keeps ehernandez2 + REI + others searchable. */
   gmailPerMailbox: 150,
   contactsTotal: 40,
@@ -626,7 +631,7 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
 async function collectCorpus(
   userId: string,
 ): Promise<{ records: ContextRecord[]; people: PersonRef[] }> {
-  const [tasks, notes, people, knowledge, memories, documents, captures, vehiclesList, homesList, warrantiesList, sources, aliases] =
+  const [tasks, notes, people, knowledge, memories, documents, captures, vehiclesList, homesList, warrantiesList, orgsList, invoicesList, sources, aliases] =
     await Promise.all([
       listTasksForUser(userId),
       listNotesForUser(userId),
@@ -638,6 +643,8 @@ async function collectCorpus(
       listVehiclesForUser(userId),
       listHomesForUser(userId),
       listWarrantiesForUser(userId),
+      listOrganizationsForUser(userId),
+      listInvoicesForUser(userId),
       loadSourceRecordsBalanced(userId),
       listPersonNameAliases(userId),
     ]);
@@ -781,6 +788,43 @@ async function collectCorpus(
         w.provider ? `provider=${w.provider}` : null,
         w.expiresAt ? `expires=${w.expiresAt}` : null,
         w.notes ? `notes=${w.notes.slice(0, 400)}` : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    });
+  }
+  for (const o of orgsList.slice(0, CORPUS.organizations)) {
+    records.push({
+      entityType: "organization",
+      entityId: o.id,
+      title: o.displayName,
+      text: [
+        `organization ${o.displayName}`,
+        `type=${o.orgType}`,
+        o.email ? `email=${o.email}` : null,
+        o.phone ? `phone=${o.phone}` : null,
+        o.website ? `website=${o.website}` : null,
+        o.notes ? `notes=${o.notes.slice(0, 400)}` : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    });
+  }
+  for (const inv of invoicesList.slice(0, CORPUS.invoices)) {
+    records.push({
+      entityType: "invoice",
+      entityId: inv.id,
+      title: inv.title,
+      text: [
+        `invoice ${inv.title}`,
+        inv.organizationName ? `vendor=${inv.organizationName}` : null,
+        inv.amountCents != null
+          ? `amount=${inv.currency} ${(inv.amountCents / 100).toFixed(2)}`
+          : null,
+        `status=${inv.status}`,
+        inv.dueDate ? `due=${inv.dueDate}` : null,
+        inv.invoiceDate ? `invoiced=${inv.invoiceDate}` : null,
+        inv.notes ? `notes=${inv.notes.slice(0, 400)}` : null,
       ]
         .filter(Boolean)
         .join(" "),

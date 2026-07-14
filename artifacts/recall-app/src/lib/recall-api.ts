@@ -314,6 +314,111 @@ export async function deleteWarranty(warrantyId: string): Promise<void> {
   await apiFetch(`/warranties/${encodeURIComponent(warrantyId)}`, { method: "DELETE" });
 }
 
+export type OrganizationRecord = {
+  id: string;
+  displayName: string;
+  orgType: "vendor" | "contractor" | "employer" | "agency" | "other";
+  email: string | null;
+  phone: string | null;
+  website: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type InvoiceRecord = {
+  id: string;
+  title: string;
+  organizationId: string | null;
+  organizationName: string | null;
+  amountCents: number | null;
+  currency: string;
+  status: "open" | "paid" | "void" | "other";
+  invoiceDate: string | null;
+  dueDate: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function listOrganizations(): Promise<{ organizations: OrganizationRecord[] }> {
+  return apiFetch("/organizations");
+}
+
+export async function createOrganization(input: {
+  displayName: string;
+  orgType?: OrganizationRecord["orgType"];
+  email?: string | null;
+  phone?: string | null;
+  website?: string | null;
+  notes?: string | null;
+}): Promise<OrganizationRecord> {
+  return apiFetch("/organizations", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function updateOrganization(
+  organizationId: string,
+  input: Partial<{
+    displayName: string;
+    orgType: OrganizationRecord["orgType"];
+    email: string | null;
+    phone: string | null;
+    website: string | null;
+    notes: string | null;
+  }>,
+): Promise<OrganizationRecord> {
+  return apiFetch(`/organizations/${encodeURIComponent(organizationId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteOrganization(organizationId: string): Promise<void> {
+  await apiFetch(`/organizations/${encodeURIComponent(organizationId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listInvoices(): Promise<{ invoices: InvoiceRecord[] }> {
+  return apiFetch("/invoices");
+}
+
+export async function createInvoice(input: {
+  title: string;
+  organizationId?: string | null;
+  amountCents?: number | null;
+  currency?: string | null;
+  status?: InvoiceRecord["status"];
+  invoiceDate?: string | null;
+  dueDate?: string | null;
+  notes?: string | null;
+}): Promise<InvoiceRecord> {
+  return apiFetch("/invoices", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function updateInvoice(
+  invoiceId: string,
+  input: Partial<{
+    title: string;
+    organizationId: string | null;
+    amountCents: number | null;
+    currency: string | null;
+    status: InvoiceRecord["status"];
+    invoiceDate: string | null;
+    dueDate: string | null;
+    notes: string | null;
+  }>,
+): Promise<InvoiceRecord> {
+  return apiFetch(`/invoices/${encodeURIComponent(invoiceId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteInvoice(invoiceId: string): Promise<void> {
+  await apiFetch(`/invoices/${encodeURIComponent(invoiceId)}`, { method: "DELETE" });
+}
+
 export interface HomeBriefingItem {
   id: string;
   label: string;
@@ -367,7 +472,8 @@ export interface HomeBriefingResponse {
       | "related"
       | "recurring-payment"
       | "project-change"
-      | "warranty";
+      | "warranty"
+      | "invoice-due";
     text: string;
     href?: string;
     evidence?: string;

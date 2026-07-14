@@ -73,6 +73,17 @@ export function vehiclesPath(opts?: {
   return q ? `/vehicles?${q}` : "/vehicles";
 }
 
+export function organizationsPath(opts?: {
+  organizationId?: string;
+  invoiceId?: string;
+}): string {
+  const params = new URLSearchParams();
+  if (opts?.organizationId) params.set("org", opts.organizationId);
+  if (opts?.invoiceId) params.set("invoice", opts.invoiceId);
+  const q = params.toString();
+  return q ? `/organizations?${q}` : "/organizations";
+}
+
 export function askPath(opts?: { q?: string }): string {
   const params = new URLSearchParams();
   if (opts?.q?.trim()) params.set("q", opts.q.trim());
@@ -124,6 +135,10 @@ export function entityPath(entityType: string, entityId: string): string | null 
       return vehiclesPath({ homeId: entityId });
     case "warranty":
       return vehiclesPath({ warrantyId: entityId });
+    case "organization":
+      return organizationsPath({ organizationId: entityId });
+    case "invoice":
+      return organizationsPath({ invoiceId: entityId });
     case "capture":
     case "capture_item":
       return inboxPath({ captureId: entityId });
