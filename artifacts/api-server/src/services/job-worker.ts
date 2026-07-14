@@ -41,19 +41,10 @@ const handlers: Record<string, JobHandler> = {
     if (!attachmentId) {
       throw new Error("attachment_extract job missing attachmentId");
     }
-    const { extractAndStoreAttachmentText, persistAttachmentExtractedText } = await import(
-      "./attachment-text-extract"
-    );
-    try {
-      await extractAndStoreAttachmentText(attachmentId);
-    } catch (err) {
-      try {
-        await persistAttachmentExtractedText(attachmentId, "");
-      } catch {
-        // ignore
-      }
-      throw err;
-    }
+    const { extractAndStoreAttachmentText } = await import("./attachment-text-extract");
+    // Do not persist empty text on failure — that marks the attachment as
+    // "extracted" and Ask treats it as having no OCR forever (no retry).
+    await extractAndStoreAttachmentText(attachmentId);
   },
   [JOB_TYPE_ENEX_IMPORT]: async (job) => {
     const meta = enexImportFromPayload(job.payload);
