@@ -72,8 +72,9 @@ gunzip -c "$DUMP" | docker exec -i "$CONTAINER" \
   psql -v ON_ERROR_STOP=1 -U drill -d recall_drill >/tmp/recall-restore-drill.psql.log
 
 echo "==> Sanity checks"
+# -i is required so the heredoc reaches psql inside the container.
 CHECKS="$(
-  docker exec "$CONTAINER" psql -U drill -d recall_drill -v ON_ERROR_STOP=1 -At <<'SQL'
+  docker exec -i "$CONTAINER" psql -U drill -d recall_drill -v ON_ERROR_STOP=1 -At <<'SQL'
 SELECT 'users=' || count(*)::text FROM users;
 SELECT 'tables=' || count(*)::text
   FROM information_schema.tables
