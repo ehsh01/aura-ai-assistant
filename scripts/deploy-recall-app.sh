@@ -26,8 +26,9 @@ command -v pnpm >/dev/null || npm install -g pnpm@9
 pnpm install
 
 echo "==> Test gate (api-server unit tests)"
-pnpm --filter "./artifacts/api-server" run test
-
+# 2GB droplet: keep Vitest workers low so pglite/db tests don't OOM the host.
+NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=768}" \
+  pnpm --filter "./artifacts/api-server" exec vitest run --maxWorkers=1 --no-file-parallelism
 echo "==> Database migrations (idempotent)"
 ENV_FILE="artifacts/api-server/.env"
 if [ -f "$ENV_FILE" ]; then
