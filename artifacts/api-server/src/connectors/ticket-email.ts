@@ -1,4 +1,3 @@
-import { ImapFlow } from "imapflow";
 import type { EvidenceInput, NormalizedSourceRecord, RecallConnector } from "./types";
 
 export type TicketEmailRaw = {
@@ -139,6 +138,9 @@ export async function fetchTicketEmailsViaImap(
   if (!host || !user || !password) {
     throw new Error("ticket_email connector requires host, user, and password");
   }
+
+  // Lazy-load so the API boots without pulling imapflow (and its nodemailer peer) at import time.
+  const { ImapFlow } = await import("imapflow");
 
   const port = settings.port ?? 993;
   const secure = settings.secure !== false;

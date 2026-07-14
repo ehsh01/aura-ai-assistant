@@ -85,6 +85,11 @@ fi
 
 pnpm run build:prod
 
+if [ ! -f "artifacts/api-server/dist/index.mjs" ]; then
+  echo "ERROR: API build missing artifacts/api-server/dist/index.mjs" >&2
+  exit 1
+fi
+
 echo "==> API .env"
 ENV_FILE="artifacts/api-server/.env"
 if [ ! -f "$ENV_FILE" ]; then
@@ -96,8 +101,13 @@ fi
 
 echo "==> PM2"
 pm2 delete aura-api 2>/dev/null || true
-pm2 delete recall-api 2>/dev/null || true
-pm2 start artifacts/api-server/ecosystem.config.cjs
+# Prefer reload/restart when possible so a failed start does not leave the API down.
+if pm2 describe recall-api >/dev/null 2>&1; then
+  pm2 restart artifacts/api-server/ecosystem.config.cjs --update-env || \
+    pm2 start artifacts/api-server/ecosystem.config.cjs
+else
+  pm2 start artifacts/api-server/ecosystem.config.cjs
+fi
 pm2 save
 
 echo "==> Nginx"
