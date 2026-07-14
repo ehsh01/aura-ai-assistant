@@ -53,3 +53,9 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Runtime upload / attachment stores (must never be git-cleaned on the server)
+/data/
+**/data/attachments/
+**/data/enex-uploads/
+artifacts/api-server/data/
