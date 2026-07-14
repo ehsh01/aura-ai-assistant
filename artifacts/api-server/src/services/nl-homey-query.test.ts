@@ -11,6 +11,14 @@ describe("nl-homey-query", () => {
     expect(isHomeyAskIntent("What did I spend last month?")).toBe(false);
   });
 
+  it("plans inventory for how-many questions", () => {
+    const plan = planHomeyAsk("how many door sensors do i have");
+    expect(plan?.intent).toBe("inventory");
+    if (plan?.intent === "inventory") {
+      expect(plan.classHint).toBe("door");
+    }
+  });
+
   it("plans status reads", () => {
     const plan = planHomeyAsk("Is the garage door open?");
     expect(plan?.intent).toBe("status");

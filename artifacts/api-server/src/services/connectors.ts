@@ -385,6 +385,66 @@ export async function executeHomeyAskForUser(
       };
     }
 
+    if (plan.intent === "inventory") {
+      const devices = await listHomeyDevices(session.baseUrl, session.sessionToken);
+      const hint = (plan.classHint ?? plan.nameHint ?? "").toLowerCase();
+      const filtered = hint
+        ? devices.filter((d) => {
+            const hay = `${d.name} ${d.className ?? ""} ${d.zoneName ?? ""}`.toLowerCase();
+            if (hint === "door" || hint === "contact") {
+              return (
+                /\bdoor\b/.test(hay) ||
+                (d.capabilities.includes("alarm_contact") && !/\bwindow\b/.test(hay))
+              );
+            }
+            if (hint === "sensor") {
+              return (
+                /\bsensor\b/.test(hay) ||
+                (d.className ?? "").includes("sensor") ||
+                d.capabilities.some((c) => c.startsWith("alarm_") || c.startsWith("measure_"))
+              );
+            }
+            if (hint === "light") {
+              return (
+                /\b(light|lamp|bulb)\b/.test(hay) ||
+                d.className === "light" ||
+                d.capabilities.includes("onoff")
+              );
+            }
+            if (hint === "lock") {
+              return /\block\b/.test(hay) || d.capabilities.includes("locked");
+            }
+            if (hint === "garage") {
+              return /\bgarage\b/.test(hay) || d.capabilities.includes("garagedoor_closed");
+            }
+            if (hint === "window") {
+              return /\bwindow\b/.test(hay);
+            }
+            return hay.includes(hint);
+          })
+        : devices;
+      if (!filtered.length) {
+        return {
+          ok: true,
+          answer: hint
+            ? `I did not find Homey devices matching “${hint}”. Sync Homey on Connectors if this looks wrong.`
+            : "No Homey devices returned. Sync the Homey connector first.",
+        };
+      }
+      const lines = filtered
+        .slice(0, 25)
+        .map((d) => `- ${d.name}${d.zoneName ? ` (${d.zoneName})` : ""}`);
+      return {
+        ok: true,
+        answer: `You have ${filtered.length} Homey device${filtered.length === 1 ? "" : "s"}${
+          hint ? ` matching “${hint}”` : ""
+        }:\n${lines.join("\n")}${
+          filtered.length > 25 ? `\n…and ${filtered.length - 25} more` : ""
+        }`,
+        evidenceText: `homey inventory count=${filtered.length} hint=${hint || "all"}`,
+      };
+    }
+
     if (plan.intent === "flow") {
       const flows = await listHomeyFlows(session.baseUrl, session.sessionToken);
       const matched = matchHomeyName(

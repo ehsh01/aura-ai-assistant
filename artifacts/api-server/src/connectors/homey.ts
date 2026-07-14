@@ -145,6 +145,7 @@ export async function exchangeHomeyCode(code: string): Promise<{
     lastname?: string;
     homeys?: Array<{
       id?: string;
+      _id?: string;
       name?: string;
       remoteUrl?: string;
       localUrl?: string;
@@ -163,7 +164,7 @@ export async function exchangeHomeyCode(code: string): Promise<{
     expiresIn: tokens.expires_in ?? 30 * 24 * 3600,
     email,
     name,
-    homeyId: homey?.id ?? null,
+    homeyId: (homey?.id ?? homey?._id ?? null) || null,
     homeyName: homey?.name ?? null,
     remoteUrl: homey?.remoteUrl ?? null,
   };
@@ -222,24 +223,32 @@ async function getDelegationToken(accessToken: string): Promise<string> {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
     },
-    body: "{}",
   });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`Homey delegation token failed: ${res.status} ${body.slice(0, 160)}`);
   }
-  // API may return raw JWT string or JSON { token }
-  const contentType = res.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
-    const json = (await res.json()) as { token?: string };
-    if (typeof json.token === "string" && json.token) return json.token;
-    throw new Error("Homey delegation response missing token");
+  // Athom returns a JSON-encoded string JWT: `"eyJ..."`. Some clients return { token }.
+  const raw = (await res.text()).trim();
+  if (!raw) throw new Error("Homey delegation response empty");
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed === "string" && parsed.trim()) return parsed.trim();
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof (parsed as { token?: unknown }).token === "string" &&
+      (parsed as { token: string }).token.trim()
+    ) {
+      return (parsed as { token: string }).token.trim();
+    }
+  } catch {
+    // Not JSON — treat as raw JWT text
   }
-  const text = (await res.text()).trim().replace(/^"|"$/g, "");
-  if (!text) throw new Error("Homey delegation response empty");
-  return text;
+  const unquoted = raw.replace(/^"|"$/g, "").trim();
+  if (unquoted) return unquoted;
+  throw new Error("Homey delegation response missing token");
 }
 
 async function createHomeySession(
@@ -256,10 +265,37 @@ async function createHomeySession(
     const body = await res.text();
     throw new Error(`Homey session login failed: ${res.status} ${body.slice(0, 160)}`);
   }
-  const json = (await res.json()) as { token?: string } | string;
-  if (typeof json === "string" && json) return json;
-  if (typeof json === "object" && typeof json.token === "string") return json.token;
+  const raw = (await res.text()).trim();
+  if (!raw) throw new Error("Homey session response empty");
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed === "string" && parsed.trim()) return parsed.trim();
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof (parsed as { token?: unknown }).token === "string" &&
+      (parsed as { token: string }).token.trim()
+    ) {
+      return (parsed as { token: string }).token.trim();
+    }
+  } catch {
+    // fall through
+  }
+  const unquoted = raw.replace(/^"|"$/g, "").trim();
+  if (unquoted) return unquoted;
   throw new Error("Homey session response missing token");
+}
+
+type AthomHomeyEntry = {
+  id?: string;
+  _id?: string;
+  name?: string;
+  remoteUrl?: string | null;
+};
+
+function homeyEntryId(h: AthomHomeyEntry): string | null {
+  const id = (h.id ?? h._id ?? "").toString().trim();
+  return id || null;
 }
 
 async function resolveHomeyRemoteUrl(
@@ -267,22 +303,20 @@ async function resolveHomeyRemoteUrl(
   preferredHomeyId?: string | null,
 ): Promise<{ homeyId: string; homeyName: string | null; remoteUrl: string }> {
   const profile = await athomGet<{
-    homeys?: Array<{
-      id?: string;
-      name?: string;
-      remoteUrl?: string;
-    }>;
+    homeys?: AthomHomeyEntry[];
   }>(accessToken, "/user/me");
   const list = profile.homeys ?? [];
+  const withRemote = list.filter((h) => Boolean(h.remoteUrl) && Boolean(homeyEntryId(h)));
   const match =
     (preferredHomeyId
-      ? list.find((h) => h.id === preferredHomeyId)
-      : null) ?? list[0];
-  if (!match?.id || !match.remoteUrl) {
+      ? withRemote.find((h) => homeyEntryId(h) === preferredHomeyId)
+      : null) ?? withRemote[0];
+  const id = match ? homeyEntryId(match) : null;
+  if (!match || !id || !match.remoteUrl) {
     throw new Error("No Homey with remote URL found on this Athom account");
   }
   return {
-    homeyId: match.id,
+    homeyId: id,
     homeyName: match.name ?? null,
     remoteUrl: match.remoteUrl,
   };
@@ -299,14 +333,13 @@ export async function openHomeyApiSession(input: {
   homeyId: string;
   homeyName: string | null;
 }> {
-  const resolved =
-    input.remoteUrl && input.homeyId
-      ? {
-          homeyId: input.homeyId,
-          homeyName: null as string | null,
-          remoteUrl: input.remoteUrl,
-        }
-      : await resolveHomeyRemoteUrl(input.accessToken, input.homeyId);
+  const resolved = input.remoteUrl
+    ? {
+        homeyId: input.homeyId?.trim() || "homey",
+        homeyName: null as string | null,
+        remoteUrl: input.remoteUrl,
+      }
+    : await resolveHomeyRemoteUrl(input.accessToken, input.homeyId);
   const delegation = await getDelegationToken(input.accessToken);
   const sessionToken = await createHomeySession(resolved.remoteUrl, delegation);
   return {

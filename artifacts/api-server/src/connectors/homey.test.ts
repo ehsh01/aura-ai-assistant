@@ -6,6 +6,7 @@ import {
   isRiskyHomeyCapability,
   normalizeHomeyAlert,
   normalizeSeverity,
+  openHomeyApiSession,
   verifyHomeyWebhookSecret,
 } from "./homey";
 
@@ -35,6 +36,40 @@ describe("homey connector helpers", () => {
     else delete process.env.HOMEY_CLIENT_ID;
     if (prevSecret) process.env.HOMEY_CLIENT_SECRET = prevSecret;
     else delete process.env.HOMEY_CLIENT_SECRET;
+  });
+
+  it("accepts Athom delegation tokens returned as JSON strings", async () => {
+    const prevFetch = globalThis.fetch;
+    try {
+      let calls = 0;
+      globalThis.fetch = (async (input: string | URL | Request) => {
+        calls += 1;
+        const url = String(input);
+        if (url.includes("/delegation/token")) {
+          return new Response(JSON.stringify("deleg-jwt"), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.includes("/api/manager/users/login")) {
+          return new Response(JSON.stringify("session-token"), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response("unexpected", { status: 500 });
+      }) as typeof fetch;
+
+      const session = await openHomeyApiSession({
+        accessToken: "cloud-token",
+        remoteUrl: "https://example.homeypro.net",
+        homeyId: "h1",
+      });
+      expect(session.sessionToken).toBe("session-token");
+      expect(calls).toBe(2);
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
   });
 
   it("normalizes severity aliases", () => {

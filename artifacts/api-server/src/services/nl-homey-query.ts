@@ -9,6 +9,11 @@ export type HomeyAskPlan =
       capabilityHint: string | null;
     }
   | {
+      intent: "inventory";
+      classHint: string | null;
+      nameHint: string | null;
+    }
+  | {
       intent: "control";
       deviceHint: string | null;
       capabilityHint: string | null;
@@ -100,11 +105,31 @@ export function planHomeyAsk(question: string): HomeyAskPlan {
     /\b(flow|scene|away\s*mode|good\s*night|i'?m\s+home|leaving)\b/i.test(q) &&
     wantsControl;
 
+  const wantsInventory =
+    /\b(how\s+many|list|count|which|what\s+.+\s+(do\s+i\s+have|are\s+there))\b/i.test(q) ||
+    /\b(sensors?|devices?)\b/i.test(q) &&
+      /\b(have|own|connected|in\s+(my|the)\s+home)\b/i.test(q);
+
   if (wantsFlow) {
     return {
       intent: "flow",
       flowHint: extractDeviceHint(q),
       confirmed,
+    };
+  }
+
+  if (wantsInventory && !(wantsControl && !interrogative)) {
+    let classHint: string | null = null;
+    if (/\b(door|contact)\b/i.test(q)) classHint = "door";
+    else if (/\b(window)\b/i.test(q)) classHint = "window";
+    else if (/\b(lock)\b/i.test(q)) classHint = "lock";
+    else if (/\b(light|lamp|bulb)\b/i.test(q)) classHint = "light";
+    else if (/\b(sensor)\b/i.test(q)) classHint = "sensor";
+    else if (/\b(garage)\b/i.test(q)) classHint = "garage";
+    return {
+      intent: "inventory",
+      classHint,
+      nameHint: extractDeviceHint(q),
     };
   }
 
