@@ -1,8 +1,14 @@
-import { boolean, jsonb, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { boolean, customType, jsonb, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { notebooks } from "./notebooks";
 import { people } from "./people";
 import { projects } from "./projects";
 import { users } from "./users";
+
+const tsvector = customType<{ data: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});
 
 export const notes = pgTable("notes", {
   id: varchar("id", { length: 64 }).primaryKey(),
@@ -24,6 +30,9 @@ export const notes = pgTable("notes", {
   contentFormat: varchar("content_format", { length: 16 }).notNull().default("plain"),
   tags: jsonb("tags").$type<string[]>().notNull().default([]),
   pinned: boolean("pinned").notNull().default(false),
+  /** Denormalized note + attachment OCR text for FTS (maintained by DB triggers). */
+  searchDocument: text("search_document").notNull().default(""),
+  searchTsv: tsvector("search_tsv"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });

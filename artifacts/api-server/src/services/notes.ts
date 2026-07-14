@@ -186,47 +186,27 @@ function extractSearchTerms(query: string): string[] {
   ];
 }
 
-function noteTextMatchesTerm(term: string) {
-  if (term === "vin") {
-    return or(
-      ilike(notes.title, "%vin%"),
-      ilike(notes.preview, "%vin%"),
-      ilike(notes.content, "%vin%"),
-      sql`${notes.tags}::text ilike ${"%vin%"}`,
-      sql`${notes.title} ~* ${"\\m(?:WP0[A-Z0-9]{14}|[A-HJ-NPR-Z0-9]{17})\\M"}`,
-      sql`${notes.preview} ~* ${"\\m(?:WP0[A-Z0-9]{14}|[A-HJ-NPR-Z0-9]{17})\\M"}`,
-      sql`${notes.content} ~* ${"\\m(?:WP0[A-Z0-9]{14}|[A-HJ-NPR-Z0-9]{17})\\M"}`,
-      sql`exists (
-        select 1 from note_attachments na
-        where na.note_id = ${notes.id}
-          and (
-            na.file_name ilike ${"%vin%"}
-            or coalesce(na.extracted_text, '') ilike ${"%vin%"}
-            or coalesce(na.extracted_text, '') ~* ${"\\m(?:WP0[A-Z0-9]{14}|[A-HJ-NPR-Z0-9]{17})\\M"}
-            or na.file_name ~* ${"\\m(?:WP0[A-Z0-9]{14}|[A-HJ-NPR-Z0-9]{17})\\M"}
-          )
-      )`,
-    );
-  }
+/** Build a safe prefix tsquery from already-sanitized alphanumeric terms. */
+export function buildNotesTsQuery(terms: string[]): string | null {
+  const safe = terms.filter((term) => /^[a-z0-9]+$/i.test(term));
+  if (safe.length === 0) return null;
+  return safe.map((term) => `${term.toLowerCase()}:*`).join(" & ");
+}
 
-  const pattern = `%${term}%`;
+function vinHeuristicMatch() {
   return or(
-    ilike(notes.title, pattern),
-    ilike(notes.preview, pattern),
-    ilike(notes.content, pattern),
-    sql`${notes.tags}::text ilike ${pattern}`,
-    sql`exists (
-      select 1 from note_attachments na
-      where na.note_id = ${notes.id}
-        and (
-          na.file_name ilike ${pattern}
-          or coalesce(na.extracted_text, '') ilike ${pattern}
-        )
-    )`,
+    ilike(notes.title, "%vin%"),
+    ilike(notes.preview, "%vin%"),
+    ilike(notes.content, "%vin%"),
+    sql`${notes.tags}::text ilike ${"%vin%"}`,
+    sql`${notes.title} ~* ${"\\m(?:WP0[A-Z0-9]{14}|[A-HJ-NPR-Z0-9]{17})\\M"}`,
+    sql`${notes.preview} ~* ${"\\m(?:WP0[A-Z0-9]{14}|[A-HJ-NPR-Z0-9]{17})\\M"}`,
+    sql`${notes.content} ~* ${"\\m(?:WP0[A-Z0-9]{14}|[A-HJ-NPR-Z0-9]{17})\\M"}`,
+    sql`${notes.searchDocument} ~* ${"\\m(?:WP0[A-Z0-9]{14}|[A-HJ-NPR-Z0-9]{17})\\M"}`,
   );
 }
 
-/** Keyword search across the user's full note library (title, preview, tags, attachment text). */
+/** Keyword search across the user's full note library via Postgres FTS (title, body, tags, OCR). */
 export async function searchNotesForUser(
   userId: string,
   query: string,
@@ -235,14 +215,21 @@ export async function searchNotesForUser(
   const terms = extractSearchTerms(query);
   if (terms.length === 0) return [];
 
+  const tsQuery = buildNotesTsQuery(terms);
+  if (!tsQuery) return [];
+
   const db = getDb();
-  const termFilters = terms.map((term) => noteTextMatchesTerm(term));
+  const ftsMatch = sql`${notes.searchTsv} @@ to_tsquery('simple', ${tsQuery})`;
+  const whereMatch = terms.includes("vin") ? or(ftsMatch, vinHeuristicMatch()) : ftsMatch;
 
   const rows = await db
     .select()
     .from(notes)
-    .where(and(eq(notes.userId, userId), ...termFilters))
-    .orderBy(desc(notes.updatedAt))
+    .where(and(eq(notes.userId, userId), whereMatch))
+    .orderBy(
+      sql`ts_rank_cd(coalesce(${notes.searchTsv}, ''::tsvector), to_tsquery('simple', ${tsQuery})) DESC`,
+      desc(notes.updatedAt),
+    )
     .limit(limit);
 
   const noteIds = rows.map((row) => row.id);
