@@ -16,7 +16,16 @@ import {
   searchDriveFiles,
   searchGmailMessages,
 } from "../connectors/google";
+import {
+  fetchMicrosoftBundle,
+  microsoftConnector,
+  refreshMicrosoftAccessToken,
+} from "../connectors/microsoft";
 import { manualConnector } from "../connectors/manual";
+import {
+  fetchTicketEmailsViaImap,
+  ticketEmailConnector,
+} from "../connectors/ticket-email";
 import type { RecallConnector } from "../connectors/types";
 import { upsertEvidenceForSourceRecord } from "./evidence";
 import { writeAuditLog } from "./audit";
@@ -27,6 +36,8 @@ const CONNECTOR_IMPLS: Record<string, RecallConnector> = {
   csv_import: csvImportConnector,
   finance_api: financeApiConnector,
   google: googleConnector,
+  microsoft: microsoftConnector,
+  ticket_email: ticketEmailConnector,
 };
 
 export type ConnectorDto = {
@@ -165,6 +176,74 @@ async function ensureGoogleAccessToken(conn: Connector): Promise<{
 async function fetchGoogleRecordsForConnector(conn: Connector): Promise<unknown[]> {
   const { accessToken, mailbox } = await ensureGoogleAccessToken(conn);
   return fetchGoogleBundle(accessToken, mailbox);
+}
+
+async function ensureMicrosoftAccessToken(conn: Connector): Promise<{
+  accessToken: string;
+  mailbox: string | null;
+}> {
+  const settings = openConnectorSettings(
+    (conn.settings ?? {}) as Record<string, unknown>,
+  );
+  const refreshToken =
+    typeof settings.refreshToken === "string" ? settings.refreshToken : null;
+  let accessToken =
+    typeof settings.accessToken === "string" ? settings.accessToken : null;
+  const expiresAt =
+    typeof settings.accessTokenExpiresAt === "string"
+      ? Date.parse(settings.accessTokenExpiresAt)
+      : 0;
+  const mailbox =
+    typeof settings.microsoftEmail === "string"
+      ? settings.microsoftEmail.trim().toLowerCase()
+      : null;
+
+  if (!refreshToken && !accessToken) {
+    throw new Error("Microsoft connector is missing OAuth tokens — reconnect Microsoft");
+  }
+
+  const needsRefresh = !accessToken || !expiresAt || expiresAt < Date.now() + 60_000;
+  if (needsRefresh) {
+    if (!refreshToken) {
+      throw new Error(
+        "Microsoft access token expired and no refresh token is stored — reconnect Microsoft",
+      );
+    }
+    const refreshed = await refreshMicrosoftAccessToken(refreshToken);
+    accessToken = refreshed.accessToken;
+    const nextSettings = sealConnectorSettings({
+      ...settings,
+      accessToken,
+      accessTokenExpiresAt: new Date(Date.now() + refreshed.expiresIn * 1000).toISOString(),
+      refreshToken: refreshed.refreshToken ?? refreshToken,
+    });
+    await getDb()
+      .update(connectors)
+      .set({ settings: nextSettings, updatedAt: new Date() })
+      .where(eq(connectors.id, conn.id));
+  }
+
+  return { accessToken: accessToken!, mailbox };
+}
+
+async function fetchMicrosoftRecordsForConnector(conn: Connector): Promise<unknown[]> {
+  const { accessToken, mailbox } = await ensureMicrosoftAccessToken(conn);
+  return fetchMicrosoftBundle(accessToken, mailbox);
+}
+
+async function fetchTicketEmailRecordsForConnector(conn: Connector): Promise<unknown[]> {
+  const settings = openConnectorSettings(
+    (conn.settings ?? {}) as Record<string, unknown>,
+  );
+  const host = typeof settings.host === "string" ? settings.host : "";
+  const user = typeof settings.user === "string" ? settings.user : "";
+  const password = typeof settings.password === "string" ? settings.password : "";
+  const port = typeof settings.port === "number" ? settings.port : Number(settings.port) || 993;
+  const secure = settings.secure !== false;
+  const mailbox = typeof settings.mailbox === "string" ? settings.mailbox : "INBOX";
+  const limit =
+    typeof settings.limit === "number" ? settings.limit : Number(settings.limit) || 40;
+  return fetchTicketEmailsViaImap({ host, user, password, port, secure, mailbox, limit });
 }
 
 export type LiveGmailHit = {
@@ -674,6 +753,12 @@ export async function syncConnectorForUser(
     if (conn.type === "google") {
       rawRecords = await fetchGoogleRecordsForConnector(conn);
     }
+    if (conn.type === "microsoft") {
+      rawRecords = await fetchMicrosoftRecordsForConnector(conn);
+    }
+    if (conn.type === "ticket_email") {
+      rawRecords = await fetchTicketEmailRecordsForConnector(conn);
+    }
 
     const normalized = await impl.normalize(rawRecords);
     recordsFetched = normalized.length;
@@ -777,6 +862,86 @@ export async function writeGoogleConnectAudit(
     entityType: "connector",
     entityId: connectorId,
     metadata: { googleEmail: email },
+  });
+}
+
+export async function findMicrosoftConnectorByEmail(
+  userId: string,
+  email: string,
+): Promise<ConnectorDto | null> {
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(and(eq(connectors.userId, userId), eq(connectors.type, "microsoft")));
+  const needle = email.trim().toLowerCase();
+  for (const row of rows) {
+    const settings = (row.settings ?? {}) as Record<string, unknown>;
+    const stored =
+      typeof settings.microsoftEmail === "string"
+        ? settings.microsoftEmail.toLowerCase()
+        : "";
+    if (stored === needle) return toDto(row);
+  }
+  return null;
+}
+
+export async function createMicrosoftConnectorForUser(
+  userId: string,
+  input: {
+    email: string;
+    displayName?: string | null;
+    accessToken: string;
+    refreshToken: string | null;
+    expiresIn: number;
+  },
+): Promise<ConnectorDto> {
+  const existing = await findMicrosoftConnectorByEmail(userId, input.email);
+  if (existing) {
+    const err = new Error(`Microsoft account ${input.email} is already connected`) as Error & {
+      status?: number;
+    };
+    err.status = 409;
+    throw err;
+  }
+
+  const now = new Date();
+  const [row] = await getDb()
+    .insert(connectors)
+    .values({
+      id: newConnectorId(),
+      userId,
+      name: `Microsoft · ${input.email}`,
+      type: "microsoft",
+      description: "Read-only Outlook mail and Teams chat sync via Microsoft Graph.",
+      baseUrl: null,
+      authType: "oauth",
+      enabled: true,
+      syncStatus: "connected",
+      settings: sealConnectorSettings({
+        microsoftEmail: input.email,
+        microsoftName: input.displayName ?? null,
+        accessToken: input.accessToken,
+        refreshToken: input.refreshToken,
+        accessTokenExpiresAt: new Date(now.getTime() + input.expiresIn * 1000).toISOString(),
+      }),
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning();
+  return toDto(row!);
+}
+
+export async function writeMicrosoftConnectAudit(
+  userId: string,
+  connectorId: string,
+  email: string,
+): Promise<void> {
+  await writeAuditLog({
+    userId,
+    action: "microsoft_connected",
+    entityType: "connector",
+    entityId: connectorId,
+    metadata: { microsoftEmail: email },
   });
 }
 

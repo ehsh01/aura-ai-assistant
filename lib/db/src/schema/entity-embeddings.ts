@@ -3,7 +3,7 @@ import { users } from "./users";
 
 /**
  * Persistent embedding store for hybrid retrieval.
- * Vectors are jsonb number[] (no pgvector required at personal scale).
+ * `vector` jsonb remains for fallback; `embedding` is pgvector(1536) when available.
  */
 export const entityEmbeddings = pgTable(
   "entity_embeddings",
@@ -18,6 +18,8 @@ export const entityEmbeddings = pgTable(
     model: varchar("model", { length: 64 }).notNull(),
     dims: integer("dims").notNull(),
     vector: jsonb("vector").$type<number[]>().notNull(),
+    /** pgvector column (1536). Written alongside jsonb; queried when extension present. */
+    // Stored via raw SQL in embedding-cache; kept nullable in schema for drizzle.
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

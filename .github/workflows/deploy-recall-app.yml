@@ -35,6 +35,9 @@ jobs:
           host: 159.223.130.69
           username: root
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # After running scripts/setup-recall-deploy-user.sh and verifying, you can
+          # switch username to `recall` (or set an optional DEPLOY_SSH_USER secret)
+          # without removing root SSH access.
           script: |
             cd /var/www/recall-app
             # Pull first so the deploy script itself (migrations list, etc.) is current.

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Recall Capture",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Capture browser context into Recall (collector only — Recall performs AI extraction).",
   "permissions": ["activeTab", "storage", "scripting"],
   "action": {

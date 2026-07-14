@@ -6,7 +6,8 @@ export type ConnectorType =
   | "csv_import"
   | "finance_api"
   | "ticket_email"
-  | "google";
+  | "google"
+  | "microsoft";
 
 export type NormalizedSourceRecord = {
   externalId: string;

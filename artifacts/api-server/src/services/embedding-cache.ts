@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { entityEmbeddings } from "@workspace/db/schema";
 import { getDb, isDatabaseConfigured } from "../lib/db";
 import { newEmbeddingId } from "../lib/recall-format";
@@ -15,6 +15,7 @@ type CacheEntry = {
 const cache = new Map<string, CacheEntry>();
 
 const MAX_ENTRIES = 8_000;
+const PGVECTOR_DIMS = 1536;
 
 function contentHash(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 24);
@@ -49,6 +50,32 @@ export type EmbeddableItem = {
 };
 
 type Pending = { item: EmbeddableItem; hash: string; key: string };
+
+function toPgVectorLiteral(vector: number[]): string {
+  return `[${vector.map((n) => (Number.isFinite(n) ? n : 0)).join(",")}]`;
+}
+
+async function syncPgvectorColumn(
+  userId: string,
+  model: string,
+  entityType: string,
+  entityId: string,
+  vector: number[],
+): Promise<void> {
+  if (vector.length !== PGVECTOR_DIMS) return;
+  try {
+    await getDb().execute(sql`
+      UPDATE entity_embeddings
+      SET embedding = ${toPgVectorLiteral(vector)}::vector
+      WHERE user_id = ${userId}::uuid
+        AND entity_type = ${entityType}
+        AND entity_id = ${entityId}
+        AND model = ${model}
+    `);
+  } catch {
+    // Extension/column may be missing on older DBs — jsonb path still works.
+  }
+}
 
 async function loadFromDb(
   userId: string,
@@ -127,6 +154,13 @@ async function persistToDb(
             updatedAt: now,
           },
         });
+      await syncPgvectorColumn(
+        userId,
+        model,
+        row.item.entityType,
+        row.item.entityId,
+        row.vector,
+      );
     }
   } catch {
     // Persistence failure must not break Ask.
@@ -134,9 +168,48 @@ async function persistToDb(
 }
 
 /**
- * Return embeddings for items, reusing L1 (memory) then L2 (DB) when content
- * hasn't changed. Falls back to null when AI embeddings are unavailable.
+ * Rank entity ids by cosine distance via pgvector when available.
+ * Returns null if extension/column missing so callers keep JS cosine.
  */
+export async function rankEntitiesByPgvector(opts: {
+  userId: string;
+  model?: string;
+  query: number[];
+  entityTypes?: string[];
+  limit?: number;
+}): Promise<Array<{ entityType: string; entityId: string; distance: number }> | null> {
+  if (!isDatabaseConfigured() || opts.query.length !== PGVECTOR_DIMS) return null;
+  const model = opts.model ?? embeddingModel();
+  const limit = Math.min(Math.max(opts.limit ?? 40, 1), 200);
+  try {
+    const typeFilter =
+      opts.entityTypes && opts.entityTypes.length > 0
+        ? sql`AND entity_type = ANY(${opts.entityTypes})`
+        : sql``;
+    const result = await getDb().execute(sql`
+      SELECT entity_type, entity_id,
+             (embedding <=> ${toPgVectorLiteral(opts.query)}::vector) AS distance
+      FROM entity_embeddings
+      WHERE user_id = ${opts.userId}::uuid
+        AND model = ${model}
+        AND embedding IS NOT NULL
+        ${typeFilter}
+      ORDER BY embedding <=> ${toPgVectorLiteral(opts.query)}::vector
+      LIMIT ${limit}
+    `);
+    const rawRows =
+      (result as { rows?: Record<string, unknown>[] }).rows ??
+      (Array.isArray(result) ? (result as Record<string, unknown>[]) : []);
+    return rawRows.map((r) => ({
+      entityType: String(r.entity_type ?? r.entityType),
+      entityId: String(r.entity_id ?? r.entityId),
+      distance: Number(r.distance ?? 1),
+    }));
+  } catch {
+    return null;
+  }
+}
+
 export async function embedItemsCached(
   userId: string,
   items: EmbeddableItem[],
@@ -160,7 +233,6 @@ export async function embedItemsCached(
     }
   }
 
-  // L2: hydrate memory from Postgres before calling OpenAI.
   if (pending.length > 0) {
     await loadFromDb(userId, model, pending);
     const stillMissing: Pending[] = [];
@@ -194,7 +266,6 @@ export async function embedItemsCached(
       }
     }
     evictIfNeeded();
-    // Fire-and-forget persistence so Ask latency stays on the embed API path.
     void persistToDb(userId, model, toPersist);
   }
 
@@ -208,10 +279,6 @@ export async function embedQuery(text: string): Promise<number[] | null> {
   return vec ?? null;
 }
 
-/**
- * Fire-and-forget: warm L1+L2 embedding cache when an entity is written so
- * the next Ask doesn't pay the first-hit embed cost for that record.
- */
 export function warmEntityEmbedding(
   userId: string,
   item: EmbeddableItem,

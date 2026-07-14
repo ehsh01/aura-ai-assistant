@@ -9,12 +9,19 @@ import {
   isGoogleOAuthConfigured,
 } from "../connectors/google";
 import {
+  buildMicrosoftAuthUrl,
+  exchangeMicrosoftCode,
+  isMicrosoftOAuthConfigured,
+} from "../connectors/microsoft";
+import {
   createConnectorForUser,
   createGoogleConnectorForUser,
+  createMicrosoftConnectorForUser,
   getConnectorForUser,
   listConnectorsForUser,
   syncConnectorForUser,
   writeGoogleConnectAudit,
+  writeMicrosoftConnectAudit,
 } from "../services/connectors";
 import { ensureUserFinanceFresh } from "../services/finance-auto-sync";
 import {
@@ -32,6 +39,7 @@ const CreateConnectorBody = z.object({
     "finance_api",
     "ticket_email",
     "google",
+    "microsoft",
   ]),
   description: z.string().max(2000).nullish(),
   baseUrl: z.string().url().nullish(),
@@ -44,7 +52,8 @@ const SyncConnectorBody = z.object({
   records: z.array(z.record(z.unknown())).optional(),
 });
 
-const OAUTH_STATE_COOKIE = "recall_google_oauth_state";
+const OAUTH_STATE_COOKIE_GOOGLE = "recall_google_oauth_state";
+const OAUTH_STATE_COOKIE_MS = "recall_ms_oauth_state";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 function stateSecret(): string {
@@ -96,7 +105,7 @@ router.get("/connectors/google/oauth/start", requireAuth, async (req, res, next)
       return;
     }
     const state = signOAuthState(req.user!.id);
-    res.cookie(OAUTH_STATE_COOKIE, state, {
+    res.cookie(OAUTH_STATE_COOKIE_GOOGLE, state, {
       httpOnly: true,
       secure: config.sessionCookieSecure,
       sameSite: "lax",
@@ -112,7 +121,7 @@ router.get("/connectors/google/oauth/start", requireAuth, async (req, res, next)
 // Callback is a top-level browser redirect from Google; validate signed state.
 router.get("/connectors/google/oauth/callback", async (req, res) => {
   const fail = (code: string) => {
-    res.clearCookie(OAUTH_STATE_COOKIE, { path: "/" });
+    res.clearCookie(OAUTH_STATE_COOKIE_GOOGLE, { path: "/" });
     res.redirect(frontendRedirect({ google: "error", reason: code }));
   };
 
@@ -124,8 +133,8 @@ router.get("/connectors/google/oauth/callback", async (req, res) => {
     const code = typeof req.query.code === "string" ? req.query.code : "";
     const state = typeof req.query.state === "string" ? req.query.state : "";
     const cookieState =
-      typeof req.cookies?.[OAUTH_STATE_COOKIE] === "string"
-        ? req.cookies[OAUTH_STATE_COOKIE]
+      typeof req.cookies?.[OAUTH_STATE_COOKIE_GOOGLE] === "string"
+        ? req.cookies[OAUTH_STATE_COOKIE_GOOGLE]
         : "";
     if (!code || !state) {
       fail("missing_code");
@@ -142,10 +151,6 @@ router.get("/connectors/google/oauth/callback", async (req, res) => {
     }
 
     const tokens = await exchangeGoogleCode(code);
-    if (!tokens.refreshToken) {
-      // Still create if we somehow only got access token — sync will fail later without refresh.
-      // Prefer asking user to reconnect with consent.
-    }
 
     const connector = await createGoogleConnectorForUser(verified.userId, {
       email: tokens.email,
@@ -157,15 +162,91 @@ router.get("/connectors/google/oauth/callback", async (req, res) => {
 
     await writeGoogleConnectAudit(verified.userId, connector.id, tokens.email);
 
-    res.clearCookie(OAUTH_STATE_COOKIE, { path: "/" });
+    res.clearCookie(OAUTH_STATE_COOKIE_GOOGLE, { path: "/" });
     res.redirect(frontendRedirect({ google: "connected", connectorId: connector.id }));
   } catch (err) {
     const message = err instanceof Error ? err.message : "oauth_failed";
     const reason = message.includes("already connected")
       ? "already_connected"
       : "oauth_failed";
-    res.clearCookie(OAUTH_STATE_COOKIE, { path: "/" });
+    res.clearCookie(OAUTH_STATE_COOKIE_GOOGLE, { path: "/" });
     res.redirect(frontendRedirect({ google: "error", reason }));
+  }
+});
+
+router.get("/connectors/microsoft/oauth/start", requireAuth, async (req, res, next) => {
+  try {
+    if (!isMicrosoftOAuthConfigured()) {
+      res.status(503).json({
+        error: "MICROSOFT_NOT_CONFIGURED",
+        message: "Microsoft OAuth is not configured on this server",
+      });
+      return;
+    }
+    const state = signOAuthState(req.user!.id);
+    res.cookie(OAUTH_STATE_COOKIE_MS, state, {
+      httpOnly: true,
+      secure: config.sessionCookieSecure,
+      sameSite: "lax",
+      maxAge: OAUTH_STATE_TTL_MS,
+      path: "/",
+    });
+    res.redirect(buildMicrosoftAuthUrl(state));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/connectors/microsoft/oauth/callback", async (req, res) => {
+  const fail = (code: string) => {
+    res.clearCookie(OAUTH_STATE_COOKIE_MS, { path: "/" });
+    res.redirect(frontendRedirect({ microsoft: "error", reason: code }));
+  };
+
+  try {
+    if (!isMicrosoftOAuthConfigured()) {
+      fail("not_configured");
+      return;
+    }
+    const code = typeof req.query.code === "string" ? req.query.code : "";
+    const state = typeof req.query.state === "string" ? req.query.state : "";
+    const cookieState =
+      typeof req.cookies?.[OAUTH_STATE_COOKIE_MS] === "string"
+        ? req.cookies[OAUTH_STATE_COOKIE_MS]
+        : "";
+    if (!code || !state) {
+      fail("missing_code");
+      return;
+    }
+    if (!cookieState || cookieState !== state) {
+      fail("state_mismatch");
+      return;
+    }
+    const verified = verifyOAuthState(state);
+    if (!verified) {
+      fail("state_invalid");
+      return;
+    }
+
+    const tokens = await exchangeMicrosoftCode(code);
+    const connector = await createMicrosoftConnectorForUser(verified.userId, {
+      email: tokens.email,
+      displayName: tokens.name,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresIn: tokens.expiresIn,
+    });
+    await writeMicrosoftConnectAudit(verified.userId, connector.id, tokens.email);
+
+    res.clearCookie(OAUTH_STATE_COOKIE_MS, { path: "/" });
+    res.redirect(frontendRedirect({ microsoft: "connected", connectorId: connector.id }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "oauth_failed";
+    const reason = message.includes("already connected")
+      ? "already_connected"
+      : "oauth_failed";
+    res.clearCookie(OAUTH_STATE_COOKIE_MS, { path: "/" });
+    res.redirect(frontendRedirect({ microsoft: "error", reason }));
   }
 });
 
@@ -177,6 +258,7 @@ router.get("/connectors", async (req, res, next) => {
     res.json({
       connectors: items,
       googleOAuthConfigured: isGoogleOAuthConfigured(),
+      microsoftOAuthConfigured: isMicrosoftOAuthConfigured(),
     });
   } catch (err) {
     next(err);
@@ -193,7 +275,30 @@ router.post("/connectors", async (req, res, next) => {
       });
       return;
     }
-    const connector = await createConnectorForUser(req.user!.id, body);
+    if (body.type === "microsoft") {
+      res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Connect Microsoft via OAuth (Connect Microsoft button)",
+      });
+      return;
+    }
+    if (body.type === "ticket_email") {
+      const settings = body.settings ?? {};
+      const host = typeof settings.host === "string" ? settings.host.trim() : "";
+      const user = typeof settings.user === "string" ? settings.user.trim() : "";
+      const password = typeof settings.password === "string" ? settings.password : "";
+      if (!host || !user || !password) {
+        res.status(400).json({
+          error: "VALIDATION_ERROR",
+          message: "ticket_email requires settings.host, settings.user, and settings.password",
+        });
+        return;
+      }
+    }
+    const connector = await createConnectorForUser(req.user!.id, {
+      ...body,
+      authType: body.type === "ticket_email" ? body.authType ?? "imap" : body.authType,
+    });
     res.status(201).json(connector);
   } catch (err) {
     next(err);

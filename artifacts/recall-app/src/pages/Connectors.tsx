@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { AppLayout } from "@/components/AppLayout";
 import {
+  createConnector,
   getFinanceSummary,
   listConnectors,
   startGoogleOAuth,
+  startMicrosoftOAuth,
   syncConnector,
   type FinanceSummary,
 } from "@/lib/recall-api";
@@ -38,7 +40,12 @@ function formatUsd(value: number): string {
 export function Connectors() {
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
   const [googleOAuthConfigured, setGoogleOAuthConfigured] = useState(false);
+  const [microsoftOAuthConfigured, setMicrosoftOAuthConfigured] = useState(false);
   const [csvText, setCsvText] = useState("");
+  const [ticketHost, setTicketHost] = useState("");
+  const [ticketUser, setTicketUser] = useState("");
+  const [ticketPassword, setTicketPassword] = useState("");
+  const [creatingTicket, setCreatingTicket] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [summary, setSummary] = useState<{ connectorId: string; data: FinanceSummary } | null>(null);
@@ -53,6 +60,7 @@ export function Connectors() {
       const res = await listConnectors();
       setConnectors(res.connectors);
       setGoogleOAuthConfigured(Boolean(res.googleOAuthConfigured));
+      setMicrosoftOAuthConfigured(Boolean(res.microsoftOAuthConfigured));
       const tokenRes = await listExtensionTokens().catch(() => null);
       if (tokenRes) setExtensionTokens(tokenRes.items);
     } finally {
@@ -89,6 +97,65 @@ export function Connectors() {
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
     void load();
   }, []);
+
+  useEffect(() => {
+    const status = readSearchParam("microsoft");
+    if (!status) return;
+    const reason = readSearchParam("reason");
+    if (status === "connected") {
+      toast({
+        title: "Microsoft connected",
+        description: "Click Sync to pull Outlook mail and Teams chat snippets.",
+      });
+    } else if (status === "error") {
+      const detail =
+        reason === "already_connected"
+          ? "That Microsoft account is already linked."
+          : reason === "not_configured"
+            ? "Microsoft OAuth is not configured on the server yet."
+            : "Could not complete Microsoft sign-in. Try again.";
+      toast({ title: "Microsoft connect failed", description: detail, variant: "destructive" });
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete("microsoft");
+    url.searchParams.delete("reason");
+    url.searchParams.delete("connectorId");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    void load();
+  }, []);
+
+  const addTicketEmailConnector = async () => {
+    setCreatingTicket(true);
+    try {
+      await createConnector({
+        name: `Ticket email · ${ticketUser || ticketHost}`,
+        type: "ticket_email",
+        description: "IMAP inbox for ticket notification emails.",
+        settings: {
+          host: ticketHost.trim(),
+          user: ticketUser.trim(),
+          password: ticketPassword,
+          port: 993,
+          secure: true,
+          mailbox: "INBOX",
+        },
+      });
+      setTicketPassword("");
+      toast({
+        title: "Ticket email connector added",
+        description: "Click Sync to pull recent messages and parse ticket fields.",
+      });
+      await load();
+    } catch (err) {
+      toast({
+        title: "Could not add ticket email connector",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setCreatingTicket(false);
+    }
+  };
 
   const runSync = async (connector: ConnectorRow) => {
     setSyncingId(connector.id);
@@ -183,6 +250,7 @@ export function Connectors() {
   };
 
   const hasGoogle = connectors.some((c) => c.type === "google");
+  const hasMicrosoft = connectors.some((c) => c.type === "microsoft");
 
   return (
     <AppLayout>
@@ -211,6 +279,64 @@ export function Connectors() {
                 Google OAuth is not configured on the server yet (needs GOOGLE_CLIENT_ID / SECRET).
               </p>
             )}
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+            <h2 className="text-lg font-semibold">Microsoft (Outlook / Teams)</h2>
+            <p className="mt-2 text-sm text-white/55">
+              Optional Graph sync for Outlook mail and Teams chats (read-only). Browser extension
+              capture still works without this when Graph is blocked by policy.
+            </p>
+            <button
+              type="button"
+              onClick={() => startMicrosoftOAuth()}
+              disabled={!microsoftOAuthConfigured}
+              className="mt-4 rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {hasMicrosoft ? "Connect another Microsoft account" : "Connect Microsoft"}
+            </button>
+            {!microsoftOAuthConfigured && (
+              <p className="mt-3 text-xs text-amber-200/80">
+                Microsoft OAuth is not configured yet (needs MICROSOFT_CLIENT_ID / SECRET).
+              </p>
+            )}
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+            <h2 className="text-lg font-semibold">Ticket email (IMAP)</h2>
+            <p className="mt-2 text-sm text-white/55">
+              Pull ticket notification mail from an IMAP inbox and parse ticket number, priority,
+              requester, and link.
+            </p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <input
+                value={ticketHost}
+                onChange={(e) => setTicketHost(e.target.value)}
+                placeholder="imap.example.com"
+                className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm"
+              />
+              <input
+                value={ticketUser}
+                onChange={(e) => setTicketUser(e.target.value)}
+                placeholder="tickets@example.com"
+                className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm"
+              />
+              <input
+                type="password"
+                value={ticketPassword}
+                onChange={(e) => setTicketPassword(e.target.value)}
+                placeholder="IMAP password / app password"
+                className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void addTicketEmailConnector()}
+              disabled={creatingTicket || !ticketHost.trim() || !ticketUser.trim() || !ticketPassword}
+              className="mt-4 rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {creatingTicket ? "Adding…" : "Add ticket email connector"}
+            </button>
           </div>
 
           {loading && <p className="mt-8 text-white/40">Loading connectors…</p>}

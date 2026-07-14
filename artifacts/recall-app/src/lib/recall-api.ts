@@ -623,6 +623,7 @@ export async function listConnectors(): Promise<{
     enabled: boolean;
   }[];
   googleOAuthConfigured?: boolean;
+  microsoftOAuthConfigured?: boolean;
 }> {
   return apiFetch("/connectors");
 }
@@ -630,6 +631,23 @@ export async function listConnectors(): Promise<{
 /** Full-page navigation so the session cookie is sent to Google OAuth start. */
 export function startGoogleOAuth(): void {
   window.location.assign("/api/connectors/google/oauth/start");
+}
+
+/** Full-page navigation for Microsoft Graph OAuth. */
+export function startMicrosoftOAuth(): void {
+  window.location.assign("/api/connectors/microsoft/oauth/start");
+}
+
+export async function createConnector(input: {
+  name: string;
+  type: string;
+  description?: string | null;
+  settings?: Record<string, unknown>;
+}): Promise<{ id: string; name: string; type: string; syncStatus: string }> {
+  return apiFetch("/connectors", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function syncConnector(

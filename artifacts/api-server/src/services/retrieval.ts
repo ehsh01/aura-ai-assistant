@@ -26,6 +26,7 @@ import {
   cosineSimilarity,
   embedItemsCached,
   embedQuery,
+  rankEntitiesByPgvector,
 } from "./embedding-cache";
 import { FAMILY_RELATION_INTENT } from "./query-utils";
 
@@ -1046,6 +1047,26 @@ export async function retrieveRelevantRecords(
           candidates.push(r);
         }
       }
+
+      // When pgvector is available, pull ANN neighbors into the candidate set.
+      const corpusById = new Map(corpus.map((r) => [`${r.entityType}:${r.entityId}`, r]));
+      const pgHits = await rankEntitiesByPgvector({
+        userId,
+        query: queryVec,
+        limit: CORPUS.semanticCandidates,
+      });
+      if (pgHits) {
+        for (const hit of pgHits) {
+          const id = `${hit.entityType}:${hit.entityId}`;
+          const row = corpusById.get(id);
+          if (!row || shortlistIds.has(id)) continue;
+          shortlistIds.add(id);
+          candidates.push(row);
+          // Cosine distance → similarity for scoring (js cosine still refines below).
+          semanticScores.set(id, Math.max(0, 1 - hit.distance));
+        }
+      }
+
       for (const r of corpus) {
         const id = `${r.entityType}:${r.entityId}`;
         if (shortlistIds.has(id)) continue;
@@ -1069,6 +1090,9 @@ export async function retrieveRelevantRecords(
           if (!vec) continue;
           semanticScores.set(`${r.entityType}:${r.entityId}`, cosineSimilarity(queryVec, vec));
         }
+      } else if (semanticScores.size > 0) {
+        // pgvector ANN scores alone are usable when embed API is degraded.
+        usedSemantic = true;
       }
     }
   } catch {

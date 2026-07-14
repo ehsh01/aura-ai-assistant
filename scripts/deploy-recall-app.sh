@@ -60,10 +60,17 @@ for mig in \
   lib/db/migrations/0014_auth_sessions.sql \
   lib/db/migrations/0015_jobs.sql \
   lib/db/migrations/0016_notes_fts.sql \
-  lib/db/migrations/0017_life_memory_lifecycle.sql
+  lib/db/migrations/0017_life_memory_lifecycle.sql \
+  lib/db/migrations/0018_entity_embeddings_pgvector.sql
 do
   echo "--> Applying $mig"
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$mig"
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$mig" || {
+    if [[ "$mig" == *pgvector* ]]; then
+      echo "WARN: pgvector migration failed (extension may be unavailable); continuing with jsonb embeddings" >&2
+    else
+      exit 1
+    fi
+  }
 done
 
 if [ -z "${SECRETS_ENCRYPTION_KEY:-}" ]; then

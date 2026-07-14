@@ -156,22 +156,76 @@ captureBtn.addEventListener("click", async () => {
       target: { tabId: tab.id },
       func: () => {
         const hostname = location.hostname;
-        const subject =
-          document.querySelector('[aria-label="Subject"]')?.textContent?.trim() ||
-          document.querySelector("h1")?.textContent?.trim() ||
-          "";
-        const from =
-          document.querySelector('[aria-label*="From"]')?.textContent?.trim() ||
-          document.querySelector(".allowTextSelection")?.textContent?.trim() ||
-          "";
+        const href = location.href;
+        const isOutlook =
+          hostname.includes("outlook.") || href.includes("outlook.office");
+        const isTeams =
+          hostname.includes("teams.microsoft") ||
+          hostname.includes("teams.live") ||
+          href.includes("teams.microsoft");
+
+        const textOf = (sel) =>
+          Array.from(document.querySelectorAll(sel))
+            .map((el) => el.textContent?.trim() || "")
+            .find((t) => t.length > 0) || "";
+
+        let subject = "";
+        let from = "";
+        let channel = "";
+        let bodySnippet = "";
+
+        if (isOutlook) {
+          subject =
+            textOf('[aria-label="Subject"]') ||
+            textOf('[data-automation-id="ConversationReadingPaneSubject"]') ||
+            textOf("div[role='heading']") ||
+            document.querySelector("h1")?.textContent?.trim() ||
+            "";
+          from =
+            textOf('[aria-label*="From"]') ||
+            textOf('[data-testid="RecipientWell"]') ||
+            textOf(".allowTextSelection") ||
+            "";
+          bodySnippet =
+            textOf('[aria-label="Message body"]') ||
+            document.querySelector('[role="document"]')?.innerText?.slice(0, 6000) ||
+            "";
+        } else if (isTeams) {
+          channel =
+            textOf('[data-tid="chat-header-title"]') ||
+            textOf('[data-tid="channel-name"]') ||
+            document.title;
+          const selected = window.getSelection()?.toString()?.trim() || "";
+          const lastMsg =
+            Array.from(document.querySelectorAll('[data-tid="message-body"], [data-tid="chat-pane-message"]'))
+              .map((el) => el.textContent?.trim() || "")
+              .filter(Boolean)
+              .slice(-3)
+              .join("\n---\n");
+          bodySnippet = selected || lastMsg;
+          from =
+            textOf('[data-tid="message-author-name"]') ||
+            textOf('[data-tid="message-header"] span') ||
+            "";
+          subject = channel || document.title;
+        } else {
+          subject = document.querySelector("h1")?.textContent?.trim() || "";
+          from =
+            document.querySelector('[aria-label*="From"]')?.textContent?.trim() ||
+            document.querySelector(".allowTextSelection")?.textContent?.trim() ||
+            "";
+        }
+
         return {
-          url: location.href,
+          url: href,
           title: document.title,
           hostname,
           selectedText: window.getSelection()?.toString() ?? "",
-          visibleText: document.body?.innerText?.slice(0, 8000) ?? "",
+          visibleText: (bodySnippet || document.body?.innerText || "").slice(0, 8000),
           subject,
           from,
+          channel,
+          collector: isOutlook ? "outlook_web" : isTeams ? "teams_web" : "generic",
           timestamp: new Date().toISOString(),
         };
       },
@@ -189,6 +243,7 @@ captureBtn.addEventListener("click", async () => {
   const bits = [];
   if (payload.subject) bits.push(`Subject: ${payload.subject}`);
   if (payload.from) bits.push(`From: ${payload.from}`);
+  if (payload.channel) bits.push(`Channel: ${payload.channel}`);
   const rawText = payload.selectedText?.trim()
     ? payload.selectedText
     : `${payload.title}\n${bits.join("\n")}\n\n${payload.visibleText}`.trim();
@@ -199,7 +254,11 @@ captureBtn.addEventListener("click", async () => {
     sourceName: pageSource.sourceName,
     sourceUrl: payload.url,
     title: payload.title,
-    rawMetadata: { ...payload, sourceLabel: pageSource.sourceName },
+    rawMetadata: {
+      ...payload,
+      sourceLabel: pageSource.sourceName,
+      collector: payload.collector || "generic",
+    },
     capturedAt: payload.timestamp,
   };
 

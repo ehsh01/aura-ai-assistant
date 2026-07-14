@@ -230,3 +230,16 @@ Only when intentionally recovering production:
 gunzip -c /var/backups/recall/recall-YYYYmmdd-HHMMSS.sql.gz | psql "$DATABASE_URL"
 pm2 start recall-api
 ```
+
+## Least-privilege deploy user (optional)
+
+Root SSH remains the default for deploy. To add a limited `recall` user without locking yourself out:
+
+```bash
+ssh root@159.223.130.69
+cd /var/www/recall-app
+bash scripts/setup-recall-deploy-user.sh
+# Optional: SSH_PUBKEY_FILE=/path/to/deploy.pub bash scripts/setup-recall-deploy-user.sh
+```
+
+This creates `recall`, owns `/var/www/recall-app`, and grants nopasswd sudo for nginx reload / `pm2`. Keep root access until deploys as `recall` are verified; then change the GitHub Action `username` if desired.
