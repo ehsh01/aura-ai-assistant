@@ -190,6 +190,17 @@ export async function updatePerson(
   });
 }
 
+/** Merge `mergeId` into `keepId` (keepId is the surviving person). */
+export async function mergePeople(
+  keepId: string,
+  mergeId: string,
+): Promise<{ kept: PersonRecord; mergedId: string }> {
+  return apiFetch(`/people/${encodeURIComponent(keepId)}/merge`, {
+    method: "POST",
+    body: JSON.stringify({ mergeId }),
+  });
+}
+
 export type PersonRelated = {
   person: PersonRecord;
   openTasks: { id: string; title: string; time: string | null }[];

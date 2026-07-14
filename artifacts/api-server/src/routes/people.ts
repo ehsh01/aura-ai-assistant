@@ -6,6 +6,7 @@ import {
   getPersonForUser,
   getPersonRelatedForUser,
   listPeopleForUser,
+  mergePeopleForUser,
   updatePersonForUser,
 } from "../services/people";
 import {
@@ -119,6 +120,28 @@ router.patch("/people/:personId", async (req, res, next) => {
     }
     res.json(person);
   } catch (err) {
+    next(err);
+  }
+});
+
+const MergeBody = z.object({
+  mergeId: z.string().min(1).max(64),
+});
+
+router.post("/people/:personId/merge", async (req, res, next) => {
+  try {
+    const body = MergeBody.parse(req.body);
+    const result = await mergePeopleForUser(req.user!.id, req.params.personId, body.mergeId);
+    if (!result) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Person not found" });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("Cannot merge")) {
+      res.status(400).json({ error: "INVALID_MERGE", message: err.message });
+      return;
+    }
     next(err);
   }
 });

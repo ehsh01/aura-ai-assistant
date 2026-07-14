@@ -1,5 +1,6 @@
 import { and, desc, eq, gt, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import {
+  entityLinks,
   knowledgeItems,
   lifeMemories,
   notes,
@@ -300,6 +301,126 @@ export async function resolvePersonByName(
   }
 
   return createPersonForUser(userId, { displayName: trimmed });
+}
+
+/**
+ * Merge duplicate person into keeper: repoint FKs/links/tags, fold blank profile
+ * fields, record alias, delete the duplicate.
+ */
+export async function mergePeopleForUser(
+  userId: string,
+  keepId: string,
+  mergeId: string,
+): Promise<{ kept: PersonDto; mergedId: string } | null> {
+  if (keepId === mergeId) {
+    throw new Error("Cannot merge a person into themselves");
+  }
+  const kept = await getPersonForUser(userId, keepId);
+  const duplicate = await getPersonForUser(userId, mergeId);
+  if (!kept || !duplicate) return null;
+
+  const db = getDb();
+  const now = new Date();
+
+  await db
+    .update(notes)
+    .set({ primaryPersonId: keepId, updatedAt: now })
+    .where(and(eq(notes.userId, userId), eq(notes.primaryPersonId, mergeId)));
+  await db
+    .update(knowledgeItems)
+    .set({ primaryPersonId: keepId, updatedAt: now })
+    .where(
+      and(eq(knowledgeItems.userId, userId), eq(knowledgeItems.primaryPersonId, mergeId)),
+    );
+  await db
+    .update(lifeMemories)
+    .set({ primaryPersonId: keepId, updatedAt: now })
+    .where(and(eq(lifeMemories.userId, userId), eq(lifeMemories.primaryPersonId, mergeId)));
+  await db
+    .update(tasks)
+    .set({ requesterPersonId: keepId, updatedAt: now })
+    .where(and(eq(tasks.userId, userId), eq(tasks.requesterPersonId, mergeId)));
+
+  const links = await db
+    .select()
+    .from(entityLinks)
+    .where(
+      and(
+        eq(entityLinks.userId, userId),
+        or(
+          and(eq(entityLinks.fromEntityType, "person"), eq(entityLinks.fromEntityId, mergeId)),
+          and(eq(entityLinks.toEntityType, "person"), eq(entityLinks.toEntityId, mergeId)),
+        )!,
+      ),
+    );
+
+  for (const link of links) {
+    const nextFrom =
+      link.fromEntityType === "person" && link.fromEntityId === mergeId
+        ? keepId
+        : link.fromEntityId;
+    const nextTo =
+      link.toEntityType === "person" && link.toEntityId === mergeId ? keepId : link.toEntityId;
+    try {
+      await db
+        .update(entityLinks)
+        .set({
+          fromEntityId: nextFrom,
+          toEntityId: nextTo,
+          updatedAt: now,
+        })
+        .where(eq(entityLinks.id, link.id));
+    } catch {
+      await db.delete(entityLinks).where(eq(entityLinks.id, link.id));
+    }
+  }
+
+  const folded: UpdatePersonInput = {};
+  if (!kept.email && duplicate.email) folded.email = duplicate.email;
+  if (!kept.phone && duplicate.phone) folded.phone = duplicate.phone;
+  if (!kept.organization && duplicate.organization) folded.organization = duplicate.organization;
+  if (!kept.department && duplicate.department) folded.department = duplicate.department;
+  if (!kept.role && duplicate.role) folded.role = duplicate.role;
+  if (!kept.firstName && duplicate.firstName) folded.firstName = duplicate.firstName;
+  if (!kept.lastName && duplicate.lastName) folded.lastName = duplicate.lastName;
+  if ((!kept.notes || !kept.notes.trim()) && duplicate.notes?.trim()) {
+    folded.notes = duplicate.notes;
+  } else if (kept.notes && duplicate.notes?.trim() && !kept.notes.includes(duplicate.notes.trim())) {
+    folded.notes = `${kept.notes.trim()}\n\n[Merged from ${duplicate.displayName}]\n${duplicate.notes.trim()}`;
+  }
+
+  await recordUserCorrection(userId, {
+    entityType: "person",
+    entityId: keepId,
+    fieldName: "displayName",
+    oldValue: duplicate.displayName,
+    newValue: kept.displayName,
+  });
+
+  if (Object.keys(folded).length > 0) {
+    await updatePersonForUser(userId, keepId, folded);
+  }
+
+  if (duplicate.displayName.trim().toLowerCase() !== kept.displayName.trim().toLowerCase()) {
+    await rewritePersonTagsForUser(userId, duplicate.displayName, kept.displayName);
+  }
+
+  await db.delete(people).where(and(eq(people.id, mergeId), eq(people.userId, userId)));
+
+  await writeAuditLog({
+    userId,
+    action: "person_merged",
+    entityType: "person",
+    entityId: keepId,
+    metadata: {
+      mergedId: mergeId,
+      mergedName: duplicate.displayName,
+      keptName: kept.displayName,
+    },
+  });
+
+  const refreshed = await getPersonForUser(userId, keepId);
+  return refreshed ? { kept: refreshed, mergedId: mergeId } : null;
 }
 
 export async function getPersonRelatedForUser(

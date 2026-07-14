@@ -8,6 +8,7 @@ import {
   getPersonRelated,
   listPeople,
   listWaitingOn,
+  mergePeople,
   updatePerson,
   type PersonRecord,
   type WaitingOnRecord,
@@ -18,7 +19,7 @@ import {
 } from "@/lib/recall-nav";
 import { invalidatePeopleCache } from "@/components/PersonTagLink";
 import { toast } from "@/hooks/use-toast";
-import { Pencil } from "lucide-react";
+import { Merge, Pencil } from "lucide-react";
 
 type OpenTask = { id: string; title: string; time: string | null };
 type TaggedNote = { id: string; title: string; preview: string };
@@ -68,6 +69,8 @@ export function People() {
     notes: "",
   });
   const [savingEdit, setSavingEdit] = useState(false);
+  const [mergeTargetId, setMergeTargetId] = useState("");
+  const [merging, setMerging] = useState(false);
   const [relatedLoadingId, setRelatedLoadingId] = useState<string | null>(null);
   const personRefs = useRef<Record<string, HTMLElement | null>>({});
   const relatedLoaded = useRef<Record<string, true>>({});
@@ -224,6 +227,35 @@ export function People() {
       toast({ title: "Could not update contact", variant: "destructive" });
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  const mergeDuplicateInto = async (keepId: string) => {
+    if (!mergeTargetId || merging) return;
+    const dup = people.find((p) => p.id === mergeTargetId);
+    if (!dup) return;
+    if (
+      !window.confirm(
+        `Merge “${dup.displayName}” into this contact? Linked notes/tasks move over and the duplicate is removed.`,
+      )
+    ) {
+      return;
+    }
+    setMerging(true);
+    try {
+      await mergePeople(keepId, mergeTargetId);
+      setMergeTargetId("");
+      invalidatePeopleCache();
+      await load();
+      toast({ title: "Contacts merged" });
+    } catch (err) {
+      toast({
+        title: "Could not merge",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setMerging(false);
     }
   };
 
@@ -457,14 +489,43 @@ export function People() {
                         onFollowUp={(w) => void followUp(w)}
                         creatingFollowUpId={creatingId}
                         actions={
-                          <button
-                            type="button"
-                            onClick={() => (editing ? setEditing(false) : startEdit(person))}
-                            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs text-white/60 hover:bg-white/5 hover:text-white/80"
-                          >
-                            <Pencil size={12} />
-                            {editing ? "Cancel" : "Edit"}
-                          </button>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => (editing ? setEditing(false) : startEdit(person))}
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs text-white/60 hover:bg-white/5 hover:text-white/80"
+                            >
+                              <Pencil size={12} />
+                              {editing ? "Cancel" : "Edit"}
+                            </button>
+                            {people.length > 1 && (
+                              <div className="inline-flex items-center gap-1.5">
+                                <select
+                                  value={mergeTargetId}
+                                  onChange={(e) => setMergeTargetId(e.target.value)}
+                                  className="max-w-[140px] rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-xs text-white/70"
+                                >
+                                  <option value="">Merge duplicate…</option>
+                                  {people
+                                    .filter((p) => p.id !== person.id)
+                                    .map((p) => (
+                                      <option key={p.id} value={p.id}>
+                                        {p.displayName}
+                                      </option>
+                                    ))}
+                                </select>
+                                <button
+                                  type="button"
+                                  disabled={!mergeTargetId || merging}
+                                  onClick={() => void mergeDuplicateInto(person.id)}
+                                  className="inline-flex items-center gap-1 rounded-xl border border-amber-500/30 px-2.5 py-1.5 text-xs text-amber-100/80 hover:bg-amber-500/10 disabled:opacity-40"
+                                >
+                                  <Merge size={12} />
+                                  {merging ? "…" : "Merge"}
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         }
                       />
                     </div>
