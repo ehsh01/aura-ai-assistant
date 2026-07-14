@@ -204,22 +204,42 @@ export async function extractAndStoreAttachmentText(attachmentId: string): Promi
   return text;
 }
 
-/** Queue extraction without blocking import/upload responses. */
-export function queueAttachmentTextExtraction(attachmentIds: string[]): void {
+/** Queue extraction without blocking import/upload responses (durable Postgres jobs). */
+export function queueAttachmentTextExtraction(
+  attachmentIds: string[],
+  userIdHint?: string,
+): void {
   if (attachmentIds.length === 0) return;
   void (async () => {
-    for (const id of attachmentIds) {
+    const { enqueueJob, JOB_TYPE_ATTACHMENT_EXTRACT } = await import("./job-queue");
+    const { nudgeJobWorker } = await import("./job-worker");
+    const { newExtractionJobId } = await import("../lib/recall-format");
+
+    for (const attachmentId of attachmentIds) {
       try {
-        await extractAndStoreAttachmentText(id);
-      } catch (err) {
-        logger.warn({ err, attachmentId: id }, "Queued attachment extraction failed");
-        try {
-          await persistAttachmentExtractedText(id, "");
-        } catch {
-          // ignore
+        let userId = userIdHint;
+        if (!userId) {
+          const rows = await getDb()
+            .select({ userId: noteAttachments.userId })
+            .from(noteAttachments)
+            .where(eq(noteAttachments.id, attachmentId))
+            .limit(1);
+          userId = rows[0]?.userId;
         }
+        if (!userId) continue;
+
+        await enqueueJob({
+          id: newExtractionJobId(),
+          userId,
+          type: JOB_TYPE_ATTACHMENT_EXTRACT,
+          payload: { attachmentId },
+          maxAttempts: 3,
+        });
+      } catch (err) {
+        logger.warn({ err, attachmentId }, "Failed to enqueue attachment extraction");
       }
     }
+    nudgeJobWorker();
   })();
 }
 
@@ -257,6 +277,7 @@ export async function attachmentSearchTextForNotes(
   return out;
 }
 
+/** Enqueue pending OCR jobs (does not run extraction inline). */
 export async function processPendingAttachmentExtractions(
   limit = BACKFILL_BATCH,
 ): Promise<number> {
@@ -264,29 +285,26 @@ export async function processPendingAttachmentExtractions(
   backfillRunning = true;
   try {
     const rows = await getDb()
-      .select({ id: noteAttachments.id })
+      .select({ id: noteAttachments.id, userId: noteAttachments.userId })
       .from(noteAttachments)
       .where(isNull(noteAttachments.extractedAt))
       .limit(limit);
 
-    let done = 0;
+    if (rows.length === 0) return 0;
+
+    const byUser = new Map<string, string[]>();
     for (const row of rows) {
-      try {
-        await extractAndStoreAttachmentText(row.id);
-        done += 1;
-      } catch (err) {
-        logger.warn({ err, attachmentId: row.id }, "Backfill attachment extraction failed");
-        try {
-          await persistAttachmentExtractedText(row.id, "");
-        } catch {
-          // ignore
-        }
-      }
+      const list = byUser.get(row.userId) ?? [];
+      list.push(row.id);
+      byUser.set(row.userId, list);
     }
-    if (done > 0) {
-      logger.info({ processed: done, remainingBatch: rows.length }, "Attachment text backfill tick");
+    for (const [userId, ids] of byUser) {
+      queueAttachmentTextExtraction(ids, userId);
     }
-    return done;
+    if (rows.length > 0) {
+      logger.info({ enqueued: rows.length }, "Attachment text backfill enqueued");
+    }
+    return rows.length;
   } catch (err) {
     logger.warn({ err }, "Attachment text backfill tick failed");
     return 0;

@@ -2,10 +2,14 @@ import { hostname } from "node:os";
 import { logger } from "../lib/logger";
 import { updateCaptureStatusForUser } from "./captures";
 import {
+  JOB_TYPE_ATTACHMENT_EXTRACT,
   JOB_TYPE_CAPTURE_EXTRACTION,
+  JOB_TYPE_ENEX_IMPORT,
+  attachmentIdFromPayload,
   captureIdFromPayload,
   claimNextJob,
   completeJob,
+  enexImportFromPayload,
   failJob,
   recoverStaleProcessingJobs,
   type Job,
@@ -29,9 +33,39 @@ const handlers: Record<string, JobHandler> = {
     if (!captureId) {
       throw new Error("capture_extraction job missing captureId");
     }
-    // Dynamic import avoids a cycle with capture-pipeline (which nudges this worker).
     const { processCaptureExtraction } = await import("./capture-pipeline");
     await processCaptureExtraction(job.userId, captureId);
+  },
+  [JOB_TYPE_ATTACHMENT_EXTRACT]: async (job) => {
+    const attachmentId = attachmentIdFromPayload(job.payload);
+    if (!attachmentId) {
+      throw new Error("attachment_extract job missing attachmentId");
+    }
+    const { extractAndStoreAttachmentText, persistAttachmentExtractedText } = await import(
+      "./attachment-text-extract"
+    );
+    try {
+      await extractAndStoreAttachmentText(attachmentId);
+    } catch (err) {
+      try {
+        await persistAttachmentExtractedText(attachmentId, "");
+      } catch {
+        // ignore
+      }
+      throw err;
+    }
+  },
+  [JOB_TYPE_ENEX_IMPORT]: async (job) => {
+    const meta = enexImportFromPayload(job.payload);
+    if (!meta) {
+      throw new Error("enex_import job missing filePath/fileName");
+    }
+    const statusJobId =
+      typeof job.payload.statusJobId === "string" && job.payload.statusJobId
+        ? job.payload.statusJobId
+        : job.id;
+    const { processEnexImportJob } = await import("./enex-import-jobs");
+    await processEnexImportJob(job.userId, statusJobId, meta.filePath, meta.fileName);
   },
 };
 
@@ -76,7 +110,6 @@ async function pollOnce(): Promise<void> {
       }
     }
 
-    // Drain a few jobs per tick so backlog clears without monopolizing the event loop.
     for (let i = 0; i < 3; i += 1) {
       const job = await claimNextJob(workerId);
       if (!job) break;

@@ -132,6 +132,28 @@ function runImportWork(
   })();
 }
 
+/** Run ENEX import work (used by the durable job worker). */
+export async function processEnexImportJob(
+  userId: string,
+  jobId: string,
+  filePath: string,
+  fileName: string,
+): Promise<void> {
+  if (activeJobs.has(jobId)) return;
+  activeJobs.add(jobId);
+  try {
+    const result = await importEnexFileForUser(userId, filePath, fileName);
+    await completeImportJob(jobId, userId, result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Import failed";
+    await failImportJob(jobId, userId, message);
+    throw err;
+  } finally {
+    activeJobs.delete(jobId);
+    await cleanupUploadFile(filePath);
+  }
+}
+
 export async function startImportJob(
   userId: string,
   jobId: string,
@@ -139,10 +161,19 @@ export async function startImportJob(
   fileName: string,
 ): Promise<void> {
   await createImportJob(userId, jobId, { filePath, fileName });
-  runImportWork(userId, jobId, filePath, fileName);
+  const { enqueueJob, JOB_TYPE_ENEX_IMPORT } = await import("./job-queue");
+  const { nudgeJobWorker } = await import("./job-worker");
+  await enqueueJob({
+    id: jobId,
+    userId,
+    type: JOB_TYPE_ENEX_IMPORT,
+    payload: { filePath, fileName },
+    maxAttempts: 2,
+  });
+  nudgeJobWorker();
 }
 
-/** Load job status; resume processing imports after a server restart when possible. */
+/** Load job status; re-enqueue interrupted imports after a server restart when possible. */
 export async function ensureImportJob(
   jobId: string,
   userId: string,
@@ -159,7 +190,20 @@ export async function ensureImportJob(
   }
 
   if (job.filePath && job.fileName && (await fileExists(job.filePath))) {
-    runImportWork(userId, jobId, job.filePath, job.fileName);
+    const { enqueueJob, JOB_TYPE_ENEX_IMPORT } = await import("./job-queue");
+    const { nudgeJobWorker } = await import("./job-worker");
+    try {
+      await enqueueJob({
+        id: `${jobId}-resume-${Date.now()}`.slice(0, 64),
+        userId,
+        type: JOB_TYPE_ENEX_IMPORT,
+        payload: { filePath: job.filePath, fileName: job.fileName, statusJobId: jobId },
+        maxAttempts: 2,
+      });
+      nudgeJobWorker();
+    } catch {
+      runImportWork(userId, jobId, job.filePath, job.fileName);
+    }
     return job;
   }
 

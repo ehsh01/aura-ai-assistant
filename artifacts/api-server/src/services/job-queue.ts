@@ -6,6 +6,8 @@ import { newExtractionJobId } from "../lib/recall-format";
 export type { Job };
 
 export const JOB_TYPE_CAPTURE_EXTRACTION = "capture_extraction" as const;
+export const JOB_TYPE_ATTACHMENT_EXTRACT = "attachment_extract" as const;
+export const JOB_TYPE_ENEX_IMPORT = "enex_import" as const;
 
 export type JobStatus = "queued" | "processing" | "complete" | "failed";
 
@@ -211,4 +213,43 @@ export async function recoverStaleProcessingJobs(
 export function captureIdFromPayload(payload: Record<string, unknown>): string | null {
   const value = payload.captureId;
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+export function attachmentIdFromPayload(payload: Record<string, unknown>): string | null {
+  const value = payload.attachmentId;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+export function enexImportFromPayload(
+  payload: Record<string, unknown>,
+): { filePath: string; fileName: string } | null {
+  const filePath = payload.filePath;
+  const fileName = payload.fileName;
+  if (typeof filePath !== "string" || !filePath) return null;
+  if (typeof fileName !== "string" || !fileName) return null;
+  return { filePath, fileName };
+}
+
+/** Lightweight queue counts for health / ops. */
+export async function getJobQueueStats(): Promise<{
+  queued: number;
+  processing: number;
+  failed: number;
+}> {
+  const rows = await getDb()
+    .select({
+      status: jobs.status,
+      count: sql<number>`cast(count(*) as int)`,
+    })
+    .from(jobs)
+    .where(sql`${jobs.status} in ('queued', 'processing', 'failed')`)
+    .groupBy(jobs.status);
+
+  const out = { queued: 0, processing: 0, failed: 0 };
+  for (const row of rows) {
+    if (row.status === "queued") out.queued = Number(row.count) || 0;
+    if (row.status === "processing") out.processing = Number(row.count) || 0;
+    if (row.status === "failed") out.failed = Number(row.count) || 0;
+  }
+  return out;
 }
