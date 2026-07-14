@@ -26,9 +26,13 @@ command -v pnpm >/dev/null || npm install -g pnpm@9
 pnpm install
 
 echo "==> Test gate (api-server unit tests)"
-# 2GB droplet: keep Vitest workers low so pglite/db tests don't OOM the host.
+# 2GB droplet: pglite *.db.test.ts OOMs tinypool workers. Fast unit tests still gate
+# the deploy; full suite (incl. db) runs in CI / locally.
 NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=768}" \
-  pnpm --filter "./artifacts/api-server" exec vitest run --maxWorkers=1 --no-file-parallelism
+  pnpm --filter "./artifacts/api-server" exec vitest run \
+    --maxWorkers=1 \
+    --no-file-parallelism \
+    --exclude '**/*.db.test.ts'
 echo "==> Database migrations (idempotent)"
 ENV_FILE="artifacts/api-server/.env"
 if [ -f "$ENV_FILE" ]; then
