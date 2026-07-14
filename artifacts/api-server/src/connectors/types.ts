@@ -7,7 +7,8 @@ export type ConnectorType =
   | "finance_api"
   | "ticket_email"
   | "google"
-  | "microsoft";
+  | "microsoft"
+  | "homey";
 
 export type NormalizedSourceRecord = {
   externalId: string;

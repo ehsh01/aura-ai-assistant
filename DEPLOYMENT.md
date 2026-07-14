@@ -194,6 +194,28 @@ SECRETS_ENCRYPTION_KEY=...   # required so refresh tokens are encrypted at rest
 
 5. Restart the API (`systemctl restart recall-api` or your usual process). Users then click **Connect Google** on `/connectors`.
 
+## Homey Pro connector (OAuth + Flow webhooks)
+
+Homey decides *when* something is important (Flows). Recall surfaces those alerts on Today and can read/control devices via Ask.
+
+1. Create a **Web API Client** in [Athom Developer Tools](https://api.developer.homey.app/) with scopes for devices (read/control) and flows. Request a rate-limit increase if Athom’s default caps block you.
+2. Set the OAuth redirect URI exactly to:
+   - Production: `https://recall-app.net/api/connectors/homey/oauth/callback`
+3. On the droplet `.env` for `recall-api`:
+
+```bash
+HOMEY_CLIENT_ID=...
+HOMEY_CLIENT_SECRET=...
+HOMEY_OAUTH_REDIRECT_URI=https://recall-app.net/api/connectors/homey/oauth/callback
+APP_PUBLIC_URL=https://recall-app.net
+SECRETS_ENCRYPTION_KEY=...   # required so tokens + webhook secret are encrypted at rest
+# Optional — quiet hours for Homey info alerts (defaults America/New_York)
+# RECALL_TIMEZONE=America/New_York
+```
+
+4. Restart `recall-api`. On `/connectors`, click **Connect Homey**, then **Sync** and **Show webhook**.
+5. In Homey Flows, add an HTTP POST (Logic / HTTP request cards) to the webhook URL with `Authorization: Bearer <secret>` and JSON body — see `docs/Homey_Flow_Cookbook.md`.
+
 ## Database backups
 
 `scripts/backup-recall-db.sh` writes a compressed, timestamped `pg_dump` to `/var/backups/recall/` and keeps the newest 14. It prefers `docker run postgres:18 pg_dump` so the client major matches DigitalOcean managed Postgres 18 (host `postgresql-client-17` is too old).

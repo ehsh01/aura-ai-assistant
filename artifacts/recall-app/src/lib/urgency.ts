@@ -74,7 +74,7 @@ export function personalProjects(projects: RecallProject[], limit = 5): RecallPr
     .slice(0, limit);
 }
 
-export type PressingKind = "task" | "capture" | "note";
+export type PressingKind = "task" | "capture" | "note" | "homey";
 
 export interface PressingItem {
   key: string;
@@ -84,6 +84,13 @@ export interface PressingItem {
   reason: string;
   score: number;
 }
+
+export type HomeyUrgencyAlert = {
+  id: string;
+  title: string;
+  severity: "info" | "warn" | "emergency";
+  deviceName?: string | null;
+};
 
 const WAITING_RE = /\b(waiting|follow up|follow-up|call|email|reply|response|ticket)\b/i;
 const FORGET_RE = /\b(permit|inspection|renew|renewal|appointment|deadline|expire|expires|due)\b/i;
@@ -95,14 +102,28 @@ function taskReason(task: RecallTask): string {
   return "Task";
 }
 
-/** One ranked list merging urgent tasks, pending captures, and time-sensitive notes. */
+/** One ranked list merging urgent tasks, pending captures, time-sensitive notes, and Homey alerts. */
 export function pressingFeed(
   tasks: RecallTask[],
   notes: RecallNote[],
   captures: RecallCaptureItem[],
   limit = 6,
+  homeyAlerts: HomeyUrgencyAlert[] = [],
 ): PressingItem[] {
   const items: PressingItem[] = [];
+
+  for (const alert of homeyAlerts) {
+    const score =
+      alert.severity === "emergency" ? 120 : alert.severity === "warn" ? 70 : 25;
+    items.push({
+      key: `homey-${alert.id}`,
+      id: alert.id,
+      title: alert.deviceName ? `${alert.title} (${alert.deviceName})` : alert.title,
+      kind: "homey",
+      reason: alert.severity === "emergency" ? "Emergency" : "Homey",
+      score,
+    });
+  }
 
   for (const task of tasks) {
     const score = scoreTaskUrgency(task);

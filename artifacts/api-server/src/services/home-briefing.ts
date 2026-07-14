@@ -20,6 +20,7 @@ import { loadSyncedFinanceAggregate } from "./finance-sync";
 import { ensureUserFinanceFresh } from "./finance-auto-sync";
 import { listWaitingOnForUser } from "./waiting-on";
 import { buildProactiveInsights } from "./proactive-insights";
+import { listOpenHomeyAlertsForUser } from "./homey-alerts";
 import { todayIso } from "./query-utils";
 import { aiService } from "./ai";
 
@@ -525,17 +526,32 @@ export async function buildHomeBriefing(
 ): Promise<HomeBriefingResponse> {
   const today = todayIso();
 
-  const [tasks, notes, captures, projects, finance] = await Promise.all([
+  const [tasks, notes, captures, projects, finance, homeyAlerts] = await Promise.all([
     listTasksForUser(userId),
     listNoteMetadataForUser(userId),
     listCaptureInboxForUser(userId),
     listProjectsForUser(userId),
     buildFinanceSnapshot(userId, today),
+    listOpenHomeyAlertsForUser(userId, { limit: 6, hours: 48 }),
   ]);
 
-  const critical: BriefingItem[] = rankedTasks(tasks, today)
+  const criticalFromTasks: BriefingItem[] = rankedTasks(tasks, today)
     .slice(0, 3)
     .map((t) => ({ id: t.id, label: t.title, href: tasksPath(t.id) }));
+
+  const criticalFromHomey: BriefingItem[] = homeyAlerts
+    .filter((a) => a.severity === "emergency" || a.severity === "warn")
+    .slice(0, 4)
+    .map((a) => ({
+      id: a.id,
+      label:
+        a.severity === "emergency"
+          ? `Homey emergency: ${a.title}`
+          : `Homey: ${a.title}`,
+      href: "/connectors",
+    }));
+
+  const critical: BriefingItem[] = [...criticalFromHomey, ...criticalFromTasks].slice(0, 5);
 
   const waitingBrief: BriefingItem[] = notes
     .filter(
@@ -554,10 +570,16 @@ export async function buildHomeBriefing(
     .map(({ item }) => ({ id: item.id, label: item.cleanedTitle, href: inboxPath }));
 
   const focus = buildFocusNow(tasks, projects, today);
-  const attentionCount = critical.length + waitingBrief.length + reminders.length;
+  const attentionCount =
+    critical.length + waitingBrief.length + reminders.length + homeyAlerts.length;
 
   const parts: string[] = [];
-  if (critical.length) parts.push(`${critical.length} urgent`);
+  if (homeyAlerts.some((a) => a.severity === "emergency")) {
+    parts.push("Homey emergency");
+  } else if (homeyAlerts.length) {
+    parts.push(`${homeyAlerts.length} home alert${homeyAlerts.length === 1 ? "" : "s"}`);
+  }
+  if (criticalFromTasks.length) parts.push(`${criticalFromTasks.length} urgent`);
   if (waitingBrief.length) parts.push(`${waitingBrief.length} waiting on others`);
   if (reminders.length) parts.push(`${reminders.length} to review`);
 

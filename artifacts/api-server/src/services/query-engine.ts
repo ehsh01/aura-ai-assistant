@@ -23,6 +23,7 @@ import {
 } from "./connectors";
 import { isEmailSearchIntent, planGmailSearch } from "./nl-gmail-query";
 import { isDriveSearchIntent, planDriveSearch } from "./nl-drive-query";
+import { isHomeyAskIntent, planHomeyAsk } from "./nl-homey-query";
 import { extractMailboxHint, retrieveRelevantRecords } from "./retrieval";
 import { listWaitingOnForUser } from "./waiting-on";
 import { writeAuditLog } from "./audit";
@@ -36,6 +37,8 @@ import {
   type ConversationTurn,
 } from "./ask-threads";
 import { buildAskAnswerMetadata } from "./ask-answer-metadata";
+import { executeHomeyAskForUser } from "./connectors";
+import { listOpenHomeyAlertsForUser } from "./homey-alerts";
 
 function buildFinanceBreakdownAnswer(
   finance: QueryFinanceAggregate,
@@ -585,6 +588,83 @@ export async function queryRecallForUser(
       : waitingItems.length > 0
         ? "Open People → Waiting on"
         : null;
+
+  const wantsHomeyAlerts =
+    /\b(homey|smart\s*home|home)\b/i.test(question) &&
+    /\b(alert|alerts|emergency|emergencies|leak|smoke|door\s+open|alarm)\b/i.test(
+      question,
+    );
+  if (wantsHomeyAlerts) {
+    const openAlerts = await listOpenHomeyAlertsForUser(userId, { limit: 6, hours: 48 });
+    if (openAlerts.length === 0) {
+      return finish({
+        answer:
+          "There are no open Homey alerts in Recall right now. Homey Flows can POST important events to the Connectors webhook.",
+        confidence: 0.85,
+        caveats: null,
+        evidence: [],
+        relatedRecords: [],
+        suggestedNextAction: "Open Connectors → Homey",
+        promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+        degraded: false,
+      });
+    }
+    const lines = openAlerts.map((a) => {
+      const when = a.createdAt ? ` (${a.createdAt})` : "";
+      const device = a.deviceName ? ` · ${a.deviceName}` : "";
+      return `- [${a.severity}] ${a.title}${device}${when}`;
+    });
+    return finish({
+      answer: `Open Homey alerts:\n${lines.join("\n")}`,
+      confidence: 0.9,
+      caveats: null,
+      evidence: openAlerts.slice(0, 3).map((a) =>
+        makeEvidence({
+          claimType: "summary_based_on",
+          evidenceText: `${a.severity}: ${a.title}`,
+          metadata: { retrievalMethod: "homey_alert", alertId: a.id },
+        }),
+      ),
+      relatedRecords: [],
+      suggestedNextAction: "Acknowledge on Connectors or Ask to control a device",
+      promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+      degraded: false,
+    });
+  }
+
+  const homeyPlan = planHomeyAsk(question);
+  if (homeyPlan && isHomeyAskIntent(question)) {
+    const result = await executeHomeyAskForUser(userId, homeyPlan);
+    const homeyEvidence: EvidenceDto[] = [];
+    if (result.evidenceText) {
+      homeyEvidence.push(
+        makeEvidence({
+          claimType: "summary_based_on",
+          evidenceText: result.evidenceText,
+          metadata: {
+            retrievalMethod: "live_homey",
+            needsConfirmation: result.needsConfirmation ?? false,
+          },
+        }),
+      );
+    }
+    return finish({
+      answer: result.answer,
+      confidence: result.ok ? (result.needsConfirmation ? 0.7 : 0.9) : 0.4,
+      caveats: result.needsConfirmation
+        ? "Confirm before Homey applies this change."
+        : result.ok
+          ? null
+          : "Connect or sync Homey in Connectors if this looks wrong.",
+      evidence: homeyEvidence,
+      relatedRecords: [],
+      suggestedNextAction: result.needsConfirmation
+        ? "Reply “confirm” to apply"
+        : "Ask about another device",
+      promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+      degraded: false,
+    });
+  }
 
   if (NOTE_CAPABILITY_INTENT.test(question)) {
     return finish({

@@ -294,3 +294,12 @@ Avoid:
 - importing external records without external IDs
 - creating tasks from connector data without evidence
 - hiding connector sync errors
+
+## 13. Homey Pro (OAuth + Flow webhooks)
+
+Athom Web API OAuth for live device status/control (Ask) plus Flow → webhook alerts for important events.
+
+- OAuth + device/flow sync into `source_records` (`homey_device`, `homey_flow`)
+- Authenticated webhook `POST /api/webhooks/homey/:connectorId` → `homey_alert`
+- Today / Urgency ranks emergencies first; quiet hours filter `info`
+- Sample Flows: [`Homey_Flow_Cookbook.md`](./Homey_Flow_Cookbook.md)

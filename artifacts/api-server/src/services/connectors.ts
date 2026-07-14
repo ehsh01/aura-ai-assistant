@@ -17,6 +17,18 @@ import {
   searchGmailMessages,
 } from "../connectors/google";
 import {
+  fetchHomeyBundle,
+  generateHomeyWebhookSecret,
+  homeyConnector,
+  listHomeyDevices,
+  listHomeyFlows,
+  openHomeyApiSession,
+  refreshHomeyAccessToken,
+  setHomeyCapabilityValue,
+  triggerHomeyFlow,
+  isRiskyHomeyCapability,
+} from "../connectors/homey";
+import {
   fetchMicrosoftBundle,
   microsoftConnector,
   refreshMicrosoftAccessToken,
@@ -30,6 +42,7 @@ import type { RecallConnector } from "../connectors/types";
 import { upsertEvidenceForSourceRecord } from "./evidence";
 import { writeAuditLog } from "./audit";
 import { openConnectorSettings, sealConnectorSettings } from "../lib/secret-box";
+import { matchHomeyName, type HomeyAskPlan } from "./nl-homey-query";
 
 const CONNECTOR_IMPLS: Record<string, RecallConnector> = {
   manual: manualConnector,
@@ -38,6 +51,7 @@ const CONNECTOR_IMPLS: Record<string, RecallConnector> = {
   google: googleConnector,
   microsoft: microsoftConnector,
   ticket_email: ticketEmailConnector,
+  homey: homeyConnector,
 };
 
 export type ConnectorDto = {
@@ -229,6 +243,231 @@ async function ensureMicrosoftAccessToken(conn: Connector): Promise<{
 async function fetchMicrosoftRecordsForConnector(conn: Connector): Promise<unknown[]> {
   const { accessToken, mailbox } = await ensureMicrosoftAccessToken(conn);
   return fetchMicrosoftBundle(accessToken, mailbox);
+}
+
+async function ensureHomeyAccessToken(conn: Connector): Promise<{
+  accessToken: string;
+  homeyId: string | null;
+  remoteUrl: string | null;
+  email: string | null;
+}> {
+  const settings = openConnectorSettings(
+    (conn.settings ?? {}) as Record<string, unknown>,
+  );
+  const refreshToken =
+    typeof settings.refreshToken === "string" ? settings.refreshToken : null;
+  let accessToken =
+    typeof settings.accessToken === "string" ? settings.accessToken : null;
+  const expiresAt =
+    typeof settings.accessTokenExpiresAt === "string"
+      ? Date.parse(settings.accessTokenExpiresAt)
+      : 0;
+  const homeyId =
+    typeof settings.homeyId === "string" ? settings.homeyId : null;
+  const remoteUrl =
+    typeof settings.remoteUrl === "string" ? settings.remoteUrl : null;
+  const email =
+    typeof settings.homeyEmail === "string"
+      ? settings.homeyEmail.trim().toLowerCase()
+      : null;
+
+  if (!refreshToken && !accessToken) {
+    throw new Error("Homey connector is missing OAuth tokens — reconnect Homey");
+  }
+
+  const needsRefresh = !accessToken || !expiresAt || expiresAt < Date.now() + 60_000;
+  if (needsRefresh && refreshToken) {
+    const refreshed = await refreshHomeyAccessToken(refreshToken);
+    accessToken = refreshed.accessToken;
+    const nextSettings = sealConnectorSettings({
+      ...settings,
+      accessToken,
+      accessTokenExpiresAt: new Date(Date.now() + refreshed.expiresIn * 1000).toISOString(),
+      refreshToken: refreshed.refreshToken ?? refreshToken,
+    });
+    await getDb()
+      .update(connectors)
+      .set({ settings: nextSettings, updatedAt: new Date() })
+      .where(eq(connectors.id, conn.id));
+  }
+
+  return { accessToken: accessToken!, homeyId, remoteUrl, email };
+}
+
+async function fetchHomeyRecordsForConnector(conn: Connector): Promise<unknown[]> {
+  const { accessToken, homeyId, remoteUrl } = await ensureHomeyAccessToken(conn);
+  return fetchHomeyBundle(accessToken, { homeyId, remoteUrl });
+}
+
+async function openHomeySessionForConnector(conn: Connector) {
+  const { accessToken, homeyId, remoteUrl } = await ensureHomeyAccessToken(conn);
+  return openHomeyApiSession({ accessToken, homeyId, remoteUrl });
+}
+
+/** Live Homey Ask: status read or control / flow trigger. */
+export async function executeHomeyAskForUser(
+  userId: string,
+  plan: HomeyAskPlan,
+): Promise<{
+  ok: boolean;
+  needsConfirmation?: boolean;
+  answer: string;
+  evidenceText?: string;
+}> {
+  if (!plan) {
+    return { ok: false, answer: "I could not understand that Homey request." };
+  }
+
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(
+      and(
+        eq(connectors.userId, userId),
+        eq(connectors.type, "homey"),
+        eq(connectors.enabled, true),
+      ),
+    )
+    .limit(1);
+  const conn = rows[0];
+  if (!conn) {
+    return {
+      ok: false,
+      answer:
+        "Homey is not connected. Open Connectors and connect Homey Pro first.",
+    };
+  }
+
+  try {
+    const session = await openHomeySessionForConnector(conn);
+
+    if (plan.intent === "status") {
+      const devices = await listHomeyDevices(session.baseUrl, session.sessionToken);
+      const matched = matchHomeyName(
+        plan.deviceHint,
+        devices.map((d) => ({ id: d.id, name: d.name })),
+      );
+      if (!matched) {
+        const sample = devices
+          .slice(0, 8)
+          .map((d) => d.name)
+          .join(", ");
+        return {
+          ok: false,
+          answer: sample
+            ? `I could not match that device. Connected devices include: ${sample}.`
+            : "No Homey devices found. Sync the Homey connector first.",
+        };
+      }
+      const device = devices.find((d) => d.id === matched.id)!;
+      const cap =
+        plan.capabilityHint && device.capabilities.includes(plan.capabilityHint)
+          ? plan.capabilityHint
+          : device.capabilities.find((c) =>
+              ["onoff", "locked", "alarm_contact", "measure_temperature", "garagedoor_closed"].includes(
+                c,
+              ),
+            ) ?? device.capabilities[0] ?? null;
+      const value =
+        cap && cap in device.values
+          ? device.values[cap]
+          : cap
+            ? device.values[cap]
+            : null;
+      const stateLine =
+        cap != null
+          ? `${cap}=${JSON.stringify(value ?? device.values[cap] ?? "unknown")}`
+          : formatHomeyValues(device.values);
+      return {
+        ok: true,
+        answer: `${device.name}${device.zoneName ? ` (${device.zoneName})` : ""}: ${stateLine}.`,
+        evidenceText: `Homey device ${device.name} ${stateLine}`,
+      };
+    }
+
+    if (plan.intent === "flow") {
+      const flows = await listHomeyFlows(session.baseUrl, session.sessionToken);
+      const matched = matchHomeyName(
+        plan.flowHint,
+        flows.map((f) => ({ id: f.id, name: f.name })),
+      );
+      if (!matched) {
+        return {
+          ok: false,
+          answer: "I could not find that Homey Flow. Name the Flow more specifically.",
+        };
+      }
+      if (!plan.confirmed) {
+        return {
+          ok: true,
+          needsConfirmation: true,
+          answer: `I can trigger the Homey Flow “${matched.name}”. Reply “confirm” to run it.`,
+        };
+      }
+      await triggerHomeyFlow(session.baseUrl, session.sessionToken, matched.id);
+      return {
+        ok: true,
+        answer: `Triggered Homey Flow “${matched.name}”.`,
+        evidenceText: `flow:${matched.id}`,
+      };
+    }
+
+    // control
+    const devices = await listHomeyDevices(session.baseUrl, session.sessionToken);
+    const matched = matchHomeyName(
+      plan.deviceHint,
+      devices.map((d) => ({ id: d.id, name: d.name })),
+    );
+    if (!matched) {
+      return {
+        ok: false,
+        answer: "I could not match that Homey device. Try the exact device name from Homey.",
+      };
+    }
+    const device = devices.find((d) => d.id === matched.id)!;
+    const capability =
+      plan.capabilityHint && device.capabilities.includes(plan.capabilityHint)
+        ? plan.capabilityHint
+        : device.capabilities.includes("onoff")
+          ? "onoff"
+          : device.capabilities[0] ?? null;
+    if (!capability || plan.value === null) {
+      return {
+        ok: false,
+        answer: `I found ${device.name} but could not determine what to change.`,
+      };
+    }
+    const risky =
+      plan.risky || isRiskyHomeyCapability(capability) || plan.capabilityHint === "locked";
+    if (risky && !plan.confirmed) {
+      return {
+        ok: true,
+        needsConfirmation: true,
+        answer: `This would set ${device.name} ${capability}=${JSON.stringify(plan.value)}. Reply “confirm” to proceed.`,
+      };
+    }
+    await setHomeyCapabilityValue(
+      session.baseUrl,
+      session.sessionToken,
+      device.id,
+      capability,
+      plan.value,
+    );
+    return {
+      ok: true,
+      answer: `Updated ${device.name}: set ${capability} to ${JSON.stringify(plan.value)}.`,
+      evidenceText: `device:${device.id} ${capability}=${JSON.stringify(plan.value)}`,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Homey request failed";
+    return { ok: false, answer: `Homey request failed: ${message}` };
+  }
+}
+
+function formatHomeyValues(values: Record<string, unknown>): string {
+  const entries = Object.entries(values).slice(0, 8);
+  if (!entries.length) return "no live state cached — try Sync on the Homey connector";
+  return entries.map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", ");
 }
 
 async function fetchTicketEmailRecordsForConnector(conn: Connector): Promise<unknown[]> {
@@ -653,7 +892,7 @@ export async function createGoogleConnectorForUser(
   return toDto(row!);
 }
 
-async function upsertSourceRecord(
+export async function upsertSourceRecord(
   userId: string,
   connectorId: string,
   record: Awaited<ReturnType<RecallConnector["normalize"]>>[number],
@@ -755,6 +994,9 @@ export async function syncConnectorForUser(
     }
     if (conn.type === "microsoft") {
       rawRecords = await fetchMicrosoftRecordsForConnector(conn);
+    }
+    if (conn.type === "homey") {
+      rawRecords = await fetchHomeyRecordsForConnector(conn);
     }
     if (conn.type === "ticket_email") {
       rawRecords = await fetchTicketEmailRecordsForConnector(conn);
@@ -943,6 +1185,209 @@ export async function writeMicrosoftConnectAudit(
     entityId: connectorId,
     metadata: { microsoftEmail: email },
   });
+}
+
+export async function findHomeyConnectorByEmail(
+  userId: string,
+  email: string,
+): Promise<ConnectorDto | null> {
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(and(eq(connectors.userId, userId), eq(connectors.type, "homey")));
+  const needle = email.trim().toLowerCase();
+  for (const row of rows) {
+    const settings = openConnectorSettings(
+      (row.settings ?? {}) as Record<string, unknown>,
+    );
+    const stored =
+      typeof settings.homeyEmail === "string"
+        ? settings.homeyEmail.toLowerCase()
+        : "";
+    if (stored === needle) return toDto(row);
+  }
+  return null;
+}
+
+export async function createHomeyConnectorForUser(
+  userId: string,
+  input: {
+    email: string;
+    displayName?: string | null;
+    accessToken: string;
+    refreshToken: string | null;
+    expiresIn: number;
+    homeyId?: string | null;
+    homeyName?: string | null;
+    remoteUrl?: string | null;
+  },
+): Promise<ConnectorDto & { webhookSecret?: string }> {
+  const now = new Date();
+  const label = input.homeyName ? `Homey · ${input.homeyName}` : `Homey · ${input.email}`;
+  const existing = await findHomeyConnectorByEmail(userId, input.email);
+  if (existing) {
+    const rows = await getDb()
+      .select()
+      .from(connectors)
+      .where(eq(connectors.id, existing.id))
+      .limit(1);
+    const row = rows[0]!;
+    const prev = openConnectorSettings(
+      (row.settings ?? {}) as Record<string, unknown>,
+    );
+    const webhookSecret =
+      typeof prev.webhookSecret === "string" && prev.webhookSecret
+        ? prev.webhookSecret
+        : generateHomeyWebhookSecret();
+    const [updated] = await getDb()
+      .update(connectors)
+      .set({
+        name: label,
+        baseUrl: input.remoteUrl ?? row.baseUrl,
+        enabled: true,
+        syncStatus: "connected",
+        settings: sealConnectorSettings({
+          ...prev,
+          homeyEmail: input.email,
+          homeyName: input.displayName ?? null,
+          homeyId: input.homeyId ?? null,
+          remoteUrl: input.remoteUrl ?? null,
+          accessToken: input.accessToken,
+          refreshToken: input.refreshToken ?? prev.refreshToken ?? null,
+          accessTokenExpiresAt: new Date(
+            now.getTime() + input.expiresIn * 1000,
+          ).toISOString(),
+          webhookSecret,
+        }),
+        updatedAt: now,
+      })
+      .where(eq(connectors.id, existing.id))
+      .returning();
+    return { ...toDto(updated!), webhookSecret };
+  }
+
+  const webhookSecret = generateHomeyWebhookSecret();
+  const [row] = await getDb()
+    .insert(connectors)
+    .values({
+      id: newConnectorId(),
+      userId,
+      name: label,
+      type: "homey",
+      description:
+        "Homey Pro: smart-home device control via Ask and important Flow alerts via webhook.",
+      baseUrl: input.remoteUrl ?? null,
+      authType: "oauth",
+      enabled: true,
+      syncStatus: "connected",
+      settings: sealConnectorSettings({
+        homeyEmail: input.email,
+        homeyName: input.displayName ?? null,
+        homeyId: input.homeyId ?? null,
+        remoteUrl: input.remoteUrl ?? null,
+        accessToken: input.accessToken,
+        refreshToken: input.refreshToken,
+        accessTokenExpiresAt: new Date(now.getTime() + input.expiresIn * 1000).toISOString(),
+        webhookSecret,
+      }),
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning();
+  return { ...toDto(row!), webhookSecret };
+}
+
+export async function writeHomeyConnectAudit(
+  userId: string,
+  connectorId: string,
+  email: string,
+): Promise<void> {
+  await writeAuditLog({
+    userId,
+    action: "homey_connected",
+    entityType: "connector",
+    entityId: connectorId,
+    metadata: { homeyEmail: email },
+  });
+}
+
+/** Reveal webhook secret + URL for Homey Flow configuration (authenticated UI). */
+export async function getHomeyWebhookInfoForUser(
+  userId: string,
+  connectorId: string,
+  appOrigin: string,
+): Promise<{ url: string; secret: string; connectorId: string } | null> {
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(
+      and(
+        eq(connectors.id, connectorId),
+        eq(connectors.userId, userId),
+        eq(connectors.type, "homey"),
+      ),
+    )
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  const settings = openConnectorSettings(
+    (row.settings ?? {}) as Record<string, unknown>,
+  );
+  let secret =
+    typeof settings.webhookSecret === "string" ? settings.webhookSecret : "";
+  if (!secret) {
+    secret = generateHomeyWebhookSecret();
+    await getDb()
+      .update(connectors)
+      .set({
+        settings: sealConnectorSettings({ ...settings, webhookSecret: secret }),
+        updatedAt: new Date(),
+      })
+      .where(eq(connectors.id, connectorId));
+  }
+  const base = appOrigin.replace(/\/$/, "");
+  return {
+    connectorId,
+    secret,
+    url: `${base}/api/webhooks/homey/${encodeURIComponent(connectorId)}`,
+  };
+}
+
+export async function rotateHomeyWebhookSecretForUser(
+  userId: string,
+  connectorId: string,
+  appOrigin: string,
+): Promise<{ url: string; secret: string; connectorId: string } | null> {
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(
+      and(
+        eq(connectors.id, connectorId),
+        eq(connectors.userId, userId),
+        eq(connectors.type, "homey"),
+      ),
+    )
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  const settings = openConnectorSettings(
+    (row.settings ?? {}) as Record<string, unknown>,
+  );
+  const secret = generateHomeyWebhookSecret();
+  await getDb()
+    .update(connectors)
+    .set({
+      settings: sealConnectorSettings({ ...settings, webhookSecret: secret }),
+      updatedAt: new Date(),
+    })
+    .where(eq(connectors.id, connectorId));
+  const base = appOrigin.replace(/\/$/, "");
+  return {
+    connectorId,
+    secret,
+    url: `${base}/api/webhooks/homey/${encodeURIComponent(connectorId)}`,
+  };
 }
 
 export async function queryFinanceSummaryForUser(

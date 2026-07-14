@@ -12,7 +12,11 @@ import type {
   RecallTask,
 } from "@/lib/recall-context";
 import { notesPath, tasksPath, inboxPath, projectsPath } from "@/lib/recall-nav";
-import { scoreCaptureUrgency, scoreTaskUrgency } from "@/lib/urgency";
+import {
+  scoreCaptureUrgency,
+  scoreTaskUrgency,
+  type HomeyUrgencyAlert,
+} from "@/lib/urgency";
 
 export interface BriefingItem {
   id: string;
@@ -194,12 +198,27 @@ export function buildDailyBriefing(
   notes: RecallNote[],
   captures: RecallCaptureItem[],
   projects: RecallProject[],
+  homeyAlerts: HomeyUrgencyAlert[] = [],
 ): DailyBriefing {
   const greeting = greetingForHour(new Date().getHours());
 
-  const critical: BriefingItem[] = rankedTasks(tasks)
+  const criticalFromHomey: BriefingItem[] = homeyAlerts
+    .filter((a) => a.severity === "emergency" || a.severity === "warn")
+    .slice(0, 4)
+    .map((a) => ({
+      id: a.id,
+      label:
+        a.severity === "emergency"
+          ? `Homey emergency: ${a.title}`
+          : `Homey: ${a.title}`,
+      href: "/connectors",
+    }));
+
+  const criticalFromTasks: BriefingItem[] = rankedTasks(tasks)
     .slice(0, 3)
     .map((t) => ({ id: t.id, label: t.title, href: tasksPath({ taskId: t.id }) }));
+
+  const critical: BriefingItem[] = [...criticalFromHomey, ...criticalFromTasks].slice(0, 5);
 
   const waiting: BriefingItem[] = notes
     .filter(
@@ -218,14 +237,20 @@ export function buildDailyBriefing(
     .map(({ item }) => ({ id: item.id, label: item.cleanedTitle, href: inboxPath() }));
 
   const focus = buildFocusNow(tasks, projects);
-  const attentionCount = critical.length + waiting.length + reminders.length;
+  const attentionCount =
+    critical.length + waiting.length + reminders.length + homeyAlerts.length;
 
   let summary: string;
   if (attentionCount === 0) {
     summary = "You're all caught up. Nothing needs your attention right now.";
   } else {
     const parts: string[] = [];
-    if (critical.length) parts.push(`${critical.length} urgent`);
+    if (homeyAlerts.some((a) => a.severity === "emergency")) {
+      parts.push("Homey emergency");
+    } else if (homeyAlerts.length) {
+      parts.push(`${homeyAlerts.length} home alert${homeyAlerts.length === 1 ? "" : "s"}`);
+    }
+    if (criticalFromTasks.length) parts.push(`${criticalFromTasks.length} urgent`);
     if (waiting.length) parts.push(`${waiting.length} waiting on others`);
     if (reminders.length) parts.push(`${reminders.length} to review`);
     const last = parts.pop();

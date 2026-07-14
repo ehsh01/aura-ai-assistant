@@ -5,11 +5,13 @@ import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
   fetchHome,
   listActivity,
+  listHomeyAlerts,
   listPeople,
   type ActivityRecord,
   type HomeBriefingResponse,
   type PersonRecord,
 } from "@/lib/recall-api";
+import { pressingFeed, type HomeyUrgencyAlert } from "@/lib/urgency";
 import { ingestCaptureReliable } from "@/lib/capture-queue";
 import { RecentActivityCard } from "@/components/home/RecentActivityCard";
 import { useAuth } from "@/context/AuthContext";
@@ -55,6 +57,7 @@ export function Today() {
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [home, setHome] = useState<HomeBriefingResponse | null>(null);
   const [activity, setActivity] = useState<ActivityRecord[]>([]);
+  const [homeyAlerts, setHomeyAlerts] = useState<HomeyUrgencyAlert[]>([]);
   const [capturePrefill, setCapturePrefill] = useState<string | null>(() =>
     readSearchParam("capture"),
   );
@@ -82,6 +85,18 @@ export function Today() {
     void listActivity({ limit: 6 })
       .then((res) => setActivity(res.items))
       .catch(() => setActivity([]));
+    void listHomeyAlerts()
+      .then((res) =>
+        setHomeyAlerts(
+          res.alerts.map((a) => ({
+            id: a.id,
+            title: a.title,
+            severity: a.severity,
+            deviceName: a.deviceName,
+          })),
+        ),
+      )
+      .catch(() => setHomeyAlerts([]));
   }, [refreshHome]);
 
   useEffect(() => {
@@ -143,8 +158,14 @@ export function Today() {
   });
 
   const date = home?.date ?? currentDate;
-  const briefing = home?.briefing ?? buildDailyBriefing(userName, tasks, notes, captures, projects);
+  const briefing =
+    home?.briefing ??
+    buildDailyBriefing(userName, tasks, notes, captures, projects, homeyAlerts);
   const focus = home?.focus ?? buildFocusNow(tasks, projects);
+  const pressing = useMemo(
+    () => pressingFeed(tasks, notes, captures, 6, homeyAlerts),
+    [tasks, notes, captures, homeyAlerts],
+  );
   const timeline = home?.timeline ?? buildTimeline(tasks, captures);
   const waiting = home?.waiting ?? buildWaitingOn(notes);
   const dontForget = home?.dontForget ?? buildDontForget(notes, captures);
@@ -200,6 +221,24 @@ export function Today() {
             </div>
 
             <DailyBriefingCard briefing={briefing} date={date} />
+            {pressing.some((p) => p.kind === "homey") && (
+              <section className="rounded-2xl border border-amber-400/20 bg-amber-500/5 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-amber-200/70">
+                  Home alerts
+                </p>
+                <ul className="mt-2 space-y-1.5">
+                  {pressing
+                    .filter((p) => p.kind === "homey")
+                    .map((item) => (
+                      <li key={item.key} className="text-sm text-zinc-200">
+                        <span className="text-amber-300/80">{item.reason}</span>
+                        {" · "}
+                        {item.title}
+                      </li>
+                    ))}
+                </ul>
+              </section>
+            )}
             <MorningActions focus={focus} waiting={waiting} briefing={briefing} />
             <FocusNowCard focus={focus} />
             <FinanceSnapshotCard finance={finance} />

@@ -113,6 +113,12 @@ function sourceTypeAliases(recordType: string): string {
       return "calendar event meeting schedule";
     case "google_contact":
       return "contact person phone email";
+    case "homey_device":
+      return "homey smart home device light lock sensor thermostat";
+    case "homey_flow":
+      return "homey smart home flow automation scene";
+    case "homey_alert":
+      return "homey smart home alert notification emergency door leak smoke";
     default:
       return "source record";
   }

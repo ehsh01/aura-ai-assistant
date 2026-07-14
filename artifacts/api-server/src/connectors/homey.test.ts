@@ -1,0 +1,69 @@
+import { describe, expect, it } from "vitest";
+import {
+  homeyConnector,
+  isHomeyOAuthConfigured,
+  isRiskyHomeyCapability,
+  normalizeHomeyAlert,
+  normalizeSeverity,
+  verifyHomeyWebhookSecret,
+} from "./homey";
+
+describe("homey connector helpers", () => {
+  it("reports OAuth misconfiguration when env unset", () => {
+    const prevId = process.env.HOMEY_CLIENT_ID;
+    const prevSecret = process.env.HOMEY_CLIENT_SECRET;
+    delete process.env.HOMEY_CLIENT_ID;
+    delete process.env.HOMEY_CLIENT_SECRET;
+    expect(isHomeyOAuthConfigured()).toBe(false);
+    if (prevId) process.env.HOMEY_CLIENT_ID = prevId;
+    if (prevSecret) process.env.HOMEY_CLIENT_SECRET = prevSecret;
+  });
+
+  it("normalizes severity aliases", () => {
+    expect(normalizeSeverity("critical")).toBe("emergency");
+    expect(normalizeSeverity("low")).toBe("info");
+    expect(normalizeSeverity(null)).toBe("warn");
+  });
+
+  it("flags risky capabilities", () => {
+    expect(isRiskyHomeyCapability("locked")).toBe(true);
+    expect(isRiskyHomeyCapability("garagedoor_closed")).toBe(true);
+    expect(isRiskyHomeyCapability("onoff")).toBe(false);
+  });
+
+  it("verifies webhook secrets", () => {
+    const secret = "hwk_testsecret";
+    expect(verifyHomeyWebhookSecret(secret, secret)).toBe(true);
+    expect(verifyHomeyWebhookSecret("wrong", secret)).toBe(false);
+    expect(verifyHomeyWebhookSecret(null, secret)).toBe(false);
+  });
+
+  it("normalizes alert + device bundle records", async () => {
+    const alert = normalizeHomeyAlert(
+      {
+        title: "Leak",
+        severity: "emergency",
+        kind: "leak",
+        deviceName: "Laundry",
+      },
+      { connectorId: "conn-1" },
+    );
+    expect(alert.recordType).toBe("homey_alert");
+    expect(alert.metadata?.severity).toBe("emergency");
+
+    const rows = await homeyConnector.normalize([
+      {
+        externalId: "dev-1",
+        recordType: "homey_device",
+        recordTitle: "Porch Light",
+        recordText: "homey device",
+        metadata: { zoneName: "Outside" },
+      },
+      alert,
+    ]);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.recordType).toBe("homey_device");
+    expect(rows[1]?.recordMetadata?.severity).toBe("emergency");
+    expect(homeyConnector.mapEvidence(rows[1]!).length).toBe(1);
+  });
+});

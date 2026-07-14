@@ -9,6 +9,11 @@ import {
   isGoogleOAuthConfigured,
 } from "../connectors/google";
 import {
+  buildHomeyAuthUrl,
+  exchangeHomeyCode,
+  isHomeyOAuthConfigured,
+} from "../connectors/homey";
+import {
   buildMicrosoftAuthUrl,
   exchangeMicrosoftCode,
   isMicrosoftOAuthConfigured,
@@ -16,13 +21,21 @@ import {
 import {
   createConnectorForUser,
   createGoogleConnectorForUser,
+  createHomeyConnectorForUser,
   createMicrosoftConnectorForUser,
   getConnectorForUser,
+  getHomeyWebhookInfoForUser,
   listConnectorsForUser,
+  rotateHomeyWebhookSecretForUser,
   syncConnectorForUser,
   writeGoogleConnectAudit,
+  writeHomeyConnectAudit,
   writeMicrosoftConnectAudit,
 } from "../services/connectors";
+import {
+  acknowledgeHomeyAlertForUser,
+  listOpenHomeyAlertsForUser,
+} from "../services/homey-alerts";
 import { ensureUserFinanceFresh } from "../services/finance-auto-sync";
 import {
   financeSummaryFromSynced,
@@ -40,6 +53,7 @@ const CreateConnectorBody = z.object({
     "ticket_email",
     "google",
     "microsoft",
+    "homey",
   ]),
   description: z.string().max(2000).nullish(),
   baseUrl: z.string().url().nullish(),
@@ -54,6 +68,7 @@ const SyncConnectorBody = z.object({
 
 const OAUTH_STATE_COOKIE_GOOGLE = "recall_google_oauth_state";
 const OAUTH_STATE_COOKIE_MS = "recall_ms_oauth_state";
+const OAUTH_STATE_COOKIE_HOMEY = "recall_homey_oauth_state";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 function stateSecret(): string {
@@ -250,6 +265,85 @@ router.get("/connectors/microsoft/oauth/callback", async (req, res) => {
   }
 });
 
+router.get("/connectors/homey/oauth/start", requireAuth, async (req, res, next) => {
+  try {
+    if (!isHomeyOAuthConfigured()) {
+      res.status(503).json({
+        error: "HOMEY_NOT_CONFIGURED",
+        message: "Homey OAuth is not configured on this server",
+      });
+      return;
+    }
+    const state = signOAuthState(req.user!.id);
+    res.cookie(OAUTH_STATE_COOKIE_HOMEY, state, {
+      httpOnly: true,
+      secure: config.sessionCookieSecure,
+      sameSite: "lax",
+      maxAge: OAUTH_STATE_TTL_MS,
+      path: "/",
+    });
+    res.redirect(buildHomeyAuthUrl(state));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/connectors/homey/oauth/callback", async (req, res) => {
+  const fail = (code: string) => {
+    res.clearCookie(OAUTH_STATE_COOKIE_HOMEY, { path: "/" });
+    res.redirect(frontendRedirect({ homey: "error", reason: code }));
+  };
+
+  try {
+    if (!isHomeyOAuthConfigured()) {
+      fail("not_configured");
+      return;
+    }
+    const code = typeof req.query.code === "string" ? req.query.code : "";
+    const state = typeof req.query.state === "string" ? req.query.state : "";
+    const cookieState =
+      typeof req.cookies?.[OAUTH_STATE_COOKIE_HOMEY] === "string"
+        ? req.cookies[OAUTH_STATE_COOKIE_HOMEY]
+        : "";
+    if (!code || !state) {
+      fail("missing_code");
+      return;
+    }
+    if (!cookieState || cookieState !== state) {
+      fail("state_mismatch");
+      return;
+    }
+    const verified = verifyOAuthState(state);
+    if (!verified) {
+      fail("state_invalid");
+      return;
+    }
+
+    const tokens = await exchangeHomeyCode(code);
+    const connector = await createHomeyConnectorForUser(verified.userId, {
+      email: tokens.email,
+      displayName: tokens.name,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresIn: tokens.expiresIn,
+      homeyId: tokens.homeyId,
+      homeyName: tokens.homeyName,
+      remoteUrl: tokens.remoteUrl,
+    });
+    await writeHomeyConnectAudit(verified.userId, connector.id, tokens.email);
+
+    res.clearCookie(OAUTH_STATE_COOKIE_HOMEY, { path: "/" });
+    res.redirect(frontendRedirect({ homey: "connected", connectorId: connector.id }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "oauth_failed";
+    const reason = message.includes("already connected")
+      ? "already_connected"
+      : "oauth_failed";
+    res.clearCookie(OAUTH_STATE_COOKIE_HOMEY, { path: "/" });
+    res.redirect(frontendRedirect({ homey: "error", reason }));
+  }
+});
+
 router.use(requireAuth);
 
 router.get("/connectors", async (req, res, next) => {
@@ -259,6 +353,7 @@ router.get("/connectors", async (req, res, next) => {
       connectors: items,
       googleOAuthConfigured: isGoogleOAuthConfigured(),
       microsoftOAuthConfigured: isMicrosoftOAuthConfigured(),
+      homeyOAuthConfigured: isHomeyOAuthConfigured(),
     });
   } catch (err) {
     next(err);
@@ -279,6 +374,13 @@ router.post("/connectors", async (req, res, next) => {
       res.status(400).json({
         error: "VALIDATION_ERROR",
         message: "Connect Microsoft via OAuth (Connect Microsoft button)",
+      });
+      return;
+    }
+    if (body.type === "homey") {
+      res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Connect Homey via OAuth (Connect Homey button)",
       });
       return;
     }
@@ -370,6 +472,83 @@ router.get("/finance/summary", async (req, res, next) => {
       return;
     }
     res.json(financeSummaryFromSynced(synced));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/connectors/:connectorId/homey-webhook", async (req, res, next) => {
+  try {
+    const info = await getHomeyWebhookInfoForUser(
+      req.user!.id,
+      req.params.connectorId,
+      config.appPublicUrl,
+    );
+    if (!info) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Homey connector not found" });
+      return;
+    }
+    res.json(info);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/connectors/:connectorId/homey-webhook/rotate", async (req, res, next) => {
+  try {
+    const info = await rotateHomeyWebhookSecretForUser(
+      req.user!.id,
+      req.params.connectorId,
+      config.appPublicUrl,
+    );
+    if (!info) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Homey connector not found" });
+      return;
+    }
+    res.json(info);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/connectors/:connectorId/homey-webhook/test", async (req, res, next) => {
+  try {
+    const connector = await getConnectorForUser(req.user!.id, req.params.connectorId);
+    if (!connector || connector.type !== "homey") {
+      res.status(404).json({ error: "NOT_FOUND", message: "Homey connector not found" });
+      return;
+    }
+    const { ingestHomeyAlertForUser } = await import("../services/homey-alerts");
+    const result = await ingestHomeyAlertForUser(req.user!.id, connector.id, {
+      title: "Recall Homey test alert",
+      message: "This is a test from Connectors. Your Homey webhook path is working.",
+      severity: "info",
+      kind: "other",
+      deviceName: "Recall",
+    });
+    res.json({ ok: true, result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/homey/alerts", async (req, res, next) => {
+  try {
+    const alerts = await listOpenHomeyAlertsForUser(req.user!.id);
+    res.json({ alerts });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/homey/alerts/:alertId/ack", async (req, res, next) => {
+  try {
+    const ok = await acknowledgeHomeyAlertForUser(req.user!.id, req.params.alertId);
+    if (!ok) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Alert not found" });
+      return;
+    }
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

@@ -19,6 +19,7 @@ import tasksRouter from "./tasks";
 import todayRouter from "./today";
 import auditRouter from "./audit";
 import memoryRouter from "./memory";
+import webhooksHomeyRouter from "./webhooks-homey";
 import { requireAuth } from "../middleware/auth";
 import { aiRateLimiter } from "../middleware/security";
 
@@ -26,6 +27,7 @@ const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(authRouter);
+router.use(webhooksHomeyRouter);
 router.use(extensionTokensRouter);
 router.use(notebooksRouter);
 router.use(notesRouter);

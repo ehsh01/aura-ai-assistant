@@ -624,6 +624,7 @@ export async function listConnectors(): Promise<{
   }[];
   googleOAuthConfigured?: boolean;
   microsoftOAuthConfigured?: boolean;
+  homeyOAuthConfigured?: boolean;
 }> {
   return apiFetch("/connectors");
 }
@@ -636,6 +637,49 @@ export function startGoogleOAuth(): void {
 /** Full-page navigation for Microsoft Graph OAuth. */
 export function startMicrosoftOAuth(): void {
   window.location.assign("/api/connectors/microsoft/oauth/start");
+}
+
+/** Full-page navigation for Homey (Athom) OAuth. */
+export function startHomeyOAuth(): void {
+  window.location.assign("/api/connectors/homey/oauth/start");
+}
+
+export async function getHomeyWebhookInfo(
+  connectorId: string,
+): Promise<{ url: string; secret: string; connectorId: string }> {
+  return apiFetch(`/connectors/${encodeURIComponent(connectorId)}/homey-webhook`);
+}
+
+export async function rotateHomeyWebhookSecret(
+  connectorId: string,
+): Promise<{ url: string; secret: string; connectorId: string }> {
+  return apiFetch(`/connectors/${encodeURIComponent(connectorId)}/homey-webhook/rotate`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export async function testHomeyWebhook(
+  connectorId: string,
+): Promise<{ ok: boolean; result: unknown }> {
+  return apiFetch(`/connectors/${encodeURIComponent(connectorId)}/homey-webhook/test`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export async function listHomeyAlerts(): Promise<{
+  alerts: Array<{
+    id: string;
+    title: string;
+    severity: "info" | "warn" | "emergency";
+    kind: string;
+    deviceName: string | null;
+    message: string | null;
+    createdAt: string;
+  }>;
+}> {
+  return apiFetch("/homey/alerts");
 }
 
 export async function createConnector(input: {

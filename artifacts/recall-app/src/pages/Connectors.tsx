@@ -3,10 +3,14 @@ import { AppLayout } from "@/components/AppLayout";
 import {
   createConnector,
   getFinanceSummary,
+  getHomeyWebhookInfo,
   listConnectors,
+  rotateHomeyWebhookSecret,
   startGoogleOAuth,
+  startHomeyOAuth,
   startMicrosoftOAuth,
   syncConnector,
+  testHomeyWebhook,
   type FinanceSummary,
 } from "@/lib/recall-api";
 import {
@@ -41,6 +45,12 @@ export function Connectors() {
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
   const [googleOAuthConfigured, setGoogleOAuthConfigured] = useState(false);
   const [microsoftOAuthConfigured, setMicrosoftOAuthConfigured] = useState(false);
+  const [homeyOAuthConfigured, setHomeyOAuthConfigured] = useState(false);
+  const [homeyWebhook, setHomeyWebhook] = useState<{
+    connectorId: string;
+    url: string;
+    secret: string;
+  } | null>(null);
   const [csvText, setCsvText] = useState("");
   const [ticketHost, setTicketHost] = useState("");
   const [ticketUser, setTicketUser] = useState("");
@@ -61,6 +71,7 @@ export function Connectors() {
       setConnectors(res.connectors);
       setGoogleOAuthConfigured(Boolean(res.googleOAuthConfigured));
       setMicrosoftOAuthConfigured(Boolean(res.microsoftOAuthConfigured));
+      setHomeyOAuthConfigured(Boolean(res.homeyOAuthConfigured));
       const tokenRes = await listExtensionTokens().catch(() => null);
       if (tokenRes) setExtensionTokens(tokenRes.items);
     } finally {
@@ -118,6 +129,38 @@ export function Connectors() {
     }
     const url = new URL(window.location.href);
     url.searchParams.delete("microsoft");
+    url.searchParams.delete("reason");
+    url.searchParams.delete("connectorId");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    void load();
+  }, []);
+
+  useEffect(() => {
+    const status = readSearchParam("homey");
+    if (!status) return;
+    const reason = readSearchParam("reason");
+    const connectorId = readSearchParam("connectorId");
+    if (status === "connected") {
+      toast({
+        title: "Homey connected",
+        description: "Sync devices, then copy the webhook URL into Homey Flows for important alerts.",
+      });
+      if (connectorId) {
+        void getHomeyWebhookInfo(connectorId)
+          .then((info) => setHomeyWebhook(info))
+          .catch(() => undefined);
+      }
+    } else if (status === "error") {
+      const detail =
+        reason === "already_connected"
+          ? "That Homey account is already linked."
+          : reason === "not_configured"
+            ? "Homey OAuth is not configured on the server yet."
+            : "Could not complete Homey sign-in. Try again.";
+      toast({ title: "Homey connect failed", description: detail, variant: "destructive" });
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete("homey");
     url.searchParams.delete("reason");
     url.searchParams.delete("connectorId");
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
@@ -251,6 +294,21 @@ export function Connectors() {
 
   const hasGoogle = connectors.some((c) => c.type === "google");
   const hasMicrosoft = connectors.some((c) => c.type === "microsoft");
+  const homeyConnector = connectors.find((c) => c.type === "homey") ?? null;
+
+  const showHomeyWebhook = async (connectorId: string) => {
+    try {
+      const info = await getHomeyWebhookInfo(connectorId);
+      setHomeyWebhook(info);
+      toast({ title: "Webhook details loaded", description: "Copy the URL and secret into Homey Flows." });
+    } catch (err) {
+      toast({
+        title: "Could not load Homey webhook",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    }
+  };
 
   return (
     <AppLayout>
@@ -299,6 +357,100 @@ export function Connectors() {
               <p className="mt-3 text-xs text-amber-200/80">
                 Microsoft OAuth is not configured yet (needs MICROSOFT_CLIENT_ID / SECRET).
               </p>
+            )}
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+            <h2 className="text-lg font-semibold">Homey Pro</h2>
+            <p className="mt-2 text-sm text-white/55">
+              Connect Homey for Ask device status/control. Important alerts come from Homey Flows
+              posting to a Recall webhook (door open too long, leak, smoke, etc.).
+            </p>
+            <button
+              type="button"
+              onClick={() => startHomeyOAuth()}
+              disabled={!homeyOAuthConfigured}
+              className="mt-4 rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {homeyConnector ? "Reconnect Homey" : "Connect Homey"}
+            </button>
+            {!homeyOAuthConfigured && (
+              <p className="mt-3 text-xs text-amber-200/80">
+                Homey OAuth is not configured yet (needs HOMEY_CLIENT_ID / SECRET from Athom Developer Tools).
+              </p>
+            )}
+            {homeyConnector && (
+              <div className="mt-4 space-y-2">
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void showHomeyWebhook(homeyConnector.id)}
+                    className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/80 hover:bg-white/5"
+                  >
+                    Show webhook
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const info = await rotateHomeyWebhookSecret(homeyConnector.id);
+                        setHomeyWebhook(info);
+                        toast({ title: "Webhook secret rotated" });
+                      } catch (err) {
+                        toast({
+                          title: "Rotate failed",
+                          description: err instanceof Error ? err.message : undefined,
+                          variant: "destructive",
+                        });
+                      }
+                    }}
+                    className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/80 hover:bg-white/5"
+                  >
+                    Rotate secret
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await testHomeyWebhook(homeyConnector.id);
+                        toast({
+                          title: "Test alert sent",
+                          description: "Check Today for “Recall Homey test alert”.",
+                        });
+                      } catch (err) {
+                        toast({
+                          title: "Test failed",
+                          description: err instanceof Error ? err.message : undefined,
+                          variant: "destructive",
+                        });
+                      }
+                    }}
+                    className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/80 hover:bg-white/5"
+                  >
+                    Send test alert
+                  </button>
+                </div>
+                {homeyWebhook && homeyWebhook.connectorId === homeyConnector.id && (
+                  <div className="rounded-xl border border-white/10 bg-black/30 p-3 text-xs text-white/70 space-y-2">
+                    <p>
+                      <span className="text-white/40">URL</span>
+                      <br />
+                      <code className="break-all text-emerald-200/90">{homeyWebhook.url}</code>
+                    </p>
+                    <p>
+                      <span className="text-white/40">Secret (Authorization: Bearer …)</span>
+                      <br />
+                      <code className="break-all text-emerald-200/90">{homeyWebhook.secret}</code>
+                    </p>
+                    <p className="text-white/45">
+                      Homey Flow: When [door open 5 min / smoke / leak] → Then HTTP POST JSON to the
+                      URL with header Authorization: Bearer &lt;secret&gt;. Body example:{" "}
+                      {`{"title":"Front door open","severity":"warn","kind":"door_open_too_long","deviceName":"Front door"}`}
+                      . Full recipes are in docs/Homey_Flow_Cookbook.md.
+                    </p>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
