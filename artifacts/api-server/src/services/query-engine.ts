@@ -9,6 +9,8 @@ import {
   PERSON_INTENT,
   WAITING_INTENT,
   financeMetricForQuestion,
+  formatInstantForUser,
+  nowLocalLabel,
   primaryFinanceFigure,
   todayIso,
 } from "./query-utils";
@@ -136,6 +138,7 @@ export async function queryRecallForUser(
   options?: { threadId?: string | null },
 ): Promise<QueryAnswer> {
   const today = todayIso();
+  const nowLabel = nowLocalLabel();
   const status = aiService.getStatus();
   const degraded = status.degraded;
   const waitingIntent = WAITING_INTENT.test(question);
@@ -356,12 +359,20 @@ export async function queryRecallForUser(
       text: `${w.followUp}. ${w.evidenceText}${w.days ? ` (${w.days}d)` : ""}`,
     };
   });
-  const retrievalContext = relevant.map((r) => ({
-    entityType: r.entityType,
-    entityId: r.entityId,
-    title: r.title,
-    text: r.text,
-  }));
+  const retrievalContext = relevant.map((r) => {
+    const date = formatInstantForUser(r.updatedAt);
+    return {
+      entityType: r.entityType,
+      entityId: r.entityId,
+      title: r.title,
+      date,
+      // Prefer an explicit Date line at the front so answerQuery truncation cannot drop it.
+      text:
+        date && !/\bDate[=:]/.test(r.text.slice(0, 180))
+          ? `Date: ${date}\n${r.text}`
+          : r.text,
+    };
+  });
 
   // Natural-language live search across every connected Google account.
   // Gmail: "find Nancy's Apr 23 permit email"; Drive: "find the contract PDF".
@@ -372,6 +383,7 @@ export async function queryRecallForUser(
     entityId: string;
     title: string;
     text: string;
+    date?: string | null;
   }[] = [];
   const wantsEmailAsk =
     isEmailSearchIntent(question) || isEmailSearchIntent(retrievalQuestion);
@@ -411,16 +423,22 @@ export async function queryRecallForUser(
 
     if (gmailPlan?.query) {
       for (const hit of gmailHits.slice(0, 24)) {
+        const date = formatInstantForUser(hit.sourceCreatedAt);
         liveMailContext.push({
           entityType: "source_record",
           entityId: hit.externalId,
-          title: `[${hit.mailbox}] ${hit.title}`,
-          text: `email gmail inbox mail message source=gmail_message mailbox=${hit.mailbox}\n${hit.text}${hit.sourceCreatedAt ? `\nDate: ${hit.sourceCreatedAt}` : ""}`,
+          title: date
+            ? `[${hit.mailbox}] ${hit.title} · ${date}`
+            : `[${hit.mailbox}] ${hit.title}`,
+          date,
+          text: `email gmail inbox mail message source=gmail_message mailbox=${hit.mailbox}${
+            date ? `\nDate: ${date}` : ""
+          }\n${hit.text}`,
         });
         evidence.push(
           makeEvidence({
             claimType: "source_excerpt",
-            evidenceText: `[${hit.mailbox}] ${hit.title}${hit.sourceCreatedAt ? ` (${hit.sourceCreatedAt})` : ""}\n${hit.text.slice(0, 450)}`,
+            evidenceText: `[${hit.mailbox}] ${hit.title}${date ? ` (${date})` : ""}\n${hit.text.slice(0, 450)}`,
             metadata: {
               relatedEntityType: "gmail_message",
               mailbox: hit.mailbox,
@@ -429,6 +447,7 @@ export async function queryRecallForUser(
               querySource: gmailPlan.source,
               sourceUrl: hit.sourceUrl,
               sourceCreatedAt: hit.sourceCreatedAt,
+              sourceCreatedAtLocal: date,
             },
           }),
         );
@@ -451,16 +470,24 @@ export async function queryRecallForUser(
 
     if (drivePlan?.query) {
       for (const hit of driveHits.slice(0, 24)) {
+        const date = formatInstantForUser(hit.sourceCreatedAt);
         liveMailContext.push({
           entityType: "source_record",
           entityId: hit.externalId,
-          title: `[${hit.account}] ${hit.title}`,
-          text: `drive file document google drive pdf attachment source=drive_file account=${hit.account}${hit.mimeType ? ` type=${hit.mimeType}` : ""}\n${hit.text}${hit.sourceCreatedAt ? `\nModified: ${hit.sourceCreatedAt}` : ""}${hit.sourceUrl ? `\nLink: ${hit.sourceUrl}` : ""}`,
+          title: date
+            ? `[${hit.account}] ${hit.title} · ${date}`
+            : `[${hit.account}] ${hit.title}`,
+          date,
+          text: `drive file document google drive pdf attachment source=drive_file account=${hit.account}${
+            hit.mimeType ? ` type=${hit.mimeType}` : ""
+          }${date ? `\nModified: ${date}` : ""}${
+            hit.sourceUrl ? `\nLink: ${hit.sourceUrl}` : ""
+          }\n${hit.text}`,
         });
         evidence.push(
           makeEvidence({
             claimType: "source_excerpt",
-            evidenceText: `[${hit.account}] ${hit.title}${hit.sourceCreatedAt ? ` (${hit.sourceCreatedAt})` : ""}\n${hit.text.slice(0, 450)}`,
+            evidenceText: `[${hit.account}] ${hit.title}${date ? ` (${date})` : ""}\n${hit.text.slice(0, 450)}`,
             metadata: {
               relatedEntityType: "drive_file",
               account: hit.account,
@@ -470,6 +497,7 @@ export async function queryRecallForUser(
               querySource: drivePlan.source,
               sourceUrl: hit.sourceUrl,
               sourceCreatedAt: hit.sourceCreatedAt,
+              sourceCreatedAtLocal: date,
             },
           }),
         );
@@ -599,6 +627,7 @@ export async function queryRecallForUser(
       const ai = await aiService.answerQuery({
         question,
         today,
+        now: nowLabel,
         records: contextRecords,
         finance: financeNeedsSync
           ? null

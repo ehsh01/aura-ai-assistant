@@ -28,7 +28,7 @@ import {
   embedQuery,
   rankEntitiesByPgvector,
 } from "./embedding-cache";
-import { FAMILY_RELATION_INTENT } from "./query-utils";
+import { FAMILY_RELATION_INTENT, formatInstantForUser } from "./query-utils";
 
 export {
   extractVinCandidates,
@@ -45,6 +45,10 @@ export type RetrievedRecord = {
   method: "keyword" | "semantic" | "hybrid";
   matchedPersonId?: string | null;
   matchedPersonName?: string | null;
+  /** Source subtype when entityType is source_record. */
+  recordType?: string;
+  /** ISO source timestamp (email sent / file modified / etc.). */
+  updatedAt?: string;
 };
 
 type ContextRecord = {
@@ -512,18 +516,24 @@ function sourceRowToContext(s: SourceRow): ContextRecord {
     ? ` sender_name=${from.name} sender_email=${from.email}`
     : "";
   const mailboxBit = s.mailbox ? ` mailbox=${s.mailbox}` : "";
+  const sourceIso = s.sourceCreatedAt
+    ? new Date(s.sourceCreatedAt).toISOString()
+    : s.updatedAt
+      ? new Date(s.updatedAt).toISOString()
+      : undefined;
+  const dateLabel = formatInstantForUser(sourceIso);
+  const titleWithDate =
+    dateLabel && s.recordType === "gmail_message" ? `${title} · ${dateLabel}` : title;
   return {
     entityType: "source_record",
     entityId: s.id,
-    title,
-    text: `${aliases} source=${s.recordType}${mailboxBit} ${title}${senderBits}\n${(s.recordText ?? "").slice(0, 800)}`,
+    title: titleWithDate,
+    text: `${aliases} source=${s.recordType}${mailboxBit}${
+      dateLabel ? ` Date=${dateLabel}` : ""
+    } ${title}${senderBits}\n${(s.recordText ?? "").slice(0, 800)}`,
     recordType: s.recordType,
     mailbox: s.mailbox,
-    updatedAt: s.sourceCreatedAt
-      ? new Date(s.sourceCreatedAt).toISOString()
-      : s.updatedAt
-        ? new Date(s.updatedAt).toISOString()
-        : undefined,
+    updatedAt: sourceIso,
   };
 }
 
@@ -1127,6 +1137,8 @@ export async function retrieveRelevantRecords(
       method,
       matchedPersonId: match?.id ?? null,
       matchedPersonName: match?.displayName ?? null,
+      recordType: r.recordType,
+      updatedAt: r.updatedAt,
     };
   };
 

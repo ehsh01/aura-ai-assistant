@@ -155,6 +155,8 @@ export interface QueryContextRecord {
   entityId: string;
   title: string;
   text: string;
+  /** Source timestamp already formatted in the user timezone — never truncated. */
+  date?: string | null;
 }
 
 export interface QueryFinanceAggregate {
@@ -191,6 +193,8 @@ export interface QueryFinanceAggregate {
 export interface AnswerQueryRequest {
   question: string;
   today: string;
+  /** Current local datetime label (same TZ as today), including clock time. */
+  now?: string;
   records: QueryContextRecord[];
   finance?: QueryFinanceAggregate | null;
   /** Prior turns in this Ask thread (oldest → newest), excluding the current question. */
@@ -1051,6 +1055,7 @@ class OpenAiService implements AiService {
           role: "user",
           content: JSON.stringify({
             today: request.today,
+            now: request.now ?? null,
             question: request.question,
             conversation: (request.conversation ?? []).slice(-12).map((t) => ({
               role: t.role,
@@ -1061,6 +1066,8 @@ class OpenAiService implements AiService {
               entityType: r.entityType,
               entityId: r.entityId,
               title: r.title,
+              // Date is separate so truncation of body text cannot drop the sent time.
+              date: r.date ?? null,
               // Keep person name fields intact; other records stay capped.
               text: r.text.slice(0, r.entityType === "person" ? 800 : 500),
             })),

@@ -22,8 +22,12 @@ export const WAITING_INTENT =
 export const NOTE_CAPABILITY_INTENT =
   /^\s*(?:can|could|would|will|are)\s+you\s+(?:able\s+to\s+)?(?:check|search|read|review|look\s+(?:at|in|through))\s+(?:(?:my|the)\s+)?notes?\s*[?.!]*\s*$/i;
 
+export function recallTimezone(): string {
+  return process.env.RECALL_TIMEZONE?.trim() || "America/New_York";
+}
+
 export function todayIso(now: Date = new Date()): string {
-  const tz = process.env.RECALL_TIMEZONE?.trim() || "America/New_York";
+  const tz = recallTimezone();
   try {
     return new Intl.DateTimeFormat("en-CA", {
       timeZone: tz,
@@ -34,6 +38,38 @@ export function todayIso(now: Date = new Date()): string {
   } catch {
     return now.toISOString().slice(0, 10);
   }
+}
+
+/**
+ * Human-readable instant in the user's timezone for Ask / Gmail context.
+ * Keep this short and unambiguous so models cite it instead of inventing noon.
+ */
+export function formatInstantForUser(
+  value: string | Date | null | undefined,
+): string | null {
+  if (value == null || value === "") return null;
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  const tz = recallTimezone();
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      weekday: "short",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    }).format(d);
+  } catch {
+    return d.toISOString();
+  }
+}
+
+/** Full local "now" label so the model can refuse future-looking email times. */
+export function nowLocalLabel(now: Date = new Date()): string {
+  return formatInstantForUser(now) ?? now.toISOString();
 }
 
 /** Exact money string with cents (e.g. -$12.80, $1,551.12). */

@@ -5,11 +5,57 @@ import {
   FINANCE_INTENT,
   NOTE_CAPABILITY_INTENT,
   financeMetricForQuestion,
+  formatInstantForUser,
   formatMoney,
+  nowLocalLabel,
   parseDateRange,
   parseFinanceDateRange,
   primaryFinanceFigure,
+  todayIso,
 } from "./query-utils";
+
+describe("formatInstantForUser", () => {
+  it("formats UTC instants in America/New_York with clock time", () => {
+    const prev = process.env.RECALL_TIMEZONE;
+    process.env.RECALL_TIMEZONE = "America/New_York";
+    try {
+      const label = formatInstantForUser("2026-07-09T17:53:44.000Z");
+      expect(label).toMatch(/Jul 9, 2026/);
+      expect(label).toMatch(/1:53\s*PM/);
+      expect(label).not.toMatch(/12:00/);
+    } finally {
+      if (prev === undefined) delete process.env.RECALL_TIMEZONE;
+      else process.env.RECALL_TIMEZONE = prev;
+    }
+  });
+
+  it("returns null for empty/invalid values", () => {
+    expect(formatInstantForUser(null)).toBeNull();
+    expect(formatInstantForUser("not-a-date")).toBeNull();
+  });
+});
+
+describe("nowLocalLabel", () => {
+  it("includes a clock time for today", () => {
+    const label = nowLocalLabel(new Date("2026-07-14T13:42:00.000Z"));
+    expect(label).toMatch(/2026/);
+    expect(label).toMatch(/\d{1,2}:\d{2}/);
+  });
+});
+
+describe("todayIso", () => {
+  it("uses the configured timezone date", () => {
+    const prev = process.env.RECALL_TIMEZONE;
+    process.env.RECALL_TIMEZONE = "America/New_York";
+    try {
+      // 2026-07-14 02:00 UTC is still Jul 13 in New York.
+      expect(todayIso(new Date("2026-07-14T02:00:00.000Z"))).toBe("2026-07-13");
+    } finally {
+      if (prev === undefined) delete process.env.RECALL_TIMEZONE;
+      else process.env.RECALL_TIMEZONE = prev;
+    }
+  });
+});
 
 describe("NOTE_CAPABILITY_INTENT", () => {
   it("recognizes note capability questions without a search topic", () => {
