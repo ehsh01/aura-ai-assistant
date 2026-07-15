@@ -219,7 +219,11 @@ async function planDriveSearchWithAi(text: string): Promise<PlannedDriveSearch |
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
 
-  const model = process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
+  // Planning is a small, latency-sensitive step — use the faster planner model when set.
+  const model =
+    process.env.OPENAI_PLANNER_MODEL?.trim() ||
+    process.env.OPENAI_MODEL?.trim() ||
+    "gpt-4o-mini";
   const client = new OpenAI({ apiKey });
   const today = new Date().toISOString().slice(0, 10);
 

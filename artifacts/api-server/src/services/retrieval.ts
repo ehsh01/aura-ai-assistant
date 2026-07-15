@@ -68,6 +68,7 @@ type ContextRecord = {
 /** Permanent memories outrank ephemeral notes/captures in hybrid scoring. */
 function typeBoost(entityType: string, pinned?: boolean): number {
   if (entityType === "memory") return pinned ? 0.35 : 0.22;
+  if (entityType === "note") return 0.1;
   if (entityType === "knowledge") return 0.08;
   if (entityType === "person") return 0.05;
   if (entityType === "vehicle" || entityType === "warranty" || entityType === "home") return 0.12;
@@ -647,7 +648,11 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
 
 async function collectCorpus(
   userId: string,
-): Promise<{ records: ContextRecord[]; people: PersonRef[] }> {
+): Promise<{
+  records: ContextRecord[];
+  people: PersonRef[];
+  tasks: Awaited<ReturnType<typeof listTasksForUser>>;
+}> {
   const [tasks, notes, people, knowledge, memories, documents, captures, vehiclesList, homesList, warrantiesList, orgsList, invoicesList, sources, aliases] =
     await Promise.all([
       listTasksForUser(userId),
@@ -863,25 +868,37 @@ async function collectCorpus(
   return {
     records,
     people: peopleWithAliasNames(peopleRefs, aliases),
+    // Surfaced so callers (query-engine) can reuse the raw task list instead of
+    // issuing a second listTasksForUser query on the same request.
+    tasks,
   };
 }
 
 /**
  * Hybrid retrieval: keyword + semantic embeddings (when available).
  * Vectors are L1 (memory) + L2 (entity_embeddings) cached by content hash.
+ *
+ * @param noteSearchQuery Prefer the current user turn alone for note FTS so
+ * prior thread turns (emails, etc.) don't AND-pollute the notes query.
  */
 export async function retrieveRelevantRecords(
   userId: string,
   question: string,
   limit = 16,
+  options?: { noteSearchQuery?: string },
 ): Promise<{
   records: RetrievedRecord[];
   usedSemantic: boolean;
   namedPeople: { id: string; displayName: string }[];
+  tasks: Awaited<ReturnType<typeof listTasksForUser>>;
 }> {
-  const [{ records: baseCorpus, people }, noteSearchHits] = await Promise.all([
+  const noteQuery = (options?.noteSearchQuery ?? question).trim() || question;
+  // Embed the query in parallel with the corpus load — it doesn't depend on the
+  // corpus, so this removes a sequential OpenAI round-trip from the critical path.
+  const [{ records: baseCorpus, people, tasks }, noteSearchHits, queryVec] = await Promise.all([
     collectCorpus(userId),
-    searchNotesForUser(userId, question, 12).catch(() => []),
+    searchNotesForUser(userId, noteQuery, 20).catch(() => []),
+    embedQuery(question).catch(() => null),
   ]);
   const corpus = [...baseCorpus];
   const corpusNoteIds = new Set(
@@ -899,7 +916,7 @@ export async function retrieveRelevantRecords(
     corpusNoteIds.add(note.id);
   }
   if (corpus.length === 0) {
-    return { records: [], usedSemantic: false, namedPeople: [] };
+    return { records: [], usedSemantic: false, namedPeople: [], tasks };
   }
 
   const intent = googleIntent(question);
@@ -1029,7 +1046,6 @@ export async function retrieveRelevantRecords(
   const semanticScores = new Map<string, number>();
 
   try {
-    const queryVec = await embedQuery(question);
     if (queryVec) {
       // Prefer embedding the keyword shortlist + a broader sample for recall.
       const shortlistIds = new Set(
@@ -1154,6 +1170,32 @@ export async function retrieveRelevantRecords(
     .slice(0, limit)
     .map(({ r, score, method }) => toRetrieved(r, score, method));
 
+  // Force-include full-library note FTS hits so older notes (and keyword matches
+  // below the semantic threshold) aren't crowded out by Gmail/memory boosts.
+  if (noteSearchHits.length > 0) {
+    const already = new Set(top.map((r) => `${r.entityType}:${r.entityId}`));
+    const noteById = new Map(
+      corpus
+        .filter((r) => r.entityType === "note")
+        .map((r) => [r.entityId, r] as const),
+    );
+    const injected: RetrievedRecord[] = [];
+    for (const note of noteSearchHits.slice(0, Math.min(8, limit))) {
+      const key = `note:${note.id}`;
+      if (already.has(key)) continue;
+      const r = noteById.get(note.id);
+      if (!r) continue;
+      injected.push(toRetrieved(r, 1.05, "keyword"));
+      already.add(key);
+    }
+    if (injected.length > 0) {
+      top = [...injected, ...top].slice(
+        0,
+        Math.max(limit, Math.min(16, injected.length + 6)),
+      );
+    }
+  }
+
   // Prefer emails whose From name/address matches the asked-about person.
   // Always pull recent mail from EACH connected mailbox so REI / personal aren't starved.
   if (wantsGoogle || senderMatchedMail.length > 0) {
@@ -1277,8 +1319,9 @@ export async function retrieveRelevantRecords(
         .map(({ r, kw }) => toRetrieved(r, kw, "keyword")),
       usedSemantic: false,
       namedPeople: named,
+      tasks,
     };
   }
 
-  return { records: top, usedSemantic, namedPeople: named };
+  return { records: top, usedSemantic, namedPeople: named, tasks };
 }

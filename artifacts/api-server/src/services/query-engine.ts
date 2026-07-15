@@ -1,4 +1,3 @@
-import { listTasksForUser } from "./tasks";
 import type { EvidenceDto } from "./evidence";
 import { aiService, type QueryFinanceAggregate } from "./ai";
 import {
@@ -91,6 +90,20 @@ export type QueryAnswer = {
   };
 };
 
+/** Metadata emitted once, before answer tokens, so the UI can show sources instantly. */
+export type QueryStreamMeta = {
+  threadId: string;
+  evidence: EvidenceDto[];
+  relatedRecords: { entityType: string; entityId: string; title: string }[];
+  privacy: QueryAnswer["privacy"];
+};
+
+/** Streaming callbacks for the SSE Ask endpoint. */
+export type QueryStreamHandlers = {
+  onMeta: (meta: QueryStreamMeta) => void;
+  onToken: (delta: string) => void;
+};
+
 function makeEvidence(input: {
   claimType: string;
   evidenceText: string;
@@ -138,12 +151,14 @@ function makeEvidence(input: {
 export async function queryRecallForUser(
   userId: string,
   question: string,
-  options?: { threadId?: string | null },
+  options?: { threadId?: string | null; stream?: QueryStreamHandlers | null },
 ): Promise<QueryAnswer> {
   const today = todayIso();
   const nowLabel = nowLocalLabel();
   const status = aiService.getStatus();
   const degraded = status.degraded;
+  const stream = options?.stream ?? null;
+  let streamMetaEmitted = false;
   const waitingIntent = WAITING_INTENT.test(question);
   const personIntent = PERSON_INTENT.test(question);
   const familyIntent = FAMILY_RELATION_INTENT.test(question);
@@ -163,17 +178,20 @@ export async function queryRecallForUser(
     content: question,
   });
 
+  // retrieveRelevantRecords already loads the task list while building the corpus,
+  // so reuse it here instead of issuing a duplicate listTasksForUser query.
   const [
-    { records: relevantRaw, usedSemantic, namedPeople },
-    tasks,
+    { records: relevantRaw, usedSemantic, namedPeople, tasks },
     waitingRaw,
   ] = await Promise.all([
     retrieveRelevantRecords(
       userId,
       retrievalQuestion,
       familyIntent || /\b(email|emails|gmail|inbox|mail)\b/i.test(retrievalQuestion) ? 16 : 12,
+      // FTS uses only the current turn so prior thread context (emails, etc.)
+      // doesn't AND-pollute the notes query.
+      { noteSearchQuery: question },
     ),
-    listTasksForUser(userId),
     waitingIntent || personIntent
       ? listWaitingOnForUser(userId, 12)
       : Promise.resolve([]),
@@ -241,7 +259,10 @@ export async function queryRecallForUser(
     FINANCE_BREAKDOWN_INTENT.test(question) ||
     FINANCE_INTENT.test(retrievalQuestion)
   ) {
-    await ensureUserFinanceFresh(userId, { awaitSync: true });
+    // Don't block the answer on an external MyFamilyBudget sync. Serve the
+    // currently-synced data now and refresh in the background for next time;
+    // loadSyncedFinanceAggregate still flags needsSync when nothing is synced yet.
+    void ensureUserFinanceFresh(userId, { awaitSync: false });
     try {
       const synced = await loadSyncedFinanceAggregate(userId, retrievalQuestion, today);
       if (synced) {
@@ -534,6 +555,7 @@ export async function queryRecallForUser(
       privacy?: QueryAnswer["privacy"];
       threadId?: string | null;
     },
+    streamOpts?: { streamed?: boolean },
   ): Promise<QueryAnswer> => {
     const categoriesSent = [
       ...new Set(
@@ -552,6 +574,23 @@ export async function queryRecallForUser(
         categoriesSent,
       },
     };
+
+    // Streaming: emit sources once, then the answer text. When the LLM path
+    // already streamed tokens (streamed: true), only emit meta if not sent yet.
+    if (stream) {
+      if (!streamMetaEmitted) {
+        streamMetaEmitted = true;
+        stream.onMeta({
+          threadId: withPrivacy.threadId ?? thread.id,
+          evidence: withPrivacy.evidence,
+          relatedRecords: withPrivacy.relatedRecords,
+          privacy: withPrivacy.privacy,
+        });
+      }
+      if (!streamOpts?.streamed) {
+        stream.onToken(withPrivacy.answer);
+      }
+    }
 
     await appendAskMessage({
       userId,
@@ -704,7 +743,7 @@ export async function queryRecallForUser(
   if (!degraded) {
     try {
       const metric = finance && !financeNeedsSync ? financeMetricForQuestion(question) : null;
-      const ai = await aiService.answerQuery({
+      const answerRequest = {
         question,
         today,
         now: nowLabel,
@@ -724,7 +763,64 @@ export async function queryRecallForUser(
               }
             : null,
         conversation,
-      });
+      };
+
+      // Streaming path: emit sources first, then stream answer tokens. Confidence
+      // and caveats are derived from retrieval signals (the model returns plain text).
+      if (stream && typeof aiService.answerQueryStream === "function") {
+        streamMetaEmitted = true;
+        stream.onMeta({
+          threadId: thread.id,
+          evidence,
+          relatedRecords,
+          privacy: {
+            model: status.model,
+            dataLeftDevice: Boolean(status.enabled),
+            categoriesSent: [
+              ...new Set(
+                [
+                  ...relatedRecords.map((r) => r.entityType),
+                  ...relevant.map((r) => r.entityType),
+                ].filter(Boolean),
+              ),
+            ],
+          },
+        });
+        const streamed = await aiService.answerQueryStream(answerRequest, (delta) =>
+          stream.onToken(delta),
+        );
+        const hasGrounding =
+          relevant.length > 0 || waitingItems.length > 0 || (finance && !financeNeedsSync);
+        const confidence = financeNeedsSync
+          ? 0.4
+          : finance
+            ? 0.85
+            : hasGrounding
+              ? usedSemantic
+                ? 0.8
+                : 0.72
+              : 0.4;
+        const caveats = financeNeedsSync
+          ? "Finance data needs a sync on Connectors before totals are reliable."
+          : !hasGrounding
+            ? "Limited matching records found."
+            : null;
+        return finish(
+          {
+            answer: streamed.answer,
+            confidence,
+            caveats,
+            evidence,
+            relatedRecords,
+            suggestedNextAction: defaultNext,
+            promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+            degraded: streamed.degraded,
+          },
+          { streamed: true },
+        );
+      }
+
+      const ai = await aiService.answerQuery(answerRequest);
       let caveats = ai.caveats;
       if (financeNeedsSync) {
         caveats = [caveats, "Finance data needs a sync on Connectors before totals are reliable."]

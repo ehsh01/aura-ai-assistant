@@ -536,10 +536,7 @@ export async function refreshFinance(): Promise<{ ok: boolean; synced: boolean; 
   return apiFetch("/finance/refresh", { method: "POST", body: "{}" });
 }
 
-export async function queryRecall(
-  question: string,
-  options?: { threadId?: string | null },
-): Promise<{
+export type QueryRecallResult = {
   answer: string;
   confidence: number;
   caveats: string | null;
@@ -552,7 +549,19 @@ export async function queryRecall(
     dataLeftDevice: boolean;
     categoriesSent: string[];
   };
-}> {
+};
+
+export type QueryRecallStreamMeta = {
+  threadId: string;
+  evidence: EvidenceRecord[];
+  relatedRecords: { entityType: string; entityId: string; title: string }[];
+  privacy?: QueryRecallResult["privacy"];
+};
+
+export async function queryRecall(
+  question: string,
+  options?: { threadId?: string | null },
+): Promise<QueryRecallResult> {
   return apiFetch("/ai/query", {
     method: "POST",
     body: JSON.stringify({
@@ -560,6 +569,100 @@ export async function queryRecall(
       threadId: options?.threadId ?? undefined,
     }),
   });
+}
+
+/**
+ * Streaming Ask over Server-Sent Events. Fires onMeta once (sources) then onToken
+ * for each answer chunk, and resolves with the final answer. Callers should catch
+ * and fall back to queryRecall() when streaming is unavailable.
+ */
+export async function queryRecallStream(
+  question: string,
+  options: {
+    threadId?: string | null;
+    signal?: AbortSignal;
+    onMeta?: (meta: QueryRecallStreamMeta) => void;
+    onToken?: (delta: string) => void;
+  },
+): Promise<QueryRecallResult> {
+  const res = await fetch(`${API_BASE}/ai/query/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    credentials: "include",
+    body: JSON.stringify({ question, threadId: options.threadId ?? undefined }),
+    signal: options.signal,
+  });
+  if (!res.ok || !res.body) {
+    const err = (await res.json().catch(() => ({}))) as { message?: string };
+    throw new Error(err.message ?? `Request failed (${res.status})`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let answer = "";
+  let meta: QueryRecallStreamMeta | null = null;
+  let final: Partial<QueryRecallResult> | null = null;
+  let streamError: string | null = null;
+
+  const handleEvent = (event: string, dataStr: string) => {
+    let data: unknown;
+    try {
+      data = JSON.parse(dataStr);
+    } catch {
+      return;
+    }
+    if (event === "meta") {
+      meta = data as QueryRecallStreamMeta;
+      options.onMeta?.(meta);
+    } else if (event === "token") {
+      const delta = (data as { delta?: string }).delta ?? "";
+      if (delta) {
+        answer += delta;
+        options.onToken?.(delta);
+      }
+    } else if (event === "done") {
+      final = data as Partial<QueryRecallResult>;
+    } else if (event === "error") {
+      streamError = (data as { message?: string }).message ?? "Ask failed";
+    }
+  };
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      let event = "message";
+      const dataLines: string[] = [];
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+      }
+      if (dataLines.length > 0) handleEvent(event, dataLines.join("\n"));
+    }
+  }
+
+  if (streamError) throw new Error(streamError);
+
+  // Alias through the declared types: TS narrows closure-mutated `let` unions to
+  // `never` in the linear flow, so read them via explicitly-typed locals.
+  const doneResult = final as Partial<QueryRecallResult> | null;
+  const metaResult = meta as QueryRecallStreamMeta | null;
+
+  return {
+    answer: doneResult?.answer ?? answer,
+    confidence: doneResult?.confidence ?? 0.6,
+    caveats: doneResult?.caveats ?? null,
+    evidence: doneResult?.evidence ?? metaResult?.evidence ?? [],
+    relatedRecords: doneResult?.relatedRecords ?? metaResult?.relatedRecords ?? [],
+    suggestedNextAction: doneResult?.suggestedNextAction ?? null,
+    threadId: doneResult?.threadId ?? metaResult?.threadId ?? options.threadId ?? null,
+    privacy: doneResult?.privacy ?? metaResult?.privacy,
+  };
 }
 
 export type AskThreadRecord = {

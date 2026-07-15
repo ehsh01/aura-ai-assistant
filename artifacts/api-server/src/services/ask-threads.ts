@@ -103,14 +103,28 @@ export async function createAskThreadForUser(
   return toThreadDto(row!);
 }
 
+/** Thread row only — avoids loading the full message list when we just need metadata. */
+export async function getAskThreadMetaForUser(
+  userId: string,
+  threadId: string,
+): Promise<AskThreadDto | null> {
+  const rows = await getDb()
+    .select()
+    .from(askThreads)
+    .where(and(eq(askThreads.id, threadId), eq(askThreads.userId, userId)))
+    .limit(1);
+  return rows[0] ? toThreadDto(rows[0]) : null;
+}
+
 export async function ensureAskThreadForUser(
   userId: string,
   threadId: string | null | undefined,
   firstQuestion: string,
 ): Promise<AskThreadDto> {
   if (threadId) {
-    const existing = await getAskThreadForUser(userId, threadId);
-    if (existing) return existing.thread;
+    // Only the thread row is needed here; recent turns are loaded separately.
+    const existing = await getAskThreadMetaForUser(userId, threadId);
+    if (existing) return existing;
   }
   return createAskThreadForUser(userId, titleFromQuestion(firstQuestion));
 }

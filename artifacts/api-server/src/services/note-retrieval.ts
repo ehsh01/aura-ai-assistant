@@ -15,10 +15,10 @@ function plainText(value: string): string {
 /**
  * Canonical note text used by Ask keyword and semantic retrieval.
  * Attachment text remains generous for exact matches while the leading body
- * and attachment excerpt fit inside the embedding service's 2,000-char cap.
+ * fits a usable Ask context window (LLM caps notes separately).
  */
 export function noteRetrievalText(note: NoteRetrievalSource): string {
-  const body = plainText(note.content || note.preview || "").slice(0, 1_000);
+  const body = plainText(note.content || note.preview || "").slice(0, 2_000);
   const attachments = plainText(note.attachmentText || "").slice(0, 4_000);
   const tags = (note.tags ?? []).join(",");
   const personBits = [note.primaryPersonName, note.primaryPersonId]

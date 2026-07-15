@@ -20,7 +20,7 @@ import {
   syncPersonTag,
 } from "./person-tags";
 import { syncPrimaryPersonLink } from "./entity-links";
-import { normalizeKeywordToken } from "./keyword-match";
+import { KEYWORD_STOP_WORDS, normalizeKeywordToken } from "./keyword-match";
 
 export type RecallNoteDto = {
   id: string;
@@ -142,37 +142,6 @@ export async function listNoteMetadataForUser(userId: string): Promise<RecallNot
   return all.map(toMetadata);
 }
 
-const SEARCH_STOP_WORDS = new Set([
-  "a",
-  "an",
-  "the",
-  "my",
-  "me",
-  "i",
-  "you",
-  "find",
-  "show",
-  "get",
-  "where",
-  "what",
-  "how",
-  "is",
-  "are",
-  "do",
-  "does",
-  "can",
-  "please",
-  "note",
-  "notes",
-  "for",
-  "of",
-  "in",
-  "on",
-  "to",
-  "and",
-  "or",
-]);
-
 function extractSearchTerms(query: string): string[] {
   return [
     ...new Set(
@@ -181,16 +150,22 @@ function extractSearchTerms(query: string): string[] {
         .replace(/['']/g, "")
         .split(/[^a-z0-9]+/)
         .map((term) => normalizeKeywordToken(term))
-        .filter((term) => term.length >= 2 && !SEARCH_STOP_WORDS.has(term)),
+        .filter((term) => term.length >= 2 && !KEYWORD_STOP_WORDS.has(term)),
     ),
   ];
 }
 
-/** Build a safe prefix tsquery from already-sanitized alphanumeric terms. */
+/**
+ * Build a safe prefix tsquery from already-sanitized alphanumeric terms.
+ * Short queries (1–3 terms) use AND for precision; longer conversational
+ * questions use OR so filler that slipped past stop-words can't zero out hits.
+ */
 export function buildNotesTsQuery(terms: string[]): string | null {
   const safe = terms.filter((term) => /^[a-z0-9]+$/i.test(term));
   if (safe.length === 0) return null;
-  return safe.map((term) => `${term.toLowerCase()}:*`).join(" & ");
+  const prefixes = safe.map((term) => `${term.toLowerCase()}:*`);
+  if (prefixes.length <= 3) return prefixes.join(" & ");
+  return prefixes.join(" | ");
 }
 
 function vinHeuristicMatch() {
@@ -206,12 +181,16 @@ function vinHeuristicMatch() {
   );
 }
 
-/** Keyword search across the user's full note library via Postgres FTS (title, body, tags, OCR). */
+/**
+ * Keyword search across the user's full note library via Postgres FTS
+ * (title, body, tags, OCR). Returns full note bodies so Ask ranking/LLM
+ * can use more than the ~120-char preview.
+ */
 export async function searchNotesForUser(
   userId: string,
   query: string,
   limit = 20,
-): Promise<RecallNoteMetadataDto[]> {
+): Promise<RecallNoteDto[]> {
   const terms = extractSearchTerms(query);
   if (terms.length === 0) return [];
 
@@ -240,13 +219,11 @@ export async function searchNotesForUser(
     rows.map((r) => r.primaryPersonId).filter((id): id is string => Boolean(id)),
   );
   return rows.map((row) =>
-    toMetadata(
-      toDto(
-        row,
-        counts.get(row.id) ?? 0,
-        row.primaryPersonId ? names.get(row.primaryPersonId) ?? null : null,
-        attachmentTexts.get(row.id) ?? "",
-      ),
+    toDto(
+      row,
+      counts.get(row.id) ?? 0,
+      row.primaryPersonId ? names.get(row.primaryPersonId) ?? null : null,
+      attachmentTexts.get(row.id) ?? "",
     ),
   );
 }

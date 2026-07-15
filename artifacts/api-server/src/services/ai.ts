@@ -4,7 +4,10 @@ import type {
   ChatCompletionTool,
 } from "openai/resources/chat/completions";
 import { searchNotesForUser } from "./notes";
-import { QUERY_ANSWER_SYSTEM_PROMPT } from "../prompts/queryAnswer.v1";
+import {
+  QUERY_ANSWER_SYSTEM_PROMPT,
+  QUERY_ANSWER_STREAM_SYSTEM_PROMPT,
+} from "../prompts/queryAnswer.v1";
 
 // ---------------------------------------------------------------------------
 // Types (mirror OpenAPI / api-zod shapes)
@@ -201,11 +204,23 @@ export interface AnswerQueryRequest {
   conversation?: { role: "user" | "assistant"; content: string }[];
 }
 
+/** Cap context text sent to the answer model — notes keep enough body to be useful. */
+function answerContextTextCap(entityType: string): number {
+  if (entityType === "person") return 800;
+  if (entityType === "note") return 2_000;
+  return 500;
+}
+
 export interface AnswerQueryResponse extends AiDegradedMeta {
   answer: string;
   confidence: number;
   caveats: string | null;
   suggestedNextAction: string | null;
+}
+
+export interface AnswerQueryStreamResult {
+  answer: string;
+  degraded: boolean;
 }
 
 export interface GenerateWorkNoteRequest {
@@ -242,6 +257,15 @@ export interface AiService {
   classifyCapture(request: ClassifyCaptureRequest): Promise<ClassifyCaptureResponse>;
   generateWorkNote(request: GenerateWorkNoteRequest): Promise<GenerateWorkNoteResponse>;
   answerQuery(request: AnswerQueryRequest): Promise<AnswerQueryResponse>;
+  /**
+   * Optional streaming variant of answerQuery. Streams the plain-text answer
+   * via onToken and resolves with the full text. Only OpenAI-backed services
+   * implement it; callers must fall back to answerQuery / rule-based answers.
+   */
+  answerQueryStream?(
+    request: AnswerQueryRequest,
+    onToken: (delta: string) => void,
+  ): Promise<AnswerQueryStreamResult>;
   /** Optional: only OpenAI-backed services implement real embeddings. */
   embedTexts?(texts: string[]): Promise<number[][]>;
 }
@@ -1069,7 +1093,7 @@ class OpenAiService implements AiService {
               // Date is separate so truncation of body text cannot drop the sent time.
               date: r.date ?? null,
               // Keep person name fields intact; other records stay capped.
-              text: r.text.slice(0, r.entityType === "person" ? 800 : 500),
+              text: r.text.slice(0, answerContextTextCap(r.entityType)),
             })),
           }),
         },
@@ -1113,6 +1137,54 @@ class OpenAiService implements AiService {
         suggestedNextAction: null,
       };
     }
+  }
+
+  async answerQueryStream(
+    request: AnswerQueryRequest,
+    onToken: (delta: string) => void,
+  ): Promise<AnswerQueryStreamResult> {
+    const stream = await this.client.chat.completions.create({
+      model: this.model,
+      messages: [
+        { role: "system", content: QUERY_ANSWER_STREAM_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: JSON.stringify({
+            today: request.today,
+            now: request.now ?? null,
+            question: request.question,
+            conversation: (request.conversation ?? []).slice(-12).map((t) => ({
+              role: t.role,
+              content: t.content.slice(0, 1200),
+            })),
+            finance: request.finance ?? null,
+            records: request.records.map((r) => ({
+              entityType: r.entityType,
+              entityId: r.entityId,
+              title: r.title,
+              date: r.date ?? null,
+              text: r.text.slice(0, answerContextTextCap(r.entityType)),
+            })),
+          }),
+        },
+      ],
+      max_tokens: 700,
+      stream: true,
+    });
+
+    let answer = "";
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content ?? "";
+      if (delta) {
+        answer += delta;
+        onToken(delta);
+      }
+    }
+
+    return {
+      answer: answer.trim() || "I couldn't find enough to answer that confidently.",
+      degraded: false,
+    };
   }
 }
 

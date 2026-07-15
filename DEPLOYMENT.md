@@ -158,7 +158,18 @@ ALLOW_PUBLIC_REGISTER=false
 
 # 64 hex chars (openssl rand -hex 32) — encrypts connector OAuth/API secrets at rest
 SECRETS_ENCRYPTION_KEY=$(openssl rand -hex 32)
+
+# AI models — gpt-4.1-mini is the recommended answer model (faster + better than
+# gpt-4o-mini). The planner model is a smaller/faster model for Gmail/Drive query
+# planning and falls back to OPENAI_MODEL when unset.
+OPENAI_MODEL=gpt-4.1-mini
+OPENAI_PLANNER_MODEL=gpt-4.1-nano
 ```
+
+Ask answers stream over Server-Sent Events (`POST /api/ai/query/stream`); the
+client falls back to the buffered `POST /api/ai/query` automatically. After
+changing model env vars, restart with a full reload so PM2 picks up `.env`
+(`pm2 delete recall-api && pm2 start artifacts/api-server/ecosystem.config.cjs && pm2 save`).
 
 Browser sessions are issued only as `HttpOnly; Secure; SameSite=Lax` cookies
 (`recall_session`) and are not exposed to frontend JavaScript. Each cookie JWT

@@ -222,6 +222,60 @@ router.post("/ai/query", async (req, res, next) => {
   }
 });
 
+// Server-Sent Events variant: streams `meta` (sources) first, then `token`
+// deltas as the answer is generated, then a final `done` event. Falls back to
+// POST /ai/query on the client when streaming is unavailable.
+router.post("/ai/query/stream", async (req, res, next) => {
+  let body: z.infer<typeof AiQueryBody>;
+  try {
+    body = AiQueryBody.parse(req.body);
+  } catch (err) {
+    next(err);
+    return;
+  }
+
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  // Disable proxy buffering (nginx) so tokens flush immediately.
+  res.setHeader("X-Accel-Buffering", "no");
+  (res as unknown as { flushHeaders?: () => void }).flushHeaders?.();
+
+  const send = (event: string, data: unknown) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    (res as unknown as { flush?: () => void }).flush?.();
+  };
+
+  try {
+    const result = await queryRecallForUser(req.user!.id, body.question, {
+      threadId: body.threadId ?? null,
+      stream: {
+        onMeta: (meta) => send("meta", meta),
+        onToken: (delta) => send("token", { delta }),
+      },
+    });
+    send("done", {
+      threadId: result.threadId,
+      answer: result.answer,
+      confidence: result.confidence,
+      caveats: result.caveats,
+      relatedRecords: result.relatedRecords,
+      evidence: result.evidence,
+      suggestedNextAction: result.suggestedNextAction,
+      promptVersion: result.promptVersion,
+      degraded: result.degraded,
+      privacy: result.privacy,
+    });
+    res.end();
+  } catch (err) {
+    // Headers are already sent, so surface the failure as an SSE error event.
+    send("error", {
+      message: err instanceof Error ? err.message : "Ask failed",
+    });
+    res.end();
+  }
+});
+
 router.get("/ai/runs/:jobId", async (req, res, next) => {
   try {
     const job = await getExtractionJobStatus(req.user!.id, req.params.jobId);

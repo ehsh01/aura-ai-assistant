@@ -11,10 +11,12 @@ import {
   listPeople,
   listWaitingOn,
   queryRecall,
+  queryRecallStream,
   setStoredAskThreadId,
   type AskMessageRecord,
   type AskThreadRecord,
   type EvidenceRecord,
+  type QueryRecallResult,
 } from "@/lib/recall-api";
 import { entityPath, readSearchParam } from "@/lib/recall-nav";
 import { useSpeakAnswer } from "@/hooks/use-speak-answer";
@@ -168,35 +170,40 @@ export function Ask() {
     setError(null);
     // Show only this turn in the main pane (history stays in the sidebar).
     const tempId = `local-${Date.now()}`;
+    const assistantId = `${tempId}-a`;
+    const userMessage: AskMessageRecord = {
+      id: tempId,
+      threadId: threadId ?? "pending",
+      role: "user",
+      content: trimmed,
+      metadata: {},
+      createdAt: new Date().toISOString(),
+    };
+    // Seed the user turn plus an empty assistant turn that fills in as tokens arrive.
     setMessages([
+      userMessage,
       {
-        id: tempId,
-        threadId: threadId ?? "pending",
-        role: "user",
-        content: trimmed,
+        id: assistantId,
+        threadId: threadId ?? "local",
+        role: "assistant",
+        content: "",
         metadata: {},
         createdAt: new Date().toISOString(),
       },
     ]);
-    try {
-      const res = await queryRecall(trimmed, { threadId });
+
+    const applyResult = (res: QueryRecallResult) => {
       if (res.threadId) {
         setThreadId(res.threadId);
         setStoredAskThreadId(res.threadId);
-        await refreshThreads();
+        void refreshThreads();
       }
+      const resolvedThreadId = res.threadId ?? threadId ?? "local";
       setMessages([
+        { ...userMessage, threadId: resolvedThreadId },
         {
-          id: tempId,
-          threadId: res.threadId ?? threadId ?? "local",
-          role: "user",
-          content: trimmed,
-          metadata: {},
-          createdAt: new Date().toISOString(),
-        },
-        {
-          id: `${tempId}-a`,
-          threadId: res.threadId ?? threadId ?? "local",
+          id: assistantId,
+          threadId: resolvedThreadId,
           role: "assistant",
           content: res.answer,
           metadata: {
@@ -218,9 +225,40 @@ export function Ask() {
         suggestedNextAction: res.suggestedNextAction,
         privacy: res.privacy,
       });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not reach Recall AI.");
-      setMessages([]);
+    };
+
+    try {
+      const res = await queryRecallStream(trimmed, {
+        threadId,
+        onMeta: (m) => {
+          // Surface sources immediately, before the answer text streams in.
+          setLatestMeta((prev) => ({
+            confidence: prev?.confidence ?? 0,
+            caveats: prev?.caveats ?? null,
+            evidence: m.evidence,
+            relatedRecords: m.relatedRecords,
+            suggestedNextAction: prev?.suggestedNextAction ?? null,
+            privacy: m.privacy,
+          }));
+        },
+        onToken: (delta) => {
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantId ? { ...msg, content: msg.content + delta } : msg,
+            ),
+          );
+        },
+      });
+      applyResult(res);
+    } catch {
+      // Streaming failed or is unavailable — fall back to the buffered endpoint.
+      try {
+        const res = await queryRecall(trimmed, { threadId });
+        applyResult(res);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not reach Recall AI.");
+        setMessages([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -347,7 +385,9 @@ export function Ask() {
                 </div>
               )}
 
-              {messages.map((m) => (
+              {messages
+                .filter((m) => m.role !== "assistant" || m.content.length > 0)
+                .map((m) => (
                 <div
                   key={m.id}
                   className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
@@ -364,13 +404,16 @@ export function Ask() {
                 </div>
               ))}
 
-              {loading && (
-                <div className="flex justify-start">
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-white/45">
-                    Thinking…
+              {loading &&
+                !messages.some(
+                  (m) => m.role === "assistant" && m.content.length > 0,
+                ) && (
+                  <div className="flex justify-start">
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-white/45">
+                      Thinking…
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
               {error && (
                 <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
