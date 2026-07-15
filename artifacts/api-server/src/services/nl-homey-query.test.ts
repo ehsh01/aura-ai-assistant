@@ -27,6 +27,15 @@ describe("nl-homey-query", () => {
     }
   });
 
+  it("plans when-was-opened questions against alarm_contact", () => {
+    const plan = planHomeyAsk("When was the front door opened?");
+    expect(plan?.intent).toBe("status");
+    if (plan?.intent === "status") {
+      expect(plan.capabilityHint).toBe("alarm_contact");
+      expect(plan.deviceHint?.toLowerCase()).toMatch(/front door/);
+    }
+  });
+
   it("plans control with confirmation flag", () => {
     const plan = planHomeyAsk("Lock the front door");
     expect(plan?.intent).toBe("control");

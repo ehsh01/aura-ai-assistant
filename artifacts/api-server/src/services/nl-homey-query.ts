@@ -35,7 +35,7 @@ const CONTROL_INTENT =
   /\b(turn\s+(on|off)|switch\s+(on|off)|set|lock|unlock|open|close|start|trigger|run|activate|dim)\b/i;
 
 const STATUS_INTENT =
-  /\b(is|are|status|state|what(?:'s| is)|check|how\s+(?:warm|cold|hot)|temperature|open|closed|locked|unlocked|on|off)\b/i;
+  /\b(is|are|was|were|status|state|what(?:'s| is)|when|what\s+time|check|how\s+(?:warm|cold|hot)|temperature|open|opened|closed|locked|unlocked|on|off)\b/i;
 
 const CONFIRM =
   /\b(confirm(?:ed)?|yes[,.]?\s*(do\s+it|please)?|go\s+ahead|proceed)\b/i;
@@ -53,7 +53,10 @@ function extractDeviceHint(text: string): string | null {
   const cleaned = text
     .replace(FILLER, " ")
     .replace(CONTROL_INTENT, " ")
-    .replace(/\b(is|are|status|state|what|check|confirm(?:ed)?|yes|go ahead|proceed)\b/gi, " ")
+    .replace(
+      /\b(is|are|was|were|status|state|what|when|check|time|opened|closed|confirm(?:ed)?|yes|go ahead|proceed)\b/gi,
+      " ",
+    )
     .replace(/\s+/g, " ")
     .trim();
   if (cleaned.length < 2) return null;
@@ -147,6 +150,8 @@ export function planHomeyAsk(question: string): HomeyAskPlan {
 
   if (wantsStatus || HOMEY_INTENT.test(q)) {
     const { capability } = inferCapabilityAndValue(q);
+    const doorOrContact =
+      /\b(door|contact|window|opened|closed)\b/i.test(q) && !/\block\b/i.test(q);
     return {
       intent: "status",
       deviceHint: extractDeviceHint(q),
@@ -154,11 +159,13 @@ export function planHomeyAsk(question: string): HomeyAskPlan {
         capability ??
         (/\btemp|warm|cold|hot|degrees?\b/i.test(q)
           ? "measure_temperature"
-          : /\block|door\b/i.test(q)
-            ? "locked"
-            : /\blight|lamp|on|off\b/i.test(q)
-              ? "onoff"
-              : null),
+          : doorOrContact
+            ? "alarm_contact"
+            : /\block\b/i.test(q)
+              ? "locked"
+              : /\blight|lamp|on|off\b/i.test(q)
+                ? "onoff"
+                : null),
     };
   }
 

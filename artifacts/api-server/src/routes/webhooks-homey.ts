@@ -14,6 +14,8 @@ const HomeyWebhookBody = z.object({
   deviceName: z.string().max(300).nullish(),
   kind: z.string().max(100).nullish(),
   homeyDeviceId: z.string().max(128).nullish(),
+  /** ISO datetime or epoch ms when the Homey event occurred. */
+  occurredAt: z.union([z.string().max(64), z.number()]).nullish(),
 });
 
 const router: IRouter = Router();

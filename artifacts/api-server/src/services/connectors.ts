@@ -18,6 +18,7 @@ import {
 } from "../connectors/google";
 import {
   fetchHomeyBundle,
+  formatHomeyLocalTime,
   generateHomeyWebhookSecret,
   homeyConnector,
   listHomeyDevices,
@@ -364,7 +365,7 @@ export async function executeHomeyAskForUser(
         plan.capabilityHint && device.capabilities.includes(plan.capabilityHint)
           ? plan.capabilityHint
           : device.capabilities.find((c) =>
-              ["onoff", "locked", "alarm_contact", "measure_temperature", "garagedoor_closed"].includes(
+              ["alarm_contact", "onoff", "locked", "measure_temperature", "garagedoor_closed"].includes(
                 c,
               ),
             ) ?? device.capabilities[0] ?? null;
@@ -374,14 +375,20 @@ export async function executeHomeyAskForUser(
           : cap
             ? device.values[cap]
             : null;
+      const changedIso = cap ? device.lastChanged[cap] : null;
+      const changedLine = changedIso
+        ? ` last changed ${formatHomeyLocalTime(changedIso)}`
+        : "";
+      const humanState = describeHomeyCapabilityState(cap, value);
       const stateLine =
-        cap != null
+        humanState ??
+        (cap != null
           ? `${cap}=${JSON.stringify(value ?? device.values[cap] ?? "unknown")}`
-          : formatHomeyValues(device.values);
+          : formatHomeyValues(device.values));
       return {
         ok: true,
-        answer: `${device.name}${device.zoneName ? ` (${device.zoneName})` : ""}: ${stateLine}.`,
-        evidenceText: `Homey device ${device.name} ${stateLine}`,
+        answer: `${device.name}${device.zoneName ? ` (${device.zoneName})` : ""}: ${stateLine}.${changedLine ? `${changedLine}.` : ""}`,
+        evidenceText: `Homey device ${device.name} ${cap ?? "state"}=${JSON.stringify(value)}${changedIso ? ` lastChanged=${changedIso}` : ""}`,
       };
     }
 
@@ -528,6 +535,33 @@ function formatHomeyValues(values: Record<string, unknown>): string {
   const entries = Object.entries(values).slice(0, 8);
   if (!entries.length) return "no live state cached — try Sync on the Homey connector";
   return entries.map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", ");
+}
+
+function describeHomeyCapabilityState(
+  capability: string | null,
+  value: unknown,
+): string | null {
+  if (!capability) return null;
+  if (capability === "alarm_contact") {
+    if (value === true) return "open (contact alarm true)";
+    if (value === false) return "closed (contact alarm false)";
+  }
+  if (capability === "garagedoor_closed") {
+    if (value === true) return "closed";
+    if (value === false) return "open";
+  }
+  if (capability === "locked") {
+    if (value === true) return "locked";
+    if (value === false) return "unlocked";
+  }
+  if (capability === "onoff") {
+    if (value === true) return "on";
+    if (value === false) return "off";
+  }
+  if (capability === "measure_temperature" && typeof value === "number") {
+    return `${value}°`;
+  }
+  return null;
 }
 
 async function fetchTicketEmailRecordsForConnector(conn: Connector): Promise<unknown[]> {

@@ -5,6 +5,7 @@ import {
   isHomeyOAuthConfigured,
   isRiskyHomeyCapability,
   normalizeHomeyAlert,
+  normalizeHomeyLastUpdated,
   normalizeSeverity,
   openHomeyApiSession,
   verifyHomeyWebhookSecret,
@@ -89,6 +90,32 @@ describe("homey connector helpers", () => {
     expect(verifyHomeyWebhookSecret(secret, secret)).toBe(true);
     expect(verifyHomeyWebhookSecret("wrong", secret)).toBe(false);
     expect(verifyHomeyWebhookSecret(null, secret)).toBe(false);
+  });
+
+  it("normalizes Homey lastUpdated timestamps", () => {
+    expect(normalizeHomeyLastUpdated("2026-07-15T16:14:03.000Z")).toBe(
+      "2026-07-15T16:14:03.000Z",
+    );
+    expect(normalizeHomeyLastUpdated(1_721_070_843_000)).toBe(
+      new Date(1_721_070_843_000).toISOString(),
+    );
+    expect(normalizeHomeyLastUpdated(null)).toBeNull();
+  });
+
+  it("preserves occurredAt on alerts", () => {
+    const alert = normalizeHomeyAlert(
+      {
+        title: "Front door opened",
+        severity: "info",
+        kind: "door_opened",
+        deviceName: "Front door",
+        occurredAt: "2026-07-15T16:14:03.000Z",
+      },
+      { connectorId: "conn-1" },
+    );
+    expect(alert.sourceCreatedAt).toBe("2026-07-15T16:14:03.000Z");
+    expect(alert.metadata?.occurredAt).toBe("2026-07-15T16:14:03.000Z");
+    expect(alert.recordText).toContain("occurredAt: 2026-07-15T16:14:03.000Z");
   });
 
   it("normalizes alert + device bundle records", async () => {

@@ -24,6 +24,8 @@ export type HomeyDeviceSummary = {
   capabilities: string[];
   /** capabilityId → current value (best-effort) */
   values: Record<string, unknown>;
+  /** capabilityId → lastChanged ISO timestamp (from Homey capabilitiesObj.lastUpdated) */
+  lastChanged: Record<string, string>;
 };
 
 export type HomeyFlowSummary = {
@@ -41,6 +43,8 @@ export type HomeyAlertPayload = {
   deviceName?: string | null;
   kind?: string | null;
   homeyDeviceId?: string | null;
+  /** When the event happened on Homey (ISO or epoch ms). Defaults to ingest time. */
+  occurredAt?: string | number | null;
 };
 
 function homeyConfig() {
@@ -407,10 +411,59 @@ type HomeyDeviceApi = {
   zoneName?: string;
   class?: string;
   capabilities?: string[];
-  capabilitiesObj?: Record<string, { value?: unknown }>;
+  capabilitiesObj?: Record<
+    string,
+    { value?: unknown; lastUpdated?: string | number | null }
+  >;
 };
 
 type HomeyZoneApi = { id?: string; name?: string };
+
+/** Homey returns lastUpdated as ISO string or epoch ms (sometimes missing). */
+export function normalizeHomeyLastUpdated(
+  value: string | number | null | undefined,
+): string | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const ms = value < 1_000_000_000_000 ? value * 1000 : value;
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  const raw = String(value).trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) {
+    return normalizeHomeyLastUpdated(Number(raw));
+  }
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+export function formatHomeyLocalTime(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const tz = process.env.RECALL_TIMEZONE?.trim() || "America/New_York";
+  try {
+    const formatted = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }).format(d);
+    const mins = Math.max(0, Math.round((now.getTime() - d.getTime()) / 60_000));
+    if (mins < 1) return `${formatted} (just now)`;
+    if (mins < 60) return `${formatted} (${mins} min ago)`;
+    if (mins < 48 * 60) {
+      const hrs = Math.round(mins / 60);
+      return `${formatted} (${hrs} hour${hrs === 1 ? "" : "s"} ago)`;
+    }
+    return formatted;
+  } catch {
+    return d.toISOString();
+  }
+}
 
 function deviceToSummary(
   d: HomeyDeviceApi,
@@ -419,8 +472,11 @@ function deviceToSummary(
   const id = d.id;
   if (!id) return null;
   const values: Record<string, unknown> = {};
+  const lastChanged: Record<string, string> = {};
   for (const [cap, obj] of Object.entries(d.capabilitiesObj ?? {})) {
     if (obj && "value" in obj) values[cap] = obj.value;
+    const ts = normalizeHomeyLastUpdated(obj?.lastUpdated);
+    if (ts) lastChanged[cap] = ts;
   }
   const zoneId =
     typeof (d as { zone?: string }).zone === "string"
@@ -433,6 +489,7 @@ function deviceToSummary(
     className: d.class ?? null,
     capabilities: d.capabilities ?? Object.keys(d.capabilitiesObj ?? {}),
     values,
+    lastChanged,
   };
 }
 
@@ -527,10 +584,18 @@ export async function triggerHomeyFlow(
   );
 }
 
-function formatCapabilityValues(values: Record<string, unknown>): string {
+function formatCapabilityValues(
+  values: Record<string, unknown>,
+  lastChanged?: Record<string, string>,
+): string {
   return Object.entries(values)
     .slice(0, 24)
-    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+    .map(([k, v]) => {
+      const changed = lastChanged?.[k];
+      return changed
+        ? `${k}=${JSON.stringify(v)} (changed ${changed})`
+        : `${k}=${JSON.stringify(v)}`;
+    })
     .join("; ");
 }
 
@@ -561,7 +626,7 @@ export async function fetchHomeyBundle(
       d.className ? `class: ${d.className}` : null,
       d.capabilities.length ? `capabilities: ${d.capabilities.join(", ")}` : null,
       Object.keys(d.values).length
-        ? `state: ${formatCapabilityValues(d.values)}`
+        ? `state: ${formatCapabilityValues(d.values, d.lastChanged)}`
         : null,
     ]
       .filter(Boolean)
@@ -573,6 +638,7 @@ export async function fetchHomeyBundle(
       className: d.className,
       capabilities: d.capabilities,
       values: d.values,
+      lastChanged: d.lastChanged,
       homeyId: session.homeyId,
     },
   }));
@@ -606,9 +672,10 @@ export function normalizeHomeyAlert(
   const title = (payload.title || "Homey alert").trim().slice(0, 400);
   const message = (payload.message ?? "").toString().trim();
   const deviceName = (payload.deviceName ?? "").toString().trim();
-  const now = new Date();
-  const stamp = now.toISOString();
-  const externalId = `homey-alert:${opts?.connectorId ?? "x"}:${severity}:${kind}:${deviceName || title}:${Math.floor(now.getTime() / 60_000)}`;
+  const occurredIso =
+    normalizeHomeyLastUpdated(payload.occurredAt) ?? new Date().toISOString();
+  const occurredMs = Date.parse(occurredIso);
+  const externalId = `homey-alert:${opts?.connectorId ?? "x"}:${severity}:${kind}:${deviceName || title}:${Math.floor(occurredMs / 60_000)}`;
 
   return {
     externalId,
@@ -621,16 +688,18 @@ export function normalizeHomeyAlert(
       deviceName ? `device: ${deviceName}` : null,
       payload.homeyDeviceId ? `homeyDeviceId: ${payload.homeyDeviceId}` : null,
       message ? `message: ${message}` : null,
-      `Date: ${stamp}`,
+      `occurredAt: ${occurredIso}`,
+      `Date: ${occurredIso}`,
     ]
       .filter(Boolean)
       .join("\n"),
-    sourceCreatedAt: stamp,
+    sourceCreatedAt: occurredIso,
     metadata: {
       severity,
       kind,
       deviceName: deviceName || null,
       homeyDeviceId: payload.homeyDeviceId ?? null,
+      occurredAt: occurredIso,
       acknowledgedAt: null,
     },
   };

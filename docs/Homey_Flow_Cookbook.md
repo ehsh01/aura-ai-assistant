@@ -19,7 +19,8 @@ Recall accepts important home events from Homey Flows. Homey filters first; Reca
   "severity": "warn",
   "kind": "door_open_too_long",
   "deviceName": "Front door",
-  "homeyDeviceId": "optional-homey-device-id"
+  "homeyDeviceId": "optional-homey-device-id",
+  "occurredAt": "2026-07-15T20:14:03.000Z"
 }
 ```
 
@@ -28,18 +29,20 @@ Recall accepts important home events from Homey Flows. Homey filters first; Reca
 | `title` | yes | Short line for Today |
 | `message` | no | Extra detail |
 | `severity` | no | `info` \| `warn` \| `emergency` (default `warn`) |
-| `kind` | no | e.g. `door_open_too_long`, `leak`, `smoke`, `security`, `other` |
+| `kind` | no | e.g. `door_opened`, `door_open_too_long`, `leak`, `smoke`, `security`, `other` |
 | `deviceName` | no | Used for dedupe + display |
 | `homeyDeviceId` | no | Optional Homey id |
+| `occurredAt` | no | ISO datetime or epoch ms when the event happened; defaults to receive time |
 
 Same `deviceName` + `kind` + `severity` within **10 minutes** is deduped. During quiet hours (**22:00–07:00** in `RECALL_TIMEZONE`), `info` alerts are filtered; `warn` and `emergency` still surface.
 
-## Example Flow 1 — Door open too long
+## Example Flow 1 — Door opened (exact time)
+
+Use this so Ask can answer “when did the front door open?” from alerts (in addition to live `lastUpdated` from Homey sync).
 
 **When**
 
-- Contact alarm / door sensor becomes **open**
-- **And** stays open for **5 minutes** (timer / AND duration cards)
+- Contact alarm / door sensor becomes **open** (alarm goes true)
 
 **Then**
 
@@ -50,6 +53,29 @@ Same `deviceName` + `kind` + `severity` within **10 minutes** is deduped. During
 
 ```json
 {
+  "title": "Front door opened",
+  "severity": "info",
+  "kind": "door_opened",
+  "deviceName": "Front door",
+  "occurredAt": "2026-07-15T20:14:03.000Z"
+}
+```
+
+Homey Logic cards can insert the current date/time into `occurredAt`. If omitted, Recall uses the webhook receive time.
+
+Same device + kind + severity within **10 minutes** is deduped, so rapid re-opens within that window may collapse into one alert. Live Homey `lastUpdated` still answers “last changed” without a Flow.
+
+## Example Flow 2 — Door open too long
+
+**When**
+
+- Contact alarm / door sensor becomes **open**
+- **And** stays open for **5 minutes** (timer / AND duration cards)
+
+**Then**
+
+```json
+{
   "title": "Front door open too long",
   "severity": "warn",
   "kind": "door_open_too_long",
@@ -57,7 +83,7 @@ Same `deviceName` + `kind` + `severity` within **10 minutes** is deduped. During
 }
 ```
 
-## Example Flow 2 — Leak or smoke (emergency)
+## Example Flow 3 — Leak or smoke (emergency)
 
 **When**
 
@@ -76,7 +102,7 @@ Same `deviceName` + `kind` + `severity` within **10 minutes** is deduped. During
 
 Use `kind`: `smoke` and title accordingly for smoke detectors.
 
-## Example Flow 3 — Security / away
+## Example Flow 4 — Security / away
 
 **When**
 
