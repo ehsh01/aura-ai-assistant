@@ -33,6 +33,12 @@ function poolSsl(url: string): pg.PoolConfig["ssl"] {
   return undefined;
 }
 
+function envInt(name: string, fallback: number, min: number, max: number): number {
+  const raw = Number.parseInt(process.env[name]?.trim() ?? "", 10);
+  if (!Number.isFinite(raw)) return fallback;
+  return Math.min(max, Math.max(min, raw));
+}
+
 export function getDb(): Db {
   const url = process.env.DATABASE_URL?.trim();
   if (!url) {
@@ -42,7 +48,14 @@ export function getDb(): Db {
     const connectionString = normalizeDatabaseUrl(url);
     pool = new pg.Pool({
       connectionString,
-      max: 10,
+      // The DO managed cluster is shared with sibling apps (~25 conn cap total).
+      // Keep Recall's slice small; queries queue in-process instead of starving
+      // other apps of connection slots.
+      max: envInt("PG_POOL_MAX", 4, 1, 10),
+      idleTimeoutMillis: envInt("PG_IDLE_TIMEOUT_MS", 10_000, 1_000, 300_000),
+      connectionTimeoutMillis: envInt("PG_CONNECT_TIMEOUT_MS", 15_000, 1_000, 60_000),
+      // Identifiable in pg_stat_activity when auditing shared-cluster usage.
+      application_name: "recall-api",
       ssl: poolSsl(url),
     });
     db = drizzle(pool as never, { schema });

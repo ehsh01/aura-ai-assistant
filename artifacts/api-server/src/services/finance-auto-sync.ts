@@ -69,6 +69,24 @@ export type EnsureFinanceFreshOptions = {
 };
 
 /**
+ * One in-flight sync per user. Concurrent refresh calls (app open + Ask +
+ * summary, or a user re-triggering after an aborted request) share the same
+ * promise instead of stacking full syncs — each sync holds DB connections on
+ * a shared cluster, so fan-out here starved sibling apps.
+ */
+const inflightSyncs = new Map<string, Promise<unknown>>();
+
+function runCoalescedSync(userId: string, connectorId: string): Promise<unknown> {
+  const existing = inflightSyncs.get(userId);
+  if (existing) return existing;
+  const run = syncConnectorForUser(userId, connectorId).finally(() => {
+    inflightSyncs.delete(userId);
+  });
+  inflightSyncs.set(userId, run);
+  return run;
+}
+
+/**
  * Refresh the user's finance connector from MyFamilyBudget.
  * Used on app open and before finance Ask answers.
  */
@@ -105,7 +123,7 @@ export async function ensureUserFinanceFresh(
     return { synced: false, skipped: true };
   }
 
-  const run = syncConnectorForUser(userId, conn.id);
+  const run = runCoalescedSync(userId, conn.id);
   if (awaitSync) {
     try {
       await run;

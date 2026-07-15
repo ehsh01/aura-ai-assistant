@@ -60,7 +60,9 @@ export async function fetchFinanceTransactions(
   const headers: Record<string, string> = { Accept: "application/json" };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-  const res = await fetch(url, { headers });
+  // Bounded: a hung upstream must not hold the sync (and its DB work) open
+  // for the ~2min socket default on a shared connection-capped cluster.
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(30_000) });
   if (!res.ok) {
     throw new Error(`Finance API error: ${res.status} ${res.statusText}`);
   }
