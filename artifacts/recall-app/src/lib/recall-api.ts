@@ -143,6 +143,16 @@ export async function createWaitingFollowUp(waitingItemId: string): Promise<{
   });
 }
 
+export async function dismissWaitingOn(waitingItemId: string): Promise<{
+  ok: boolean;
+  waitingItemId: string;
+}> {
+  return apiFetch("/people/waiting-on/dismiss", {
+    method: "POST",
+    body: JSON.stringify({ waitingItemId }),
+  });
+}
+
 export type ActivityRecord = {
   id: string;
   action: string;

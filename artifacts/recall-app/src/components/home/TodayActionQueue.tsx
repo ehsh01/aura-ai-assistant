@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { ArrowRight, Flame, Hourglass, Inbox, Target } from "lucide-react";
 import type { BriefingItem, FocusNow, WaitingItem } from "@/lib/home-briefing";
-import { createWaitingFollowUp } from "@/lib/recall-api";
+import { createWaitingFollowUp, dismissWaitingOn } from "@/lib/recall-api";
 import { toast } from "@/hooks/use-toast";
 
 export type QueueItem = {
@@ -16,6 +16,7 @@ export type QueueItem = {
 
 type Props = {
   items: QueueItem[];
+  onWaitingChanged?: () => void;
 };
 
 const KIND_META: Record<
@@ -111,16 +112,24 @@ export function buildTodayQueue(input: {
   return out.slice(0, limit);
 }
 
-export function TodayActionQueue({ items }: Props) {
+export function TodayActionQueue({ items, onWaitingChanged }: Props) {
   const [, navigate] = useLocation();
-  const [creatingId, setCreatingId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => new Set());
+
+  const visible = useMemo(
+    () => items.filter((item) => !hiddenIds.has(item.id)),
+    [items, hiddenIds],
+  );
 
   const followUp = async (item: WaitingItem) => {
-    if (creatingId) return;
-    setCreatingId(item.id);
+    if (busyId) return;
+    setBusyId(item.id);
     try {
       const res = await createWaitingFollowUp(item.id);
       toast({ title: "Follow-up task created", description: res.task.title });
+      setHiddenIds((prev) => new Set(prev).add(item.id));
+      onWaitingChanged?.();
       navigate(`/tasks?task=${encodeURIComponent(res.task.id)}`);
     } catch (err) {
       toast({
@@ -129,11 +138,30 @@ export function TodayActionQueue({ items }: Props) {
         variant: "destructive",
       });
     } finally {
-      setCreatingId(null);
+      setBusyId(null);
     }
   };
 
-  if (items.length === 0) {
+  const dismiss = async (item: WaitingItem) => {
+    if (busyId) return;
+    setBusyId(item.id);
+    try {
+      await dismissWaitingOn(item.id);
+      setHiddenIds((prev) => new Set(prev).add(item.id));
+      toast({ title: "Dismissed", description: "Won’t show this waiting item again." });
+      onWaitingChanged?.();
+    } catch (err) {
+      toast({
+        title: "Could not dismiss",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (visible.length === 0) {
     return (
       <section className="nebula-glass rounded-2xl px-5 py-8 text-center">
         <p className="text-base font-medium text-white/80">Clear.</p>
@@ -147,7 +175,7 @@ export function TodayActionQueue({ items }: Props) {
   return (
     <section aria-label="What to do next">
       <ol className="space-y-2">
-        {items.map((item, index) => {
+        {visible.map((item, index) => {
           const meta = KIND_META[item.kind];
           const Icon = meta.icon;
           return (
@@ -178,14 +206,24 @@ export function TodayActionQueue({ items }: Props) {
                 />
               </Link>
               {item.waiting && (
-                <button
-                  type="button"
-                  onClick={() => void followUp(item.waiting!)}
-                  disabled={creatingId === item.waiting.id}
-                  className="flex-shrink-0 rounded-full bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
-                >
-                  {creatingId === item.waiting.id ? "…" : "Follow up"}
-                </button>
+                <div className="flex flex-shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void dismiss(item.waiting!)}
+                    disabled={busyId === item.waiting.id}
+                    className="rounded-full border border-white/15 px-3 py-1.5 text-xs font-medium text-white/70 hover:bg-white/[0.06] hover:text-white disabled:opacity-50"
+                  >
+                    Dismiss
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void followUp(item.waiting!)}
+                    disabled={busyId === item.waiting.id}
+                    className="rounded-full bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
+                  >
+                    {busyId === item.waiting.id ? "…" : "Follow up"}
+                  </button>
+                </div>
               )}
             </li>
           );

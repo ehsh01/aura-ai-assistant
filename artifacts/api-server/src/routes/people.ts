@@ -12,6 +12,7 @@ import {
 } from "../services/people";
 import {
   createFollowUpFromWaitingOn,
+  dismissWaitingOnForUser,
   listWaitingOnForUser,
 } from "../services/waiting-on";
 
@@ -64,6 +65,20 @@ router.post("/people/waiting-on/follow-up", async (req, res, next) => {
       return;
     }
     res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const DismissWaitingBody = z.object({
+  waitingItemId: z.string().min(1).max(128),
+});
+
+router.post("/people/waiting-on/dismiss", async (req, res, next) => {
+  try {
+    const body = DismissWaitingBody.parse(req.body);
+    const result = await dismissWaitingOnForUser(req.user!.id, body.waitingItemId);
+    res.json(result);
   } catch (err) {
     next(err);
   }

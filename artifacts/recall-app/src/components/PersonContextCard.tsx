@@ -44,6 +44,7 @@ type PersonContextCardProps = {
   linkedMemories: PersonContextMemory[];
   waiting: WaitingOnRecord[];
   onFollowUp?: (item: WaitingOnRecord) => void;
+  onDismissWaiting?: (item: WaitingOnRecord) => void;
   creatingFollowUpId?: string | null;
   /** Extra actions rendered under the Ask CTA (edit, etc.). */
   actions?: React.ReactNode;
@@ -60,6 +61,7 @@ export function PersonContextCard({
   linkedMemories,
   waiting,
   onFollowUp,
+  onDismissWaiting,
   creatingFollowUpId = null,
   actions,
 }: PersonContextCardProps) {
@@ -187,15 +189,29 @@ export function PersonContextCard({
                   <p className="truncate text-sm font-medium text-white">{w.item}</p>
                   <p className="mt-0.5 line-clamp-1 text-xs text-white/45">{w.evidenceText}</p>
                 </Link>
-                {onFollowUp && (
-                  <button
-                    type="button"
-                    onClick={() => onFollowUp(w)}
-                    disabled={creatingFollowUpId === w.id}
-                    className="flex-shrink-0 rounded-lg bg-indigo-500 px-2.5 py-1.5 text-[11px] font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
-                  >
-                    {creatingFollowUpId === w.id ? "…" : "Follow up"}
-                  </button>
+                {(onFollowUp || onDismissWaiting) && (
+                  <div className="flex flex-shrink-0 flex-col gap-1.5">
+                    {onFollowUp && (
+                      <button
+                        type="button"
+                        onClick={() => onFollowUp(w)}
+                        disabled={creatingFollowUpId === w.id}
+                        className="rounded-lg bg-indigo-500 px-2.5 py-1.5 text-[11px] font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
+                      >
+                        {creatingFollowUpId === w.id ? "…" : "Follow up"}
+                      </button>
+                    )}
+                    {onDismissWaiting && (
+                      <button
+                        type="button"
+                        onClick={() => onDismissWaiting(w)}
+                        disabled={creatingFollowUpId === w.id}
+                        className="rounded-lg border border-white/15 px-2.5 py-1.5 text-[11px] font-medium text-white/70 hover:bg-white/[0.06] hover:text-white disabled:opacity-50"
+                      >
+                        Dismiss
+                      </button>
+                    )}
+                  </div>
                 )}
               </li>
             ))}

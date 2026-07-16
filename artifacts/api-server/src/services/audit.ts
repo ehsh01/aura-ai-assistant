@@ -29,6 +29,7 @@ const ACTION_LABELS: Record<string, string> = {
   document_created: "Document added",
   person_created: "Person added",
   follow_up_created: "Follow-up task created",
+  waiting_dismissed: "Waiting item dismissed",
 };
 
 function labelFor(action: string): string {

@@ -246,7 +246,7 @@ export function Today() {
               </section>
             )}
 
-            <TodayActionQueue items={queue} />
+            <TodayActionQueue items={queue} onWaitingChanged={refreshHome} />
 
             {dontForget.length > 0 && <DontForgetSection items={dontForget} />}
           </div>

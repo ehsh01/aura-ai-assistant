@@ -5,6 +5,7 @@ import { PersonContextCard } from "@/components/PersonContextCard";
 import {
   createPerson,
   createWaitingFollowUp,
+  dismissWaitingOn,
   getPersonRelated,
   getPersonTimeline,
   listPeople,
@@ -195,6 +196,24 @@ export function People() {
     }
   };
 
+  const dismissWaiting = async (item: WaitingOnRecord) => {
+    if (creatingId) return;
+    setCreatingId(item.id);
+    try {
+      await dismissWaitingOn(item.id);
+      setWaiting((prev) => prev.filter((w) => w.id !== item.id));
+      toast({ title: "Dismissed", description: "Won’t show this waiting item again." });
+    } catch (err) {
+      toast({
+        title: "Could not dismiss",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setCreatingId(null);
+    }
+  };
+
   const selectPerson = (personId: string) => {
     setEditing(false);
     setSelectedId((prev) => {
@@ -349,14 +368,24 @@ export function People() {
                         <p className="mt-1 line-clamp-2 text-sm text-white/50">{w.evidenceText}</p>
                       </Link>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => void followUp(w)}
-                      disabled={creatingId === w.id}
-                      className="flex-shrink-0 rounded-xl bg-indigo-500 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
-                    >
-                      {creatingId === w.id ? "Creating…" : "Follow up"}
-                    </button>
+                    <div className="flex flex-shrink-0 flex-col gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void followUp(w)}
+                        disabled={creatingId === w.id}
+                        className="rounded-xl bg-indigo-500 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
+                      >
+                        {creatingId === w.id ? "…" : "Follow up"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void dismissWaiting(w)}
+                        disabled={creatingId === w.id}
+                        className="rounded-xl border border-white/15 px-3 py-2 text-xs font-medium text-white/70 hover:bg-white/[0.06] hover:text-white disabled:opacity-50"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
                   </div>
                 </article>
               ))}
@@ -497,6 +526,7 @@ export function People() {
                         linkedMemories={linkedMemories}
                         waiting={personWaiting}
                         onFollowUp={(w) => void followUp(w)}
+                        onDismissWaiting={(w) => void dismissWaiting(w)}
                         creatingFollowUpId={creatingId}
                         actions={
                           <div className="flex flex-wrap items-center gap-2">

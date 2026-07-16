@@ -1,3 +1,6 @@
+import { eq } from "drizzle-orm";
+import { waitingDismissals } from "@workspace/db";
+import { getDb } from "../lib/db";
 import { getNoteForUser, listNoteMetadataForUser } from "./notes";
 import { getKnowledgeForUser, listKnowledgeForUser } from "./knowledge";
 import { createPersonForUser, listPeopleForUser } from "./people";
@@ -181,9 +184,66 @@ export async function listWaitingOnForUser(
     });
   }
 
+  const dismissed = await listDismissedWaitingItemIds(userId);
   return items
+    .filter((item) => !dismissed.has(item.id))
     .sort((a, b) => b.days - a.days)
     .slice(0, limit);
+}
+
+async function listDismissedWaitingItemIds(userId: string): Promise<Set<string>> {
+  const rows = await getDb()
+    .select({ waitingItemId: waitingDismissals.waitingItemId })
+    .from(waitingDismissals)
+    .where(eq(waitingDismissals.userId, userId));
+  return new Set(rows.map((r) => r.waitingItemId));
+}
+
+/** Hide a waiting-on item from Today / People until the source id changes. */
+export async function dismissWaitingOnForUser(
+  userId: string,
+  waitingItemId: string,
+): Promise<{ ok: true; waitingItemId: string }> {
+  const id = waitingItemId.trim();
+  if (!id) {
+    throw new Error("waitingItemId is required");
+  }
+  // Prefer canonical id when the source still exists.
+  const resolved = await resolveWaitingItemForFollowUp(userId, id);
+  const canonicalId = resolved?.id ?? id;
+
+  await getDb()
+    .insert(waitingDismissals)
+    .values({
+      userId,
+      waitingItemId: canonicalId.slice(0, 128),
+    })
+    .onConflictDoNothing({
+      target: [waitingDismissals.userId, waitingDismissals.waitingItemId],
+    });
+
+  // Also store the raw id the client sent (legacy bare note UUID).
+  if (canonicalId !== id) {
+    await getDb()
+      .insert(waitingDismissals)
+      .values({
+        userId,
+        waitingItemId: id.slice(0, 128),
+      })
+      .onConflictDoNothing({
+        target: [waitingDismissals.userId, waitingDismissals.waitingItemId],
+      });
+  }
+
+  await writeAuditLog({
+    userId,
+    action: "waiting_dismissed",
+    entityType: resolved?.sourceType ?? "waiting",
+    entityId: canonicalId,
+    metadata: { waitingItemId: canonicalId },
+  });
+
+  return { ok: true, waitingItemId: canonicalId };
 }
 
 export type FollowUpResult = {

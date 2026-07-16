@@ -28,3 +28,4 @@ export * from "./organizations";
 export * from "./invoices";
 export * from "./auth-sessions";
 export * from "./jobs";
+export * from "./waiting-dismissals";
