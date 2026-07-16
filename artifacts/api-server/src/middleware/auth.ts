@@ -154,6 +154,21 @@ export async function requireCaptureAuth(
   }
 }
 
+export function requireAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  if (!req.user?.isAdmin) {
+    res.status(403).json({
+      error: "FORBIDDEN",
+      message: "Admin access required",
+    });
+    return;
+  }
+  next();
+}
+
 export function handleAuthRouteError(
   err: unknown,
   res: Response,
@@ -163,9 +178,15 @@ export function handleAuthRouteError(
     const status =
       err.code === "INVALID_CREDENTIALS"
         ? 401
-        : err.code === "WEAK_PASSWORD"
-          ? 400
-          : 503;
+        : err.code === "ACCOUNT_DISABLED"
+          ? 403
+          : err.code === "WEAK_PASSWORD"
+            ? 400
+            : err.code === "FORBIDDEN"
+              ? 403
+              : err.code === "NOT_FOUND"
+                ? 404
+                : 503;
     res.status(status).json({ error: err.code, message: err.message });
     return;
   }

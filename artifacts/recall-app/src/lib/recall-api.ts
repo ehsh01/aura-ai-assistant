@@ -1080,3 +1080,56 @@ export async function summarizeText(
     body: JSON.stringify({ content, maxLength }),
   });
 }
+
+export type AdminUserRecord = {
+  id: string;
+  email: string;
+  name: string;
+  isAdmin: boolean;
+  disabledAt: string | null;
+  createdAt: string;
+};
+
+export async function changePassword(input: {
+  currentPassword: string;
+  newPassword: string;
+}): Promise<{ ok: boolean; message: string }> {
+  return apiFetch("/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function listAdminUsers(): Promise<{ users: AdminUserRecord[] }> {
+  return apiFetch("/admin/users");
+}
+
+export async function adminSetPassword(
+  userId: string,
+  newPassword: string,
+): Promise<{ ok: boolean }> {
+  return apiFetch(`/admin/users/${encodeURIComponent(userId)}/password`, {
+    method: "POST",
+    body: JSON.stringify({ newPassword }),
+  });
+}
+
+export async function adminSetDisabled(
+  userId: string,
+  disabled: boolean,
+): Promise<{ user: AdminUserRecord }> {
+  return apiFetch(`/admin/users/${encodeURIComponent(userId)}/disabled`, {
+    method: "POST",
+    body: JSON.stringify({ disabled }),
+  });
+}
+
+export async function adminSetIsAdmin(
+  userId: string,
+  isAdmin: boolean,
+): Promise<{ user: AdminUserRecord }> {
+  return apiFetch(`/admin/users/${encodeURIComponent(userId)}/admin`, {
+    method: "POST",
+    body: JSON.stringify({ isAdmin }),
+  });
+}

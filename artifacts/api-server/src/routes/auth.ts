@@ -7,12 +7,17 @@ import {
   GetCurrentUserResponse,
   RegisterBody,
 } from "@workspace/api-zod";
-import { handleAuthRouteError, requireAuth } from "../middleware/auth";
+import { handleAuthRouteError, requireAuth, requireAdmin } from "../middleware/auth";
 import { loginRateLimiter } from "../middleware/security";
 import { config } from "../lib/config";
 import {
   assertAuthConfigured,
   AuthError,
+  adminSetUserAdmin,
+  adminSetUserDisabled,
+  adminSetUserPassword,
+  changePasswordForUser,
+  listUsersForAdmin,
   loginUser,
   registerUser,
   toPublicUser,
@@ -26,6 +31,23 @@ import { writeAuditLog } from "../services/audit";
 
 const RegisterWithInviteBody = RegisterBody.extend({
   inviteCode: z.string().optional(),
+});
+
+const ChangePasswordBody = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(8),
+});
+
+const AdminSetPasswordBody = z.object({
+  newPassword: z.string().min(8),
+});
+
+const AdminSetDisabledBody = z.object({
+  disabled: z.boolean(),
+});
+
+const AdminSetAdminBody = z.object({
+  isAdmin: z.boolean(),
 });
 
 function setSessionCookie(res: Response, token: string): void {
@@ -200,5 +222,119 @@ router.get("/auth/me", requireAuth, (req, res) => {
   const data = GetCurrentUserResponse.parse({ user: toPublicUser(req.user!) });
   res.json(data);
 });
+
+router.post("/auth/change-password", requireAuth, async (req, res, next) => {
+  try {
+    const body = ChangePasswordBody.parse(req.body);
+    await changePasswordForUser({
+      userId: req.user!.id,
+      currentPassword: body.currentPassword,
+      newPassword: body.newPassword,
+    });
+    clearSessionCookie(res);
+    await writeAuditLog({
+      userId: req.user!.id,
+      action: "password_changed",
+      entityType: "auth",
+      entityId: req.user!.id,
+      metadata: {},
+    });
+    res.json({
+      ok: true,
+      message: "Password updated. Sign in again with your new password.",
+    });
+  } catch (err) {
+    handleAuthRouteError(err, res, next);
+  }
+});
+
+router.get("/admin/users", requireAuth, requireAdmin, async (_req, res, next) => {
+  try {
+    const usersList = await listUsersForAdmin();
+    res.json({ users: usersList });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post(
+  "/admin/users/:userId/password",
+  requireAuth,
+  requireAdmin,
+  async (req, res, next) => {
+    try {
+      const userId = String(req.params.userId);
+      const body = AdminSetPasswordBody.parse(req.body);
+      await adminSetUserPassword({
+        targetUserId: userId,
+        newPassword: body.newPassword,
+      });
+      await writeAuditLog({
+        userId: req.user!.id,
+        action: "admin_set_password",
+        entityType: "user",
+        entityId: userId,
+        metadata: {},
+      });
+      res.json({ ok: true });
+    } catch (err) {
+      handleAuthRouteError(err, res, next);
+    }
+  },
+);
+
+router.post(
+  "/admin/users/:userId/disabled",
+  requireAuth,
+  requireAdmin,
+  async (req, res, next) => {
+    try {
+      const userId = String(req.params.userId);
+      const body = AdminSetDisabledBody.parse(req.body);
+      const user = await adminSetUserDisabled({
+        actorUserId: req.user!.id,
+        targetUserId: userId,
+        disabled: body.disabled,
+      });
+      await writeAuditLog({
+        userId: req.user!.id,
+        action: body.disabled ? "admin_disable_user" : "admin_enable_user",
+        entityType: "user",
+        entityId: userId,
+        metadata: {},
+      });
+      res.json({ user });
+    } catch (err) {
+      handleAuthRouteError(err, res, next);
+    }
+  },
+);
+
+router.post(
+  "/admin/users/:userId/admin",
+  requireAuth,
+  requireAdmin,
+  async (req, res, next) => {
+    try {
+      const userId = String(req.params.userId);
+      const body = AdminSetAdminBody.parse(req.body);
+      const user = await adminSetUserAdmin({
+        actorUserId: req.user!.id,
+        targetUserId: userId,
+        isAdmin: body.isAdmin,
+      });
+      await writeAuditLog({
+        userId: req.user!.id,
+        action: "admin_set_admin",
+        entityType: "user",
+        entityId: userId,
+        metadata: { isAdmin: body.isAdmin },
+      });
+      res.json({ user });
+    } catch (err) {
+      handleAuthRouteError(err, res, next);
+    }
+  },
+);
 
 export default router;

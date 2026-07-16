@@ -48,7 +48,8 @@ export const LoginResponse = zod.object({
   "user": zod.object({
   "id": zod.string().uuid(),
   "email": zod.string().email(),
-  "name": zod.string()
+  "name": zod.string(),
+  "isAdmin": zod.boolean()
 })
 })
 
@@ -60,7 +61,8 @@ export const GetCurrentUserResponse = zod.object({
   "user": zod.object({
   "id": zod.string().uuid(),
   "email": zod.string().email(),
-  "name": zod.string()
+  "name": zod.string(),
+  "isAdmin": zod.boolean()
 })
 })
 

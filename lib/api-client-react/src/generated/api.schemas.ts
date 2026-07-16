@@ -9,6 +9,8 @@ export interface User {
   id: string;
   email: string;
   name: string;
+  /** Whether the user can manage other accounts */
+  isAdmin: boolean;
 }
 
 export interface RegisterRequest {

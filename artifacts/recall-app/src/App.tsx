@@ -24,6 +24,7 @@ import { Documents } from "@/pages/Documents";
 import { Knowledge } from "@/pages/Knowledge";
 import { Memory } from "@/pages/Memory";
 import { Activity } from "@/pages/Activity";
+import { Settings } from "@/pages/Settings";
 import { PrivacyPolicy } from "@/pages/Privacy";
 import { TermsOfService } from "@/pages/Terms";
 import { normalizeBrowserPath, pathnameOnly } from "@/lib/app-path";
@@ -91,6 +92,7 @@ function AuthedRoutes() {
         <Route path="/organizations" component={Organizations} />
         <Route path="/activity" component={Activity} />
         <Route path="/connectors" component={Connectors} />
+        <Route path="/settings" component={Settings} />
         <Route path="/projects" component={Projects} />
         <Route path="/projects/:projectId" component={ProjectDetail} />
         <Route path="/tasks" component={Tasks} />

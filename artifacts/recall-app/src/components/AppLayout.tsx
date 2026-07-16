@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { BookOpen, Inbox, Library, Plus, FolderKanban, Sparkles, FileText, BookMarked, Activity, Brain, Car, Building2 } from "lucide-react";
+import { BookOpen, Inbox, Library, Plus, FolderKanban, Sparkles, FileText, BookMarked, Activity, Brain, Car, Building2, Settings } from "lucide-react";
 import { CaptureModal } from "@/components/CaptureModal";
 import { MobileBottomNav, MobileMoreSheet } from "@/components/MobileShell";
 import { OfflineQueueBanner } from "@/components/OfflineQueueBanner";
@@ -189,6 +189,12 @@ const staticNavItems: Array<{
         <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>
       </svg>
     ),
+  },
+  {
+    id: "/settings",
+    label: "Settings",
+    section: "system",
+    icon: <Settings width={18} height={18} strokeWidth={1.8} />,
   },
 ];
 
@@ -566,8 +572,12 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
 
         <div className="p-3 border-t border-white/[0.06]">
           {!collapsed && (
-            <div className="flex items-center gap-2.5 px-2 py-2 rounded-xl"
-                 style={{ background: "rgba(255,255,255,0.04)" }}>
+            <Link
+              href="/settings"
+              className="flex items-center gap-2.5 px-2 py-2 rounded-xl no-underline hover:bg-white/[0.06] transition-colors"
+              style={{ background: "rgba(255,255,255,0.04)" }}
+              title="Settings"
+            >
               <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0"
                    style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)" }}>
                 {initial}
@@ -578,13 +588,17 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
               </div>
               <button
                 type="button"
-                onClick={logout}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  logout();
+                }}
                 className="text-[10px] text-white/30 hover:text-white/60 transition-colors px-2 py-1 rounded"
                 title="Sign out"
               >
                 Out
               </button>
-            </div>
+            </Link>
           )}
           <button
             type="button"

@@ -16,6 +16,7 @@ import {
   Menu,
   Plus,
   Search,
+  Settings,
   Sparkles,
   Users,
   Car,
@@ -261,6 +262,10 @@ export function MobileMoreSheet({
           <Link href="/connectors" onClick={close} className={linkClass(location === "/connectors")}>
             <Cable size={18} />
             <span className="flex-1 text-sm font-medium">Connectors</span>
+          </Link>
+          <Link href="/settings" onClick={close} className={linkClass(location === "/settings")}>
+            <Settings size={18} />
+            <span className="flex-1 text-sm font-medium">Settings</span>
           </Link>
           <button
             type="button"

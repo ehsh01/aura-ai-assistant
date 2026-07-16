@@ -1039,10 +1039,52 @@ components:
           format: email
         name:
           type: string
+        isAdmin:
+          type: boolean
+          description: Whether the user can manage other accounts
       required:
         - id
         - email
         - name
+        - isAdmin
+    ChangePasswordRequest:
+      type: object
+      properties:
+        currentPassword:
+          type: string
+          minLength: 1
+        newPassword:
+          type: string
+          minLength: 8
+      required:
+        - currentPassword
+        - newPassword
+    AdminUser:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        isAdmin:
+          type: boolean
+        disabledAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - email
+        - name
+        - isAdmin
+        - createdAt
     RegisterRequest:
       type: object
       properties:

@@ -59,6 +59,7 @@ beforeEach(() => {
     id: "user-1",
     email: "person@example.com",
     name: "Person",
+    isAdmin: false,
   });
   mocks.verifyAccessToken.mockReturnValue({
     sub: "user-1",
