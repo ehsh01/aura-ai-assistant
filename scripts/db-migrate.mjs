@@ -22,6 +22,7 @@
  * Usage: DATABASE_URL=... node scripts/db-migrate.mjs
  */
 import { readdir, readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 /** Presence of this table means the DB is already provisioned (baseline case). */
@@ -138,7 +139,12 @@ async function main() {
     process.exit(1);
   }
 
-  const pg = (await import("pg")).default;
+  // This script lives at the repo root, where pnpm may not hoist `pg`. Resolve
+  // it from a workspace that lists pg as a direct dependency instead.
+  const requireFrom = createRequire(
+    path.resolve(process.cwd(), "artifacts/api-server/package.json"),
+  );
+  const pg = requireFrom("pg");
   const client = new pg.Client({ connectionString: url });
   await client.connect();
   try {
