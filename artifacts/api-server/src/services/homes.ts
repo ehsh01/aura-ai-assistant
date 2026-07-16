@@ -96,12 +96,16 @@ export async function createHomeForUser(
   return dto;
 }
 
-export async function listHomesForUser(userId: string): Promise<HomeDto[]> {
-  const rows = await getDb()
+export async function listHomesForUser(
+  userId: string,
+  options: { limit?: number } = {},
+): Promise<HomeDto[]> {
+  const query = getDb()
     .select()
     .from(homes)
     .where(eq(homes.userId, userId))
     .orderBy(desc(homes.updatedAt));
+  const rows = await (options.limit ? query.limit(options.limit) : query);
   return rows.map(toDto);
 }
 

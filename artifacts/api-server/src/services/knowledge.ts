@@ -41,12 +41,16 @@ function toDto(row: KnowledgeItem, personName: string | null = null): KnowledgeD
   };
 }
 
-export async function listKnowledgeForUser(userId: string): Promise<KnowledgeDto[]> {
-  const rows = await getDb()
+export async function listKnowledgeForUser(
+  userId: string,
+  options: { limit?: number } = {},
+): Promise<KnowledgeDto[]> {
+  const query = getDb()
     .select()
     .from(knowledgeItems)
     .where(eq(knowledgeItems.userId, userId))
     .orderBy(desc(knowledgeItems.updatedAt));
+  const rows = await (options.limit ? query.limit(options.limit) : query);
   const names = await personNamesById(
     userId,
     rows.map((r) => r.primaryPersonId).filter((id): id is string => Boolean(id)),

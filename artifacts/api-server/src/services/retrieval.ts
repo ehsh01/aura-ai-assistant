@@ -676,18 +676,18 @@ async function collectCorpus(
 }> {
   const [tasks, notes, people, knowledge, memories, documents, captures, vehiclesList, homesList, warrantiesList, orgsList, invoicesList, sources, aliases] =
     await Promise.all([
-      listTasksForUser(userId),
-      listNotesForUser(userId),
-      listPeopleForUser(userId),
-      listKnowledgeForUser(userId),
+      listTasksForUser(userId, { limit: CORPUS.tasks }),
+      listNotesForUser(userId, { limit: CORPUS.notes }),
+      listPeopleForUser(userId, { limit: CORPUS.people }),
+      listKnowledgeForUser(userId, { limit: CORPUS.knowledge }),
       listMemoriesForUser(userId, { limit: CORPUS.memories }),
-      listDocumentsForUser(userId),
+      listDocumentsForUser(userId, { limit: CORPUS.documents }),
       listCapturesForUser(userId, { limit: CORPUS.captures }),
-      listVehiclesForUser(userId),
-      listHomesForUser(userId),
-      listWarrantiesForUser(userId),
-      listOrganizationsForUser(userId),
-      listInvoicesForUser(userId),
+      listVehiclesForUser(userId, { limit: CORPUS.vehicles }),
+      listHomesForUser(userId, { limit: CORPUS.homes }),
+      listWarrantiesForUser(userId, { limit: CORPUS.warranties }),
+      listOrganizationsForUser(userId, { limit: CORPUS.organizations }),
+      listInvoicesForUser(userId, { limit: CORPUS.invoices }),
       loadSourceRecordsBalanced(userId),
       listPersonNameAliases(userId),
     ]);

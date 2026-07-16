@@ -81,13 +81,17 @@ async function personNamesById(
   return map;
 }
 
-export async function listTasksForUser(userId: string): Promise<RecallTaskDto[]> {
+export async function listTasksForUser(
+  userId: string,
+  options: { limit?: number } = {},
+): Promise<RecallTaskDto[]> {
   const db = getDb();
-  const rows = await db
+  const query = db
     .select()
     .from(tasks)
     .where(eq(tasks.userId, userId))
     .orderBy(desc(tasks.updatedAt));
+  const rows = await (options.limit ? query.limit(options.limit) : query);
   const names = await personNamesById(
     userId,
     rows.map((r) => r.requesterPersonId).filter((id): id is string => Boolean(id)),

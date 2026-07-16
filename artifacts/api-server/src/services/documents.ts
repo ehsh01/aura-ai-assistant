@@ -35,12 +35,16 @@ function toDto(row: Document): DocumentDto {
   };
 }
 
-export async function listDocumentsForUser(userId: string): Promise<DocumentDto[]> {
-  const rows = await getDb()
+export async function listDocumentsForUser(
+  userId: string,
+  options: { limit?: number } = {},
+): Promise<DocumentDto[]> {
+  const query = getDb()
     .select()
     .from(documents)
     .where(eq(documents.userId, userId))
     .orderBy(desc(documents.uploadedAt));
+  const rows = await (options.limit ? query.limit(options.limit) : query);
   return rows.map(toDto);
 }
 

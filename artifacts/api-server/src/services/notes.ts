@@ -118,13 +118,17 @@ async function attachmentCountsForNotes(noteIds: string[]): Promise<Map<string, 
   return new Map(rows.map((row) => [row.noteId, row.count ?? 0]));
 }
 
-export async function listNotesForUser(userId: string): Promise<RecallNoteDto[]> {
+export async function listNotesForUser(
+  userId: string,
+  options: { limit?: number } = {},
+): Promise<RecallNoteDto[]> {
   const db = getDb();
-  const rows = await db
+  const query = db
     .select()
     .from(notes)
     .where(eq(notes.userId, userId))
     .orderBy(desc(notes.updatedAt));
+  const rows = await (options.limit ? query.limit(options.limit) : query);
   const noteIds = rows.map((row) => row.id);
   const counts = await attachmentCountsForNotes(noteIds);
   const attachmentTexts = await attachmentSearchTextForNotes(noteIds);

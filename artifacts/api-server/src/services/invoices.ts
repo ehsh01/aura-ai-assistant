@@ -164,12 +164,16 @@ export async function createInvoiceForUser(
   return dto;
 }
 
-export async function listInvoicesForUser(userId: string): Promise<InvoiceDto[]> {
-  const rows = await getDb()
+export async function listInvoicesForUser(
+  userId: string,
+  options: { limit?: number } = {},
+): Promise<InvoiceDto[]> {
+  const query = getDb()
     .select()
     .from(invoices)
     .where(eq(invoices.userId, userId))
     .orderBy(asc(invoices.dueDate), desc(invoices.updatedAt));
+  const rows = await (options.limit ? query.limit(options.limit) : query);
 
   const out: InvoiceDto[] = [];
   for (const row of rows) {

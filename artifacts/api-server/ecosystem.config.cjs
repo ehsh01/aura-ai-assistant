@@ -49,11 +49,37 @@ module.exports = {
       instances: 1,
       autorestart: true,
       max_memory_restart: "1024M",
+      // Cap V8 heap below max_memory_restart so GC pressure surfaces before OOM.
+      node_args: "--max-old-space-size=768",
       env: {
         ...fileEnvNoPort,
         NODE_ENV: "production",
+        RECALL_ROLE: "api",
+        // Background work (jobs, finance sync, attachment backfill) runs in the
+        // dedicated recall-worker process so it can't stall API responsiveness.
+        RECALL_DISABLE_INLINE_WORKER: "1",
+        // Per-process pool cap. Two processes (api + worker) => ~2x total, so keep
+        // this small on the shared cluster: 3 each => ~6 connections total.
+        // Forced here (overrides .env) so the split can't silently double usage.
+        PG_POOL_MAX: "3",
         HOST: fileEnv.HOST || "127.0.0.1",
         PORT: fileEnv.API_PORT || fileEnv.API_PORT_PROD || "5008",
+      },
+    },
+    {
+      name: "recall-worker",
+      script: "dist/index.mjs",
+      cwd: __dirname,
+      exec_mode: "fork",
+      instances: 1,
+      autorestart: true,
+      max_memory_restart: "768M",
+      node_args: "--max-old-space-size=512",
+      env: {
+        ...fileEnvNoPort,
+        NODE_ENV: "production",
+        RECALL_ROLE: "worker",
+        PG_POOL_MAX: "3",
       },
     },
   ],

@@ -45,46 +45,19 @@ if [ -z "${DATABASE_URL:-}" ]; then
   echo "ERROR: DATABASE_URL is required; refusing to deploy without migrations" >&2
   exit 1
 fi
-if ! command -v psql >/dev/null; then
-  echo "ERROR: psql is required; refusing to deploy without migrations" >&2
-  exit 1
-fi
-for mig in \
-  lib/db/migrations/0002_capture_layer.sql \
-  lib/db/migrations/0003_evidence_and_platform.sql \
-  lib/db/migrations/0004_entity_embeddings.sql \
-  lib/db/migrations/0005_note_knowledge_person.sql \
-  lib/db/migrations/0006_life_memories.sql \
-  lib/db/migrations/0007_ask_threads.sql \
-  lib/db/migrations/0008_note_attachment_text.sql \
-  lib/db/migrations/0009_extension_tokens.sql \
-  lib/db/migrations/0010_entity_links.sql \
-  lib/db/migrations/0011_vehicles_warranties.sql \
-  lib/db/migrations/0012_homes.sql \
-  lib/db/migrations/0013_organizations_invoices.sql \
-  lib/db/migrations/0014_auth_sessions.sql \
-  lib/db/migrations/0015_jobs.sql \
-  lib/db/migrations/0016_notes_fts.sql \
-  lib/db/migrations/0017_life_memory_lifecycle.sql \
-  lib/db/migrations/0018_entity_embeddings_pgvector.sql \
-  lib/db/migrations/0019_digests.sql
-do
-  echo "--> Applying $mig"
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$mig" || {
-    if [[ "$mig" == *pgvector* ]]; then
-      echo "WARN: pgvector migration failed (extension may be unavailable); continuing with jsonb embeddings" >&2
-    else
-      exit 1
-    fi
-  }
-done
+# Migration runner (scripts/db-migrate.mjs) applies every unrecorded
+# lib/db/migrations/*.sql via a schema_migrations ledger, so new migration files
+# can't be silently skipped. On an already-provisioned DB it baselines the
+# existing files as applied. pgvector remains soft-fail inside the runner.
+node scripts/db-migrate.mjs
 
 if [ -z "${SECRETS_ENCRYPTION_KEY:-}" ]; then
   echo "ERROR: SECRETS_ENCRYPTION_KEY is required before replacing the production API" >&2
   exit 1
 fi
 
-pnpm run build:prod
+# Give esbuild/tsc headroom on the 2GB droplet (earlier deploys OOM'd here).
+NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=1024}" pnpm run build:prod
 
 if [ ! -f "artifacts/api-server/dist/index.mjs" ]; then
   echo "ERROR: API build missing artifacts/api-server/dist/index.mjs" >&2
@@ -102,13 +75,10 @@ fi
 
 echo "==> PM2"
 pm2 delete aura-api 2>/dev/null || true
-# Prefer reload/restart when possible so a failed start does not leave the API down.
-if pm2 describe recall-api >/dev/null 2>&1; then
-  pm2 restart artifacts/api-server/ecosystem.config.cjs --update-env || \
-    pm2 start artifacts/api-server/ecosystem.config.cjs
-else
+# startOrReload brings up both recall-api and recall-worker (creating the worker
+# on first deploy) and 0-downtime reloads whatever is already running.
+pm2 startOrReload artifacts/api-server/ecosystem.config.cjs --update-env || \
   pm2 start artifacts/api-server/ecosystem.config.cjs
-fi
 pm2 save
 
 echo "==> Nginx"
@@ -124,11 +94,11 @@ if [ ! -d "/etc/letsencrypt/live/recall-app.net" ]; then
 fi
 
 echo "==> Verify"
-# Give PM2 a moment to boot the API before probing health.
+# Give PM2 a moment to boot the API before probing readiness (DB + job queue).
 for i in 1 2 3 4 5; do
-  if curl -sSf "http://127.0.0.1:$API_PORT/api/healthz" >/dev/null 2>&1; then break; fi
+  if curl -sSf "http://127.0.0.1:$API_PORT/api/ready" >/dev/null 2>&1; then break; fi
   sleep 2
 done
-curl -sS "http://127.0.0.1:$API_PORT/api/healthz" && echo ""
+curl -sS "http://127.0.0.1:$API_PORT/api/ready" && echo ""
 curl -sk -H "Host: recall-app.net" https://127.0.0.1/ | grep -o '<title>[^<]*</title>' || true
 echo "Done. Purge Cloudflare cache for recall-app.net if the browser still shows ABA."

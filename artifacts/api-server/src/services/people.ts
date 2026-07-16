@@ -101,12 +101,16 @@ export async function createPersonForUser(
   return dto;
 }
 
-export async function listPeopleForUser(userId: string): Promise<PersonDto[]> {
-  const rows = await getDb()
+export async function listPeopleForUser(
+  userId: string,
+  options: { limit?: number } = {},
+): Promise<PersonDto[]> {
+  const query = getDb()
     .select()
     .from(people)
     .where(eq(people.userId, userId))
     .orderBy(desc(people.updatedAt));
+  const rows = await (options.limit ? query.limit(options.limit) : query);
   return rows.map(toDto);
 }
 

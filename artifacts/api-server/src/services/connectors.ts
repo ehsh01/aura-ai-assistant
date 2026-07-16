@@ -1047,11 +1047,22 @@ export async function upsertSourceRecord(
   return id;
 }
 
-/** Bound Homey device embedding warm after sync (respects shared PG pool). */
-async function warmHomeyDeviceEmbeddings(
+/**
+ * Bound source_record embedding warm after sync (respects the shared PG pool).
+ * Warming the most recent records means the first Ask that touches them hits a
+ * content-hash cache instead of paying a cold OpenAI embed on the request path.
+ */
+async function warmRecentSourceEmbeddings(
   userId: string,
   connectorId: string,
+  opts: { recordType?: string; limit?: number; fallbackTitle?: string } = {},
 ): Promise<void> {
+  const conds = [
+    eq(sourceRecords.userId, userId),
+    eq(sourceRecords.connectorId, connectorId),
+  ];
+  if (opts.recordType) conds.push(eq(sourceRecords.recordType, opts.recordType));
+
   const rows = await getDb()
     .select({
       id: sourceRecords.id,
@@ -1060,15 +1071,9 @@ async function warmHomeyDeviceEmbeddings(
       metadata: sourceRecords.recordMetadata,
     })
     .from(sourceRecords)
-    .where(
-      and(
-        eq(sourceRecords.userId, userId),
-        eq(sourceRecords.connectorId, connectorId),
-        eq(sourceRecords.recordType, "homey_device"),
-      ),
-    )
+    .where(and(...conds))
     .orderBy(desc(sourceRecords.updatedAt))
-    .limit(40);
+    .limit(opts.limit ?? 40);
 
   for (const row of rows) {
     const digest =
@@ -1077,7 +1082,7 @@ async function warmHomeyDeviceEmbeddings(
       entityType: "source_record",
       entityId: row.id,
       text: digest
-        ? `${row.title ?? "Homey device"}\n${digest}`
+        ? `${row.title ?? opts.fallbackTitle ?? ""}\n${digest}`
         : `${row.title ?? ""}\n${(row.text ?? "").slice(0, 800)}`,
     });
   }
@@ -1179,7 +1184,15 @@ export async function syncConnectorForUser(
     }
 
     if (conn.type === "homey") {
-      void warmHomeyDeviceEmbeddings(userId, connectorId).catch(() => undefined);
+      void warmRecentSourceEmbeddings(userId, connectorId, {
+        recordType: "homey_device",
+        fallbackTitle: "Homey device",
+      }).catch(() => undefined);
+    } else if (conn.type === "google" || conn.type === "microsoft") {
+      // Warm freshly synced mail/calendar/drive/contact records across types.
+      void warmRecentSourceEmbeddings(userId, connectorId, { limit: 60 }).catch(
+        () => undefined,
+      );
     }
 
     await getDb()

@@ -184,12 +184,16 @@ export async function createWarrantyForUser(
   return dto;
 }
 
-export async function listWarrantiesForUser(userId: string): Promise<WarrantyDto[]> {
-  const rows = await getDb()
+export async function listWarrantiesForUser(
+  userId: string,
+  options: { limit?: number } = {},
+): Promise<WarrantyDto[]> {
+  const query = getDb()
     .select()
     .from(warranties)
     .where(eq(warranties.userId, userId))
     .orderBy(asc(warranties.expiresAt), desc(warranties.updatedAt));
+  const rows = await (options.limit ? query.limit(options.limit) : query);
 
   const out: WarrantyDto[] = [];
   for (const row of rows) {

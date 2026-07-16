@@ -96,12 +96,16 @@ export async function createVehicleForUser(
   return dto;
 }
 
-export async function listVehiclesForUser(userId: string): Promise<VehicleDto[]> {
-  const rows = await getDb()
+export async function listVehiclesForUser(
+  userId: string,
+  options: { limit?: number } = {},
+): Promise<VehicleDto[]> {
+  const query = getDb()
     .select()
     .from(vehicles)
     .where(eq(vehicles.userId, userId))
     .orderBy(desc(vehicles.updatedAt));
+  const rows = await (options.limit ? query.limit(options.limit) : query);
   return rows.map(toDto);
 }
 

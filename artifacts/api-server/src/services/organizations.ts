@@ -105,12 +105,14 @@ export async function createOrganizationForUser(
 
 export async function listOrganizationsForUser(
   userId: string,
+  options: { limit?: number } = {},
 ): Promise<OrganizationDto[]> {
-  const rows = await getDb()
+  const query = getDb()
     .select()
     .from(organizations)
     .where(eq(organizations.userId, userId))
     .orderBy(desc(organizations.updatedAt));
+  const rows = await (options.limit ? query.limit(options.limit) : query);
   return rows.map(toDto);
 }
 
