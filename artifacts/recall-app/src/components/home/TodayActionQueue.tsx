@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { ArrowRight, Flame, Hourglass, Inbox, Target } from "lucide-react";
+import { ArrowRight, Flame, Hourglass, Inbox, Target, X } from "lucide-react";
 import type { BriefingItem, FocusNow, WaitingItem } from "@/lib/home-briefing";
 import { createWaitingFollowUp, dismissWaitingOn } from "@/lib/recall-api";
 import { toast } from "@/hooks/use-toast";
@@ -206,14 +206,16 @@ export function TodayActionQueue({ items, onWaitingChanged }: Props) {
                 />
               </Link>
               {item.waiting && (
-                <div className="flex flex-shrink-0 items-center gap-2">
+                <div className="flex flex-shrink-0 items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => void dismiss(item.waiting!)}
                     disabled={busyId === item.waiting.id}
-                    className="rounded-full border border-white/15 px-3 py-1.5 text-xs font-medium text-white/70 hover:bg-white/[0.06] hover:text-white disabled:opacity-50"
+                    title="Dismiss"
+                    aria-label={`Dismiss ${item.title}`}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/[0.08] hover:text-white disabled:opacity-50"
                   >
-                    Dismiss
+                    <X size={15} strokeWidth={2.25} />
                   </button>
                   <button
                     type="button"

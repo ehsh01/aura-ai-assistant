@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { waitingDismissals } from "@workspace/db";
+import { waitingDismissals } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { getNoteForUser, listNoteMetadataForUser } from "./notes";
 import { getKnowledgeForUser, listKnowledgeForUser } from "./knowledge";
