@@ -51,6 +51,8 @@ describe("proactive insights helpers", () => {
         id: "n1",
         title: "Permit",
         preview: "submitted",
+        summary: null,
+        factBullets: [],
         contentFormat: "plain",
         tags: [],
         date: "today",

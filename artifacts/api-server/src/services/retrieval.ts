@@ -26,9 +26,16 @@ import {
   cosineSimilarity,
   embedItemsCached,
   embedQuery,
+  getEmbeddingCacheMetrics,
   rankEntitiesByPgvector,
 } from "./embedding-cache";
+import {
+  embeddingTextForContextRecord,
+  memoryEmbeddingText,
+  personEmbeddingText,
+} from "./embedding-text";
 import { FAMILY_RELATION_INTENT, formatInstantForUser } from "./query-utils";
+import { logger } from "../lib/logger";
 
 export {
   extractVinCandidates,
@@ -49,6 +56,9 @@ export type RetrievedRecord = {
   recordType?: string;
   /** ISO source timestamp (email sent / file modified / etc.). */
   updatedAt?: string;
+  digest?: string | null;
+  pinned?: boolean;
+  expandPreferred?: boolean;
 };
 
 type ContextRecord = {
@@ -56,6 +66,8 @@ type ContextRecord = {
   entityId: string;
   title: string;
   text: string;
+  /** Compact digest for embed/prompt when present (Phase 2). */
+  digest?: string | null;
   pinned?: boolean;
   /** Optional subtype for source_records (gmail_message, drive_file, …). */
   recordType?: string;
@@ -63,6 +75,8 @@ type ContextRecord = {
   mailbox?: string | null;
   /** ISO timestamp for recency boosts. */
   updatedAt?: string;
+  /** Force full-text expansion into the answer prompt. */
+  expandPreferred?: boolean;
 };
 
 /** Permanent memories outrank ephemeral notes/captures in hybrid scoring. */
@@ -513,6 +527,7 @@ type SourceRow = {
   updatedAt: Date | null;
   sourceCreatedAt: Date | null;
   mailbox: string | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 function sourceRowToContext(s: SourceRow): ContextRecord {
@@ -531,10 +546,13 @@ function sourceRowToContext(s: SourceRow): ContextRecord {
   const dateLabel = formatInstantForUser(sourceIso);
   const titleWithDate =
     dateLabel && s.recordType === "gmail_message" ? `${title} · ${dateLabel}` : title;
+  const metaDigest =
+    typeof s.metadata?.digest === "string" ? s.metadata.digest.trim() : "";
   return {
     entityType: "source_record",
     entityId: s.id,
     title: titleWithDate,
+    digest: metaDigest || null,
     text: `${aliases} source=${s.recordType}${mailboxBit}${
       dateLabel ? ` Date=${dateLabel}` : ""
     } ${title}${senderBits}\n${(s.recordText ?? "").slice(0, 800)}`,
@@ -585,6 +603,7 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
         recordText: sourceRecords.recordText,
         updatedAt: sourceRecords.updatedAt,
         sourceCreatedAt: sourceRecords.sourceCreatedAt,
+        metadata: sourceRecords.recordMetadata,
       })
       .from(sourceRecords)
       .where(
@@ -617,6 +636,7 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
         updatedAt: sourceRecords.updatedAt,
         sourceCreatedAt: sourceRecords.sourceCreatedAt,
         connectorId: sourceRecords.connectorId,
+        metadata: sourceRecords.recordMetadata,
       })
       .from(sourceRecords)
       .where(
@@ -639,6 +659,7 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
         updatedAt: r.updatedAt,
         sourceCreatedAt: r.sourceCreatedAt,
         mailbox: mailboxByConnector.get(r.connectorId) ?? null,
+        metadata: r.metadata,
       })),
     );
   }
@@ -675,19 +696,29 @@ async function collectCorpus(
   const personById = new Map(people.map((p) => [p.id, p] as const));
 
   for (const m of memories.slice(0, CORPUS.memories)) {
-    const cap = m.pinned ? 4000 : 1200;
     const linked = m.primaryPersonId ? personById.get(m.primaryPersonId) : undefined;
     const personName =
       linked?.displayName ??
       ([linked?.firstName, linked?.lastName].filter(Boolean).join(" ").trim() || null);
+    const digest = m.summary?.trim() || null;
     records.push({
       entityType: "memory",
       entityId: m.id,
       title: m.title,
-      text: `domain=${m.domain} ${m.title}\n${m.content.slice(0, cap)}\ntags=${m.tags.join(",")}${
-        m.primaryPersonId ? ` personId=${m.primaryPersonId}` : ""
-      }${personName ? ` person=${personName}` : ""}${m.pinned ? " pinned=true" : ""}`,
+      digest,
+      text: memoryEmbeddingText({
+        domain: m.domain,
+        title: m.title,
+        content: m.content,
+        tags: m.tags,
+        primaryPersonId: m.primaryPersonId,
+        personName,
+        pinned: m.pinned,
+        // Keep full content in `text` for keyword/FTS reliability; digest used for embed.
+        summary: undefined,
+      }),
       pinned: m.pinned,
+      expandPreferred: m.pinned,
     });
   }
 
@@ -705,34 +736,26 @@ async function collectCorpus(
     });
   }
   for (const n of notes.slice(0, CORPUS.notes)) {
+    const digest =
+      n.summary?.trim() ||
+      (n.factBullets?.length ? n.factBullets.slice(0, 6).join("; ") : null);
     records.push({
       entityType: "note",
       entityId: n.id,
       title: n.title,
+      digest,
       text: noteRetrievalText(n),
+      expandPreferred: Boolean(n.pinned),
     });
   }
   for (const p of people.slice(0, CORPUS.people)) {
     const fullName =
       [p.firstName, p.lastName].filter(Boolean).join(" ").trim() || p.displayName;
-    const nameBits = [
-      `fullName=${fullName}`,
-      `displayName=${p.displayName}`,
-      p.firstName ? `firstName=${p.firstName}` : null,
-      p.lastName ? `lastName=${p.lastName}` : null,
-      p.organization ? `organization=${p.organization}` : null,
-      p.email ? `email=${p.email}` : null,
-      p.phone ? `phone=${p.phone}` : null,
-      p.role ? `role=${p.role}` : null,
-      p.notes ? `notes=${p.notes.slice(0, 400)}` : null,
-    ]
-      .filter(Boolean)
-      .join(" ");
     records.push({
       entityType: "person",
       entityId: p.id,
       title: fullName,
-      text: nameBits,
+      text: personEmbeddingText(p),
     });
   }
   for (const k of knowledge.slice(0, CORPUS.knowledge)) {
@@ -747,10 +770,12 @@ async function collectCorpus(
     });
   }
   for (const d of documents.slice(0, CORPUS.documents)) {
+    const digest = d.summary?.trim() || null;
     records.push({
       entityType: "document",
       entityId: d.id,
       title: d.fileName,
+      digest,
       text: `${d.fileName}\n${(d.summary ?? d.extractedText ?? "").slice(0, 600)}`,
     });
   }
@@ -759,6 +784,7 @@ async function collectCorpus(
       entityType: "capture",
       entityId: c.id,
       title: c.title || "Capture",
+      digest: c.digest?.trim() || null,
       text: `${c.title ?? ""}\n${(c.rawText ?? "").slice(0, 500)}`,
     });
   }
@@ -1106,12 +1132,13 @@ export async function retrieveRelevantRecords(
         if (candidates.length >= CORPUS.semanticCandidates) break;
       }
 
+      const metricsBefore = getEmbeddingCacheMetrics();
       const vectors = await embedItemsCached(
         userId,
         candidates.map((r) => ({
           entityType: r.entityType,
           entityId: r.entityId,
-          text: `${r.title}\n${r.text}`,
+          text: embeddingTextForContextRecord(r),
         })),
       );
 
@@ -1122,6 +1149,24 @@ export async function retrieveRelevantRecords(
           if (!vec) continue;
           semanticScores.set(`${r.entityType}:${r.entityId}`, cosineSimilarity(queryVec, vec));
         }
+        const m = getEmbeddingCacheMetrics();
+        const apiCalls =
+          m.itemApiCalls -
+          metricsBefore.itemApiCalls +
+          (m.queryApiCalls - metricsBefore.queryApiCalls);
+        const hits = m.itemHits - metricsBefore.itemHits;
+        const misses = m.itemMisses - metricsBefore.itemMisses;
+        const denom = hits + misses;
+        logger.debug(
+          {
+            embed_cache_hit_rate: denom === 0 ? 1 : Number((hits / denom).toFixed(3)),
+            embed_api_calls_per_ask: apiCalls,
+            embed_item_hits: hits,
+            embed_item_misses: misses,
+            candidates: candidates.length,
+          },
+          "ask_embed_metrics",
+        );
       } else if (semanticScores.size > 0) {
         // pgvector ANN scores alone are usable when embed API is degraded.
         usedSemantic = true;
@@ -1161,6 +1206,9 @@ export async function retrieveRelevantRecords(
       matchedPersonName: match?.displayName ?? null,
       recordType: r.recordType,
       updatedAt: r.updatedAt,
+      digest: r.digest ?? null,
+      pinned: r.pinned,
+      expandPreferred: r.expandPreferred,
     };
   };
 

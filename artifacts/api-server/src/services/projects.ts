@@ -183,6 +183,8 @@ export async function getProjectDetailForUser(
       id: note.id,
       title: note.title,
       preview: note.preview,
+      summary: note.summary ?? null,
+      factBullets: Array.isArray(note.factBullets) ? note.factBullets : [],
       tags: note.tags ?? [],
       date: noteDateLabel(note.updatedAt),
       pinned: note.pinned,

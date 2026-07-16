@@ -66,6 +66,7 @@ export type RecallCaptureDto = {
   rawText: string;
   rawHtml: string | null;
   rawMetadata: Record<string, unknown>;
+  digest: string | null;
   processedStatus: CaptureProcessedStatus;
   processingError: string | null;
   capturedAt: string;
@@ -120,6 +121,7 @@ export function toCaptureDto(row: Capture): RecallCaptureDto {
     rawText: row.rawText,
     rawHtml: row.rawHtml ?? null,
     rawMetadata: row.rawMetadata ?? {},
+    digest: row.digest ?? null,
     processedStatus: isCaptureProcessedStatus(row.processedStatus)
       ? row.processedStatus
       : "pending",

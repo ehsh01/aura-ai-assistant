@@ -13,6 +13,7 @@ import {
 import { attachmentSearchTextForNotes } from "./attachment-text-extract";
 import { writeAuditLog } from "./audit";
 import { warmEntityEmbedding } from "./embedding-cache";
+import { scheduleDigestRegen } from "./digests";
 import { noteRetrievalText } from "./note-retrieval";
 import {
   personNamesById,
@@ -27,6 +28,8 @@ export type RecallNoteDto = {
   title: string;
   content: string;
   preview: string;
+  summary: string | null;
+  factBullets: string[];
   contentFormat: "plain" | "html";
   tags: string[];
   date: string;
@@ -80,6 +83,8 @@ function toDto(
     title: row.title,
     content: row.content,
     preview: row.preview,
+    summary: row.summary ?? null,
+    factBullets: Array.isArray(row.factBullets) ? row.factBullets : [],
     contentFormat: format,
     tags: row.tags ?? [],
     date: noteDateLabel(row.updatedAt),
@@ -318,6 +323,7 @@ export async function createNoteForUser(
     entityId: dto.id,
     text: noteRetrievalText(dto),
   });
+  scheduleDigestRegen({ userId, entityType: "note", entityId: dto.id });
   await syncPrimaryPersonLink(userId, "note", dto.id, dto.primaryPersonId);
   return dto;
 }
@@ -531,6 +537,7 @@ export async function updateNoteForUser(
       entityId: dto.id,
       text: noteRetrievalText(dto),
     });
+    scheduleDigestRegen({ userId, entityType: "note", entityId: dto.id });
   }
   if (primaryPersonIdToWrite !== undefined) {
     await syncPrimaryPersonLink(userId, "note", dto.id, dto.primaryPersonId);

@@ -27,6 +27,11 @@ export const notes = pgTable("notes", {
   title: varchar("title", { length: 500 }).notNull().default("Untitled"),
   content: text("content").notNull().default(""),
   preview: text("preview").notNull().default(""),
+  /** Compact Ask/embed digest — never replaces content. */
+  summary: text("summary"),
+  /** Hash of title+content+attachmentText used to invalidate digest. */
+  contentHash: varchar("content_hash", { length: 64 }),
+  factBullets: jsonb("fact_bullets").$type<string[]>().notNull().default([]),
   contentFormat: varchar("content_format", { length: 16 }).notNull().default("plain"),
   tags: jsonb("tags").$type<string[]>().notNull().default([]),
   pinned: boolean("pinned").notNull().default(false),

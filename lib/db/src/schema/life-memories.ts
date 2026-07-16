@@ -36,6 +36,8 @@ export const lifeMemories = pgTable(
     domain: varchar("domain", { length: 32 }).notNull().default("other"),
     title: varchar("title", { length: 500 }).notNull(),
     content: text("content").notNull().default(""),
+    /** Compact digest when content is long — never replaces content. */
+    summary: text("summary"),
     tags: jsonb("tags").$type<string[]>().notNull().default([]),
     primaryPersonId: varchar("primary_person_id", { length: 64 }).references(() => people.id, {
       onDelete: "set null",

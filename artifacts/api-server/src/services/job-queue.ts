@@ -8,6 +8,7 @@ export type { Job };
 export const JOB_TYPE_CAPTURE_EXTRACTION = "capture_extraction" as const;
 export const JOB_TYPE_ATTACHMENT_EXTRACT = "attachment_extract" as const;
 export const JOB_TYPE_ENEX_IMPORT = "enex_import" as const;
+export const JOB_TYPE_DIGEST_REGEN = "digest_regen" as const;
 
 export type JobStatus = "queued" | "processing" | "complete" | "failed";
 

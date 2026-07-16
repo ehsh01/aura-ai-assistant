@@ -13,6 +13,8 @@ import { newMemoryId } from "../lib/recall-format";
 import { aiService } from "./ai";
 import { writeAuditLog } from "./audit";
 import { warmEntityEmbedding } from "./embedding-cache";
+import { memoryEmbeddingText } from "./embedding-text";
+import { scheduleDigestRegen } from "./digests";
 import { syncPrimaryPersonLink } from "./entity-links";
 
 export type LifeMemoryDto = {
@@ -20,6 +22,7 @@ export type LifeMemoryDto = {
   domain: LifeMemoryDomain;
   title: string;
   content: string;
+  summary: string | null;
   tags: string[];
   primaryPersonId: string | null;
   projectId: string | null;
@@ -120,6 +123,7 @@ function toDto(row: LifeMemory): LifeMemoryDto {
     domain: normalizeDomain(row.domain),
     title: row.title,
     content: row.content,
+    summary: row.summary ?? null,
     tags: row.tags ?? [],
     primaryPersonId: row.primaryPersonId ?? null,
     projectId: row.projectId ?? null,
@@ -185,9 +189,15 @@ function warmMemory(userId: string, dto: LifeMemoryDto): void {
   warmEntityEmbedding(userId, {
     entityType: "memory",
     entityId: dto.id,
-    text: `domain=${dto.domain} ${dto.title}\n${dto.content}${
-      dto.pinned ? " pinned=true" : ""
-    } tags=${dto.tags.join(",")}`,
+    text: memoryEmbeddingText({
+      domain: dto.domain,
+      title: dto.title,
+      content: dto.content,
+      tags: dto.tags,
+      primaryPersonId: dto.primaryPersonId,
+      pinned: dto.pinned,
+      summary: dto.summary,
+    }),
   });
 }
 
@@ -307,6 +317,9 @@ export async function createMemoryForUser(
     },
   });
   warmMemory(userId, dto);
+  if (dto.content.length > 800) {
+    scheduleDigestRegen({ userId, entityType: "memory", entityId: dto.id });
+  }
   await syncPrimaryPersonLink(userId, "memory", dto.id, dto.primaryPersonId);
   return dto;
 }
@@ -375,6 +388,9 @@ export async function updateMemoryForUser(
   if (!row) return null;
   const dto = toDto(row);
   warmMemory(userId, dto);
+  if (input.content !== undefined && dto.content.length > 800) {
+    scheduleDigestRegen({ userId, entityType: "memory", entityId: dto.id });
+  }
   if (input.primaryPersonId !== undefined) {
     await syncPrimaryPersonLink(userId, "memory", dto.id, dto.primaryPersonId);
   }
@@ -501,4 +517,33 @@ export function filterActiveMemoryRows<T extends Pick<LifeMemory, "status" | "ex
   now: Date = new Date(),
 ): T[] {
   return rows.filter((row) => isMemoryActiveForRetrieval(row, now));
+}
+
+/**
+ * Mark past-due active memories as expired so Ask never pays tokens for them.
+ * Safe to run periodically from the job worker.
+ */
+export async function expireDueMemories(limit = 200): Promise<number> {
+  const now = new Date();
+  const due = await getDb()
+    .select({ id: lifeMemories.id, userId: lifeMemories.userId })
+    .from(lifeMemories)
+    .where(
+      and(
+        eq(lifeMemories.status, "active"),
+        sql`${lifeMemories.expiresAt} is not null`,
+        sql`${lifeMemories.expiresAt} <= ${now}`,
+      ),
+    )
+    .limit(limit);
+  if (!due.length) return 0;
+  let n = 0;
+  for (const row of due) {
+    await getDb()
+      .update(lifeMemories)
+      .set({ status: "expired", pinned: false, updatedAt: now })
+      .where(and(eq(lifeMemories.id, row.id), eq(lifeMemories.userId, row.userId)));
+    n += 1;
+  }
+  return n;
 }

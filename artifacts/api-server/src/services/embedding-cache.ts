@@ -14,8 +14,48 @@ type CacheEntry = {
 /** L1: in-process embedding cache. Survives for the PM2 process lifetime. */
 const cache = new Map<string, CacheEntry>();
 
+/** Short-TTL L1 for query embeddings (same Ask may embed the question twice). */
+const queryCache = new Map<string, CacheEntry>();
+const QUERY_CACHE_TTL_MS = 5 * 60_000;
+const QUERY_CACHE_MAX = 500;
+
 const MAX_ENTRIES = 8_000;
 const PGVECTOR_DIMS = 1536;
+
+type EmbedMetrics = {
+  itemHits: number;
+  itemMisses: number;
+  itemApiCalls: number;
+  queryHits: number;
+  queryMisses: number;
+  queryApiCalls: number;
+};
+
+const metrics: EmbedMetrics = {
+  itemHits: 0,
+  itemMisses: 0,
+  itemApiCalls: 0,
+  queryHits: 0,
+  queryMisses: 0,
+  queryApiCalls: 0,
+};
+
+export function getEmbeddingCacheMetrics(): EmbedMetrics & { itemHitRate: number } {
+  const total = metrics.itemHits + metrics.itemMisses;
+  return {
+    ...metrics,
+    itemHitRate: total === 0 ? 1 : metrics.itemHits / total,
+  };
+}
+
+export function resetEmbeddingCacheMetricsForTests(): void {
+  metrics.itemHits = 0;
+  metrics.itemMisses = 0;
+  metrics.itemApiCalls = 0;
+  metrics.queryHits = 0;
+  metrics.queryMisses = 0;
+  metrics.queryApiCalls = 0;
+}
 
 function contentHash(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 24);
@@ -228,6 +268,7 @@ export async function embedItemsCached(
     if (hit && hit.hash === hash) {
       vectors.set(`${item.entityType}:${item.entityId}`, hit.vector);
       hit.updatedAt = Date.now();
+      metrics.itemHits += 1;
     } else {
       pending.push({ item, hash, key });
     }
@@ -241,8 +282,10 @@ export async function embedItemsCached(
       if (hit && hit.hash === p.hash) {
         vectors.set(`${p.item.entityType}:${p.item.entityId}`, hit.vector);
         hit.updatedAt = Date.now();
+        metrics.itemHits += 1;
       } else {
         stillMissing.push(p);
+        metrics.itemMisses += 1;
       }
     }
     pending = stillMissing;
@@ -253,6 +296,7 @@ export async function embedItemsCached(
     const toPersist: { item: EmbeddableItem; hash: string; vector: number[] }[] = [];
     for (let i = 0; i < pending.length; i += CHUNK) {
       const slice = pending.slice(i, i + CHUNK);
+      metrics.itemApiCalls += 1;
       const embeds = await aiService.embedTexts!(
         slice.map((m) => m.item.text.slice(0, 2_000)),
       );
@@ -272,11 +316,36 @@ export async function embedItemsCached(
   return vectors;
 }
 
+function evictQueryCacheIfNeeded(): void {
+  if (queryCache.size <= QUERY_CACHE_MAX) return;
+  const entries = [...queryCache.entries()].sort((a, b) => a[1].updatedAt - b[1].updatedAt);
+  const drop = Math.ceil(entries.length * 0.2);
+  for (let i = 0; i < drop; i++) {
+    const key = entries[i]?.[0];
+    if (key) queryCache.delete(key);
+  }
+}
+
 export async function embedQuery(text: string): Promise<number[] | null> {
   if (aiService.getStatus().degraded) return null;
   if (typeof aiService.embedTexts !== "function") return null;
-  const [vec] = await aiService.embedTexts([text.slice(0, 2_000)]);
-  return vec ?? null;
+  const model = embeddingModel();
+  const sliced = text.slice(0, 2_000);
+  const hash = contentHash(sliced);
+  const key = `${model}:${hash}`;
+  const hit = queryCache.get(key);
+  if (hit && Date.now() - hit.updatedAt < QUERY_CACHE_TTL_MS && hit.hash === hash) {
+    hit.updatedAt = Date.now();
+    metrics.queryHits += 1;
+    return hit.vector;
+  }
+  metrics.queryMisses += 1;
+  metrics.queryApiCalls += 1;
+  const [vec] = await aiService.embedTexts([sliced]);
+  if (!vec) return null;
+  queryCache.set(key, { hash, vector: vec, updatedAt: Date.now() });
+  evictQueryCacheIfNeeded();
+  return vec;
 }
 
 export function warmEntityEmbedding(
@@ -307,4 +376,5 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 /** Test helper */
 export function clearEmbeddingCacheForTests(): void {
   cache.clear();
+  queryCache.clear();
 }

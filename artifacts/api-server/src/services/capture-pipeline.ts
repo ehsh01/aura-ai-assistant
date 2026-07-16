@@ -133,6 +133,9 @@ export async function processCaptureExtraction(
 
   await updateCaptureStatusForUser(userId, captureId, { processedStatus: "processed" });
 
+  const { scheduleDigestRegen } = await import("./digests");
+  scheduleDigestRegen({ userId, entityType: "capture", entityId: captureId });
+
   await writeAuditLog({
     userId,
     action: "capture_extracted",

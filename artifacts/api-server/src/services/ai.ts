@@ -160,6 +160,7 @@ export interface QueryContextRecord {
   text: string;
   /** Source timestamp already formatted in the user timezone — never truncated. */
   date?: string | null;
+  pinned?: boolean;
 }
 
 export interface QueryFinanceAggregate {
@@ -205,10 +206,27 @@ export interface AnswerQueryRequest {
 }
 
 /** Cap context text sent to the answer model — notes keep enough body to be useful. */
-function answerContextTextCap(entityType: string): number {
-  if (entityType === "person") return 800;
+function answerContextTextCap(
+  entityType: string,
+  opts?: { pinned?: boolean },
+): number {
   if (entityType === "note") return 2_000;
+  if (entityType === "person") return 800;
+  if (entityType === "memory") return opts?.pinned ? 2_000 : 1_200;
+  if (entityType === "source_record") return 1_200;
   return 500;
+}
+
+function truncateConversationTurn(
+  turn: { role: "user" | "assistant"; content: string },
+  index: number,
+  total: number,
+): { role: "user" | "assistant"; content: string } {
+  const isLatestUser = index === total - 1 && turn.role === "user";
+  return {
+    role: turn.role,
+    content: turn.content.slice(0, isLatestUser ? 1_200 : 600),
+  };
 }
 
 export interface AnswerQueryResponse extends AiDegradedMeta {
@@ -1081,10 +1099,10 @@ class OpenAiService implements AiService {
             today: request.today,
             now: request.now ?? null,
             question: request.question,
-            conversation: (request.conversation ?? []).slice(-12).map((t) => ({
-              role: t.role,
-              content: t.content.slice(0, 1200),
-            })),
+            conversation: (() => {
+              const turns = (request.conversation ?? []).slice(-12);
+              return turns.map((t, i) => truncateConversationTurn(t, i, turns.length));
+            })(),
             finance: request.finance ?? null,
             records: request.records.map((r) => ({
               entityType: r.entityType,
@@ -1093,7 +1111,10 @@ class OpenAiService implements AiService {
               // Date is separate so truncation of body text cannot drop the sent time.
               date: r.date ?? null,
               // Keep person name fields intact; other records stay capped.
-              text: r.text.slice(0, answerContextTextCap(r.entityType)),
+              text: r.text.slice(
+                0,
+                answerContextTextCap(r.entityType, { pinned: r.pinned }),
+              ),
             })),
           }),
         },
@@ -1153,17 +1174,20 @@ class OpenAiService implements AiService {
             today: request.today,
             now: request.now ?? null,
             question: request.question,
-            conversation: (request.conversation ?? []).slice(-12).map((t) => ({
-              role: t.role,
-              content: t.content.slice(0, 1200),
-            })),
+            conversation: (() => {
+              const turns = (request.conversation ?? []).slice(-12);
+              return turns.map((t, i) => truncateConversationTurn(t, i, turns.length));
+            })(),
             finance: request.finance ?? null,
             records: request.records.map((r) => ({
               entityType: r.entityType,
               entityId: r.entityId,
               title: r.title,
               date: r.date ?? null,
-              text: r.text.slice(0, answerContextTextCap(r.entityType)),
+              text: r.text.slice(
+                0,
+                answerContextTextCap(r.entityType, { pinned: r.pinned }),
+              ),
             })),
           }),
         },

@@ -24,6 +24,7 @@ import { isEmailSearchIntent, planGmailSearch } from "./nl-gmail-query";
 import { isDriveSearchIntent, planDriveSearch } from "./nl-drive-query";
 import { isHomeyAskIntent, planHomeyAsk } from "./nl-homey-query";
 import { extractMailboxHint, retrieveRelevantRecords } from "./retrieval";
+import { promptTextForRetrievedRecord } from "./prompt-context";
 import { listWaitingOnForUser } from "./waiting-on";
 import { writeAuditLog } from "./audit";
 import { QUERY_ANSWER_PROMPT_VERSION } from "../prompts/queryAnswer.v1";
@@ -38,6 +39,7 @@ import {
 import { buildAskAnswerMetadata } from "./ask-answer-metadata";
 import { executeHomeyAskForUser } from "./connectors";
 import { listOpenHomeyAlertsForUser } from "./homey-alerts";
+import { logger } from "../lib/logger";
 
 function buildFinanceBreakdownAnswer(
   finance: QueryFinanceAggregate,
@@ -383,18 +385,30 @@ export async function queryRecallForUser(
       text: `${w.followUp}. ${w.evidenceText}${w.days ? ` (${w.days}d)` : ""}`,
     };
   });
-  const retrievalContext = relevant.map((r) => {
+  const wantsEmailAsk =
+    isEmailSearchIntent(question) || isEmailSearchIntent(retrievalQuestion);
+  const wantsDriveAsk =
+    isDriveSearchIntent(question) || isDriveSearchIntent(retrievalQuestion);
+
+  const retrievalContext = relevant.map((r, rankIndex) => {
     const date = formatInstantForUser(r.updatedAt);
+    const body = promptTextForRetrievedRecord(r, {
+      question,
+      rankIndex,
+      emailIntent: wantsEmailAsk,
+      forceExpand: r.method === "keyword" && r.entityType === "note",
+    });
     return {
       entityType: r.entityType,
       entityId: r.entityId,
       title: r.title,
       date,
+      pinned: r.pinned,
       // Prefer an explicit Date line at the front so answerQuery truncation cannot drop it.
       text:
-        date && !/\bDate[=:]/.test(r.text.slice(0, 180))
-          ? `Date: ${date}\n${r.text}`
-          : r.text,
+        date && !/\bDate[=:]/.test(body.slice(0, 180))
+          ? `Date: ${date}\n${body}`
+          : body,
     };
   });
 
@@ -408,11 +422,8 @@ export async function queryRecallForUser(
     title: string;
     text: string;
     date?: string | null;
+    pinned?: boolean;
   }[] = [];
-  const wantsEmailAsk =
-    isEmailSearchIntent(question) || isEmailSearchIntent(retrievalQuestion);
-  const wantsDriveAsk =
-    isDriveSearchIntent(question) || isDriveSearchIntent(retrievalQuestion);
 
   if (wantsEmailAsk || wantsDriveAsk) {
     const mailboxes = await getConnectedGoogleMailboxes(userId);
@@ -422,10 +433,20 @@ export async function queryRecallForUser(
 
     const [gmailPlan, drivePlan] = await Promise.all([
       wantsEmailAsk
-        ? planGmailSearch(question).then((p) => p ?? planGmailSearch(retrievalQuestion))
+        ? planGmailSearch(retrievalQuestion).then((p) =>
+            p ??
+            (retrievalQuestion.trim() !== question.trim()
+              ? planGmailSearch(question)
+              : null),
+          )
         : Promise.resolve(null),
       wantsDriveAsk
-        ? planDriveSearch(question).then((p) => p ?? planDriveSearch(retrievalQuestion))
+        ? planDriveSearch(retrievalQuestion).then((p) =>
+            p ??
+            (retrievalQuestion.trim() !== question.trim()
+              ? planDriveSearch(question)
+              : null),
+          )
         : Promise.resolve(null),
     ]);
 
@@ -753,6 +774,7 @@ export async function queryRecallForUser(
           : finance
             ? {
                 ...finance,
+                transactions: finance.transactions.slice(0, 40),
                 // Hint which figure to lead with (spent vs income vs net).
                 rangeLabel:
                   metric && finance.rangeLabel
@@ -764,6 +786,24 @@ export async function queryRecallForUser(
             : null,
         conversation,
       };
+
+      logger.debug(
+        {
+          answer_prompt_chars: JSON.stringify({
+            question,
+            conversation,
+            records: answerRequest.records,
+            finance: answerRequest.finance
+              ? {
+                  ...answerRequest.finance,
+                  transactions: answerRequest.finance.transactions,
+                }
+              : null,
+          }).length,
+          record_count: contextRecords.length,
+        },
+        "ask_answer_prompt_metrics",
+      );
 
       // Streaming path: emit sources first, then stream answer tokens. Confidence
       // and caveats are derived from retrieval signals (the model returns plain text).

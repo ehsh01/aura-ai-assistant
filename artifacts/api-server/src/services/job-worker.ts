@@ -4,6 +4,7 @@ import { updateCaptureStatusForUser } from "./captures";
 import {
   JOB_TYPE_ATTACHMENT_EXTRACT,
   JOB_TYPE_CAPTURE_EXTRACTION,
+  JOB_TYPE_DIGEST_REGEN,
   JOB_TYPE_ENEX_IMPORT,
   attachmentIdFromPayload,
   captureIdFromPayload,
@@ -58,6 +59,17 @@ const handlers: Record<string, JobHandler> = {
     const { processEnexImportJob } = await import("./enex-import-jobs");
     await processEnexImportJob(job.userId, statusJobId, meta.filePath, meta.fileName);
   },
+  [JOB_TYPE_DIGEST_REGEN]: async (job) => {
+    const entityType =
+      typeof job.payload.entityType === "string" ? job.payload.entityType : "";
+    const entityId =
+      typeof job.payload.entityId === "string" ? job.payload.entityId : "";
+    if (!entityType || !entityId) {
+      throw new Error("digest_regen job missing entityType/entityId");
+    }
+    const { processDigestRegen } = await import("./digests");
+    await processDigestRegen(job.userId, entityType, entityId);
+  },
 };
 
 async function runOneJob(job: Job): Promise<void> {
@@ -98,6 +110,15 @@ async function pollOnce(): Promise<void> {
       const recovered = await recoverStaleProcessingJobs();
       if (recovered > 0) {
         logger.info({ recovered }, "Re-queued stale processing jobs");
+      }
+      try {
+        const { expireDueMemories } = await import("./life-memory");
+        const expired = await expireDueMemories(100);
+        if (expired > 0) {
+          logger.info({ expired }, "Marked due life memories as expired");
+        }
+      } catch (err) {
+        logger.warn({ err }, "expireDueMemories failed");
       }
     }
 

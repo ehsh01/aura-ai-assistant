@@ -87,6 +87,10 @@ export async function createDocumentForUser(
     entityId: dto.id,
     text: `${dto.fileName}\n${(dto.summary ?? dto.extractedText ?? "").slice(0, 600)}`,
   });
+  if (!dto.summary && dto.extractedText) {
+    const { scheduleDigestRegen } = await import("./digests");
+    scheduleDigestRegen({ userId, entityType: "document", entityId: dto.id });
+  }
   return dto;
 }
 

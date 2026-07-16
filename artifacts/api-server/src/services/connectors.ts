@@ -42,6 +42,8 @@ import {
 import type { RecallConnector } from "../connectors/types";
 import { upsertEvidenceForSourceRecord } from "./evidence";
 import { writeAuditLog } from "./audit";
+import { warmEntityEmbedding } from "./embedding-cache";
+import { heuristicDigest, withSourceDigest } from "./digests";
 import { openConnectorSettings, sealConnectorSettings } from "../lib/secret-box";
 import { matchHomeyName, type HomeyAskPlan } from "./nl-homey-query";
 
@@ -1004,12 +1006,16 @@ export async function upsertSourceRecord(
 
   const now = new Date();
   if (existing[0]) {
+    const meta = withSourceDigest(
+      (record.recordMetadata ?? {}) as Record<string, unknown>,
+      heuristicDigest(record.recordTitle ?? "", record.recordText ?? "", 400),
+    );
     await getDb()
       .update(sourceRecords)
       .set({
         recordTitle: record.recordTitle ?? null,
         recordText: record.recordText ?? null,
-        recordMetadata: record.recordMetadata ?? {},
+        recordMetadata: meta,
         sourceUrl: record.sourceUrl ?? null,
         lastSyncedAt: now,
         updatedAt: now,
@@ -1019,6 +1025,10 @@ export async function upsertSourceRecord(
   }
 
   const id = newSourceRecordId();
+  const meta = withSourceDigest(
+    (record.recordMetadata ?? {}) as Record<string, unknown>,
+    heuristicDigest(record.recordTitle ?? "", record.recordText ?? "", 400),
+  );
   await getDb().insert(sourceRecords).values({
     id,
     userId,
@@ -1027,7 +1037,7 @@ export async function upsertSourceRecord(
     recordType: record.recordType,
     recordTitle: record.recordTitle ?? null,
     recordText: record.recordText ?? null,
-    recordMetadata: record.recordMetadata ?? {},
+    recordMetadata: meta,
     sourceUrl: record.sourceUrl ?? null,
     sourceCreatedAt: record.sourceCreatedAt ? new Date(record.sourceCreatedAt) : null,
     lastSyncedAt: now,
@@ -1035,6 +1045,42 @@ export async function upsertSourceRecord(
     updatedAt: now,
   });
   return id;
+}
+
+/** Bound Homey device embedding warm after sync (respects shared PG pool). */
+async function warmHomeyDeviceEmbeddings(
+  userId: string,
+  connectorId: string,
+): Promise<void> {
+  const rows = await getDb()
+    .select({
+      id: sourceRecords.id,
+      title: sourceRecords.recordTitle,
+      text: sourceRecords.recordText,
+      metadata: sourceRecords.recordMetadata,
+    })
+    .from(sourceRecords)
+    .where(
+      and(
+        eq(sourceRecords.userId, userId),
+        eq(sourceRecords.connectorId, connectorId),
+        eq(sourceRecords.recordType, "homey_device"),
+      ),
+    )
+    .orderBy(desc(sourceRecords.updatedAt))
+    .limit(40);
+
+  for (const row of rows) {
+    const digest =
+      typeof row.metadata?.digest === "string" ? row.metadata.digest : null;
+    warmEntityEmbedding(userId, {
+      entityType: "source_record",
+      entityId: row.id,
+      text: digest
+        ? `${row.title ?? "Homey device"}\n${digest}`
+        : `${row.title ?? ""}\n${(row.text ?? "").slice(0, 800)}`,
+    });
+  }
 }
 
 export async function syncConnectorForUser(
@@ -1130,6 +1176,10 @@ export async function syncConnectorForUser(
       } catch {
         recordsFailed++;
       }
+    }
+
+    if (conn.type === "homey") {
+      void warmHomeyDeviceEmbeddings(userId, connectorId).catch(() => undefined);
     }
 
     await getDb()

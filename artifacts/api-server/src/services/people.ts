@@ -13,6 +13,7 @@ import { newPersonId } from "../lib/recall-format";
 import { recordUserCorrection, listPersonNameAliases } from "./user-corrections";
 import { writeAuditLog } from "./audit";
 import { warmEntityEmbedding } from "./embedding-cache";
+import { personEmbeddingText } from "./embedding-text";
 import { listEntitiesLinkedToPeople } from "./entity-links";
 
 export type PersonDto = {
@@ -95,7 +96,7 @@ export async function createPersonForUser(
   warmEntityEmbedding(userId, {
     entityType: "person",
     entityId: dto.id,
-    text: `${dto.displayName} ${dto.organization ?? ""} ${dto.email ?? ""}`.trim(),
+    text: personEmbeddingText(dto),
   });
   return dto;
 }
@@ -193,7 +194,7 @@ export async function updatePersonForUser(
   warmEntityEmbedding(userId, {
     entityType: "person",
     entityId: dto.id,
-    text: `${dto.displayName} ${dto.organization ?? ""} ${dto.email ?? ""}`.trim(),
+    text: personEmbeddingText(dto),
   });
   return dto;
 }

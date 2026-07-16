@@ -28,6 +28,8 @@ export const captures = pgTable(
     rawText: text("raw_text").notNull(),
     rawHtml: text("raw_html"),
     rawMetadata: jsonb("raw_metadata").$type<Record<string, unknown>>().notNull().default({}),
+    /** Derived compact digest for Ask — additive; raw_text stays immutable. */
+    digest: text("digest"),
     // Processing lifecycle: pending | processing | processed | failed | ignored | archived.
     processedStatus: varchar("processed_status", { length: 16 }).notNull().default("pending"),
     processingError: text("processing_error"),
