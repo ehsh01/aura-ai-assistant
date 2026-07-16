@@ -28,6 +28,26 @@ import path from "node:path";
 /** Presence of this table means the DB is already provisioned (baseline case). */
 export const CORE_TABLE = "public.notes";
 
+// Mirror artifacts/api-server/src/lib/db.ts so the runner connects to the shared
+// DigitalOcean managed cluster exactly like the app (self-signed CA chain).
+function normalizeDatabaseUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if (/ondigitalocean\.com/i.test(parsed.hostname)) {
+      parsed.searchParams.delete("sslmode");
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+function clientSsl(url) {
+  if (/localhost|127\.0\.0\.1/.test(url)) return undefined;
+  if (/ondigitalocean\.com|sslmode=/i.test(url)) return { rejectUnauthorized: false };
+  return undefined;
+}
+
 /**
  * Core migration algorithm, decoupled from the pg driver so it can be exercised
  * against pglite (or any engine) in tests.
@@ -145,7 +165,10 @@ async function main() {
     path.resolve(process.cwd(), "artifacts/api-server/package.json"),
   );
   const pg = requireFrom("pg");
-  const client = new pg.Client({ connectionString: url });
+  const client = new pg.Client({
+    connectionString: normalizeDatabaseUrl(url),
+    ssl: clientSsl(url),
+  });
   await client.connect();
   try {
     await runMigrations({
