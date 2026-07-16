@@ -37,6 +37,12 @@ import {
   type ConversationTurn,
 } from "./ask-threads";
 import { buildAskAnswerMetadata } from "./ask-answer-metadata";
+import {
+  noteIdsForAskImages,
+  wantsShowSavedImage,
+  type AskAnswerImage,
+} from "./ask-images";
+import { listImageAttachmentsForNotes } from "./note-attachments";
 import { executeHomeyAskForUser } from "./connectors";
 import { listOpenHomeyAlertsForUser } from "./homey-alerts";
 import { logger } from "../lib/logger";
@@ -81,6 +87,8 @@ export type QueryAnswer = {
   caveats: string | null;
   evidence: EvidenceDto[];
   relatedRecords: { entityType: string; entityId: string; title: string }[];
+  /** Saved note images to render inline when the user asked to see a picture. */
+  images: AskAnswerImage[];
   suggestedNextAction: string | null;
   promptVersion: string;
   degraded: boolean;
@@ -97,6 +105,7 @@ export type QueryStreamMeta = {
   threadId: string;
   evidence: EvidenceDto[];
   relatedRecords: { entityType: string; entityId: string; title: string }[];
+  images: AskAnswerImage[];
   privacy: QueryAnswer["privacy"];
 };
 
@@ -376,6 +385,29 @@ export async function queryRecallForUser(
     ? waitingRelated
     : [...waitingRelated, ...retrievalRelated].slice(0, 12);
 
+  // When the user asks to see a saved picture, resolve note image attachments
+  // so the Ask UI can render them (the model only ever returns text).
+  const imageIntent = wantsShowSavedImage(question);
+  let askImages: AskAnswerImage[] = [];
+  if (imageIntent) {
+    const noteIds = noteIdsForAskImages([...retrievalRelated, ...relatedRecords]);
+    if (noteIds.length > 0) {
+      const titleByNote = new Map(
+        [...retrievalRelated, ...relatedRecords]
+          .filter((r) => r.entityType === "note")
+          .map((r) => [r.entityId, r.title] as const),
+      );
+      const attachments = await listImageAttachmentsForNotes(userId, noteIds, 6);
+      askImages = attachments.map((a) => ({
+        attachmentId: a.id,
+        noteId: a.noteId,
+        noteTitle: titleByNote.get(a.noteId) ?? "Note",
+        fileName: a.fileName,
+        mimeType: a.mimeType,
+      }));
+    }
+  }
+
   const waitingContext = waitingItems.map((w) => {
     const bareId = w.id.includes(":") ? w.id.slice(w.id.indexOf(":") + 1) : w.id;
     return {
@@ -571,10 +603,24 @@ export async function queryRecallForUser(
         liveMailContext.length > 0 ? 26 : familyIntent ? 16 : 14,
       );
 
+  if (askImages.length > 0) {
+    contextRecords.unshift({
+      entityType: "note",
+      entityId: askImages[0]!.noteId,
+      title: "Saved images available in the UI",
+      text:
+        `The user asked to see a saved image. The app WILL display ${askImages.length} image(s) ` +
+        `below your reply (${askImages.map((i) => i.fileName).join(", ")}). ` +
+        `Answer briefly: name the note and what the image is. Do not say you cannot show images.`,
+      pinned: true,
+    });
+  }
+
   const finish = async (
-    result: Omit<QueryAnswer, "privacy" | "threadId"> & {
+    result: Omit<QueryAnswer, "privacy" | "threadId" | "images"> & {
       privacy?: QueryAnswer["privacy"];
       threadId?: string | null;
+      images?: AskAnswerImage[];
     },
     streamOpts?: { streamed?: boolean },
   ): Promise<QueryAnswer> => {
@@ -586,8 +632,20 @@ export async function queryRecallForUser(
         ].filter(Boolean),
       ),
     ];
+    const images = result.images ?? askImages;
+    let answer = result.answer;
+    if (
+      imageIntent &&
+      images.length > 0 &&
+      !/\b(here('s| is)|showing|below)\b/i.test(answer.slice(0, 120))
+    ) {
+      const from = [...new Set(images.map((i) => i.noteTitle))].slice(0, 2).join("; ");
+      answer = `Here's the saved image from “${from}”:\n\n${answer}`;
+    }
     const withPrivacy: QueryAnswer = {
       ...result,
+      answer,
+      images,
       threadId: thread.id,
       privacy: result.privacy ?? {
         model: status.model,
@@ -605,6 +663,7 @@ export async function queryRecallForUser(
           threadId: withPrivacy.threadId ?? thread.id,
           evidence: withPrivacy.evidence,
           relatedRecords: withPrivacy.relatedRecords,
+          images: withPrivacy.images,
           privacy: withPrivacy.privacy,
         });
       }
@@ -631,6 +690,7 @@ export async function queryRecallForUser(
         threadId: thread.id,
         confidence: withPrivacy.confidence,
         evidenceCount: withPrivacy.evidence.length,
+        imageCount: withPrivacy.images.length,
         usedSemantic,
         waitingCount: waitingItems.length,
         personIntent,
@@ -813,6 +873,7 @@ export async function queryRecallForUser(
           threadId: thread.id,
           evidence,
           relatedRecords,
+          images: askImages,
           privacy: {
             model: status.model,
             dataLeftDevice: Boolean(status.enabled),

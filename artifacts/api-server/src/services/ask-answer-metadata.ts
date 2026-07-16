@@ -1,10 +1,12 @@
 import type { EvidenceDto } from "./evidence";
+import type { AskAnswerImage } from "./ask-images";
 
 export type PersistedAskAnswerMetadata = {
   confidence: number;
   caveats: string | null;
   relatedRecords: { entityType: string; entityId: string; title: string }[];
   evidence: EvidenceDto[];
+  images: AskAnswerImage[];
   privacy: {
     model: string | null;
     dataLeftDevice: boolean;
@@ -24,6 +26,7 @@ export function buildAskAnswerMetadata(
     caveats: answer.caveats,
     relatedRecords: answer.relatedRecords.slice(0, 8),
     evidence: answer.evidence,
+    images: (answer.images ?? []).slice(0, 6),
     privacy: answer.privacy,
     suggestedNextAction: answer.suggestedNextAction,
     promptVersion: answer.promptVersion,

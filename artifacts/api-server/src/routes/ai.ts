@@ -261,6 +261,7 @@ router.post("/ai/query/stream", async (req, res, next) => {
       caveats: result.caveats,
       relatedRecords: result.relatedRecords,
       evidence: result.evidence,
+      images: result.images,
       suggestedNextAction: result.suggestedNextAction,
       promptVersion: result.promptVersion,
       degraded: result.degraded,

@@ -28,6 +28,15 @@ describe("buildAskAnswerMetadata", () => {
         { entityType: "note", entityId: "note-1", title: "Porsche paperwork" },
       ],
       evidence: [evidence],
+      images: [
+        {
+          attachmentId: "att-1",
+          noteId: "note-1",
+          noteTitle: "Porsche paperwork",
+          fileName: "scan.jpg",
+          mimeType: "image/jpeg",
+        },
+      ],
       privacy: {
         model: "gpt-4o-mini",
         dataLeftDevice: true,
@@ -39,6 +48,7 @@ describe("buildAskAnswerMetadata", () => {
     });
 
     expect(metadata.evidence).toEqual([evidence]);
+    expect(metadata.images).toHaveLength(1);
     expect(metadata.privacy.categoriesSent).toEqual(["note"]);
     expect(metadata.suggestedNextAction).toBe("Open the note");
     expect(metadata.promptVersion).toBe("query-answer.v1");
@@ -55,6 +65,7 @@ describe("buildAskAnswerMetadata", () => {
       caveats: "Review sources",
       relatedRecords,
       evidence: [],
+      images: [],
       privacy: { model: null, dataLeftDevice: false, categoriesSent: [] },
       suggestedNextAction: null,
       promptVersion: "query-answer.v1",

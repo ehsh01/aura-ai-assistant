@@ -536,12 +536,21 @@ export async function refreshFinance(): Promise<{ ok: boolean; synced: boolean; 
   return apiFetch("/finance/refresh", { method: "POST", body: "{}" });
 }
 
+export type AskAnswerImage = {
+  attachmentId: string;
+  noteId: string;
+  noteTitle: string;
+  fileName: string;
+  mimeType: string;
+};
+
 export type QueryRecallResult = {
   answer: string;
   confidence: number;
   caveats: string | null;
   evidence: EvidenceRecord[];
   relatedRecords: { entityType: string; entityId: string; title: string }[];
+  images?: AskAnswerImage[];
   suggestedNextAction: string | null;
   threadId: string | null;
   privacy?: {
@@ -555,6 +564,7 @@ export type QueryRecallStreamMeta = {
   threadId: string;
   evidence: EvidenceRecord[];
   relatedRecords: { entityType: string; entityId: string; title: string }[];
+  images?: AskAnswerImage[];
   privacy?: QueryRecallResult["privacy"];
 };
 
@@ -659,6 +669,7 @@ export async function queryRecallStream(
     caveats: doneResult?.caveats ?? null,
     evidence: doneResult?.evidence ?? metaResult?.evidence ?? [],
     relatedRecords: doneResult?.relatedRecords ?? metaResult?.relatedRecords ?? [],
+    images: doneResult?.images ?? metaResult?.images ?? [],
     suggestedNextAction: doneResult?.suggestedNextAction ?? null,
     threadId: doneResult?.threadId ?? metaResult?.threadId ?? options.threadId ?? null,
     privacy: doneResult?.privacy ?? metaResult?.privacy,

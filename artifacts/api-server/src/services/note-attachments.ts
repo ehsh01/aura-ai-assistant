@@ -3,7 +3,7 @@ import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { noteAttachments } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { config } from "../lib/config";
@@ -173,6 +173,33 @@ export async function listAttachmentsForNote(
     sizeBytes: row.sizeBytes,
     isImage: isImageMime(row.mimeType),
   }));
+}
+
+/** Image attachments for several notes, preserving noteId order. */
+export async function listImageAttachmentsForNotes(
+  userId: string,
+  noteIds: string[],
+  limit = 6,
+): Promise<NoteAttachmentDto[]> {
+  if (noteIds.length === 0 || limit <= 0) return [];
+  const rows = await getDb()
+    .select()
+    .from(noteAttachments)
+    .where(and(eq(noteAttachments.userId, userId), inArray(noteAttachments.noteId, noteIds)));
+
+  const order = new Map(noteIds.map((id, i) => [id, i]));
+  return rows
+    .filter((row) => isImageMime(row.mimeType))
+    .sort((a, b) => (order.get(a.noteId) ?? 99) - (order.get(b.noteId) ?? 99))
+    .slice(0, limit)
+    .map((row) => ({
+      id: row.id,
+      noteId: row.noteId,
+      fileName: row.fileName,
+      mimeType: row.mimeType,
+      sizeBytes: row.sizeBytes,
+      isImage: true,
+    }));
 }
 
 export async function getAttachmentForUser(

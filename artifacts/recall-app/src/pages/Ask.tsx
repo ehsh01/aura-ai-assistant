@@ -21,12 +21,15 @@ import {
 import { entityPath, readSearchParam } from "@/lib/recall-nav";
 import { useSpeakAnswer } from "@/hooks/use-speak-answer";
 import { stopSpeaking } from "@/lib/speech-synthesis";
+import { AskAnswerImages } from "@/components/AskAnswerImages";
+import type { AskAnswerImage } from "@/lib/recall-api";
 
 type AnswerMeta = {
   confidence: number;
   caveats: string | null;
   evidence: EvidenceRecord[];
   relatedRecords: { entityType: string; entityId: string; title: string }[];
+  images: AskAnswerImage[];
   suggestedNextAction: string | null;
   privacy?: {
     model: string | null;
@@ -52,6 +55,9 @@ function answerMetaFromMessage(message: AskMessageRecord | undefined): AnswerMet
       : [],
     relatedRecords: Array.isArray(metadata.relatedRecords)
       ? (metadata.relatedRecords as AnswerMeta["relatedRecords"])
+      : [],
+    images: Array.isArray(metadata.images)
+      ? (metadata.images as AskAnswerImage[])
       : [],
     suggestedNextAction:
       typeof metadata.suggestedNextAction === "string"
@@ -211,6 +217,7 @@ export function Ask() {
             caveats: res.caveats,
             evidence: res.evidence,
             relatedRecords: res.relatedRecords,
+            images: res.images ?? [],
             suggestedNextAction: res.suggestedNextAction,
             privacy: res.privacy,
           },
@@ -222,6 +229,7 @@ export function Ask() {
         caveats: res.caveats,
         evidence: res.evidence,
         relatedRecords: res.relatedRecords,
+        images: res.images ?? [],
         suggestedNextAction: res.suggestedNextAction,
         privacy: res.privacy,
       });
@@ -237,6 +245,7 @@ export function Ask() {
             caveats: prev?.caveats ?? null,
             evidence: m.evidence,
             relatedRecords: m.relatedRecords,
+            images: m.images ?? [],
             suggestedNextAction: prev?.suggestedNextAction ?? null,
             privacy: m.privacy,
           }));
@@ -466,6 +475,9 @@ export function Ask() {
                   </div>
                   {latestMeta.caveats && (
                     <p className="text-sm text-amber-200/80">⚠ {latestMeta.caveats}</p>
+                  )}
+                  {latestMeta.images.length > 0 && (
+                    <AskAnswerImages images={latestMeta.images} />
                   )}
                   {latestMeta.suggestedNextAction && (
                     <div className="flex items-center gap-2 text-sm text-indigo-200">
