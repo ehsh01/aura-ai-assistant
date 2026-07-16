@@ -21,6 +21,7 @@ import {
   readSearchParam,
 } from "@/lib/recall-nav";
 import { invalidatePeopleCache } from "@/components/PersonTagLink";
+import { filterDismissedWaiting, rememberDismissedWaitingId } from "@/lib/waiting-dismissals";
 import { toast } from "@/hooks/use-toast";
 import { Merge, Pencil } from "lucide-react";
 
@@ -84,7 +85,7 @@ export function People() {
     try {
       const [peopleRes, waitingRes] = await Promise.all([listPeople(), listWaitingOn()]);
       setPeople(peopleRes.people);
-      setWaiting(waitingRes.items);
+      setWaiting(filterDismissedWaiting(waitingRes.items));
       relatedLoaded.current = {};
       setOpenByPerson({});
       setNotesByPerson({});
@@ -199,9 +200,10 @@ export function People() {
   const dismissWaiting = async (item: WaitingOnRecord) => {
     if (creatingId) return;
     setCreatingId(item.id);
+    rememberDismissedWaitingId(item.id);
+    setWaiting((prev) => prev.filter((w) => w.id !== item.id));
     try {
       await dismissWaitingOn(item.id);
-      setWaiting((prev) => prev.filter((w) => w.id !== item.id));
       toast({ title: "Dismissed", description: "Won’t show this waiting item again." });
     } catch (err) {
       toast({

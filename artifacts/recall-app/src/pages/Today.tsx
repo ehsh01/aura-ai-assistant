@@ -6,8 +6,10 @@ import {
   fetchHome,
   listHomeyAlerts,
   listPeople,
+  listWaitingOn,
   type HomeBriefingResponse,
   type PersonRecord,
+  type WaitingOnRecord,
 } from "@/lib/recall-api";
 import { pressingFeed, type HomeyUrgencyAlert } from "@/lib/urgency";
 import { ingestCaptureReliable } from "@/lib/capture-queue";
@@ -21,8 +23,9 @@ import {
   buildDailyBriefing,
   buildDontForget,
   buildFocusNow,
-  buildWaitingOn,
+  type WaitingItem,
 } from "@/lib/home-briefing";
+import { filterDismissedWaiting } from "@/lib/waiting-dismissals";
 import {
   buildTodayQueue,
   TodayActionQueue,
@@ -30,6 +33,18 @@ import {
 import { DontForgetSection } from "@/components/home/DontForgetSection";
 import { BrainDumpInput } from "@/components/home/BrainDumpInput";
 import { NeuralBrainBackground } from "@/components/NeuralBrainBackground";
+
+function toWaitingItems(items: WaitingOnRecord[]): WaitingItem[] {
+  return items.map((w) => ({
+    id: w.id,
+    person: w.person,
+    personId: w.personId,
+    item: w.item,
+    days: w.days,
+    href: w.href,
+    followUp: w.followUp,
+  }));
+}
 
 function firstLineTitle(text: string, fallback = "Quick capture"): string {
   const line = text.trim().split(/\r?\n/).find(Boolean) ?? fallback;
@@ -46,6 +61,7 @@ export function Today() {
   const [projects, setProjects] = useState<RecallProject[]>([]);
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [home, setHome] = useState<HomeBriefingResponse | null>(null);
+  const [waiting, setWaiting] = useState<WaitingItem[]>([]);
   const [homeyAlerts, setHomeyAlerts] = useState<HomeyUrgencyAlert[]>([]);
   const [capturePrefill, setCapturePrefill] = useState<string | null>(() =>
     readSearchParam("capture"),
@@ -56,11 +72,27 @@ export function Today() {
       .then((res) => setCaptures(res.items as RecallCaptureItem[]))
       .catch(() => {});
 
+  const refreshWaiting = useCallback(() => {
+    void listWaitingOn()
+      .then((res) => setWaiting(filterDismissedWaiting(toWaitingItems(res.items))))
+      .catch(() => {
+        // Keep last good server list — never rebuild from local notes (ignores dismissals).
+      });
+  }, []);
+
   const refreshHome = useCallback(() => {
     void fetchHome()
-      .then(setHome)
-      .catch(() => setHome(null));
-  }, []);
+      .then((next) => {
+        setHome(next);
+        if (Array.isArray(next.waiting)) {
+          setWaiting(filterDismissedWaiting(next.waiting));
+        }
+      })
+      .catch(() => {
+        // Keep prior home snapshot; a failed refresh must not wipe dismiss-aware waiting.
+      });
+    refreshWaiting();
+  }, [refreshWaiting]);
 
   useEffect(() => {
     refreshHome();
@@ -141,7 +173,6 @@ export function Today() {
     home?.briefing ??
     buildDailyBriefing(userName, tasks, notes, captures, projects, homeyAlerts);
   const focus = home?.focus ?? buildFocusNow(tasks, projects);
-  const waiting = home?.waiting ?? buildWaitingOn(notes);
   const pressing = useMemo(
     () => pressingFeed(tasks, notes, captures, 6, homeyAlerts),
     [tasks, notes, captures, homeyAlerts],
@@ -151,7 +182,7 @@ export function Today() {
     () =>
       buildTodayQueue({
         focus,
-        waiting,
+        waiting: filterDismissedWaiting(waiting),
         critical: briefing.critical,
         reminders: briefing.reminders,
       }),

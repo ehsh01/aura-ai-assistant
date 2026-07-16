@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { ArrowRight, Flame, Hourglass, Inbox, Target, X } from "lucide-react";
 import type { BriefingItem, FocusNow, WaitingItem } from "@/lib/home-briefing";
 import { createWaitingFollowUp, dismissWaitingOn } from "@/lib/recall-api";
+import { rememberDismissedWaitingId } from "@/lib/waiting-dismissals";
 import { toast } from "@/hooks/use-toast";
 
 export type QueueItem = {
@@ -145,9 +146,12 @@ export function TodayActionQueue({ items, onWaitingChanged }: Props) {
   const dismiss = async (item: WaitingItem) => {
     if (busyId) return;
     setBusyId(item.id);
+    // Hide immediately and persist locally so a refresh never resurrects it
+    // even if /home briefly falls back or lags behind the dismiss write.
+    rememberDismissedWaitingId(item.id);
+    setHiddenIds((prev) => new Set(prev).add(item.id));
     try {
       await dismissWaitingOn(item.id);
-      setHiddenIds((prev) => new Set(prev).add(item.id));
       toast({ title: "Dismissed", description: "Won’t show this waiting item again." });
       onWaitingChanged?.();
     } catch (err) {
