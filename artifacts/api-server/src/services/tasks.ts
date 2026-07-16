@@ -16,6 +16,8 @@ export type RecallTaskDto = {
   projectId: string | null;
   requesterPersonId: string | null;
   requesterPersonName: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type CreateTaskInput = {
@@ -63,6 +65,8 @@ function toDto(row: Task, personName: string | null = null): RecallTaskDto {
     projectId: row.projectId ?? null,
     requesterPersonId: row.requesterPersonId ?? null,
     requesterPersonName: personName,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 

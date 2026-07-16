@@ -75,6 +75,8 @@ describe("proactive insights helpers", () => {
         projectId: "p1",
         requesterPersonId: null,
         requesterPersonName: null,
+        createdAt: recent,
+        updatedAt: recent,
       },
       {
         id: "t2",
@@ -84,6 +86,8 @@ describe("proactive insights helpers", () => {
         projectId: "p1",
         requesterPersonId: null,
         requesterPersonName: null,
+        createdAt: recent,
+        updatedAt: recent,
       },
     ];
     const signals = findProjectChangeSignals(projects, notes, tasks);

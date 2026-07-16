@@ -194,10 +194,14 @@ function isDueToday(value: string | null | undefined, today: string): boolean {
 
 function scoreTaskUrgency(task: RecallTaskDto, today: string): number {
   if (task.completed) return -1;
+  const due = isDueNowOrPast(task.time ?? null, today);
+  // Undated stale tasks must not dominate Focus / Start here. Due (or overdue)
+  // tasks always stay eligible; everything else needs recent activity.
+  if (!due && !isRecentForHome(task.updatedAt ?? task.createdAt)) return -1;
   let score = 0;
   if (task.priority === "high") score += 40;
   if (task.priority === "med") score += 20;
-  if (isDueNowOrPast(task.time ?? null, today)) score += 45;
+  if (due) score += 45;
   if (URGENCY_KEYWORDS.test(task.title)) score += 20;
   return score;
 }
@@ -269,7 +273,12 @@ function buildFocusNow(
     };
   }
 
-  const firstOpen = tasks.find((t) => !t.completed);
+  const firstOpen = tasks.find(
+    (t) =>
+      !t.completed &&
+      (isDueNowOrPast(t.time ?? null, today) ||
+        isRecentForHome(t.updatedAt ?? t.createdAt)),
+  );
   if (firstOpen) {
     return {
       title: firstOpen.title,

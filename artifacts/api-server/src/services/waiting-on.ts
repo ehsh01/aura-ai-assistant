@@ -161,14 +161,19 @@ export async function listWaitingOnForUser(
     });
   }
 
+  // Open waiting tasks must age out the same as notes — previously they always
+  // used days: 0 and never left Waiting on / Start here, so stale follow-ups
+  // (Kenneth bills, old doctor follow-ups, etc.) stuck forever.
   for (const t of tasks.filter((x) => !x.completed && WAITING_RE.test(x.title))) {
+    const age = daysSince(t.updatedAt ?? t.createdAt);
+    if (age < minAgeDays || age > maxAgeDays) continue;
     const person = extractPerson(t.title, peopleNames);
     items.push({
       id: `task:${t.id}`,
       person,
       personId: matchPersonId(person, people, aliases),
       item: t.title,
-      days: 0,
+      days: age,
       href: `/tasks?task=${encodeURIComponent(t.id)}`,
       followUp: `Follow up with ${person}`,
       sourceType: "task",
