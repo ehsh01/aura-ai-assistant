@@ -476,7 +476,7 @@ export function Ask() {
                   {latestMeta.caveats && (
                     <p className="text-sm text-amber-200/80">⚠ {latestMeta.caveats}</p>
                   )}
-                  {latestMeta.images.length > 0 && (
+                  {latestMeta.images && latestMeta.images.length > 0 && (
                     <AskAnswerImages images={latestMeta.images} />
                   )}
                   {latestMeta.suggestedNextAction && (

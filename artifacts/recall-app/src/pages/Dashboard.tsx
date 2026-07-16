@@ -23,6 +23,13 @@ import { MicButton } from "@/components/MicButton";
 import { RecallLogo } from "@/components/RecallLogo";
 import { useSpeakAnswer } from "@/hooks/use-speak-answer";
 import { stopSpeaking } from "@/lib/speech-synthesis";
+import { AskAnswerImages } from "@/components/AskAnswerImages";
+import type { AskAnswerImage } from "@/lib/recall-api";
+
+function imagesFromMetadata(metadata: Record<string, unknown> | undefined): AskAnswerImage[] {
+  if (!metadata || !Array.isArray(metadata.images)) return [];
+  return metadata.images as AskAnswerImage[];
+}
 
 /** Immersive oracle Home — background + ask only. History stays behind a tab. */
 export function Dashboard() {
@@ -30,6 +37,7 @@ export function Dashboard() {
   const [question, setQuestion] = useState("");
   /** Only the current turn (latest Q + A) — not the full thread. */
   const [liveMessages, setLiveMessages] = useState<AskMessageRecord[]>([]);
+  const [answerImages, setAnswerImages] = useState<AskAnswerImage[]>([]);
   const [threadId, setThreadId] = useState<string | null>(getStoredAskThreadId());
   const [askPending, setAskPending] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -134,6 +142,7 @@ export function Dashboard() {
     }
 
     const tempId = `local-${Date.now()}`;
+    setAnswerImages([]);
     setLiveMessages([
       {
         id: tempId,
@@ -150,6 +159,8 @@ export function Dashboard() {
         setThreadId(res.threadId);
         setStoredAskThreadId(res.threadId);
       }
+      const images = res.images ?? [];
+      setAnswerImages(images);
       // Only the current turn — never the full thread history.
       setLiveMessages([
         {
@@ -165,12 +176,13 @@ export function Dashboard() {
           threadId: res.threadId ?? activeThreadId ?? "local",
           role: "assistant",
           content: res.answer,
-          metadata: {},
+          metadata: { images },
           createdAt: new Date().toISOString(),
         },
       ]);
       void refreshThreads();
     } catch {
+      setAnswerImages([]);
       setLiveMessages([
         {
           id: tempId,
@@ -198,6 +210,7 @@ export function Dashboard() {
     stopSpeaking();
     setPanelOpen(false);
     setLiveMessages([]);
+    setAnswerImages([]);
     setQuestion("");
     sessionActive.current = false;
   };
@@ -403,22 +416,29 @@ export function Dashboard() {
                     </p>
                   )}
                   {!historyLoading &&
-                    historyMessages.map((m) => (
-                      <div
-                        key={m.id}
-                        className={`mb-3 flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-                      >
-                        <p
-                          className={`max-w-[95%] whitespace-pre-wrap text-sm leading-relaxed ${
-                            m.role === "user"
-                              ? "rounded-2xl bg-indigo-500/25 px-3 py-2 text-indigo-50"
-                              : "text-white/90"
-                          }`}
-                        >
-                          {m.content}
-                        </p>
-                      </div>
-                    ))}
+                    historyMessages.map((m) => {
+                      const imgs = imagesFromMetadata(m.metadata);
+                      return (
+                        <div key={m.id} className="mb-3 space-y-2">
+                          <div
+                            className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                          >
+                            <p
+                              className={`max-w-[95%] whitespace-pre-wrap text-sm leading-relaxed ${
+                                m.role === "user"
+                                  ? "rounded-2xl bg-indigo-500/25 px-3 py-2 text-indigo-50"
+                                  : "text-white/90"
+                              }`}
+                            >
+                              {m.content}
+                            </p>
+                          </div>
+                          {m.role === "assistant" && imgs.length > 0 && (
+                            <AskAnswerImages images={imgs} />
+                          )}
+                        </div>
+                      );
+                    })}
                 </div>
               </div>
             </article>
@@ -453,6 +473,11 @@ export function Dashboard() {
                     </p>
                   </div>
                 ))}
+                {!askPending && answerImages.length > 0 && (
+                  <div className="mx-auto w-full max-w-lg">
+                    <AskAnswerImages images={answerImages} />
+                  </div>
+                )}
                 {askPending && (
                   <p className="text-center text-lg text-white/50">Listening to your world…</p>
                 )}
