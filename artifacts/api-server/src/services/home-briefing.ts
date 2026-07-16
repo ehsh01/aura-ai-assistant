@@ -140,7 +140,11 @@ function tasksPath(taskId?: string): string {
   return taskId ? `/tasks?task=${encodeURIComponent(taskId)}` : "/tasks";
 }
 
-const inboxPath = "/inbox";
+function inboxPath(captureId?: string): string {
+  return captureId
+    ? `/inbox?capture=${encodeURIComponent(captureId)}`
+    : "/inbox";
+}
 
 function projectsPath(projectId?: string): string {
   return projectId ? `/projects/${encodeURIComponent(projectId)}` : "/projects";
@@ -242,7 +246,7 @@ function buildFocusNow(
 
   if (top) {
     let reason = "This is the highest-priority thing on your plate.";
-    if (isDueToday(top.time ?? null, today)) reason = "It's due today ‚Äî best to clear it first.";
+    if (isDueToday(top.time ?? null, today)) reason = "It's due today ù best to clear it first.";
     else if (top.priority === "high") reason = "You flagged this as high priority.";
     else if (/\b(urgent|asap|deadline|blocked)\b/i.test(top.title))
       reason = "It looks time-sensitive based on how you described it.";
@@ -265,7 +269,7 @@ function buildFocusNow(
       title: `Continue ${activeProject.name}`,
       reason:
         open > 0
-          ? `Your most active project ‚Äî ${open} open item${open === 1 ? "" : "s"} waiting.`
+          ? `Your most active project ù ${open} open item${open === 1 ? "" : "s"} waiting.`
           : "Your most active project right now.",
       estimatedTime: "~45 min",
       actionLabel: "Resume",
@@ -333,7 +337,7 @@ function buildTimeline(
         title: c.cleanedTitle,
         bucket: "Today",
         kind: "reminder",
-        href: inboxPath,
+        href: inboxPath(c.id),
         meta: c.suggestedDueDate ?? undefined,
       });
     });
@@ -366,7 +370,7 @@ function buildDontForget(
 ): BriefingItem[] {
   const fromCaptures = captures
     .filter((c) => c.status === "pending" && isRecentForHome(c.createdAt))
-    .map((c) => ({ id: c.id, label: c.cleanedTitle, href: inboxPath }));
+    .map((c) => ({ id: c.id, label: c.cleanedTitle, href: inboxPath(c.id) }));
   const fromNotes = notes
     .filter(
       (n) =>
@@ -401,7 +405,7 @@ function buildInsights(
     insights.push({
       id: `no-task-${note.id}`,
       kind: "no-task",
-      text: `You mentioned ‚Äú${note.title}‚Äù but never turned it into a task.`,
+      text: `You mentioned ù${note.title}ù but never turned it into a task.`,
       href: notesPath({ noteId: note.id }),
     });
   }
@@ -415,8 +419,8 @@ function buildInsights(
     insights.push({
       id: `stale-${capture.id}`,
       kind: "stale",
-      text: `‚Äú${capture.cleanedTitle}‚Äù has been sitting in your inbox since yesterday.`,
-      href: inboxPath,
+      text: `ù${capture.cleanedTitle}ù has been sitting in your inbox since yesterday.`,
+      href: inboxPath(capture.id),
     });
   }
 
@@ -426,7 +430,7 @@ function buildInsights(
     insights.push({
       id: `follow-${note.id}`,
       kind: "follow-up",
-      text: `‚Äú${note.title}‚Äù looks like it may need a follow-up.`,
+      text: `ù${note.title}ù looks like it may need a follow-up.`,
       href: notesPath({ noteId: note.id }),
     });
   }
@@ -440,7 +444,7 @@ function buildInsights(
       insights.push({
         id: `related-${related.id}`,
         kind: "related",
-        text: `‚Äú${related.title}‚Äù looks related to your ${project.name} project.`,
+        text: `ù${related.title}ù looks related to your ${project.name} project.`,
         href: notesPath({ noteId: related.id }),
       });
     }
@@ -502,7 +506,7 @@ function fallbackSummary(attentionCount: number, parts: string[]): string {
   const phrase = copy.length ? `${copy.join(", ")} and ${last}` : last;
   return `Here ${attentionCount === 1 ? "is" : "are"} the ${attentionCount} thing${
     attentionCount === 1 ? "" : "s"
-  } that need your attention today ‚Äî ${phrase}.`;
+  } that need your attention today ù ${phrase}.`;
 }
 
 /** This-month finance snapshot from already-synced source_records. */
@@ -512,7 +516,7 @@ async function buildFinanceSnapshot(userId: string, today: string): Promise<Fina
   const synced = await loadSyncedFinanceAggregate(userId, "this month", today);
   if (!synced) return null;
   const top = synced.finance.topPayees[0] ?? null;
-  // Home card is labeled "Spending" ‚Äî show dollars spent, not net.
+  // Home card is labeled "Spending" ù show dollars spent, not net.
   return {
     total: synced.finance.spent,
     transactionCount: synced.finance.expenseCount || synced.finance.count,
@@ -576,7 +580,7 @@ export async function buildHomeBriefing(
     .map((c) => ({ item: c, score: scoreCaptureUrgency(c, today) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, 3)
-    .map(({ item }) => ({ id: item.id, label: item.cleanedTitle, href: inboxPath }));
+    .map(({ item }) => ({ id: item.id, label: item.cleanedTitle, href: inboxPath(item.id) }));
 
   const focus = buildFocusNow(tasks, projects, today);
   const attentionCount =

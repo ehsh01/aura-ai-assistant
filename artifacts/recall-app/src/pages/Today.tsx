@@ -1,19 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { AppLayout } from "@/components/AppLayout";
 import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
   fetchHome,
-  listActivity,
   listHomeyAlerts,
   listPeople,
-  type ActivityRecord,
   type HomeBriefingResponse,
   type PersonRecord,
 } from "@/lib/recall-api";
 import { pressingFeed, type HomeyUrgencyAlert } from "@/lib/urgency";
 import { ingestCaptureReliable } from "@/lib/capture-queue";
-import { RecentActivityCard } from "@/components/home/RecentActivityCard";
 import { useAuth } from "@/context/AuthContext";
 import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
@@ -21,23 +18,16 @@ import { toast } from "@/hooks/use-toast";
 import { type RecallCaptureItem, type RecallProject } from "@/lib/recall-context";
 import { notesPath, readSearchParam } from "@/lib/recall-nav";
 import {
-  buildContextAreas,
   buildDailyBriefing,
   buildDontForget,
   buildFocusNow,
-  buildInsights,
-  buildTimeline,
   buildWaitingOn,
 } from "@/lib/home-briefing";
-import { DailyBriefingCard } from "@/components/home/DailyBriefingCard";
-import { FocusNowCard } from "@/components/home/FocusNowCard";
-import { TimelineSection } from "@/components/home/TimelineSection";
-import { WaitingOnSection } from "@/components/home/WaitingOnSection";
-import { MorningActions } from "@/components/home/MorningActions";
+import {
+  buildTodayQueue,
+  TodayActionQueue,
+} from "@/components/home/TodayActionQueue";
 import { DontForgetSection } from "@/components/home/DontForgetSection";
-import { RecallInsightsSection } from "@/components/home/RecallInsightsSection";
-import { CurrentContextSection } from "@/components/home/CurrentContextSection";
-import { FinanceSnapshotCard } from "@/components/home/FinanceSnapshotCard";
 import { BrainDumpInput } from "@/components/home/BrainDumpInput";
 import { NeuralBrainBackground } from "@/components/NeuralBrainBackground";
 
@@ -46,7 +36,7 @@ function firstLineTitle(text: string, fallback = "Quick capture"): string {
   return line.length > 80 ? `${line.slice(0, 77)}…` : line;
 }
 
-/** Pending work, briefing, and capture — the former Home dashboard. */
+/** One queue of things you can act on — nothing else. */
 export function Today() {
   const { user } = useAuth();
   const { notes, tasks, addNote, addTask } = useRecallData();
@@ -56,7 +46,6 @@ export function Today() {
   const [projects, setProjects] = useState<RecallProject[]>([]);
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [home, setHome] = useState<HomeBriefingResponse | null>(null);
-  const [activity, setActivity] = useState<ActivityRecord[]>([]);
   const [homeyAlerts, setHomeyAlerts] = useState<HomeyUrgencyAlert[]>([]);
   const [capturePrefill, setCapturePrefill] = useState<string | null>(() =>
     readSearchParam("capture"),
@@ -82,9 +71,6 @@ export function Today() {
     void listPeople()
       .then((res) => setPeople(res.people))
       .catch(() => setPeople([]));
-    void listActivity({ limit: 6 })
-      .then((res) => setActivity(res.items))
-      .catch(() => setActivity([]));
     void listHomeyAlerts()
       .then((res) =>
         setHomeyAlerts(
@@ -151,27 +137,39 @@ export function Today() {
     }
   };
 
-  const currentDate = new Date().toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-
-  const date = home?.date ?? currentDate;
   const briefing =
     home?.briefing ??
     buildDailyBriefing(userName, tasks, notes, captures, projects, homeyAlerts);
   const focus = home?.focus ?? buildFocusNow(tasks, projects);
+  const waiting = home?.waiting ?? buildWaitingOn(notes);
   const pressing = useMemo(
     () => pressingFeed(tasks, notes, captures, 6, homeyAlerts),
     [tasks, notes, captures, homeyAlerts],
   );
-  const timeline = home?.timeline ?? buildTimeline(tasks, captures);
-  const waiting = home?.waiting ?? buildWaitingOn(notes);
-  const dontForget = home?.dontForget ?? buildDontForget(notes, captures);
-  const insights = home?.insights ?? buildInsights(tasks, notes, captures, projects);
-  const contextAreas = home?.contextAreas ?? buildContextAreas(notes, tasks, captures, projects);
-  const finance = home?.finance ?? null;
+
+  const queue = useMemo(
+    () =>
+      buildTodayQueue({
+        focus,
+        waiting,
+        critical: briefing.critical,
+        reminders: briefing.reminders,
+      }),
+    [focus, waiting, briefing.critical, briefing.reminders],
+  );
+
+  // Don't re-surface items already in the action queue.
+  const dontForget = useMemo(() => {
+    const queued = new Set(
+      queue.flatMap((q) => [q.title.toLowerCase(), q.href]),
+    );
+    return (home?.dontForget ?? buildDontForget(notes, captures))
+      .filter(
+        (item) =>
+          !queued.has(item.label.toLowerCase()) && !queued.has(item.href),
+      )
+      .slice(0, 5);
+  }, [home?.dontForget, notes, captures, queue]);
 
   const brainGraph = useMemo(
     () => ({
@@ -201,26 +199,29 @@ export function Today() {
     [tasks, notes, people, projects, captures],
   );
 
+  const countLabel =
+    queue.length === 0
+      ? "Nothing queued"
+      : queue.length === 1
+        ? "1 thing to handle"
+        : `${queue.length} things to handle`;
+
   return (
     <AppLayout>
       <div className="nebula-bg relative h-full text-zinc-100">
         <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
-          <NeuralBrainBackground graph={brainGraph} opacity={0.28} />
-          <div className="orb-1 nebula-orb opacity-25" />
-          <div className="orb-3 nebula-orb opacity-15" />
+          <NeuralBrainBackground graph={brainGraph} opacity={0.22} />
+          <div className="orb-1 nebula-orb opacity-20" />
+          <div className="orb-3 nebula-orb opacity-10" />
         </div>
 
         <div className="relative z-10 h-full overflow-y-auto dashboard-hide-scrollbar">
-          <div className="mx-auto w-full max-w-5xl space-y-6 px-4 pb-44 pt-6 md:px-8 md:pt-8">
-            <div>
-              <p className="text-sm uppercase tracking-[0.3em] text-indigo-300/70">Focus</p>
-              <h1 className="mt-2 text-3xl font-semibold text-white">Today</h1>
-              <p className="mt-2 text-white/45">
-                What needs you now — briefing, waiting, and pending work.
-              </p>
-            </div>
+          <div className="mx-auto w-full max-w-2xl space-y-6 px-4 pb-44 pt-6 md:px-8 md:pt-10">
+            <header>
+              <h1 className="text-3xl font-semibold text-white">Today</h1>
+              <p className="mt-2 text-sm text-white/45">{countLabel}</p>
+            </header>
 
-            <DailyBriefingCard briefing={briefing} date={date} />
             {pressing.some((p) => p.kind === "homey") && (
               <section className="rounded-2xl border border-amber-400/20 bg-amber-500/5 px-4 py-3">
                 <p className="text-xs font-semibold uppercase tracking-wider text-amber-200/70">
@@ -231,27 +232,23 @@ export function Today() {
                     .filter((p) => p.kind === "homey")
                     .map((item) => (
                       <li key={item.key} className="text-sm text-zinc-200">
-                        <span className="text-amber-300/80">{item.reason}</span>
-                        {" · "}
-                        {item.title}
+                        <Link
+                          href="/connectors"
+                          className="text-zinc-200 no-underline hover:text-amber-100"
+                        >
+                          <span className="text-amber-300/80">{item.reason}</span>
+                          {" · "}
+                          {item.title}
+                        </Link>
                       </li>
                     ))}
                 </ul>
               </section>
             )}
-            <MorningActions focus={focus} waiting={waiting} briefing={briefing} />
-            <FocusNowCard focus={focus} />
-            <FinanceSnapshotCard finance={finance} />
 
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-              <WaitingOnSection items={waiting} />
-              <RecentActivityCard items={activity} />
-            </div>
+            <TodayActionQueue items={queue} />
 
-            <TimelineSection entries={timeline} />
-            <RecallInsightsSection insights={insights} />
-            <DontForgetSection items={dontForget} />
-            <CurrentContextSection areas={contextAreas} />
+            {dontForget.length > 0 && <DontForgetSection items={dontForget} />}
           </div>
         </div>
       </div>

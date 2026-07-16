@@ -44,15 +44,15 @@ function hrefFor(entityType: string | null, entityId: string | null): string | n
       return `/notes?note=${encodeURIComponent(entityId)}`;
     case "capture":
     case "capture_item":
-      return "/inbox";
+      return `/inbox?capture=${encodeURIComponent(entityId)}`;
     case "connector":
       return "/connectors";
     case "person":
-      return "/people";
+      return `/people?person=${encodeURIComponent(entityId)}`;
     case "knowledge":
-      return "/knowledge";
+      return `/knowledge?item=${encodeURIComponent(entityId)}`;
     case "document":
-      return "/documents";
+      return `/documents?doc=${encodeURIComponent(entityId)}`;
     case "query":
       return "/ask";
     default:

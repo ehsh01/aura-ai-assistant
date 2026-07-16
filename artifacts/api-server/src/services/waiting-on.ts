@@ -1,5 +1,5 @@
-import { listNoteMetadataForUser } from "./notes";
-import { listKnowledgeForUser } from "./knowledge";
+import { getNoteForUser, listNoteMetadataForUser } from "./notes";
+import { getKnowledgeForUser, listKnowledgeForUser } from "./knowledge";
 import { createPersonForUser, listPeopleForUser } from "./people";
 import { createTaskForUser, listTasksForUser, type RecallTaskDto } from "./tasks";
 import { createEvidenceForUser } from "./evidence";
@@ -154,7 +154,7 @@ export async function listWaitingOnForUser(
       personId: matchPersonId(person, people, aliases),
       item: k.title,
       days: age,
-      href: "/knowledge",
+      href: `/knowledge?item=${encodeURIComponent(k.id)}`,
       followUp: `Follow up with ${person}`,
       sourceType: "knowledge",
       evidenceText: blob.slice(0, 280),
@@ -193,6 +193,96 @@ export type FollowUpResult = {
 };
 
 /**
+ * Resolve a waiting-on id to its source, without re-applying age / keyword filters.
+ * Follow-up must work for anything the UI already showed — those filters can diverge
+ * between list time, client fallback, and create time.
+ */
+export async function resolveWaitingItemForFollowUp(
+  userId: string,
+  waitingItemId: string,
+): Promise<WaitingOnItem | null> {
+  const raw = waitingItemId.trim();
+  if (!raw) return null;
+
+  let sourceType: WaitingOnItem["sourceType"];
+  let sourceId: string;
+  const colon = raw.indexOf(":");
+  if (colon > 0) {
+    const prefix = raw.slice(0, colon);
+    sourceId = raw.slice(colon + 1);
+    if (prefix === "note" || prefix === "knowledge" || prefix === "task") {
+      sourceType = prefix;
+    } else {
+      return null;
+    }
+  } else {
+    // Legacy client fallbacks sent bare note UUIDs.
+    sourceType = "note";
+    sourceId = raw;
+  }
+  if (!sourceId) return null;
+
+  const [people, aliases] = await Promise.all([
+    listPeopleForUser(userId),
+    listPersonNameAliases(userId),
+  ]);
+  const peopleForMatch = peopleWithAliasNames(people, aliases);
+  const peopleNames = peopleForMatch.map((p) => p.displayName).filter(Boolean);
+
+  if (sourceType === "note") {
+    const n = await getNoteForUser(userId, sourceId);
+    if (!n) return null;
+    const blob = `${n.title} ${n.content ?? ""}`;
+    const person = extractPerson(blob, peopleNames);
+    return {
+      id: `note:${n.id}`,
+      person,
+      personId: matchPersonId(person, people, aliases) ?? n.primaryPersonId ?? null,
+      item: n.title,
+      days: daysSince(n.updatedAt ?? n.createdAt),
+      href: `/notes?note=${encodeURIComponent(n.id)}`,
+      followUp: `Follow up with ${person}`,
+      sourceType: "note",
+      evidenceText: blob.slice(0, 280),
+    };
+  }
+
+  if (sourceType === "knowledge") {
+    const k = await getKnowledgeForUser(userId, sourceId);
+    if (!k) return null;
+    const blob = `${k.title} ${k.content}`;
+    const person = extractPerson(blob, peopleNames);
+    return {
+      id: `knowledge:${k.id}`,
+      person,
+      personId: matchPersonId(person, people, aliases) ?? k.primaryPersonId ?? null,
+      item: k.title,
+      days: daysSince(k.updatedAt ?? k.createdAt),
+      href: `/knowledge?item=${encodeURIComponent(k.id)}`,
+      followUp: `Follow up with ${person}`,
+      sourceType: "knowledge",
+      evidenceText: blob.slice(0, 280),
+    };
+  }
+
+  const tasks = await listTasksForUser(userId);
+  const t = tasks.find((x) => x.id === sourceId);
+  if (!t) return null;
+  const person = extractPerson(t.title, peopleNames);
+  return {
+    id: `task:${t.id}`,
+    person,
+    personId: matchPersonId(person, people, aliases) ?? t.requesterPersonId ?? null,
+    item: t.title,
+    days: daysSince(t.updatedAt ?? t.createdAt),
+    href: `/tasks?task=${encodeURIComponent(t.id)}`,
+    followUp: `Follow up with ${person}`,
+    sourceType: "task",
+    evidenceText: t.title,
+  };
+}
+
+/**
  * Turn a waiting-on item into an actionable follow-up task, linked to the
  * person when known and backed by the source evidence text.
  */
@@ -200,8 +290,7 @@ export async function createFollowUpFromWaitingOn(
   userId: string,
   waitingItemId: string,
 ): Promise<FollowUpResult | null> {
-  const items = await listWaitingOnForUser(userId, 50);
-  const item = items.find((w) => w.id === waitingItemId);
+  const item = await resolveWaitingItemForFollowUp(userId, waitingItemId);
   if (!item) return null;
 
   // Source tasks already are tasks — don't duplicate; just return a pointer-style result

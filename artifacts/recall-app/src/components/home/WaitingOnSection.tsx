@@ -61,11 +61,7 @@ export function WaitingOnSection({ items }: Props) {
               className="nebula-glass flex items-center gap-3 rounded-2xl p-4"
             >
               <Link
-                href={
-                  item.personId
-                    ? peoplePath({ personId: item.personId })
-                    : item.href
-                }
+                href={item.href}
                 className="flex min-w-0 flex-1 items-center gap-4 no-underline"
               >
                 <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-sky-500/15 text-sm font-semibold text-sky-300">

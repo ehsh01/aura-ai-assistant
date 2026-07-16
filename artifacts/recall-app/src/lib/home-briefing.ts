@@ -90,7 +90,9 @@ export interface ContextArea {
 }
 
 const ACTION_PHRASE = /\b(need to|needs to|should|have to|must|remember to|todo|to-do|follow up|follow-up)\b/i;
-const WAITING_RE = /\b(waiting|follow up|follow-up|call|email|reply|response|return|pending)\b/i;
+/** Keep in sync with artifacts/api-server/src/services/waiting-on.ts */
+const WAITING_RE =
+  /\b(waiting|follow[- ]?up|awaiting|need(?:s)? (?:a |the )?(?:quote|reply|response|call|email)|still need|pending (?:from|on)|haven't heard|no response)\b/i;
 
 /** Offline Home fallback: only surface items from yesterday or today. */
 const HOME_SURFACE_MAX_AGE_DAYS = 1;
@@ -234,7 +236,11 @@ export function buildDailyBriefing(
     .map((c) => ({ item: c, score: scoreCaptureUrgency(c) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, 3)
-    .map(({ item }) => ({ id: item.id, label: item.cleanedTitle, href: inboxPath() }));
+    .map(({ item }) => ({
+      id: item.id,
+      label: item.cleanedTitle,
+      href: inboxPath({ captureId: item.id }),
+    }));
 
   const focus = buildFocusNow(tasks, projects);
   const attentionCount =
@@ -309,7 +315,7 @@ export function buildTimeline(
         title: c.cleanedTitle,
         bucket: "Today",
         kind: "reminder",
-        href: inboxPath(),
+        href: inboxPath({ captureId: c.id }),
         meta: c.suggestedDueDate ?? undefined,
       });
     });
@@ -341,7 +347,7 @@ export function buildWaitingOn(notes: RecallNote[], limit = 4): WaitingItem[] {
     )
     .slice(0, limit)
     .map((n) => ({
-      id: n.id,
+      id: `note:${n.id}`,
       person: extractPerson(`${n.title} ${n.preview}`),
       item: n.title,
       days: daysSince(n.updatedAt ?? n.createdAt),
@@ -357,7 +363,11 @@ export function buildDontForget(
 ): BriefingItem[] {
   const fromCaptures = captures
     .filter((c) => c.status === "pending" && isRecentForHome(c.createdAt))
-    .map((c) => ({ id: c.id, label: c.cleanedTitle, href: inboxPath() }));
+    .map((c) => ({
+      id: c.id,
+      label: c.cleanedTitle,
+      href: inboxPath({ captureId: c.id }),
+    }));
   const fromNotes = notes
     .filter(
       (n) =>
@@ -407,7 +417,7 @@ export function buildInsights(
       id: `stale-${capture.id}`,
       kind: "stale",
       text: `“${capture.cleanedTitle}” has been sitting in your inbox since yesterday.`,
-      href: inboxPath(),
+      href: inboxPath({ captureId: capture.id }),
     });
   }
 

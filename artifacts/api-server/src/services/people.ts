@@ -701,7 +701,7 @@ export async function getPersonTimelineForUser(
       title: k.title,
       subtitle: k.itemType,
       at: k.updatedAt.toISOString(),
-      href: `/knowledge?id=${encodeURIComponent(k.id)}`,
+      href: `/knowledge?item=${encodeURIComponent(k.id)}`,
     })),
     ...memoryRows.map((m) => ({
       entityType: "memory" as const,
