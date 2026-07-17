@@ -7,6 +7,7 @@ import {
   deleteInvoice,
   deleteOrganization,
   listInvoices,
+  listOrganizationPeople,
   listOrganizations,
   updateInvoice,
   updateOrganization,
@@ -38,6 +39,9 @@ export function Organizations() {
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [orgPeople, setOrgPeople] = useState<
+    { personId: string; displayName: string; email: string | null; role: string | null }[]
+  >([]);
 
   const [orgForm, setOrgForm] = useState({
     displayName: "",
@@ -75,6 +79,16 @@ export function Organizations() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (!selectedOrgId) {
+      setOrgPeople([]);
+      return;
+    }
+    void listOrganizationPeople(selectedOrgId)
+      .then((r) => setOrgPeople(r.people))
+      .catch(() => setOrgPeople([]));
+  }, [selectedOrgId]);
 
   useEffect(() => {
     const orgParam = readSearchParam("org");
@@ -291,6 +305,23 @@ export function Organizations() {
                 >
                   Save changes
                 </button>
+                <div className="border-t border-white/10 pt-3">
+                  <p className="mb-1 text-xs uppercase tracking-wider text-white/35">
+                    Affiliated people
+                  </p>
+                  {orgPeople.length === 0 ? (
+                    <p className="text-sm text-white/40">Link people from the People page.</p>
+                  ) : (
+                    <ul className="space-y-1 text-sm text-white/70">
+                      {orgPeople.map((p) => (
+                        <li key={p.personId}>
+                          {p.displayName}
+                          {p.role ? ` · ${p.role}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
                 {orgInvoices.map((inv) => (
                   <button
                     key={inv.id}

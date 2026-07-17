@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { z } from "zod";
 import {
   CreateProjectBody,
   GetProjectResponse,
@@ -13,6 +14,12 @@ import {
   listProjectsForUser,
   updateProjectForUser,
 } from "../services/projects";
+import {
+  linkSourceToProject,
+  listProjectSourcesForUser,
+  searchSourcesForProjectLink,
+  unlinkSourceFromProject,
+} from "../services/project-sources";
 
 const router: IRouter = Router();
 
@@ -72,6 +79,70 @@ router.patch("/projects/:projectId", async (req, res, next) => {
       return;
     }
     res.json(project);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/projects/:projectId/sources", async (req, res, next) => {
+  try {
+    const sources = await listProjectSourcesForUser(req.user!.id, req.params.projectId);
+    if (!sources) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Project not found" });
+      return;
+    }
+    res.json(sources);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/projects/:projectId/sources/search", async (req, res, next) => {
+  try {
+    const q = String(req.query.q ?? "");
+    const type = String(req.query.type ?? "gmail_message");
+    if (type !== "gmail_message" && type !== "finance_transaction") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "Invalid type" });
+      return;
+    }
+    const results = await searchSourcesForProjectLink(req.user!.id, q, type);
+    res.json({ results });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/projects/:projectId/sources/link", async (req, res, next) => {
+  try {
+    const body = z.object({ sourceRecordId: z.string().min(1).max(64) }).parse(req.body);
+    const result = await linkSourceToProject(
+      req.user!.id,
+      req.params.projectId,
+      body.sourceRecordId,
+    );
+    if (!result.ok) {
+      res.status(404).json({ error: "NOT_FOUND", message: result.error });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/projects/:projectId/sources/unlink", async (req, res, next) => {
+  try {
+    const body = z.object({ sourceRecordId: z.string().min(1).max(64) }).parse(req.body);
+    const ok = await unlinkSourceFromProject(
+      req.user!.id,
+      req.params.projectId,
+      body.sourceRecordId,
+    );
+    if (!ok) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Link not found" });
+      return;
+    }
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

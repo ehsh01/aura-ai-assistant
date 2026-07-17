@@ -15,6 +15,11 @@ import {
   dismissWaitingOnForUser,
   listWaitingOnForUser,
 } from "../services/waiting-on";
+import {
+  linkPersonToOrganization,
+  listPersonOrganizations,
+  unlinkPersonFromOrganization,
+} from "../services/person-org";
 
 const CreatePersonBody = z.object({
   displayName: z.string().min(1).max(255),
@@ -131,6 +136,56 @@ router.get("/people/:personId/timeline", async (req, res, next) => {
       return;
     }
     res.json(timeline);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/people/:personId/organizations", async (req, res, next) => {
+  try {
+    const person = await getPersonForUser(req.user!.id, req.params.personId);
+    if (!person) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Person not found" });
+      return;
+    }
+    const organizations = await listPersonOrganizations(req.user!.id, req.params.personId);
+    res.json({ organizations });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/people/:personId/organizations/link", async (req, res, next) => {
+  try {
+    const body = z.object({ organizationId: z.string().min(1).max(64) }).parse(req.body);
+    const result = await linkPersonToOrganization(
+      req.user!.id,
+      req.params.personId,
+      body.organizationId,
+    );
+    if (!result.ok) {
+      res.status(404).json({ error: "NOT_FOUND", message: result.error });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/people/:personId/organizations/unlink", async (req, res, next) => {
+  try {
+    const body = z.object({ organizationId: z.string().min(1).max(64) }).parse(req.body);
+    const ok = await unlinkPersonFromOrganization(
+      req.user!.id,
+      req.params.personId,
+      body.organizationId,
+    );
+    if (!ok) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Link not found" });
+      return;
+    }
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

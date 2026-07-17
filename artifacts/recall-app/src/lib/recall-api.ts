@@ -244,6 +244,154 @@ export async function getProjectTimeline(
   return apiFetch(`/projects/${encodeURIComponent(projectId)}/timeline`);
 }
 
+export type ProjectSourceRecord = {
+  id: string;
+  recordType: string;
+  title: string;
+  text: string | null;
+  date: string | null;
+  amount: number | null;
+  payee: string | null;
+  category: string | null;
+};
+
+export async function listProjectSources(projectId: string): Promise<{
+  mail: ProjectSourceRecord[];
+  transactions: ProjectSourceRecord[];
+}> {
+  return apiFetch(`/projects/${encodeURIComponent(projectId)}/sources`);
+}
+
+export async function searchProjectSources(
+  projectId: string,
+  q: string,
+  type: "gmail_message" | "finance_transaction",
+): Promise<{ results: ProjectSourceRecord[] }> {
+  const params = new URLSearchParams({ q, type });
+  return apiFetch(
+    `/projects/${encodeURIComponent(projectId)}/sources/search?${params.toString()}`,
+  );
+}
+
+export async function linkProjectSource(
+  projectId: string,
+  sourceRecordId: string,
+): Promise<{ ok: boolean }> {
+  return apiFetch(`/projects/${encodeURIComponent(projectId)}/sources/link`, {
+    method: "POST",
+    body: JSON.stringify({ sourceRecordId }),
+  });
+}
+
+export async function unlinkProjectSource(
+  projectId: string,
+  sourceRecordId: string,
+): Promise<{ ok: boolean }> {
+  return apiFetch(`/projects/${encodeURIComponent(projectId)}/sources/unlink`, {
+    method: "POST",
+    body: JSON.stringify({ sourceRecordId }),
+  });
+}
+
+export async function listPersonOrganizations(
+  personId: string,
+): Promise<{ organizations: { organizationId: string; displayName: string; orgType: string }[] }> {
+  return apiFetch(`/people/${encodeURIComponent(personId)}/organizations`);
+}
+
+export async function linkPersonOrganization(
+  personId: string,
+  organizationId: string,
+): Promise<{ ok: boolean }> {
+  return apiFetch(`/people/${encodeURIComponent(personId)}/organizations/link`, {
+    method: "POST",
+    body: JSON.stringify({ organizationId }),
+  });
+}
+
+export async function unlinkPersonOrganization(
+  personId: string,
+  organizationId: string,
+): Promise<{ ok: boolean }> {
+  return apiFetch(`/people/${encodeURIComponent(personId)}/organizations/unlink`, {
+    method: "POST",
+    body: JSON.stringify({ organizationId }),
+  });
+}
+
+export async function listOrganizationPeople(
+  organizationId: string,
+): Promise<{
+  people: { personId: string; displayName: string; email: string | null; role: string | null }[];
+}> {
+  return apiFetch(`/organizations/${encodeURIComponent(organizationId)}/people`);
+}
+
+export type SubjectSpendResponse = {
+  subjectType: "vehicle" | "home";
+  subjectId: string;
+  finance: {
+    spent: number;
+    income: number;
+    expenseCount: number;
+    formatted: { spent: string; income: string };
+  };
+  transactions: {
+    id: string;
+    date: string;
+    payee: string;
+    amount: number;
+    amountFormatted: string;
+    category: string | null;
+    kind: string;
+  }[];
+};
+
+export async function getSubjectSpend(
+  subjectType: "vehicle" | "home",
+  subjectId: string,
+): Promise<SubjectSpendResponse> {
+  const base = subjectType === "vehicle" ? "vehicles" : "homes";
+  return apiFetch(`/${base}/${encodeURIComponent(subjectId)}/spend`);
+}
+
+export async function suggestSubjectSpend(
+  subjectType: "vehicle" | "home",
+  subjectId: string,
+): Promise<{
+  suggestions: (SubjectSpendResponse["transactions"][number] & {
+    score: number;
+    matchedOn: string;
+  })[];
+}> {
+  const base = subjectType === "vehicle" ? "vehicles" : "homes";
+  return apiFetch(`/${base}/${encodeURIComponent(subjectId)}/spend/suggest`);
+}
+
+export async function linkSubjectSpend(
+  subjectType: "vehicle" | "home",
+  subjectId: string,
+  sourceRecordId: string,
+): Promise<{ ok: boolean }> {
+  const base = subjectType === "vehicle" ? "vehicles" : "homes";
+  return apiFetch(`/${base}/${encodeURIComponent(subjectId)}/spend/link`, {
+    method: "POST",
+    body: JSON.stringify({ sourceRecordId }),
+  });
+}
+
+export async function unlinkSubjectSpend(
+  subjectType: "vehicle" | "home",
+  subjectId: string,
+  sourceRecordId: string,
+): Promise<{ ok: boolean }> {
+  const base = subjectType === "vehicle" ? "vehicles" : "homes";
+  return apiFetch(`/${base}/${encodeURIComponent(subjectId)}/spend/unlink`, {
+    method: "POST",
+    body: JSON.stringify({ sourceRecordId }),
+  });
+}
+
 export async function listVehicles(): Promise<{ vehicles: VehicleRecord[] }> {
   return apiFetch("/vehicles");
 }

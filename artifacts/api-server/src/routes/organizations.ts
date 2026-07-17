@@ -15,6 +15,7 @@ import {
   listInvoicesForUser,
   updateInvoiceForUser,
 } from "../services/invoices";
+import { listOrganizationPeople } from "../services/person-org";
 
 const CreateOrganizationBody = z.object({
   displayName: z.string().min(1).max(255),
@@ -73,6 +74,23 @@ router.get("/organizations/:organizationId", async (req, res, next) => {
       return;
     }
     res.json(organization);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/organizations/:organizationId/people", async (req, res, next) => {
+  try {
+    const organization = await getOrganizationForUser(
+      req.user!.id,
+      req.params.organizationId,
+    );
+    if (!organization) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Organization not found" });
+      return;
+    }
+    const people = await listOrganizationPeople(req.user!.id, req.params.organizationId);
+    res.json({ people });
   } catch (err) {
     next(err);
   }

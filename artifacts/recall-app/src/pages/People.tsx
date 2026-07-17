@@ -8,10 +8,15 @@ import {
   dismissWaitingOn,
   getPersonRelated,
   getPersonTimeline,
+  linkPersonOrganization,
+  listOrganizations,
+  listPersonOrganizations,
   listPeople,
   listWaitingOn,
   mergePeople,
+  unlinkPersonOrganization,
   updatePerson,
+  type OrganizationRecord,
   type PersonRecord,
   type TimelineItem,
   type WaitingOnRecord,
@@ -77,6 +82,11 @@ export function People() {
   const [merging, setMerging] = useState(false);
   const [timelineByPerson, setTimelineByPerson] = useState<Record<string, TimelineItem[]>>({});
   const [relatedLoadingId, setRelatedLoadingId] = useState<string | null>(null);
+  const [affiliatedOrgs, setAffiliatedOrgs] = useState<
+    { organizationId: string; displayName: string; orgType: string }[]
+  >([]);
+  const [allOrgs, setAllOrgs] = useState<OrganizationRecord[]>([]);
+  const [linkOrgId, setLinkOrgId] = useState("");
   const personRefs = useRef<Record<string, HTMLElement | null>>({});
   const relatedLoaded = useRef<Record<string, true>>({});
 
@@ -140,6 +150,12 @@ export function People() {
   useEffect(() => {
     if (!selectedId) return;
     void loadRelated(selectedId);
+    void listPersonOrganizations(selectedId)
+      .then((r) => setAffiliatedOrgs(r.organizations))
+      .catch(() => setAffiliatedOrgs([]));
+    void listOrganizations()
+      .then((r) => setAllOrgs(r.organizations))
+      .catch(() => setAllOrgs([]));
   }, [selectedId]);
 
   // Deep-link from Today / elsewhere: /people?person=<id>
@@ -470,6 +486,73 @@ export function People() {
 
                   {isSelected && (
                     <div className="mt-4 space-y-4 border-t border-white/10 pt-4">
+                      <div className="space-y-2 rounded-xl border border-white/10 bg-black/20 p-3">
+                        <p className="text-[11px] uppercase tracking-wider text-white/35">
+                          Linked organizations
+                        </p>
+                        {affiliatedOrgs.length === 0 ? (
+                          <p className="text-sm text-white/40">None linked.</p>
+                        ) : (
+                          <ul className="space-y-1">
+                            {affiliatedOrgs.map((org) => (
+                              <li
+                                key={org.organizationId}
+                                className="flex items-center justify-between gap-2 text-sm text-white/70"
+                              >
+                                <span>{org.displayName}</span>
+                                <button
+                                  type="button"
+                                  className="text-xs text-white/40 hover:text-white/70"
+                                  onClick={() =>
+                                    void unlinkPersonOrganization(
+                                      person.id,
+                                      org.organizationId,
+                                    ).then(async () => {
+                                      const r = await listPersonOrganizations(person.id);
+                                      setAffiliatedOrgs(r.organizations);
+                                      await load();
+                                    })
+                                  }
+                                >
+                                  Unlink
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        <div className="flex gap-2">
+                          <select
+                            value={linkOrgId}
+                            onChange={(e) => setLinkOrgId(e.target.value)}
+                            className="flex-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-sm"
+                          >
+                            <option value="">Link organization…</option>
+                            {allOrgs.map((o) => (
+                              <option key={o.id} value={o.id}>
+                                {o.displayName}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            disabled={!linkOrgId}
+                            className="rounded-lg bg-indigo-500/30 px-2 py-1 text-xs text-indigo-100 disabled:opacity-40"
+                            onClick={() =>
+                              void linkPersonOrganization(person.id, linkOrgId).then(
+                                async () => {
+                                  setLinkOrgId("");
+                                  const r = await listPersonOrganizations(person.id);
+                                  setAffiliatedOrgs(r.organizations);
+                                  await load();
+                                },
+                              )
+                            }
+                          >
+                            Link
+                          </button>
+                        </div>
+                      </div>
+
                       {editing && (
                         <div className="space-y-2 rounded-xl border border-white/10 bg-black/20 p-3">
                           {(

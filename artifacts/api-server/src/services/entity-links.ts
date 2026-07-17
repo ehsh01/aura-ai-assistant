@@ -145,6 +145,80 @@ export function linkedEntityKeySet(links: LinkedEntityRef[]): Set<string> {
   return new Set(links.map((l) => `${l.entityType}:${l.entityId}`));
 }
 
+/** Links originating from a specific entity. */
+export async function listLinksFromEntity(
+  userId: string,
+  fromEntityType: string,
+  fromEntityId: string,
+  options?: { linkType?: string; toEntityType?: string },
+): Promise<EntityLinkDto[]> {
+  const rows = await getDb()
+    .select()
+    .from(entityLinks)
+    .where(
+      and(
+        eq(entityLinks.userId, userId),
+        eq(entityLinks.fromEntityType, fromEntityType),
+        eq(entityLinks.fromEntityId, fromEntityId),
+        ...(options?.linkType ? [eq(entityLinks.linkType, options.linkType)] : []),
+        ...(options?.toEntityType
+          ? [eq(entityLinks.toEntityType, options.toEntityType)]
+          : []),
+      ),
+    );
+  return rows.map(toDto);
+}
+
+/** Links pointing at a specific entity. */
+export async function listLinksToEntity(
+  userId: string,
+  toEntityType: string,
+  toEntityId: string,
+  options?: { linkType?: string; fromEntityType?: string },
+): Promise<EntityLinkDto[]> {
+  const rows = await getDb()
+    .select()
+    .from(entityLinks)
+    .where(
+      and(
+        eq(entityLinks.userId, userId),
+        eq(entityLinks.toEntityType, toEntityType),
+        eq(entityLinks.toEntityId, toEntityId),
+        ...(options?.linkType ? [eq(entityLinks.linkType, options.linkType)] : []),
+        ...(options?.fromEntityType
+          ? [eq(entityLinks.fromEntityType, options.fromEntityType)]
+          : []),
+      ),
+    );
+  return rows.map(toDto);
+}
+
+export async function deleteEntityLink(
+  userId: string,
+  input: {
+    fromEntityType: string;
+    fromEntityId: string;
+    toEntityType: string;
+    toEntityId: string;
+    linkType: string;
+  },
+): Promise<boolean> {
+  const deleted = await getDb()
+    .delete(entityLinks)
+    .where(
+      and(
+        eq(entityLinks.userId, userId),
+        eq(entityLinks.fromEntityType, input.fromEntityType),
+        eq(entityLinks.fromEntityId, input.fromEntityId),
+        eq(entityLinks.toEntityType, input.toEntityType),
+        eq(entityLinks.toEntityId, input.toEntityId),
+        eq(entityLinks.linkType, input.linkType),
+      ),
+    )
+    .returning({ id: entityLinks.id });
+  return deleted.length > 0;
+}
+
 function toDto(row: typeof entityLinks.$inferSelect): EntityLinkDto {
   return {
     id: row.id,

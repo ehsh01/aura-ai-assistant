@@ -22,6 +22,12 @@ import {
   listWarrantiesForUser,
   updateWarrantyForUser,
 } from "../services/warranties";
+import {
+  getSubjectSpendForUser,
+  linkSubjectExpense,
+  suggestSubjectSpendForUser,
+  unlinkSubjectExpense,
+} from "../services/subject-spend";
 
 const CreateVehicleBody = z.object({
   displayName: z.string().min(1).max(255),
@@ -120,6 +126,74 @@ router.delete("/vehicles/:vehicleId", async (req, res, next) => {
   }
 });
 
+router.get("/vehicles/:vehicleId/spend", async (req, res, next) => {
+  try {
+    const spend = await getSubjectSpendForUser(req.user!.id, "vehicle", req.params.vehicleId);
+    if (!spend) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Vehicle not found" });
+      return;
+    }
+    res.json(spend);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/vehicles/:vehicleId/spend/suggest", async (req, res, next) => {
+  try {
+    const result = await suggestSubjectSpendForUser(
+      req.user!.id,
+      "vehicle",
+      req.params.vehicleId,
+    );
+    if (!result) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Vehicle not found" });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/vehicles/:vehicleId/spend/link", async (req, res, next) => {
+  try {
+    const body = z.object({ sourceRecordId: z.string().min(1).max(64) }).parse(req.body);
+    const result = await linkSubjectExpense(
+      req.user!.id,
+      "vehicle",
+      req.params.vehicleId,
+      body.sourceRecordId,
+    );
+    if (!result.ok) {
+      res.status(404).json({ error: "NOT_FOUND", message: result.error });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/vehicles/:vehicleId/spend/unlink", async (req, res, next) => {
+  try {
+    const body = z.object({ sourceRecordId: z.string().min(1).max(64) }).parse(req.body);
+    const ok = await unlinkSubjectExpense(
+      req.user!.id,
+      "vehicle",
+      req.params.vehicleId,
+      body.sourceRecordId,
+    );
+    if (!ok) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Link not found" });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get("/homes", async (req, res, next) => {
   try {
     const homes = await listHomesForUser(req.user!.id);
@@ -174,6 +248,70 @@ router.delete("/homes/:homeId", async (req, res, next) => {
       return;
     }
     res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/homes/:homeId/spend", async (req, res, next) => {
+  try {
+    const spend = await getSubjectSpendForUser(req.user!.id, "home", req.params.homeId);
+    if (!spend) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Home not found" });
+      return;
+    }
+    res.json(spend);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/homes/:homeId/spend/suggest", async (req, res, next) => {
+  try {
+    const result = await suggestSubjectSpendForUser(req.user!.id, "home", req.params.homeId);
+    if (!result) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Home not found" });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/homes/:homeId/spend/link", async (req, res, next) => {
+  try {
+    const body = z.object({ sourceRecordId: z.string().min(1).max(64) }).parse(req.body);
+    const result = await linkSubjectExpense(
+      req.user!.id,
+      "home",
+      req.params.homeId,
+      body.sourceRecordId,
+    );
+    if (!result.ok) {
+      res.status(404).json({ error: "NOT_FOUND", message: result.error });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/homes/:homeId/spend/unlink", async (req, res, next) => {
+  try {
+    const body = z.object({ sourceRecordId: z.string().min(1).max(64) }).parse(req.body);
+    const ok = await unlinkSubjectExpense(
+      req.user!.id,
+      "home",
+      req.params.homeId,
+      body.sourceRecordId,
+    );
+    if (!ok) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Link not found" });
+      return;
+    }
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

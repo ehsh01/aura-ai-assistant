@@ -18,6 +18,7 @@ import {
   type VehicleRecord,
   type WarrantyRecord,
 } from "@/lib/recall-api";
+import { SubjectSpendCard } from "@/components/SubjectSpendCard";
 import { readSearchParam, vehiclesPath } from "@/lib/recall-nav";
 import { toast } from "@/hooks/use-toast";
 import { Car, Home, ShieldCheck, Trash2 } from "lucide-react";
@@ -419,6 +420,7 @@ export function Vehicles() {
                     {w.expiresAt ? ` · ${w.expiresAt}` : ""}
                   </button>
                 ))}
+                <SubjectSpendCard subjectType="home" subjectId={selectedHome.id} />
               </div>
             )}
           </section>
@@ -601,6 +603,7 @@ export function Vehicles() {
                     {w.expiresAt ? ` · ${w.expiresAt}` : ""}
                   </button>
                 ))}
+                <SubjectSpendCard subjectType="vehicle" subjectId={selectedVehicle.id} />
               </div>
             )}
           </section>
