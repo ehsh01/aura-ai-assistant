@@ -1,8 +1,30 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { RecallLogo } from "@/components/RecallLogo";
 
 type Mode = "login" | "register";
+
+function isNetworkFailure(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    err.name === "TypeError" ||
+    msg.includes("failed to fetch") ||
+    msg.includes("networkerror") ||
+    msg.includes("load failed") ||
+    msg.includes("network request failed")
+  );
+}
+
+function formatAuthError(err: unknown): string {
+  if (isNetworkFailure(err)) {
+    return "Can’t reach Recall from this network. Work Wi‑Fi/firewalls often block the login API even when this page loads. Try a phone hotspot, then sign in again.";
+  }
+  if (err && typeof err === "object" && "message" in err) {
+    return String((err as { message: unknown }).message);
+  }
+  return "Something went wrong. Try again.";
+}
 
 export function Login() {
   const { login, register } = useAuth();
@@ -12,6 +34,31 @@ export function Login() {
   const [name, setName] = useState("Ernesto");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [apiReachable, setApiReachable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 8000);
+    void fetch("/api/healthz", {
+      method: "GET",
+      credentials: "omit",
+      signal: controller.signal,
+      cache: "no-store",
+    })
+      .then((res) => {
+        if (!cancelled) setApiReachable(res.ok);
+      })
+      .catch(() => {
+        if (!cancelled) setApiReachable(false);
+      })
+      .finally(() => window.clearTimeout(timer));
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,11 +71,7 @@ export function Login() {
         await register({ email, password, name });
       }
     } catch (err: unknown) {
-      const message =
-        err && typeof err === "object" && "message" in err
-          ? String((err as { message: unknown }).message)
-          : "Something went wrong. Try again.";
-      setError(message);
+      setError(formatAuthError(err));
     } finally {
       setSubmitting(false);
     }
@@ -103,6 +146,13 @@ export function Login() {
             />
           </div>
 
+          {apiReachable === false && (
+            <p className="text-sm text-amber-200/90 bg-amber-500/10 border border-amber-500/25 rounded-lg px-3 py-2">
+              This network can’t reach Recall’s API right now. Use a phone hotspot (or leave
+              work Wi‑Fi) to sign in — your password is probably fine.
+            </p>
+          )}
+
           {error && (
             <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
               {error}
@@ -111,7 +161,7 @@ export function Login() {
 
           <button
             type="submit"
-            disabled={submitting}
+            disabled={submitting || apiReachable === false}
             className="w-full py-3 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 font-medium text-sm transition-colors"
           >
             {submitting
