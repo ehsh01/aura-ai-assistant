@@ -20,6 +20,7 @@ import {
   searchSourcesForProjectLink,
   unlinkSourceFromProject,
 } from "../services/project-sources";
+import { getSubjectTimelineForUser } from "../services/subject-timeline";
 
 const router: IRouter = Router();
 
@@ -59,6 +60,16 @@ router.get("/projects/:projectId", async (req, res, next) => {
 
 router.get("/projects/:projectId/timeline", async (req, res, next) => {
   try {
+    // Prefer unified subject timeline (mail/txns/docs + notes/tasks).
+    const unified = await getSubjectTimelineForUser(
+      req.user!.id,
+      "project",
+      req.params.projectId,
+    );
+    if (unified) {
+      res.json(unified);
+      return;
+    }
     const timeline = await getProjectTimelineForUser(req.user!.id, req.params.projectId);
     if (!timeline) {
       res.status(404).json({ error: "NOT_FOUND", message: "Project not found" });

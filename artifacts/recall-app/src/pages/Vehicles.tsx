@@ -19,6 +19,7 @@ import {
   type WarrantyRecord,
 } from "@/lib/recall-api";
 import { SubjectSpendCard } from "@/components/SubjectSpendCard";
+import { SubjectTimelineCard } from "@/components/SubjectTimelineCard";
 import { readSearchParam, vehiclesPath } from "@/lib/recall-nav";
 import { toast } from "@/hooks/use-toast";
 import { Car, Home, ShieldCheck, Trash2 } from "lucide-react";
@@ -421,6 +422,7 @@ export function Vehicles() {
                   </button>
                 ))}
                 <SubjectSpendCard subjectType="home" subjectId={selectedHome.id} />
+                <SubjectTimelineCard subjectType="home" subjectId={selectedHome.id} />
               </div>
             )}
           </section>
@@ -604,6 +606,7 @@ export function Vehicles() {
                   </button>
                 ))}
                 <SubjectSpendCard subjectType="vehicle" subjectId={selectedVehicle.id} />
+                <SubjectTimelineCard subjectType="vehicle" subjectId={selectedVehicle.id} />
               </div>
             )}
           </section>

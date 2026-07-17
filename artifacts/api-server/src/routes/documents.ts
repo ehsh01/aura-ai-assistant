@@ -7,6 +7,11 @@ import {
   listDocumentsForUser,
 } from "../services/documents";
 import {
+  confirmReceiptMatch,
+  suggestReceiptMatchesForDocument,
+  unlinkReceiptMatch,
+} from "../services/receipt-match";
+import {
   createKnowledgeForUser,
   getKnowledgeForUser,
   listKnowledgeForUser,
@@ -72,6 +77,58 @@ router.get("/documents/:documentId", async (req, res, next) => {
       return;
     }
     res.json(doc);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/documents/:documentId/receipt-matches", async (req, res, next) => {
+  try {
+    const result = await suggestReceiptMatchesForDocument(
+      req.user!.id,
+      req.params.documentId,
+    );
+    if (!result) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Document not found" });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/documents/:documentId/receipt-matches/confirm", async (req, res, next) => {
+  try {
+    const body = z.object({ sourceRecordId: z.string().min(1).max(64) }).parse(req.body);
+    const result = await confirmReceiptMatch(
+      req.user!.id,
+      req.params.documentId,
+      body.sourceRecordId,
+    );
+    if (!result.ok) {
+      res.status(404).json({ error: "NOT_FOUND", message: result.error });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/documents/:documentId/receipt-matches/unlink", async (req, res, next) => {
+  try {
+    const body = z.object({ sourceRecordId: z.string().min(1).max(64) }).parse(req.body);
+    const ok = await unlinkReceiptMatch(
+      req.user!.id,
+      req.params.documentId,
+      body.sourceRecordId,
+    );
+    if (!ok) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Link not found" });
+      return;
+    }
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

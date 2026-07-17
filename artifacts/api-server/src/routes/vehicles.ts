@@ -28,6 +28,7 @@ import {
   suggestSubjectSpendForUser,
   unlinkSubjectExpense,
 } from "../services/subject-spend";
+import { getSubjectTimelineForUser } from "../services/subject-timeline";
 
 const CreateVehicleBody = z.object({
   displayName: z.string().min(1).max(255),
@@ -121,6 +122,23 @@ router.delete("/vehicles/:vehicleId", async (req, res, next) => {
       return;
     }
     res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/vehicles/:vehicleId/timeline", async (req, res, next) => {
+  try {
+    const timeline = await getSubjectTimelineForUser(
+      req.user!.id,
+      "vehicle",
+      req.params.vehicleId,
+    );
+    if (!timeline) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Vehicle not found" });
+      return;
+    }
+    res.json(timeline);
   } catch (err) {
     next(err);
   }
@@ -248,6 +266,19 @@ router.delete("/homes/:homeId", async (req, res, next) => {
       return;
     }
     res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/homes/:homeId/timeline", async (req, res, next) => {
+  try {
+    const timeline = await getSubjectTimelineForUser(req.user!.id, "home", req.params.homeId);
+    if (!timeline) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Home not found" });
+      return;
+    }
+    res.json(timeline);
   } catch (err) {
     next(err);
   }

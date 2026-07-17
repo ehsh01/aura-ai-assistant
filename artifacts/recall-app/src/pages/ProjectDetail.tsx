@@ -3,6 +3,7 @@ import { Link, useRoute } from "wouter";
 import { getProject } from "@workspace/api-client-react";
 import { AppLayout } from "@/components/AppLayout";
 import { ProjectContextCard } from "@/components/ProjectContextCard";
+import { SubjectTimelineCard } from "@/components/SubjectTimelineCard";
 import type { RecallCaptureItem, RecallNote, RecallProject, RecallTask } from "@/lib/recall-context";
 import {
   linkProjectSource,
@@ -101,6 +102,10 @@ export function ProjectDetail() {
                   tasks={detail.tasks}
                   captures={detail.captures}
                 />
+              </div>
+
+              <div className="mt-8">
+                <SubjectTimelineCard subjectType="project" subjectId={projectId!} />
               </div>
 
               <section className="mt-8 space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5">

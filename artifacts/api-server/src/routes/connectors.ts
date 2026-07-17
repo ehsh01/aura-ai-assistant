@@ -42,6 +42,7 @@ import {
   loadSyncedFinanceAggregate,
 } from "../services/finance-sync";
 import { todayIso } from "../services/query-utils";
+import { listSubscriptionHeuristicsForUser } from "../services/subscriptions";
 
 const CreateConnectorBody = z.object({
   name: z.string().min(1).max(255),
@@ -472,6 +473,15 @@ router.get("/finance/summary", async (req, res, next) => {
       return;
     }
     res.json(financeSummaryFromSynced(synced));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/finance/subscriptions", async (req, res, next) => {
+  try {
+    const subscriptions = await listSubscriptionHeuristicsForUser(req.user!.id);
+    res.json({ subscriptions });
   } catch (err) {
     next(err);
   }

@@ -2,8 +2,10 @@ import React, { useEffect, useRef, useState } from "react";
 import { FileText, Plus, Sparkles, Upload, X } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import {
+  confirmReceiptMatch,
   createDocument,
   listDocuments,
+  suggestReceiptMatches,
   summarizeText,
   type DocumentRecord,
 } from "@/lib/recall-api";
@@ -32,6 +34,17 @@ export function Documents() {
   const [dragOver, setDragOver] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [receiptCandidates, setReceiptCandidates] = useState<
+    {
+      sourceRecordId: string;
+      date: string;
+      payee: string;
+      amountFormatted: string;
+      score: number;
+      reasons: string[];
+    }[]
+  >([]);
+  const [receiptLoading, setReceiptLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = async () => {
@@ -399,6 +412,61 @@ export function Documents() {
             )}
             <div className="mt-3 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-white/70">
               {selected.extractedText || "No extracted text stored for this document."}
+            </div>
+            <div className="mt-4 border-t border-white/10 pt-3">
+              <button
+                type="button"
+                disabled={receiptLoading}
+                className="rounded-xl bg-indigo-500/30 px-3 py-2 text-sm text-indigo-100 disabled:opacity-40"
+                onClick={() => {
+                  setReceiptLoading(true);
+                  void suggestReceiptMatches(selected.id)
+                    .then((r) => setReceiptCandidates(r.candidates))
+                    .catch((err) =>
+                      toast({
+                        title: "Could not match receipt",
+                        description: err instanceof Error ? err.message : "Try again",
+                        variant: "destructive",
+                      }),
+                    )
+                    .finally(() => setReceiptLoading(false));
+                }}
+              >
+                {receiptLoading ? "Matching…" : "Match to transaction"}
+              </button>
+              {receiptCandidates.length > 0 && (
+                <ul className="mt-3 space-y-1.5">
+                  {receiptCandidates.map((c) => (
+                    <li
+                      key={c.sourceRecordId}
+                      className="flex items-center justify-between gap-2 text-sm text-white/70"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate">
+                          {c.payee} · {c.amountFormatted}
+                        </p>
+                        <p className="text-xs text-white/35">
+                          {c.date} · {c.reasons.join(", ")}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="shrink-0 rounded-lg bg-indigo-500/20 px-2 py-1 text-xs text-indigo-200"
+                        onClick={() =>
+                          void confirmReceiptMatch(selected.id, c.sourceRecordId).then(() => {
+                            toast({ title: "Receipt linked" });
+                            setReceiptCandidates((prev) =>
+                              prev.filter((x) => x.sourceRecordId !== c.sourceRecordId),
+                            );
+                          })
+                        }
+                      >
+                        Confirm
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </div>
         </div>

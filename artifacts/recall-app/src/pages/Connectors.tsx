@@ -5,6 +5,7 @@ import {
   getFinanceSummary,
   getHomeyWebhookInfo,
   listConnectors,
+  listFinanceSubscriptions,
   rotateHomeyWebhookSecret,
   startGoogleOAuth,
   startHomeyOAuth,
@@ -60,6 +61,16 @@ export function Connectors() {
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [summary, setSummary] = useState<{ connectorId: string; data: FinanceSummary } | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [subscriptions, setSubscriptions] = useState<
+    {
+      payee: string;
+      occurrenceCount: number;
+      avgAmountFormatted: string;
+      lastDate: string;
+      cadenceDays: number | null;
+      confidence: string;
+    }[]
+  >([]);
   const [extensionTokens, setExtensionTokens] = useState<ExtensionToken[]>([]);
   const [creatingExtensionToken, setCreatingExtensionToken] = useState(false);
   const [newExtensionToken, setNewExtensionToken] = useState<string | null>(null);
@@ -67,6 +78,9 @@ export function Connectors() {
   const load = async () => {
     setLoading(true);
     try {
+      void listFinanceSubscriptions()
+        .then((r) => setSubscriptions(r.subscriptions))
+        .catch(() => setSubscriptions([]));
       const res = await listConnectors();
       setConnectors(res.connectors);
       setGoogleOAuthConfigured(Boolean(res.googleOAuthConfigured));
@@ -586,6 +600,32 @@ export function Connectors() {
                   </p>
                 </>
               )}
+            </div>
+          )}
+
+          {subscriptions.length > 0 && (
+            <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+              <h2 className="text-lg font-semibold">Likely subscriptions</h2>
+              <p className="mt-1 text-sm text-white/45">
+                Recurring expenses (~monthly) detected from synced transactions.
+              </p>
+              <ul className="mt-4 space-y-2">
+                {subscriptions.slice(0, 12).map((s) => (
+                  <li
+                    key={s.payee}
+                    className="flex items-center justify-between gap-3 text-sm text-white/75"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{s.payee}</p>
+                      <p className="text-xs text-white/40">
+                        {s.occurrenceCount}× · every ~{s.cadenceDays ?? "?"}d · last {s.lastDate} ·{" "}
+                        {s.confidence}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-white/60">{s.avgAmountFormatted}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 

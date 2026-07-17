@@ -1,5 +1,5 @@
-import { eq } from "drizzle-orm";
-import { waitingDismissals } from "@workspace/db/schema";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { sourceRecords, waitingDismissals } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { getNoteForUser, listNoteMetadataForUser } from "./notes";
 import { getKnowledgeForUser, listKnowledgeForUser } from "./knowledge";
@@ -23,7 +23,7 @@ export type WaitingOnItem = {
   days: number;
   href: string;
   followUp: string;
-  sourceType: "note" | "knowledge" | "task";
+  sourceType: "note" | "knowledge" | "task" | "mail";
   evidenceText: string;
 };
 
@@ -184,6 +184,50 @@ export async function listWaitingOnForUser(
     });
   }
 
+  // Recent Gmail that looks like a follow-up is needed (slightly wider age window).
+  const mailMaxAge = Math.max(maxAgeDays, 3);
+  const mailRows = await getDb()
+    .select({
+      id: sourceRecords.id,
+      recordTitle: sourceRecords.recordTitle,
+      recordText: sourceRecords.recordText,
+      sourceCreatedAt: sourceRecords.sourceCreatedAt,
+      updatedAt: sourceRecords.updatedAt,
+      metadata: sourceRecords.recordMetadata,
+    })
+    .from(sourceRecords)
+    .where(
+      and(
+        eq(sourceRecords.userId, userId),
+        eq(sourceRecords.recordType, "gmail_message"),
+      ),
+    )
+    .orderBy(desc(sql`coalesce(${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`))
+    .limit(80);
+
+  for (const m of mailRows) {
+    const blob = `${m.recordTitle ?? ""} ${m.recordText ?? ""}`;
+    if (!WAITING_RE.test(blob)) continue;
+    const iso =
+      m.sourceCreatedAt?.toISOString() ||
+      (typeof m.metadata?.date === "string" ? m.metadata.date : null) ||
+      m.updatedAt.toISOString();
+    const age = daysSince(iso);
+    if (age < minAgeDays || age > mailMaxAge) continue;
+    const person = extractPerson(blob, peopleNames);
+    items.push({
+      id: `mail:${m.id}`,
+      person,
+      personId: matchPersonId(person, people, aliases),
+      item: (m.recordTitle ?? "Email").slice(0, 120),
+      days: age,
+      href: "/ask",
+      followUp: `Follow up with ${person}`,
+      sourceType: "mail",
+      evidenceText: blob.slice(0, 280),
+    });
+  }
+
   const dismissed = await listDismissedWaitingItemIds(userId);
   return items
     .filter((item) => !dismissed.has(item.id))
@@ -270,7 +314,12 @@ export async function resolveWaitingItemForFollowUp(
   if (colon > 0) {
     const prefix = raw.slice(0, colon);
     sourceId = raw.slice(colon + 1);
-    if (prefix === "note" || prefix === "knowledge" || prefix === "task") {
+    if (
+      prefix === "note" ||
+      prefix === "knowledge" ||
+      prefix === "task" ||
+      prefix === "mail"
+    ) {
       sourceType = prefix;
     } else {
       return null;
@@ -321,6 +370,41 @@ export async function resolveWaitingItemForFollowUp(
       href: `/knowledge?item=${encodeURIComponent(k.id)}`,
       followUp: `Follow up with ${person}`,
       sourceType: "knowledge",
+      evidenceText: blob.slice(0, 280),
+    };
+  }
+
+  if (sourceType === "mail") {
+    const rows = await getDb()
+      .select({
+        id: sourceRecords.id,
+        recordTitle: sourceRecords.recordTitle,
+        recordText: sourceRecords.recordText,
+        sourceCreatedAt: sourceRecords.sourceCreatedAt,
+        updatedAt: sourceRecords.updatedAt,
+      })
+      .from(sourceRecords)
+      .where(
+        and(
+          eq(sourceRecords.id, sourceId),
+          eq(sourceRecords.userId, userId),
+          eq(sourceRecords.recordType, "gmail_message"),
+        ),
+      )
+      .limit(1);
+    const m = rows[0];
+    if (!m) return null;
+    const blob = `${m.recordTitle ?? ""} ${m.recordText ?? ""}`;
+    const person = extractPerson(blob, peopleNames);
+    return {
+      id: `mail:${m.id}`,
+      person,
+      personId: matchPersonId(person, people, aliases),
+      item: (m.recordTitle ?? "Email").slice(0, 120),
+      days: daysSince(m.sourceCreatedAt?.toISOString() ?? m.updatedAt.toISOString()),
+      href: "/ask",
+      followUp: `Follow up with ${person}`,
+      sourceType: "mail",
       evidenceText: blob.slice(0, 280),
     };
   }

@@ -100,7 +100,7 @@ export type WaitingOnRecord = {
   days: number;
   href: string;
   followUp: string;
-  sourceType: "note" | "knowledge" | "task";
+  sourceType: "note" | "knowledge" | "task" | "mail";
   evidenceText: string;
 };
 
@@ -390,6 +390,67 @@ export async function unlinkSubjectSpend(
     method: "POST",
     body: JSON.stringify({ sourceRecordId }),
   });
+}
+
+export type SubjectTimelineItem = {
+  at: string;
+  kind: string;
+  title: string;
+  summary: string | null;
+  entityType: string;
+  entityId: string;
+  provenance: string;
+  href: string;
+};
+
+export async function getSubjectTimeline(
+  subjectType: "project" | "vehicle" | "home",
+  subjectId: string,
+): Promise<{ items: SubjectTimelineItem[] }> {
+  if (subjectType === "project") {
+    return apiFetch(`/projects/${encodeURIComponent(subjectId)}/timeline`);
+  }
+  const base = subjectType === "vehicle" ? "vehicles" : "homes";
+  return apiFetch(`/${base}/${encodeURIComponent(subjectId)}/timeline`);
+}
+
+export async function suggestReceiptMatches(documentId: string): Promise<{
+  documentId: string;
+  candidates: {
+    sourceRecordId: string;
+    date: string;
+    payee: string;
+    amount: number;
+    amountFormatted: string;
+    score: number;
+    reasons: string[];
+  }[];
+}> {
+  return apiFetch(`/documents/${encodeURIComponent(documentId)}/receipt-matches`);
+}
+
+export async function confirmReceiptMatch(
+  documentId: string,
+  sourceRecordId: string,
+): Promise<{ ok: boolean }> {
+  return apiFetch(`/documents/${encodeURIComponent(documentId)}/receipt-matches/confirm`, {
+    method: "POST",
+    body: JSON.stringify({ sourceRecordId }),
+  });
+}
+
+export async function listFinanceSubscriptions(): Promise<{
+  subscriptions: {
+    payee: string;
+    occurrenceCount: number;
+    avgAmount: number;
+    avgAmountFormatted: string;
+    lastDate: string;
+    cadenceDays: number | null;
+    confidence: string;
+  }[];
+}> {
+  return apiFetch("/finance/subscriptions");
 }
 
 export async function listVehicles(): Promise<{ vehicles: VehicleRecord[] }> {
