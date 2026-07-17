@@ -215,6 +215,8 @@ export interface AnswerQueryRequest {
   finance?: QueryFinanceAggregate | null;
   /** Prior turns in this Ask thread (oldest → newest), excluding the current question. */
   conversation?: { role: "user" | "assistant"; content: string }[];
+  /** Optional user rules / correction hints appended to the system prompt. */
+  userRulesPrompt?: string | null;
 }
 
 /** Cap context text sent to the answer model — notes keep enough body to be useful. */
@@ -1101,10 +1103,13 @@ class OpenAiService implements AiService {
   }
 
   async answerQuery(request: AnswerQueryRequest): Promise<AnswerQueryResponse> {
+    const systemContent = request.userRulesPrompt
+      ? `${QUERY_ANSWER_SYSTEM_PROMPT}\n\n${request.userRulesPrompt}`
+      : QUERY_ANSWER_SYSTEM_PROMPT;
     const completion = await this.client.chat.completions.create({
       model: this.model,
       messages: [
-        { role: "system", content: QUERY_ANSWER_SYSTEM_PROMPT },
+        { role: "system", content: systemContent },
         {
           role: "user",
           content: JSON.stringify({
@@ -1176,10 +1181,13 @@ class OpenAiService implements AiService {
     request: AnswerQueryRequest,
     onToken: (delta: string) => void,
   ): Promise<AnswerQueryStreamResult> {
+    const systemContent = request.userRulesPrompt
+      ? `${QUERY_ANSWER_STREAM_SYSTEM_PROMPT}\n\n${request.userRulesPrompt}`
+      : QUERY_ANSWER_STREAM_SYSTEM_PROMPT;
     const stream = await this.client.chat.completions.create({
       model: this.model,
       messages: [
-        { role: "system", content: QUERY_ANSWER_STREAM_SYSTEM_PROMPT },
+        { role: "system", content: systemContent },
         {
           role: "user",
           content: JSON.stringify({

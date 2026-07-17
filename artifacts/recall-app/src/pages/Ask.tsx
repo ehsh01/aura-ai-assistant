@@ -12,12 +12,14 @@ import {
   listWaitingOn,
   queryRecall,
   queryRecallStream,
+  sendAskFeedback,
   setStoredAskThreadId,
   type AskMessageRecord,
   type AskThreadRecord,
   type EvidenceRecord,
   type QueryRecallResult,
 } from "@/lib/recall-api";
+import { toast } from "@/hooks/use-toast";
 import { entityPath, readSearchParam } from "@/lib/recall-nav";
 import { useSpeakAnswer } from "@/hooks/use-speak-answer";
 import { stopSpeaking } from "@/lib/speech-synthesis";
@@ -109,6 +111,8 @@ export function Ask() {
   const [threads, setThreads] = useState<AskThreadRecord[]>([]);
   const [messages, setMessages] = useState<AskMessageRecord[]>([]);
   const [latestMeta, setLatestMeta] = useState<AnswerMeta | null>(null);
+  const [assistantMessageId, setAssistantMessageId] = useState<string | null>(null);
+  const [feedbackSent, setFeedbackSent] = useState<"up" | "down" | null>(null);
   const autoAsked = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -205,10 +209,13 @@ export function Ask() {
         void refreshThreads();
       }
       const resolvedThreadId = res.threadId ?? threadId ?? "local";
+      const persistedId = res.assistantMessageId ?? assistantId;
+      setAssistantMessageId(res.assistantMessageId ?? null);
+      setFeedbackSent(null);
       setMessages([
         { ...userMessage, threadId: resolvedThreadId },
         {
-          id: assistantId,
+          id: persistedId,
           threadId: resolvedThreadId,
           role: "assistant",
           content: res.answer,
@@ -432,6 +439,40 @@ export function Ask() {
 
               {latestMeta && !loading && (
                 <div className="space-y-4 pt-2">
+                  {assistantMessageId && (
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-white/45">
+                      <span>Was this helpful?</span>
+                      <button
+                        type="button"
+                        disabled={feedbackSent != null}
+                        className="rounded-lg border border-white/10 px-2 py-1 hover:bg-white/5 disabled:opacity-40"
+                        onClick={() =>
+                          void sendAskFeedback(assistantMessageId, "up").then(() => {
+                            setFeedbackSent("up");
+                            toast({ title: "Thanks for the feedback" });
+                          })
+                        }
+                      >
+                        {feedbackSent === "up" ? "Thanks" : "👍"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={feedbackSent != null}
+                        className="rounded-lg border border-white/10 px-2 py-1 hover:bg-white/5 disabled:opacity-40"
+                        onClick={() => {
+                          const note = window.prompt(
+                            "What was wrong? (optional — helps improve future answers)",
+                          );
+                          void sendAskFeedback(assistantMessageId, "down", note).then(() => {
+                            setFeedbackSent("down");
+                            toast({ title: "Feedback saved" });
+                          });
+                        }}
+                      >
+                        {feedbackSent === "down" ? "Noted" : "👎"}
+                      </button>
+                    </div>
+                  )}
                   <div className="flex flex-wrap items-center gap-2">
                     {conf && (
                       <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${conf.className}`}>

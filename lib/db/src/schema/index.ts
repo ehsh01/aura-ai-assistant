@@ -29,3 +29,4 @@ export * from "./invoices";
 export * from "./auth-sessions";
 export * from "./jobs";
 export * from "./waiting-dismissals";
+export * from "./user-rules";

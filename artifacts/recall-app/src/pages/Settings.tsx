@@ -7,8 +7,13 @@ import {
   adminSetIsAdmin,
   adminSetPassword,
   changePassword,
+  createUserRule,
+  deleteUserRule,
   listAdminUsers,
+  listUserRules,
+  updateUserRule,
   type AdminUserRecord,
+  type UserRuleRecord,
 } from "@/lib/recall-api";
 import { toast } from "@/hooks/use-toast";
 
@@ -23,6 +28,9 @@ export function Settings() {
   const [usersLoading, setUsersLoading] = useState(false);
   const [resetFor, setResetFor] = useState<string | null>(null);
   const [resetPassword, setResetPassword] = useState("");
+  const [rules, setRules] = useState<UserRuleRecord[]>([]);
+  const [newRule, setNewRule] = useState("");
+  const [savingRule, setSavingRule] = useState(false);
 
   const loadUsers = useCallback(async () => {
     if (!user?.isAdmin) return;
@@ -44,6 +52,12 @@ export function Settings() {
   useEffect(() => {
     void loadUsers();
   }, [loadUsers]);
+
+  useEffect(() => {
+    void listUserRules()
+      .then((r) => setRules(r.rules))
+      .catch(() => setRules([]));
+  }, []);
 
   const onChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -146,6 +160,89 @@ export function Settings() {
               className="rounded-xl bg-indigo-500 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-40"
             >
               {savingPassword ? "Saving…" : "Update password"}
+            </button>
+          </form>
+        </section>
+
+        <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 md:p-6">
+          <h2 className="text-lg font-medium text-white">Ask rules</h2>
+          <p className="mt-1 text-sm text-white/45">
+            Short instructions Recall always follows when answering (e.g. prefer metric units,
+            never invent project codes).
+          </p>
+          <ul className="mt-4 space-y-2">
+            {rules.map((rule) => (
+              <li
+                key={rule.id}
+                className="flex items-start justify-between gap-3 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm"
+              >
+                <div className="min-w-0">
+                  <p className={rule.enabled ? "text-white/80" : "text-white/35 line-through"}>
+                    {rule.body}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button
+                    type="button"
+                    className="text-xs text-white/40 hover:text-white/70"
+                    onClick={() =>
+                      void updateUserRule(rule.id, { enabled: !rule.enabled }).then((updated) =>
+                        setRules((prev) => prev.map((r) => (r.id === updated.id ? updated : r))),
+                      )
+                    }
+                  >
+                    {rule.enabled ? "Disable" : "Enable"}
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs text-rose-300/70 hover:text-rose-200"
+                    onClick={() =>
+                      void deleteUserRule(rule.id).then(() =>
+                        setRules((prev) => prev.filter((r) => r.id !== rule.id)),
+                      )
+                    }
+                  >
+                    Delete
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <form
+            className="mt-4 flex gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!newRule.trim()) return;
+              setSavingRule(true);
+              void createUserRule(newRule.trim())
+                .then((rule) => {
+                  setRules((prev) => [...prev, rule]);
+                  setNewRule("");
+                  toast({ title: "Rule added" });
+                })
+                .catch((err) =>
+                  toast({
+                    title: "Could not add rule",
+                    description: err instanceof Error ? err.message : "Try again",
+                    variant: "destructive",
+                  }),
+                )
+                .finally(() => setSavingRule(false));
+            }}
+          >
+            <input
+              value={newRule}
+              onChange={(e) => setNewRule(e.target.value)}
+              placeholder="Add a rule…"
+              maxLength={500}
+              className="flex-1 rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-indigo-500/50"
+            />
+            <button
+              type="submit"
+              disabled={savingRule || !newRule.trim()}
+              className="rounded-xl bg-indigo-500 px-3 py-2 text-sm font-medium text-white disabled:opacity-40"
+            >
+              Add
             </button>
           </form>
         </section>

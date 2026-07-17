@@ -111,10 +111,14 @@ Last verified against the production codebase: 2026-07-17.
 - [ ] Add security review
 - [ ] Add documentation update process
 
-## Life OS roadmap (not done)
+## Life OS roadmap
 
-- [ ] Subject timeline across mail / transactions / docs
-- [ ] Receipt ↔ transaction matching
-- [ ] Outbound digests / notifications
+- [x] Subject timeline across mail / transactions / docs (project / home / vehicle)
+- [x] Receipt ↔ transaction matching (suggest + confirm)
+- [x] Subscription heuristics (Connectors)
+- [x] Gmail waiting-on follow-ups
+- [x] In-app weekly digest (Today)
+- [x] Ask answer feedback → corrections
+- [x] User rules for Ask (Settings)
+- [ ] Outbound digests / email notifications
 - [ ] Calendar-first UX + deadline extraction
-- [ ] Ask answer feedback → corrections

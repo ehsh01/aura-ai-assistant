@@ -772,6 +772,7 @@ export type QueryRecallResult = {
   images?: AskAnswerImage[];
   suggestedNextAction: string | null;
   threadId: string | null;
+  assistantMessageId?: string | null;
   privacy?: {
     model: string | null;
     dataLeftDevice: boolean;
@@ -891,8 +892,60 @@ export async function queryRecallStream(
     images: doneResult?.images ?? metaResult?.images ?? [],
     suggestedNextAction: doneResult?.suggestedNextAction ?? null,
     threadId: doneResult?.threadId ?? metaResult?.threadId ?? options.threadId ?? null,
+    assistantMessageId: doneResult?.assistantMessageId ?? null,
     privacy: doneResult?.privacy ?? metaResult?.privacy,
   };
+}
+
+export async function sendAskFeedback(
+  messageId: string,
+  rating: "up" | "down",
+  note?: string | null,
+): Promise<{ ok: boolean }> {
+  return apiFetch(`/ai/messages/${encodeURIComponent(messageId)}/feedback`, {
+    method: "POST",
+    body: JSON.stringify({ rating, note: note ?? null }),
+  });
+}
+
+export async function getWeeklyDigest(): Promise<{
+  weekOf: string;
+  generatedAt: string;
+  summary: string;
+  sections: { title: string; bullets: string[] }[];
+}> {
+  return apiFetch("/digest/weekly");
+}
+
+export type UserRuleRecord = {
+  id: string;
+  body: string;
+  sortOrder: number;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function listUserRules(): Promise<{ rules: UserRuleRecord[] }> {
+  return apiFetch("/user-rules");
+}
+
+export async function createUserRule(body: string): Promise<UserRuleRecord> {
+  return apiFetch("/user-rules", { method: "POST", body: JSON.stringify({ body }) });
+}
+
+export async function updateUserRule(
+  ruleId: string,
+  input: Partial<{ body: string; enabled: boolean; sortOrder: number }>,
+): Promise<UserRuleRecord> {
+  return apiFetch(`/user-rules/${encodeURIComponent(ruleId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteUserRule(ruleId: string): Promise<void> {
+  await apiFetch(`/user-rules/${encodeURIComponent(ruleId)}`, { method: "DELETE" });
 }
 
 export type AskThreadRecord = {

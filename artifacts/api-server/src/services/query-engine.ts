@@ -45,6 +45,8 @@ import {
 import { listImageAttachmentsForNotes } from "./note-attachments";
 import { executeHomeyAskForUser } from "./connectors";
 import { listOpenHomeyAlertsForUser } from "./homey-alerts";
+import { formatUserRulesForPrompt } from "./user-rules";
+import { listRecentAskFeedbackHints } from "./ask-feedback";
 import { logger } from "../lib/logger";
 
 function buildFinanceBreakdownAnswer(
@@ -103,6 +105,8 @@ export type QueryAnswer = {
   promptVersion: string;
   degraded: boolean;
   threadId: string | null;
+  /** Persisted assistant message id for feedback. */
+  assistantMessageId?: string | null;
   privacy: {
     model: string | null;
     dataLeftDevice: boolean;
@@ -682,13 +686,14 @@ export async function queryRecallForUser(
       }
     }
 
-    await appendAskMessage({
+    const assistantMsg = await appendAskMessage({
       userId,
       threadId: thread.id,
       role: "assistant",
       content: withPrivacy.answer,
       metadata: buildAskAnswerMetadata(withPrivacy),
     });
+    withPrivacy.assistantMessageId = assistantMsg.id;
 
     await writeAuditLog({
       userId,
@@ -698,6 +703,7 @@ export async function queryRecallForUser(
       metadata: {
         question: question.slice(0, 240),
         threadId: thread.id,
+        assistantMessageId: assistantMsg.id,
         confidence: withPrivacy.confidence,
         evidenceCount: withPrivacy.evidence.length,
         imageCount: withPrivacy.images.length,
@@ -834,6 +840,12 @@ export async function queryRecallForUser(
   if (!degraded) {
     try {
       const metric = finance && !financeNeedsSync ? financeMetricForQuestion(question) : null;
+      const [rulesPrompt, feedbackHints] = await Promise.all([
+        formatUserRulesForPrompt(userId),
+        listRecentAskFeedbackHints(userId),
+      ]);
+      const userRulesPrompt = [rulesPrompt, feedbackHints].filter(Boolean).join("\n\n") || null;
+
       const answerRequest = {
         question,
         today,
@@ -855,6 +867,7 @@ export async function queryRecallForUser(
               }
             : null,
         conversation,
+        userRulesPrompt,
       };
 
       logger.debug(

@@ -4,6 +4,7 @@ import { AppLayout } from "@/components/AppLayout";
 import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
   fetchHome,
+  getWeeklyDigest,
   listHomeyAlerts,
   listPeople,
   listWaitingOn,
@@ -63,6 +64,18 @@ export function Today() {
   const [home, setHome] = useState<HomeBriefingResponse | null>(null);
   const [waiting, setWaiting] = useState<WaitingItem[]>([]);
   const [homeyAlerts, setHomeyAlerts] = useState<HomeyUrgencyAlert[]>([]);
+  const [weeklyDigest, setWeeklyDigest] = useState<{
+    weekOf: string;
+    summary: string;
+    sections: { title: string; bullets: string[] }[];
+  } | null>(null);
+  const [digestDismissed, setDigestDismissed] = useState(() => {
+    try {
+      return localStorage.getItem("recall-weekly-digest-dismissed") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [capturePrefill, setCapturePrefill] = useState<string | null>(() =>
     readSearchParam("capture"),
   );
@@ -103,6 +116,9 @@ export function Today() {
     void listPeople()
       .then((res) => setPeople(res.people))
       .catch(() => setPeople([]));
+    void getWeeklyDigest()
+      .then((d) => setWeeklyDigest(d))
+      .catch(() => setWeeklyDigest(null));
     void listHomeyAlerts()
       .then((res) =>
         setHomeyAlerts(
@@ -252,6 +268,41 @@ export function Today() {
               <h1 className="text-3xl font-semibold text-white">Today</h1>
               <p className="mt-2 text-sm text-white/45">{countLabel}</p>
             </header>
+
+            {weeklyDigest && !digestDismissed && (
+              <section className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-white/40">
+                      This week
+                    </p>
+                    <p className="mt-1 text-sm text-white/70">{weeklyDigest.summary}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs text-white/35 hover:text-white/60"
+                    onClick={() => {
+                      setDigestDismissed(true);
+                      try {
+                        localStorage.setItem("recall-weekly-digest-dismissed", "1");
+                      } catch {
+                        // ignore
+                      }
+                    }}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+                <ul className="mt-3 space-y-2">
+                  {weeklyDigest.sections.slice(0, 3).map((s) => (
+                    <li key={s.title}>
+                      <p className="text-xs text-white/40">{s.title}</p>
+                      <p className="text-sm text-white/65">{s.bullets[0]}</p>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
 
             {pressing.some((p) => p.kind === "homey") && (
               <section className="rounded-2xl border border-amber-400/20 bg-amber-500/5 px-4 py-3">

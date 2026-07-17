@@ -28,6 +28,7 @@ import {
   getAskThreadForUser,
   listAskThreadsForUser,
 } from "../services/ask-threads";
+import { recordAskFeedbackForUser } from "../services/ask-feedback";
 
 function mergeSearchHitsIntoContext(
   context: AiContext | undefined,
@@ -256,6 +257,7 @@ router.post("/ai/query/stream", async (req, res, next) => {
     });
     send("done", {
       threadId: result.threadId,
+      assistantMessageId: result.assistantMessageId ?? null,
       answer: result.answer,
       confidence: result.confidence,
       caveats: result.caveats,
@@ -274,6 +276,29 @@ router.post("/ai/query/stream", async (req, res, next) => {
       message: err instanceof Error ? err.message : "Ask failed",
     });
     res.end();
+  }
+});
+
+router.post("/ai/messages/:messageId/feedback", async (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        rating: z.enum(["up", "down"]),
+        note: z.string().max(1000).nullish(),
+      })
+      .parse(req.body);
+    const result = await recordAskFeedbackForUser(req.user!.id, {
+      messageId: req.params.messageId,
+      rating: body.rating,
+      note: body.note,
+    });
+    if (!result.ok) {
+      res.status(404).json({ error: "NOT_FOUND", message: result.error });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
   }
 });
 
