@@ -60,7 +60,15 @@ Transaction fields:
 - source URL if available
 - metadata
 
-## 6. Evidence
+## 6. Spend integrity
+
+Ask and Connectors “spent” totals exclude transfers and credit-card payments so bank→card payments are not double-counted with card purchases.
+
+Classification prefers MyFamilyBudget `type` / `transferSubtype` / `affectsSpending`, then payee heuristics (e.g. `CHASE CREDIT CRD EPAY`, `Payment to … card ending`, `Payment Thank You`).
+
+Controlled by `FINANCE_EXCLUDE_TRANSFERS` (default on; set `false` to restore sign-only totals).
+
+## 7. Evidence
 
 Every finance answer must be linked to transactions.
 
@@ -72,7 +80,7 @@ For totals, show:
 - included rows
 - excluded rows if relevant
 
-## 7. Construction Finance
+## 8. Construction Finance
 
 Construction-related expenses may be identified by:
 
@@ -83,13 +91,13 @@ Construction-related expenses may be identified by:
 - imported spreadsheet
 - user correction
 
-## 8. Safety
+## 9. Safety
 
 Avoid giving high-stakes financial advice.
 
 Recall can summarize and organize finances, but should not act as a financial advisor.
 
-## 9. Future Ideas
+## 10. Future Ideas
 
 - budget tracking
 - anomaly detection

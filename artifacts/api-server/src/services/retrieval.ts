@@ -9,6 +9,7 @@ import { listHomesForUser } from "./homes";
 import { listOrganizationsForUser } from "./organizations";
 import { listInvoicesForUser } from "./invoices";
 import { listWarrantiesForUser } from "./warranties";
+import { listProjectsForRetrieval } from "./projects";
 import { listPersonNameAliases, peopleWithAliasNames } from "./user-corrections";
 import {
   linkedEntityKeySet,
@@ -492,6 +493,7 @@ const CORPUS = {
   warranties: 40,
   organizations: 40,
   invoices: 40,
+  projects: 40,
   /** Per connected Google mailbox — keeps ehernandez2 + REI + others searchable. */
   gmailPerMailbox: 150,
   contactsTotal: 40,
@@ -674,7 +676,7 @@ async function collectCorpus(
   people: PersonRef[];
   tasks: Awaited<ReturnType<typeof listTasksForUser>>;
 }> {
-  const [tasks, notes, people, knowledge, memories, documents, captures, vehiclesList, homesList, warrantiesList, orgsList, invoicesList, sources, aliases] =
+  const [tasks, notes, people, knowledge, memories, documents, captures, vehiclesList, homesList, warrantiesList, orgsList, invoicesList, projectsList, sources, aliases] =
     await Promise.all([
       listTasksForUser(userId, { limit: CORPUS.tasks }),
       listNotesForUser(userId, { limit: CORPUS.notes }),
@@ -688,6 +690,7 @@ async function collectCorpus(
       listWarrantiesForUser(userId, { limit: CORPUS.warranties }),
       listOrganizationsForUser(userId, { limit: CORPUS.organizations }),
       listInvoicesForUser(userId, { limit: CORPUS.invoices }),
+      listProjectsForRetrieval(userId, CORPUS.projects),
       loadSourceRecordsBalanced(userId),
       listPersonNameAliases(userId),
     ]);
@@ -873,6 +876,21 @@ async function collectCorpus(
         inv.dueDate ? `due=${inv.dueDate}` : null,
         inv.invoiceDate ? `invoiced=${inv.invoiceDate}` : null,
         inv.notes ? `notes=${inv.notes.slice(0, 400)}` : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    });
+  }
+  for (const p of projectsList.slice(0, CORPUS.projects)) {
+    records.push({
+      entityType: "project",
+      entityId: p.id,
+      title: p.name,
+      text: [
+        `project ${p.name}`,
+        `status=${p.status}`,
+        p.description ? `description=${p.description.slice(0, 500)}` : null,
+        p.relatedPeople.length ? `people=${p.relatedPeople.join(",")}` : null,
       ]
         .filter(Boolean)
         .join(" "),

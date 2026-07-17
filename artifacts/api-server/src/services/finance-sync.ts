@@ -1,7 +1,10 @@
 import { and, desc, eq } from "drizzle-orm";
 import { sourceRecords } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
+import { config } from "../lib/config";
+import { logger } from "../lib/logger";
 import { listConnectorsForUser } from "./connectors";
+import { classifyFinanceTransaction } from "./finance-classify";
 import { aggregateFinance, formatMoney, parseFinanceDateRange } from "./query-utils";
 import type { QueryFinanceAggregate } from "./ai";
 
@@ -25,7 +28,13 @@ export function financeSummaryFromSynced(result: SyncedFinanceResult): {
   }[];
   evidenceNote: string;
 } {
-  const expenses = result.finance.transactions.filter((tx) => tx.amount < 0);
+  const expenses = result.finance.transactions.filter((tx) => {
+    if (tx.kind) return tx.kind === "expense";
+    return tx.amount < 0;
+  });
+  const excludedNote = result.finance.transfersExcluded
+    ? " Transfers and credit-card payments are excluded from spent."
+    : "";
   return {
     total: result.finance.spent,
     transactionCount: result.finance.expenseCount,
@@ -37,7 +46,7 @@ export function financeSummaryFromSynced(result: SyncedFinanceResult): {
       category: tx.category,
       notes: null,
     })),
-    evidenceNote: `Spent total computed from ${result.finance.expenseCount} synced transaction(s) for ${result.finance.rangeLabel ?? "the selected period"}. Last successful sync is the source snapshot.`,
+    evidenceNote: `Spent total computed from ${result.finance.expenseCount} synced transaction(s) for ${result.finance.rangeLabel ?? "the selected period"}.${excludedNote} Last successful sync is the source snapshot.`,
   };
 }
 
@@ -76,6 +85,14 @@ const emptyFinance = (rangeLabel: string | null): QueryFinanceAggregate => ({
     topCategories: [],
   },
   transactions: [],
+  transfersExcluded: config.financeExcludeTransfers,
+  classificationCounts: {
+    expense: 0,
+    income: 0,
+    transfer: 0,
+    credit_card_payment: 0,
+    refund: 0,
+  },
 });
 
 /**
@@ -158,6 +175,18 @@ export async function loadSyncedFinanceAggregate(
         amount,
         payee,
         category: typeof meta.category === "string" ? meta.category : null,
+        type: typeof meta.type === "string" ? meta.type : null,
+        transferSubtype:
+          typeof meta.transferSubtype === "string" ? meta.transferSubtype : null,
+        affectsSpending:
+          typeof meta.affectsSpending === "boolean" || typeof meta.affectsSpending === "string"
+            ? meta.affectsSpending
+            : null,
+        affectsIncome:
+          typeof meta.affectsIncome === "boolean" || typeof meta.affectsIncome === "string"
+            ? meta.affectsIncome
+            : null,
+        notes: typeof meta.notes === "string" ? meta.notes : null,
       };
     })
     .filter((t): t is NonNullable<typeof t> => t != null);
@@ -165,19 +194,45 @@ export async function loadSyncedFinanceAggregate(
   const labelParts = [range.label, payeeFilter ? `at ${payeeFilter}` : null].filter(Boolean);
   const finance = aggregateFinance(txns, labelParts.length ? labelParts.join(" ") : null);
 
+  if (finance.classificationCounts) {
+    logger.info(
+      {
+        userId,
+        connectorId: financeConn.id,
+        excludeTransfers: config.financeExcludeTransfers,
+        rangeLabel: finance.rangeLabel,
+        counts: finance.classificationCounts,
+        spent: finance.spent,
+        income: finance.income,
+      },
+      "finance.classification",
+    );
+  }
+
   // Newest first; keep a generous cap so breakdown answers can list everything practical.
   const MAX_TX_LINES = 300;
+  const excludeTransfers = finance.transfersExcluded ?? config.financeExcludeTransfers;
   finance.transactions = txns
     .slice()
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
     .slice(0, MAX_TX_LINES)
-    .map((t) => ({
-      date: t.date,
-      payee: (t.payee ?? "Unknown").trim() || "Unknown",
-      amount: t.amount,
-      amountFormatted: formatMoney(t.amount),
-      category: t.category,
-    }));
+    .map((t) => {
+      const kind = excludeTransfers
+        ? classifyFinanceTransaction(t)
+        : t.amount < 0
+          ? ("expense" as const)
+          : t.amount > 0
+            ? ("income" as const)
+            : ("transfer" as const);
+      return {
+        date: t.date,
+        payee: (t.payee ?? "Unknown").trim() || "Unknown",
+        amount: t.amount,
+        amountFormatted: formatMoney(t.amount),
+        category: t.category,
+        kind,
+      };
+    });
 
   return {
     finance,

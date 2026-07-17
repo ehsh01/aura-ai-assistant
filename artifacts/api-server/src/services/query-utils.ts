@@ -1,4 +1,13 @@
 import type { QueryFinanceAggregate } from "./ai";
+import { config } from "../lib/config";
+import {
+  classifyFinanceTransaction,
+  emptyClassificationCounts,
+  incomeDeltaCents,
+  spentDeltaCents,
+  type FinanceTxnInput,
+  type FinanceTxnKind,
+} from "./finance-classify";
 
 export const FINANCE_INTENT =
   /\b(spend|spent|spending|cost|costs?|paid|pay(?:ing)?|budget|transactions?|expenses?|income|earn(?:ed)?|money|dollars?|grocer|restaurant|bought|purchase|bill|\$)\b/i;
@@ -166,10 +175,25 @@ export function parseFinanceDateRange(
   return parseDateRange("this month", today);
 }
 
+export type AggregateFinanceTxn = FinanceTxnInput & {
+  date?: string;
+};
+
+export type AggregateFinanceOptions = {
+  /** Override config.financeExcludeTransfers for tests / rollback. */
+  excludeTransfers?: boolean;
+};
+
+/**
+ * Aggregate finance totals. When excludeTransfers is on (default via config),
+ * transfers and credit-card payments are omitted from spent/income/net.
+ */
 export function aggregateFinance(
-  transactions: { amount: number; payee?: string | null; category?: string | null }[],
+  transactions: AggregateFinanceTxn[],
   rangeLabel: string | null,
+  options?: AggregateFinanceOptions,
 ): QueryFinanceAggregate {
+  const excludeTransfers = options?.excludeTransfers ?? config.financeExcludeTransfers;
   const byPayee = new Map<string, { totalCents: number; count: number }>();
   const byCategory = new Map<string, { totalCents: number; count: number }>();
   let netCents = 0;
@@ -177,17 +201,46 @@ export function aggregateFinance(
   let incomeCents = 0;
   let expenseCount = 0;
   let incomeCount = 0;
+  const classificationCounts = emptyClassificationCounts();
 
   for (const tx of transactions) {
     const cents = toCents(tx.amount);
-    netCents += cents;
-    if (cents < 0) {
-      spentCents += -cents;
-      expenseCount += 1;
-    } else if (cents > 0) {
-      incomeCents += cents;
-      incomeCount += 1;
+    const kind: FinanceTxnKind = excludeTransfers
+      ? classifyFinanceTransaction(tx)
+      : tx.amount < 0
+        ? "expense"
+        : tx.amount > 0
+          ? "income"
+          : "transfer";
+    classificationCounts[kind] += 1;
+
+    if (excludeTransfers) {
+      spentCents += spentDeltaCents(kind, cents);
+      if (kind === "expense" && cents < 0) expenseCount += 1;
+      const incomeDelta = incomeDeltaCents(kind, cents);
+      if (incomeDelta !== 0) {
+        incomeCents += incomeDelta;
+        incomeCount += 1;
+      }
+      // Net from real cash-flow only (expenses + income + refunds).
+      if (kind === "expense" || kind === "income" || kind === "refund") {
+        netCents += cents;
+      }
+    } else {
+      netCents += cents;
+      if (cents < 0) {
+        spentCents += -cents;
+        expenseCount += 1;
+      } else if (cents > 0) {
+        incomeCents += cents;
+        incomeCount += 1;
+      }
     }
+
+    const includeInRanks =
+      !excludeTransfers || kind === "expense" || kind === "income" || kind === "refund";
+    if (!includeInRanks) continue;
+
     const payee = (tx.payee ?? "Unknown").trim() || "Unknown";
     const category = (tx.category ?? "Uncategorized").trim() || "Uncategorized";
     const p = byPayee.get(payee) ?? { totalCents: 0, count: 0 };
@@ -206,7 +259,7 @@ export function aggregateFinance(
       .slice(0, 10);
 
   const total = fromCents(netCents);
-  const spent = fromCents(spentCents);
+  const spent = fromCents(Math.max(0, spentCents));
   const income = fromCents(incomeCents);
   const topPayees = rank(byPayee).map(([payee, v]) => ({
     payee,
@@ -247,6 +300,8 @@ export function aggregateFinance(
       })),
     },
     transactions: [],
+    transfersExcluded: excludeTransfers,
+    classificationCounts,
   };
 }
 

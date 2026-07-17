@@ -7,6 +7,12 @@ export type FinanceTransaction = {
   payee?: string | null;
   category?: string | null;
   notes?: string | null;
+  /** MyFamilyBudget: expense | income | transfer */
+  type?: string | null;
+  transferSubtype?: string | null;
+  affectsSpending?: boolean | null;
+  affectsIncome?: boolean | null;
+  affectsCashFlow?: boolean | null;
 };
 
 export const financeApiConnector: RecallConnector = {

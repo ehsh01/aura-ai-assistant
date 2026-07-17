@@ -1,6 +1,6 @@
 # Recall AI App — Implementation Checklist
 
-Last verified against the production codebase: 2026-07-12.
+Last verified against the production codebase: 2026-07-17.
 
 ## Foundation
 
@@ -21,12 +21,12 @@ Last verified against the production codebase: 2026-07-12.
 
 ## AI Extraction
 
-- [ ] Create AI extraction service
-- [ ] Define prompt version
-- [ ] Validate structured output
-- [ ] Store raw AI output
-- [ ] Create suggested tasks
-- [ ] Add confidence scores
+- [x] Create AI extraction service
+- [x] Define prompt version
+- [x] Validate structured output
+- [x] Store raw AI output
+- [x] Create suggested tasks
+- [x] Add confidence scores
 
 ## Evidence
 
@@ -40,25 +40,26 @@ Last verified against the production codebase: 2026-07-12.
 
 ## Tasks
 
-- [ ] Create Task model
-- [ ] Build task list
-- [ ] Build task detail
-- [ ] Support status changes
-- [ ] Support due dates
-- [ ] Support priority
+- [x] Create Task model
+- [x] Build task list
+- [x] Build task detail
+- [x] Support status changes
+- [x] Support due dates
+- [x] Support priority
 
 ## People
 
-- [ ] Create Person model
-- [ ] Link tasks to requesters
-- [ ] Build person detail page
-- [ ] Add duplicate resolution later
+- [x] Create Person model
+- [x] Link tasks to requesters
+- [x] Build person detail page
+- [x] Add duplicate resolution later
 
 ## Projects
 
-- [ ] Create Project model
-- [ ] Link tasks to projects
-- [ ] Build project detail page
+- [x] Create Project model
+- [x] Link tasks to projects
+- [x] Build project detail page
+- [x] Include projects in Ask retrieval corpus
 - [ ] Add project summaries later
 
 ## Browser Extension
@@ -77,7 +78,11 @@ Last verified against the production codebase: 2026-07-12.
 - [x] Create sync run table
 - [x] Add finance connector
 - [x] Use one synced finance snapshot across Ask, Home, and Connectors
+- [x] Exclude transfers / credit-card payments from “spent” (`FINANCE_EXCLUDE_TRANSFERS`)
 - [x] Add CSV import
+- [x] Add Homey connector (OAuth + webhooks)
+- [x] Add Google multi-mailbox sync
+- [x] Add Microsoft Outlook / Teams sync
 - [ ] Add ticket email parser
 
 ## Query
@@ -89,10 +94,11 @@ Last verified against the production codebase: 2026-07-12.
 - [x] Restore evidence when a saved thread is reopened
 - [x] Search OCR and extracted note-attachment text
 - [x] Show related records
+- [x] Retrieve projects alongside notes/people/assets
 
 ## Hardening
 
-- [ ] Add tests
+- [x] Add tests (Vitest API suite + Playwright smoke)
 - [x] Add backup strategy
 - [x] Add restore drill (ephemeral Docker Postgres)
 - [x] Durable job queue for capture extraction (Postgres + worker)
@@ -101,6 +107,14 @@ Last verified against the production codebase: 2026-07-12.
 - [x] Person merge / dedup
 - [x] Person + project timeline APIs
 - [x] Deep /ready health (DB + job queue)
-- [ ] Add logging
+- [x] Add structured logging
 - [ ] Add security review
 - [ ] Add documentation update process
+
+## Life OS roadmap (not done)
+
+- [ ] Subject timeline across mail / transactions / docs
+- [ ] Receipt ↔ transaction matching
+- [ ] Outbound digests / notifications
+- [ ] Calendar-first UX + deadline extraction
+- [ ] Ask answer feedback → corrections

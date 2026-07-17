@@ -191,7 +191,19 @@ export interface QueryFinanceAggregate {
     amount: number;
     amountFormatted: string;
     category: string | null;
+    /** Present when finance classification ran. */
+    kind?: "expense" | "income" | "transfer" | "credit_card_payment" | "refund";
   }[];
+  /** True when transfers/CC payments were excluded from spent/income. */
+  transfersExcluded?: boolean;
+  /** Classification tallies for the aggregated window (when classified). */
+  classificationCounts?: {
+    expense: number;
+    income: number;
+    transfer: number;
+    credit_card_payment: number;
+    refund: number;
+  };
 }
 
 export interface AnswerQueryRequest {

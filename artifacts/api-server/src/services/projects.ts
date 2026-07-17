@@ -107,6 +107,34 @@ export async function listProjectsForUser(userId: string): Promise<RecallProject
   return Promise.all(rows.map((row) => toDto(userId, row)));
 }
 
+/** Lean project rows for Ask retrieval (no per-project count queries). */
+export async function listProjectsForRetrieval(
+  userId: string,
+  limit = 40,
+): Promise<
+  {
+    id: string;
+    name: string;
+    description: string | null;
+    status: "active" | "paused" | "archived";
+    relatedPeople: string[];
+  }[]
+> {
+  const rows = await getDb()
+    .select()
+    .from(projects)
+    .where(eq(projects.userId, userId))
+    .orderBy(desc(projects.updatedAt))
+    .limit(limit);
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    description: row.description ?? null,
+    status: normalizeStatus(row.status),
+    relatedPeople: row.relatedPeople ?? [],
+  }));
+}
+
 export async function createProjectForUser(
   userId: string,
   input: CreateProjectInput,

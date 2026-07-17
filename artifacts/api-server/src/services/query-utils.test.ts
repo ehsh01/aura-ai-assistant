@@ -210,4 +210,49 @@ describe("aggregateFinance", () => {
     const agg = aggregateFinance(txns, "this month");
     expect(primaryFinanceFigure(agg, "spent").formatted).toBe("$180.35");
   });
+
+  it("excludes credit-card payments and transfers from spent when flag on", () => {
+    const mixed = [
+      { amount: -50, payee: "Publix", type: "expense", affectsSpending: true },
+      {
+        amount: -900,
+        payee: "CHASE CREDIT CRD EPAY",
+        type: "expense",
+        affectsSpending: true,
+      },
+      {
+        amount: 500,
+        payee: "Payment Thank You-Mobile",
+        type: "transfer",
+        transferSubtype: "credit_card_payment",
+        affectsSpending: false,
+        affectsIncome: false,
+      },
+      {
+        amount: 2000,
+        payee: "Employer",
+        type: "income",
+        affectsIncome: true,
+        affectsSpending: false,
+      },
+    ];
+    const agg = aggregateFinance(mixed, "this month", { excludeTransfers: true });
+    expect(agg.spent).toBe(50);
+    expect(agg.income).toBe(2000);
+    expect(agg.expenseCount).toBe(1);
+    expect(agg.incomeCount).toBe(1);
+    expect(agg.classificationCounts?.credit_card_payment).toBe(2);
+    expect(agg.transfersExcluded).toBe(true);
+  });
+
+  it("restores sign-only totals when excludeTransfers is false", () => {
+    const mixed = [
+      { amount: -50, payee: "Publix" },
+      { amount: -900, payee: "CHASE CREDIT CRD EPAY", type: "expense" },
+    ];
+    const agg = aggregateFinance(mixed, null, { excludeTransfers: false });
+    expect(agg.spent).toBe(950);
+    expect(agg.expenseCount).toBe(2);
+    expect(agg.transfersExcluded).toBe(false);
+  });
 });

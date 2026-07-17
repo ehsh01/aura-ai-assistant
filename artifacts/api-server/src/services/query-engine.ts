@@ -54,8 +54,18 @@ function buildFinanceBreakdownAnswer(
   const primary = primaryFinanceFigure(finance, metric);
   const lines = finance.transactions
     .filter((t) => {
-      if (metric === "spent") return t.amount < 0;
-      if (metric === "income") return t.amount > 0;
+      if (metric === "spent") {
+        if (t.kind) return t.kind === "expense";
+        return t.amount < 0;
+      }
+      if (metric === "income") {
+        if (t.kind) return t.kind === "income";
+        return t.amount > 0;
+      }
+      // Net breakdown: omit transfers / CC payments when classified.
+      if (t.kind) {
+        return t.kind === "expense" || t.kind === "income" || t.kind === "refund";
+      }
       return true;
     })
     .map(

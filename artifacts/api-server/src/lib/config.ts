@@ -61,4 +61,9 @@ export const config = {
     process.env.APP_PUBLIC_URL?.trim() ||
     (isProduction ? "https://recall-app.net" : "http://localhost:5173")
   ).replace(/\/$/, ""),
+  /**
+   * When true, Ask/Connectors "spent" excludes transfers and credit-card payments.
+   * Set FINANCE_EXCLUDE_TRANSFERS=false to restore sign-only totals.
+   */
+  financeExcludeTransfers: process.env.FINANCE_EXCLUDE_TRANSFERS !== "false",
 } as const;

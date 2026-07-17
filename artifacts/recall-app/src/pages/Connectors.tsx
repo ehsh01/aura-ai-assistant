@@ -580,6 +580,10 @@ export function Connectors() {
                   <p className="mt-4 border-t border-white/10 pt-3 text-xs text-white/40">
                     {summary.data.evidenceNote}
                   </p>
+                  <p className="mt-2 text-xs text-white/35">
+                    Spent means purchases and bills only — bank transfers and credit-card
+                    payments are excluded so the same purchase is not counted twice.
+                  </p>
                 </>
               )}
             </div>
