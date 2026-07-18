@@ -153,6 +153,54 @@ export async function dismissWaitingOn(waitingItemId: string): Promise<{
   });
 }
 
+export type AttentionItemRecord = {
+  id: string;
+  title: string;
+  summary: string | null;
+  dueAt: string;
+  kind: "deadline" | "appointment" | "follow_up" | "other";
+  status: "open" | "seen" | "snoozed" | "dismissed" | "completed";
+  seenAt: string | null;
+  snoozedUntil: string | null;
+  evidenceText: string | null;
+  personId: string | null;
+  projectId: string | null;
+  confidence: number | null;
+  href: string;
+  sourceEntityType: string;
+  sourceEntityId: string;
+};
+
+export async function listAttention(): Promise<{ items: AttentionItemRecord[] }> {
+  return apiFetch("/attention");
+}
+
+export async function markAttentionSeen(id: string): Promise<AttentionItemRecord> {
+  return apiFetch(`/attention/${encodeURIComponent(id)}/seen`, { method: "POST" });
+}
+
+export async function dismissAttention(id: string): Promise<AttentionItemRecord> {
+  return apiFetch(`/attention/${encodeURIComponent(id)}/dismiss`, { method: "POST" });
+}
+
+export async function snoozeAttention(
+  id: string,
+  body: { preset?: string; until?: string } = { preset: "1d_before" },
+): Promise<AttentionItemRecord> {
+  return apiFetch(`/attention/${encodeURIComponent(id)}/snooze`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function completeAttention(id: string): Promise<AttentionItemRecord> {
+  return apiFetch(`/attention/${encodeURIComponent(id)}/complete`, { method: "POST" });
+}
+
+export async function scanAttention(): Promise<{ jobId: string; status: string }> {
+  return apiFetch("/attention/scan", { method: "POST" });
+}
+
 export type ActivityRecord = {
   id: string;
   action: string;

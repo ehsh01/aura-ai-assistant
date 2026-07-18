@@ -3,6 +3,7 @@ import { logger } from "../lib/logger";
 import { updateCaptureStatusForUser } from "./captures";
 import {
   JOB_TYPE_ATTACHMENT_EXTRACT,
+  JOB_TYPE_ATTENTION_SCAN,
   JOB_TYPE_CAPTURE_EXTRACTION,
   JOB_TYPE_DIGEST_REGEN,
   JOB_TYPE_ENEX_IMPORT,
@@ -69,6 +70,11 @@ const handlers: Record<string, JobHandler> = {
     }
     const { processDigestRegen } = await import("./digests");
     await processDigestRegen(job.userId, entityType, entityId);
+  },
+  [JOB_TYPE_ATTENTION_SCAN]: async (job) => {
+    const { processAttentionScanJob } = await import("./attention-extract");
+    const result = await processAttentionScanJob(job.userId);
+    logger.info({ userId: job.userId, ...result }, "Attention scan complete");
   },
 };
 

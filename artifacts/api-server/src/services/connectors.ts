@@ -1195,6 +1195,25 @@ export async function syncConnectorForUser(
       );
     }
 
+    if (conn.type === "google") {
+      // Promote calendar events + extract high-confidence Gmail deadlines.
+      void (async () => {
+        try {
+          const { enqueueJob, JOB_TYPE_ATTENTION_SCAN } = await import("./job-queue");
+          const { nudgeJobWorker } = await import("./job-worker");
+          await enqueueJob({
+            userId,
+            type: JOB_TYPE_ATTENTION_SCAN,
+            payload: { connectorId },
+            id: `attn-scan-${userId}-${connectorId}-${Math.floor(Date.now() / 300_000)}`,
+          });
+          nudgeJobWorker();
+        } catch {
+          /* non-fatal */
+        }
+      })();
+    }
+
     await getDb()
       .update(connectors)
       .set({

@@ -112,6 +112,10 @@ export function newUserRuleId(): string {
   return `rule-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function newAttentionId(): string {
+  return `attn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function newAskMessageId(): string {
   return `amsg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

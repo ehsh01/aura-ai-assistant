@@ -5,9 +5,11 @@ import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
   fetchHome,
   getWeeklyDigest,
+  listAttention,
   listHomeyAlerts,
   listPeople,
   listWaitingOn,
+  type AttentionItemRecord,
   type HomeBriefingResponse,
   type PersonRecord,
   type WaitingOnRecord,
@@ -63,6 +65,7 @@ export function Today() {
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [home, setHome] = useState<HomeBriefingResponse | null>(null);
   const [waiting, setWaiting] = useState<WaitingItem[]>([]);
+  const [attention, setAttention] = useState<AttentionItemRecord[]>([]);
   const [homeyAlerts, setHomeyAlerts] = useState<HomeyUrgencyAlert[]>([]);
   const [weeklyDigest, setWeeklyDigest] = useState<{
     weekOf: string;
@@ -93,6 +96,14 @@ export function Today() {
       });
   }, []);
 
+  const refreshAttention = useCallback(() => {
+    void listAttention()
+      .then((res) => setAttention(res.items ?? []))
+      .catch(() => {
+        /* keep last good list */
+      });
+  }, []);
+
   const refreshHome = useCallback(() => {
     void fetchHome()
       .then((next) => {
@@ -105,7 +116,8 @@ export function Today() {
         // Keep prior home snapshot; a failed refresh must not wipe dismiss-aware waiting.
       });
     refreshWaiting();
-  }, [refreshWaiting]);
+    refreshAttention();
+  }, [refreshWaiting, refreshAttention]);
 
   useEffect(() => {
     refreshHome();
@@ -201,8 +213,9 @@ export function Today() {
         waiting: filterDismissedWaiting(waiting),
         critical: briefing.critical,
         reminders: briefing.reminders,
+        attention,
       }),
-    [focus, waiting, briefing.critical, briefing.reminders],
+    [focus, waiting, briefing.critical, briefing.reminders, attention],
   );
 
   // Don't re-surface items already in the action queue.
@@ -328,7 +341,11 @@ export function Today() {
               </section>
             )}
 
-            <TodayActionQueue items={queue} onWaitingChanged={refreshHome} />
+            <TodayActionQueue
+              items={queue}
+              onWaitingChanged={refreshHome}
+              onAttentionChanged={refreshAttention}
+            />
 
             {dontForget.length > 0 && <DontForgetSection items={dontForget} />}
           </div>

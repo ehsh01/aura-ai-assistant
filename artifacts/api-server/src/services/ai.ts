@@ -268,6 +268,27 @@ export interface GenerateWorkNoteResponse extends AiDegradedMeta {
   emailReply: string;
 }
 
+export interface ExtractDeadlineRequest {
+  subject: string;
+  body: string;
+}
+
+export type ExtractDeadlineKind = "deadline" | "appointment" | "follow_up" | "other";
+
+export interface ExtractDeadlineItem {
+  hasCommitment: boolean;
+  title: string | null;
+  dueAt: string | null;
+  kind: ExtractDeadlineKind | null;
+  personName: string | null;
+  evidenceText: string | null;
+  confidence: number;
+}
+
+export interface ExtractDeadlineResponse extends AiDegradedMeta {
+  item: ExtractDeadlineItem;
+}
+
 // ---------------------------------------------------------------------------
 // Service interface
 // ---------------------------------------------------------------------------
@@ -287,6 +308,7 @@ export interface AiService {
     request: DashboardDigestRequest,
   ): Promise<DashboardDigestResponse>;
   classifyCapture(request: ClassifyCaptureRequest): Promise<ClassifyCaptureResponse>;
+  extractDeadline(request: ExtractDeadlineRequest): Promise<ExtractDeadlineResponse>;
   generateWorkNote(request: GenerateWorkNoteRequest): Promise<GenerateWorkNoteResponse>;
   answerQuery(request: AnswerQueryRequest): Promise<AnswerQueryResponse>;
   /**
@@ -542,6 +564,21 @@ class DisabledAiService implements AiService {
 
   async classifyCapture(request: ClassifyCaptureRequest): Promise<ClassifyCaptureResponse> {
     return { ...degradedMeta(), item: fallbackCaptureClassification(request) };
+  }
+
+  async extractDeadline(_request: ExtractDeadlineRequest): Promise<ExtractDeadlineResponse> {
+    return {
+      ...degradedMeta(),
+      item: {
+        hasCommitment: false,
+        title: null,
+        dueAt: null,
+        kind: null,
+        personName: null,
+        evidenceText: null,
+        confidence: 0,
+      },
+    };
   }
 
   async generateWorkNote(
@@ -1058,6 +1095,84 @@ class OpenAiService implements AiService {
       };
     } catch {
       return { degraded: true, degradedReason: "classification_parse_failed", item: fallback };
+    }
+  }
+
+  async extractDeadline(request: ExtractDeadlineRequest): Promise<ExtractDeadlineResponse> {
+    const { EXTRACT_DEADLINE_SYSTEM_PROMPT, EXTRACT_DEADLINE_PROMPT_VERSION } = await import(
+      "../prompts/extractDeadline.v1"
+    );
+    const today = currentDateContext();
+    const empty: ExtractDeadlineItem = {
+      hasCommitment: false,
+      title: null,
+      dueAt: null,
+      kind: null,
+      personName: null,
+      evidenceText: null,
+      confidence: 0,
+    };
+    try {
+      const completion = await this.client.chat.completions.create({
+        model: this.model,
+        messages: [
+          {
+            role: "system",
+            content:
+              EXTRACT_DEADLINE_SYSTEM_PROMPT +
+              ` Today is ${today.weekday}, ${today.iso}. Prompt: ${EXTRACT_DEADLINE_PROMPT_VERSION}.`,
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              today: today.iso,
+              subject: request.subject.slice(0, 400),
+              body: request.body.slice(0, 5000),
+            }),
+          },
+        ],
+        response_format: { type: "json_object" },
+        max_tokens: 350,
+      });
+      const raw = completion.choices[0]?.message.content ?? "{}";
+      const parsed = JSON.parse(raw) as Partial<ExtractDeadlineItem>;
+      const confidence =
+        typeof parsed.confidence === "number"
+          ? Math.max(0, Math.min(1, parsed.confidence))
+          : 0;
+      const kind =
+        parsed.kind === "deadline" ||
+        parsed.kind === "appointment" ||
+        parsed.kind === "follow_up" ||
+        parsed.kind === "other"
+          ? parsed.kind
+          : null;
+      let dueAt: string | null = null;
+      if (typeof parsed.dueAt === "string") {
+        const trimmed = parsed.dueAt.trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+          dueAt = normalizeDueDate(trimmed, today.iso);
+        } else {
+          const d = new Date(trimmed);
+          dueAt = Number.isNaN(d.getTime()) ? null : d.toISOString();
+          if (dueAt && dueAt.slice(0, 10) < today.iso) dueAt = null;
+        }
+      }
+      return {
+        degraded: false,
+        degradedReason: null,
+        item: {
+          hasCommitment: Boolean(parsed.hasCommitment) && Boolean(dueAt),
+          title: typeof parsed.title === "string" ? parsed.title : null,
+          dueAt,
+          kind,
+          personName: typeof parsed.personName === "string" ? parsed.personName : null,
+          evidenceText: typeof parsed.evidenceText === "string" ? parsed.evidenceText : null,
+          confidence,
+        },
+      };
+    } catch {
+      return { degraded: true, degradedReason: "deadline_extract_failed", item: empty };
     }
   }
 
