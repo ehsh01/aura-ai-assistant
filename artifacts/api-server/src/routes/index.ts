@@ -22,6 +22,7 @@ import memoryRouter from "./memory";
 import webhooksHomeyRouter from "./webhooks-homey";
 import userRulesRouter from "./user-rules";
 import attentionRouter from "./attention";
+import notificationSettingsRouter from "./notification-settings";
 import { requireAuth } from "../middleware/auth";
 import { aiRateLimiter } from "../middleware/security";
 
@@ -44,6 +45,7 @@ router.use(organizationsRouter);
 router.use(todayRouter);
 router.use(userRulesRouter);
 router.use(attentionRouter);
+router.use(notificationSettingsRouter);
 router.use(connectorsRouter);
 router.use(documentsRouter);
 router.use(memoryRouter);

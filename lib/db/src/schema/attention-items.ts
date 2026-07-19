@@ -34,6 +34,10 @@ export const attentionItems = pgTable(
     projectId: varchar("project_id", { length: 64 }),
     confidence: real("confidence"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    /** Set once the "coming up" SMS heads-up has been sent — never re-sent. */
+    smsHeadsUpSentAt: timestamp("sms_heads_up_sent_at", { withTimezone: true }),
+    /** Set once the "due now" SMS has been sent — never re-sent. */
+    smsDueSentAt: timestamp("sms_due_sent_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

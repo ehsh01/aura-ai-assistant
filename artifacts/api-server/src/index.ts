@@ -5,12 +5,14 @@ import { assertSecretEncryptionConfigured } from "./lib/secret-box";
 import { startAttachmentTextBackfill } from "./services/attachment-text-extract";
 import { startFinanceAutoSync } from "./services/finance-auto-sync";
 import { startJobWorker } from "./services/job-worker";
+import { startSmsReminderSweep } from "./services/sms-reminders";
 
 /**
  * RECALL_ROLE splits responsibilities across PM2 processes:
  *  - "api" (default): serves HTTP. In production it sets
  *    RECALL_DISABLE_INLINE_WORKER=1 so background work runs only in the worker.
- *  - "worker": runs job queue + finance auto-sync + attachment backfill, no HTTP.
+ *  - "worker": runs job queue + finance auto-sync + attachment backfill + SMS
+ *    reminder sweep, no HTTP.
  * With neither env set (local dev / single process) the API also runs background
  * services inline, preserving prior behavior.
  */
@@ -20,6 +22,7 @@ function startBackgroundServices(): void {
   startFinanceAutoSync();
   startAttachmentTextBackfill();
   startJobWorker();
+  startSmsReminderSweep();
 }
 
 assertSecretEncryptionConfigured(config.isProduction);
