@@ -1,8 +1,6 @@
 import React from "react";
 import { Link } from "wouter";
 import {
-  Activity,
-  BookMarked,
   Brain,
   Cable,
   CheckSquare,
@@ -11,16 +9,13 @@ import {
   Home,
   Inbox,
   LayoutGrid,
-  Library,
   LogOut,
   Menu,
   Plus,
   Search,
   Settings,
-  Sparkles,
   Users,
   Car,
-  Building2,
 } from "lucide-react";
 import {
   Sheet,
@@ -162,7 +157,6 @@ type MobileMoreSheetProps = {
   userInitial: string;
   onCapture: () => void;
   onLogout: () => void;
-  notebookLinks: Array<{ href: string; label: string; count?: number }>;
 };
 
 export function MobileMoreSheet({
@@ -174,7 +168,6 @@ export function MobileMoreSheet({
   userInitial,
   onCapture,
   onLogout,
-  notebookLinks,
 }: MobileMoreSheetProps) {
   const close = () => onOpenChange(false);
 
@@ -199,10 +192,6 @@ export function MobileMoreSheet({
           <p className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
             Ask
           </p>
-          <Link href="/ask" onClick={close} className={linkClass(location === "/ask")}>
-            <Sparkles size={18} />
-            <span className="flex-1 text-sm font-medium">Threads</span>
-          </Link>
           <Link href="/today" onClick={close} className={linkClass(location === "/today")}>
             <LayoutGrid size={18} />
             <span className="flex-1 text-sm font-medium">Today</span>
@@ -215,17 +204,9 @@ export function MobileMoreSheet({
             <Search size={18} />
             <span className="flex-1 text-sm font-medium">Notes</span>
           </Link>
-          <Link href="/notebooks" onClick={close} className={linkClass(location === "/notebooks")}>
-            <Library size={18} />
-            <span className="flex-1 text-sm font-medium">Notebooks</span>
-          </Link>
           <Link href="/memory" onClick={close} className={linkClass(location === "/memory")}>
             <Brain size={18} />
             <span className="flex-1 text-sm font-medium">Life Memory</span>
-          </Link>
-          <Link href="/knowledge" onClick={close} className={linkClass(location === "/knowledge")}>
-            <BookMarked size={18} />
-            <span className="flex-1 text-sm font-medium">Knowledge</span>
           </Link>
           <Link href="/documents" onClick={close} className={linkClass(location === "/documents")}>
             <FileText size={18} />
@@ -239,10 +220,6 @@ export function MobileMoreSheet({
             <Car size={18} />
             <span className="flex-1 text-sm font-medium">Home & vehicles</span>
           </Link>
-          <Link href="/organizations" onClick={close} className={linkClass(location === "/organizations")}>
-            <Building2 size={18} />
-            <span className="flex-1 text-sm font-medium">Organizations</span>
-          </Link>
           <Link href="/projects" onClick={close} className={linkClass(location === "/projects" || location.startsWith("/projects/"))}>
             <FolderKanban size={18} />
             <span className="flex-1 text-sm font-medium">Projects</span>
@@ -255,10 +232,6 @@ export function MobileMoreSheet({
           <p className="px-1 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
             System
           </p>
-          <Link href="/activity" onClick={close} className={linkClass(location === "/activity")}>
-            <Activity size={18} />
-            <span className="flex-1 text-sm font-medium">Activity</span>
-          </Link>
           <Link href="/connectors" onClick={close} className={linkClass(location === "/connectors")}>
             <Cable size={18} />
             <span className="flex-1 text-sm font-medium">Connectors</span>
@@ -279,30 +252,6 @@ export function MobileMoreSheet({
             <span className="flex-1 text-sm font-medium">Quick capture</span>
           </button>
         </div>
-
-        {notebookLinks.length > 0 && (
-          <div className="mt-6">
-            <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-white/30">
-              Notebooks
-            </p>
-            <div className="space-y-1 max-h-40 overflow-y-auto recall-scrollbar">
-              {notebookLinks.map((nb) => (
-                <Link
-                  key={nb.href}
-                  href={nb.href}
-                  onClick={close}
-                  className={linkClass(location === "/notes" && false)}
-                >
-                  <Library size={16} className="opacity-60" />
-                  <span className="flex-1 truncate text-sm">{nb.label}</span>
-                  {nb.count !== undefined && (
-                    <span className="text-xs text-white/30 tabular-nums">{nb.count}</span>
-                  )}
-                </Link>
-              ))}
-            </div>
-          </div>
-        )}
 
         <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
           <div className="flex items-center gap-3">

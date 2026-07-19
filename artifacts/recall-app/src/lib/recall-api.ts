@@ -1082,6 +1082,35 @@ export async function deleteUserRule(ruleId: string): Promise<void> {
   await apiFetch(`/user-rules/${encodeURIComponent(ruleId)}`, { method: "DELETE" });
 }
 
+export type NotificationSettings = {
+  phoneNumber: string | null;
+  smsRemindersEnabled: boolean;
+  smsLeadMinutes: number;
+  /** False when the server has no Twilio credentials configured — texts won't actually send yet. */
+  smsConfigured: boolean;
+};
+
+export async function getNotificationSettings(): Promise<NotificationSettings> {
+  return apiFetch("/settings/notifications");
+}
+
+export async function updateNotificationSettings(
+  input: Partial<{
+    phoneNumber: string | null;
+    smsRemindersEnabled: boolean;
+    smsLeadMinutes: number;
+  }>,
+): Promise<NotificationSettings> {
+  return apiFetch("/settings/notifications", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function sendTestSmsReminder(): Promise<{ ok: boolean }> {
+  return apiFetch("/settings/notifications/test", { method: "POST" });
+}
+
 export type AskThreadRecord = {
   id: string;
   title: string;
@@ -1279,50 +1308,10 @@ export async function createDocument(input: {
   return apiFetch("/documents", { method: "POST", body: JSON.stringify(input) });
 }
 
-export type KnowledgeRecord = {
-  id: string;
-  title: string;
-  content: string;
-  itemType: string;
-  tags: string[];
-  projectId: string | null;
-  primaryPersonId: string | null;
-  primaryPersonName: string | null;
-  sourceCaptureId: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export async function listKnowledge(): Promise<{ items: KnowledgeRecord[] }> {
-  return apiFetch("/knowledge");
-}
-
-export async function createKnowledge(input: {
-  title: string;
-  content?: string;
-  itemType?: string;
-  tags?: string[];
-  primaryPersonId?: string | null;
-}): Promise<KnowledgeRecord> {
-  return apiFetch("/knowledge", { method: "POST", body: JSON.stringify(input) });
-}
-
-export async function updateKnowledge(
-  itemId: string,
-  input: {
-    title?: string;
-    content?: string;
-    itemType?: string;
-    tags?: string[];
-    projectId?: string | null;
-    primaryPersonId?: string | null;
-  },
-): Promise<KnowledgeRecord> {
-  return apiFetch(`/knowledge/${encodeURIComponent(itemId)}`, {
-    method: "PATCH",
-    body: JSON.stringify(input),
-  });
-}
+// Note: the standalone Knowledge browse/create UI was folded into Notes
+// (Sidebar Consolidation) — knowledge items are still created server-side by
+// the document-extraction pipeline, but the frontend no longer calls
+// /knowledge directly. See lib/db/migrations/0025_migrate_knowledge_to_notes.sql.
 
 export const LIFE_MEMORY_DOMAINS = [
   "family",

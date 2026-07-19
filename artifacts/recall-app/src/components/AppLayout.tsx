@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { BookOpen, Inbox, Library, Plus, FolderKanban, Sparkles, FileText, BookMarked, Activity, Brain, Car, Building2, Settings } from "lucide-react";
+import { Inbox, Plus, FolderKanban, FileText, Brain, Car, Settings } from "lucide-react";
 import { CaptureModal } from "@/components/CaptureModal";
 import { MobileBottomNav, MobileMoreSheet } from "@/components/MobileShell";
 import { OfflineQueueBanner } from "@/components/OfflineQueueBanner";
@@ -26,19 +26,6 @@ type NavEntry = {
   count?: number;
   nested?: boolean;
 };
-
-type NavGroup = {
-  key: string;
-  href: string;
-  label: string;
-  icon: React.ReactNode;
-  isActive: boolean;
-  count?: number;
-  children: NavEntry[];
-};
-
-const notebooksIcon = <Library width={18} height={18} strokeWidth={1.8} />;
-const notebookItemIcon = <BookOpen width={18} height={18} strokeWidth={1.8} />;
 
 type NavSection = "ask" | "capture" | "organize" | "system";
 
@@ -67,12 +54,6 @@ const staticNavItems: Array<{
         <rect x="14" y="14" width="7" height="7" rx="1.5"/>
       </svg>
     ),
-  },
-  {
-    id: "/ask",
-    label: "Threads",
-    section: "ask",
-    icon: <Sparkles width={18} height={18} strokeWidth={1.8} />,
   },
   {
     id: "/today",
@@ -106,22 +87,10 @@ const staticNavItems: Array<{
     ),
   },
   {
-    id: "/notebooks",
-    label: "Notebooks",
-    section: "organize",
-    icon: notebooksIcon,
-  },
-  {
     id: "/memory",
     label: "Life Memory",
     section: "organize",
     icon: <Brain width={18} height={18} strokeWidth={1.8} />,
-  },
-  {
-    id: "/knowledge",
-    label: "Knowledge",
-    section: "organize",
-    icon: <BookMarked width={18} height={18} strokeWidth={1.8} />,
   },
   {
     id: "/documents",
@@ -149,12 +118,6 @@ const staticNavItems: Array<{
     icon: <Car width={18} height={18} strokeWidth={1.8} />,
   },
   {
-    id: "/organizations",
-    label: "Organizations",
-    section: "organize",
-    icon: <Building2 width={18} height={18} strokeWidth={1.8} />,
-  },
-  {
     id: "/projects",
     label: "Projects",
     section: "organize",
@@ -170,12 +133,6 @@ const staticNavItems: Array<{
         <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
       </svg>
     ),
-  },
-  {
-    id: "/activity",
-    label: "Activity",
-    section: "system",
-    icon: <Activity width={18} height={18} strokeWidth={1.8} />,
   },
   {
     id: "/connectors",
@@ -253,11 +210,10 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
   const sidebarSearchRef = useRef<HTMLInputElement>(null);
   const [location, navigate] = useLocation();
   const { user, logout } = useAuth();
-  const { notebooks, notes, isReady } = useRecallData();
+  const { notes } = useRecallData();
   const initial = user?.name?.charAt(0).toUpperCase() ?? "?";
   const onNotesPage = location === "/notes";
   const activeNotebook = onNotesPage ? readSearchParam("notebook") ?? "all" : "all";
-  const [notebooksExpanded, setNotebooksExpanded] = useState(false);
   const hideRail = immersive && !railOpen;
 
   const openRail = () => {
@@ -283,12 +239,6 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
     });
   }, [user?.id]);
 
-  React.useEffect(() => {
-    if (location === "/notebooks" || (onNotesPage && activeNotebook !== "all")) {
-      setNotebooksExpanded(true);
-    }
-  }, [location, onNotesPage, activeNotebook]);
-
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -312,7 +262,6 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
   const navItems: Array<
     | { type: "section"; key: string; label: string }
     | { type: "entry"; entry: NavEntry }
-    | { type: "group"; group: NavGroup }
   > = [];
 
   let lastSection: NavSection | null = null;
@@ -341,32 +290,6 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
       continue;
     }
 
-    if (item.id === "/notebooks") {
-      navItems.push({
-        type: "group",
-        group: {
-          key: "/notebooks",
-          href: "/notebooks",
-          label: "Notebooks",
-          icon: item.icon,
-          isActive: location === "/notebooks",
-          count: isReady ? notebooks.length : undefined,
-          children: isReady
-            ? notebooks.map((notebook) => ({
-                key: notebook.id,
-                href: notesPath({ notebook: notebook.id }),
-                label: notebook.name,
-                icon: notebookItemIcon,
-                isActive: onNotesPage && activeNotebook === notebook.id,
-                count: notebook.noteCount,
-                nested: true,
-              }))
-            : [],
-        },
-      });
-      continue;
-    }
-
     navItems.push({
       type: "entry",
       entry: {
@@ -383,13 +306,10 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
   }
 
   const moreActive =
-    location === "/notebooks" ||
     location === "/tasks" ||
     location === "/today" ||
     location === "/canvas" ||
-    location === "/ask" ||
     location === "/documents" ||
-    location === "/knowledge" ||
     location === "/memory" ||
     location === "/people" ||
     location === "/vehicles" ||
@@ -398,14 +318,6 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
     location === "/connectors" ||
     location === "/projects" ||
     location.startsWith("/projects/");
-
-  const mobileNotebookLinks = isReady
-    ? notebooks.slice(0, 12).map((notebook) => ({
-        href: notesPath({ notebook: notebook.id }),
-        label: notebook.name,
-        count: notebook.noteCount,
-      }))
-    : [];
 
   const sidebarWidth = collapsed ? 64 : 220;
 
@@ -493,79 +405,18 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
               );
             }
 
-            if (item.type === "entry") {
-              const entry = item.entry;
-              return (
-                <SidebarNavButton
-                  key={entry.key}
-                  href={entry.href}
-                  label={entry.label}
-                  icon={entry.icon}
-                  active={entry.isActive}
-                  collapsed={collapsed}
-                  count={entry.count}
-                  nested={entry.nested}
-                />
-              );
-            }
-
-            const group = item.group;
+            const entry = item.entry;
             return (
-              <div key={group.key}>
-                <div className="flex items-center gap-0.5">
-                  <SidebarNavButton
-                    href={group.href}
-                    label={group.label}
-                    icon={group.icon}
-                    active={group.isActive}
-                    collapsed={collapsed}
-                    count={group.count}
-                  />
-                  {!collapsed && group.children.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setNotebooksExpanded((open) => !open)}
-                      className="flex-shrink-0 p-2 rounded-lg text-white/25 hover:text-white/50 transition-colors"
-                      aria-expanded={notebooksExpanded}
-                      aria-label={notebooksExpanded ? "Collapse notebooks" : "Expand notebooks"}
-                    >
-                      <svg
-                        width="12"
-                        height="12"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        style={{
-                          transform: notebooksExpanded ? "rotate(90deg)" : "rotate(0deg)",
-                          transition: "transform 150ms ease",
-                        }}
-                      >
-                        <polyline points="9 18 15 12 9 6" />
-                      </svg>
-                    </button>
-                  )}
-                </div>
-
-                {!collapsed && notebooksExpanded && (
-                  <div className="mt-0.5 space-y-0.5">
-                    {group.children.map((entry) => (
-                      <SidebarNavButton
-                        key={entry.key}
-                        href={entry.href}
-                        label={entry.label}
-                        icon={entry.icon}
-                        active={entry.isActive}
-                        collapsed={collapsed}
-                        count={entry.count}
-                        nested
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
+              <SidebarNavButton
+                key={entry.key}
+                href={entry.href}
+                label={entry.label}
+                icon={entry.icon}
+                active={entry.isActive}
+                collapsed={collapsed}
+                count={entry.count}
+                nested={entry.nested}
+              />
             );
           })}
         </nav>
@@ -662,7 +513,6 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
         userInitial={initial}
         onCapture={() => setCaptureOpen(true)}
         onLogout={logout}
-        notebookLinks={mobileNotebookLinks}
       />
       <CaptureModal open={captureOpen} onClose={() => setCaptureOpen(false)} />
     </div>

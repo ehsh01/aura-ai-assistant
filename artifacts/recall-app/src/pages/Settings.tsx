@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Settings as SettingsIcon, Shield, Users } from "lucide-react";
+import { Link } from "wouter";
+import { Activity, MessageSquare, Settings as SettingsIcon, Shield, Users } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -9,10 +10,14 @@ import {
   changePassword,
   createUserRule,
   deleteUserRule,
+  getNotificationSettings,
   listAdminUsers,
   listUserRules,
+  sendTestSmsReminder,
+  updateNotificationSettings,
   updateUserRule,
   type AdminUserRecord,
+  type NotificationSettings,
   type UserRuleRecord,
 } from "@/lib/recall-api";
 import { toast } from "@/hooks/use-toast";
@@ -31,6 +36,13 @@ export function Settings() {
   const [rules, setRules] = useState<UserRuleRecord[]>([]);
   const [newRule, setNewRule] = useState("");
   const [savingRule, setSavingRule] = useState(false);
+
+  const [notif, setNotif] = useState<NotificationSettings | null>(null);
+  const [notifPhone, setNotifPhone] = useState("");
+  const [notifEnabled, setNotifEnabled] = useState(false);
+  const [notifLeadMinutes, setNotifLeadMinutes] = useState(30);
+  const [savingNotif, setSavingNotif] = useState(false);
+  const [testingNotif, setTestingNotif] = useState(false);
 
   const loadUsers = useCallback(async () => {
     if (!user?.isAdmin) return;
@@ -58,6 +70,56 @@ export function Settings() {
       .then((r) => setRules(r.rules))
       .catch(() => setRules([]));
   }, []);
+
+  useEffect(() => {
+    void getNotificationSettings()
+      .then((s) => {
+        setNotif(s);
+        setNotifPhone(s.phoneNumber ?? "");
+        setNotifEnabled(s.smsRemindersEnabled);
+        setNotifLeadMinutes(s.smsLeadMinutes);
+      })
+      .catch(() => setNotif(null));
+  }, []);
+
+  const onSaveNotifications = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingNotif(true);
+    try {
+      const updated = await updateNotificationSettings({
+        phoneNumber: notifPhone.trim() || null,
+        smsRemindersEnabled: notifEnabled,
+        smsLeadMinutes: notifLeadMinutes,
+      });
+      setNotif(updated);
+      setNotifPhone(updated.phoneNumber ?? "");
+      toast({ title: "Text reminders updated" });
+    } catch (err) {
+      toast({
+        title: "Could not save",
+        description: err instanceof Error ? err.message : "Try again",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingNotif(false);
+    }
+  };
+
+  const onSendTestText = async () => {
+    setTestingNotif(true);
+    try {
+      await sendTestSmsReminder();
+      toast({ title: "Test text sent", description: "It should arrive shortly." });
+    } catch (err) {
+      toast({
+        title: "Could not send test text",
+        description: err instanceof Error ? err.message : "Try again",
+        variant: "destructive",
+      });
+    } finally {
+      setTestingNotif(false);
+    }
+  };
 
   const onChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,6 +174,22 @@ export function Settings() {
             {user?.isAdmin ? " · Admin" : ""}
           </p>
         </header>
+
+        <Link
+          href="/activity"
+          className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4 no-underline transition-colors hover:bg-white/[0.05] md:px-6"
+        >
+          <div className="flex items-center gap-3">
+            <Activity size={18} className="text-indigo-300" />
+            <div>
+              <p className="text-sm font-medium text-white">Activity log</p>
+              <p className="text-xs text-white/45">
+                See everything Recall has captured, changed, or acted on.
+              </p>
+            </div>
+          </div>
+          <span className="text-xs text-white/30">View →</span>
+        </Link>
 
         <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 md:p-6">
           <h2 className="text-lg font-medium text-white">Change password</h2>
@@ -244,6 +322,76 @@ export function Settings() {
             >
               Add
             </button>
+          </form>
+        </section>
+
+        <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 md:p-6">
+          <div className="flex items-center gap-2">
+            <MessageSquare size={18} className="text-indigo-300" />
+            <h2 className="text-lg font-medium text-white">Text message reminders</h2>
+          </div>
+          <p className="mt-1 text-sm text-white/45">
+            Get a text when a reminder is coming up and again when it's due — no need to have
+            the app open.
+          </p>
+
+          {notif && !notif.smsConfigured && (
+            <p className="mt-3 rounded-xl border border-amber-400/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-200/80">
+              Texting isn't turned on for this Recall deployment yet (Twilio isn't configured on
+              the server). You can still save your number and preferences below.
+            </p>
+          )}
+
+          <form onSubmit={onSaveNotifications} className="mt-5 max-w-md space-y-3">
+            <div>
+              <label className="mb-1 block text-xs text-white/50">Phone number</label>
+              <input
+                type="tel"
+                placeholder="(555) 123-4567"
+                value={notifPhone}
+                onChange={(e) => setNotifPhone(e.target.value)}
+                className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-2.5 text-sm outline-none focus:border-indigo-500/50"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-white/50">
+                Send a heads-up this many minutes before it's due
+              </label>
+              <input
+                type="number"
+                min={5}
+                max={1440}
+                value={notifLeadMinutes}
+                onChange={(e) => setNotifLeadMinutes(Number(e.target.value) || 30)}
+                className="w-32 rounded-xl border border-white/10 bg-black/30 px-4 py-2.5 text-sm outline-none focus:border-indigo-500/50"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm text-white/70">
+              <input
+                type="checkbox"
+                checked={notifEnabled}
+                onChange={(e) => setNotifEnabled(e.target.checked)}
+                className="h-4 w-4 rounded border-white/20 bg-black/30 accent-indigo-500"
+              />
+              Text me reminders
+            </label>
+            <div className="flex flex-wrap gap-2 pt-1">
+              <button
+                type="submit"
+                disabled={savingNotif}
+                className="rounded-xl bg-indigo-500 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-40"
+              >
+                {savingNotif ? "Saving…" : "Save"}
+              </button>
+              <button
+                type="button"
+                disabled={testingNotif || !notif?.phoneNumber}
+                onClick={() => void onSendTestText()}
+                className="rounded-xl border border-white/10 px-4 py-2.5 text-sm text-white/80 hover:bg-white/5 disabled:opacity-40"
+              >
+                {testingNotif ? "Sending…" : "Send test text"}
+              </button>
+            </div>
           </form>
         </section>
 

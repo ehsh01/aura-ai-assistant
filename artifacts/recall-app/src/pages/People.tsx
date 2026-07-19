@@ -28,7 +28,8 @@ import {
 import { invalidatePeopleCache } from "@/components/PersonTagLink";
 import { filterDismissedWaiting, rememberDismissedWaitingId } from "@/lib/waiting-dismissals";
 import { toast } from "@/hooks/use-toast";
-import { Merge, Pencil } from "lucide-react";
+import { Building2, Merge, Pencil, Users } from "lucide-react";
+import { OrganizationsPanel } from "@/components/OrganizationsPanel";
 
 type OpenTask = { id: string; title: string; time: string | null };
 type TaggedNote = { id: string; title: string; preview: string };
@@ -51,6 +52,7 @@ function waitingForPerson(
 
 export function People() {
   const [location, navigate] = useLocation();
+  const [tab, setTab] = useState<"people" | "organizations">("people");
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [waiting, setWaiting] = useState<WaitingOnRecord[]>([]);
   const [openByPerson, setOpenByPerson] = useState<Record<string, OpenTask[]>>({});
@@ -323,10 +325,24 @@ export function People() {
       })
     : people;
 
+  if (tab === "organizations") {
+    return (
+      <AppLayout>
+        <div className="flex h-full flex-col bg-[#0a0a0f] text-white">
+          <PeopleTabBar tab={tab} onChange={setTab} padded />
+          <div className="flex-1 overflow-hidden">
+            <OrganizationsPanel />
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
+
   return (
     <AppLayout>
       <div className="h-full overflow-y-auto bg-[#0a0a0f] p-4 md:p-8 text-white">
         <div className="mx-auto max-w-4xl">
+          <PeopleTabBar tab={tab} onChange={setTab} />
           <p className="text-sm uppercase tracking-[0.3em] text-indigo-300/70">Network</p>
           <h1 className="mt-2 text-3xl font-semibold">People</h1>
           <p className="mt-2 text-white/50">
@@ -692,5 +708,39 @@ export function People() {
         </div>
       </div>
     </AppLayout>
+  );
+}
+
+function PeopleTabBar({
+  tab,
+  onChange,
+  padded = false,
+}: {
+  tab: "people" | "organizations";
+  onChange: (tab: "people" | "organizations") => void;
+  /** Standalone padding when not already inside a padded container. */
+  padded?: boolean;
+}) {
+  const tabClass = (active: boolean) =>
+    `inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${
+      active
+        ? "bg-indigo-500/20 text-indigo-200 border border-indigo-500/30"
+        : "text-white/50 border border-transparent hover:bg-white/5 hover:text-white/80"
+    }`;
+  return (
+    <div className={`mb-4 flex items-center gap-2 ${padded ? "px-4 pt-4 md:px-8 md:pt-6" : ""}`}>
+      <button type="button" onClick={() => onChange("people")} className={tabClass(tab === "people")}>
+        <Users size={14} />
+        People
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("organizations")}
+        className={tabClass(tab === "organizations")}
+      >
+        <Building2 size={14} />
+        Organizations
+      </button>
+    </div>
   );
 }

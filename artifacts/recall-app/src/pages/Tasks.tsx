@@ -11,7 +11,6 @@ import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
 import {
   askPath,
-  knowledgePath,
   notesPath,
   peoplePath,
   readSearchParam,
@@ -327,15 +326,6 @@ export function Tasks() {
                       className="rounded-lg px-2 py-1 text-xs text-sky-200 hover:bg-sky-500/20"
                     >
                       Notes
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        navigate(knowledgePath({ person: personFilterName }))
-                      }
-                      className="rounded-lg px-2 py-1 text-xs text-sky-200 hover:bg-sky-500/20"
-                    >
-                      Knowledge
                     </button>
                   </>
                 )}

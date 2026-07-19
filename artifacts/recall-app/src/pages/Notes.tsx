@@ -18,7 +18,6 @@ import {
 } from "@/lib/recall-context";
 import {
   askPath,
-  knowledgePath,
   notesPath,
   peoplePath,
   readSearchParam,
@@ -32,7 +31,7 @@ import {
   resolvePersonIdByName,
 } from "@/components/PersonTagLink";
 import { PersonTagger } from "@/components/PersonTagger";
-import { Download, Loader2, BookOpen, ChevronDown, Sparkles, ChevronLeft, X } from "lucide-react";
+import { Download, Loader2, BookOpen, ChevronDown, Library, Sparkles, ChevronLeft, X } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 
 function notebookIdFromFilter(filter: NotebookFilter): string | null {
@@ -405,6 +404,35 @@ export function Notes() {
               />
             </div>
 
+            <div className="relative flex items-center">
+              <Library className="w-3.5 h-3.5 text-white/30 absolute left-3 pointer-events-none" />
+              <select
+                value={activeNotebook}
+                onChange={(e) => {
+                  const next = e.target.value as NotebookFilter;
+                  setActiveNotebook(next);
+                  navigate(
+                    notesPath({
+                      notebook: next === "all" ? undefined : next,
+                      q: searchQuery || undefined,
+                      person: personFilter || undefined,
+                    }),
+                  );
+                }}
+                className="w-full appearance-none pl-8 pr-8 py-2 rounded-xl text-sm bg-white/[0.03] border border-white/[0.08] text-white/70 hover:bg-white/[0.06] focus:outline-none focus:border-indigo-500/40 transition-colors cursor-pointer truncate"
+                title="Filter by notebook"
+              >
+                <option value="all">All notebooks</option>
+                <option value="unfiled">Unfiled ({unfiledCount})</option>
+                {notebooks.map((nb) => (
+                  <option key={nb.id} value={nb.id}>
+                    {nb.name} ({nb.noteCount})
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="w-3.5 h-3.5 text-white/30 absolute right-2.5 pointer-events-none" />
+            </div>
+
             {personFilter && (
               <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-sky-500/25 bg-sky-500/10 px-3 py-2 text-xs text-sky-100">
                 <span>
@@ -435,13 +463,6 @@ export function Notes() {
                     className="rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
                   >
                     Today
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => navigate(knowledgePath({ person: personFilter }))}
-                    className="rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
-                  >
-                    Knowledge
                   </button>
                   <button
                     type="button"

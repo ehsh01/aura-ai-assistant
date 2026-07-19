@@ -9,7 +9,6 @@ import { RequireAuth } from "@/components/RequireAuth";
 import { Dashboard } from "@/pages/Dashboard";
 import { Today } from "@/pages/Today";
 import { Notes } from "@/pages/Notes";
-import { Notebooks } from "@/pages/Notebooks";
 import { Tasks } from "@/pages/Tasks";
 import { Canvas } from "@/pages/Canvas";
 import { Inbox } from "@/pages/Inbox";
@@ -19,9 +18,7 @@ import { Organizations } from "@/pages/Organizations";
 import { Connectors } from "@/pages/Connectors";
 import { Projects } from "@/pages/Projects";
 import { ProjectDetail } from "@/pages/ProjectDetail";
-import { Ask } from "@/pages/Ask";
 import { Documents } from "@/pages/Documents";
-import { Knowledge } from "@/pages/Knowledge";
 import { Memory } from "@/pages/Memory";
 import { Activity } from "@/pages/Activity";
 import { Settings } from "@/pages/Settings";
@@ -61,6 +58,16 @@ function RedirectHome() {
   return null;
 }
 
+/** Notebooks folded into Notes — old /notebooks bookmarks land on the Notes list. */
+function RedirectToNotes() {
+  const [, setLocation] = useLocation();
+  useEffect(() => {
+    normalizeBrowserPath();
+    setLocation("/notes", { replace: true });
+  }, [setLocation]);
+  return null;
+}
+
 function Router() {
   return (
     <Switch>
@@ -80,12 +87,14 @@ function AuthedRoutes() {
       <Switch>
         <Route path="/" component={Dashboard} />
         <Route path="/today" component={Today} />
-        <Route path="/ask" component={Ask} />
+        {/* Threads folded into Home — old /ask deep links (askPath()) still land on the same oracle UI. */}
+        <Route path="/ask" component={Dashboard} />
         <Route path="/notes" component={Notes} />
-        <Route path="/notebooks" component={Notebooks} />
+        <Route path="/notebooks" component={RedirectToNotes} />
         <Route path="/inbox" component={Inbox} />
         <Route path="/documents" component={Documents} />
-        <Route path="/knowledge" component={Knowledge} />
+        {/* Knowledge folded into Notes — old /knowledge bookmarks land there too. */}
+        <Route path="/knowledge" component={RedirectToNotes} />
         <Route path="/memory" component={Memory} />
         <Route path="/people" component={People} />
         <Route path="/vehicles" component={Vehicles} />

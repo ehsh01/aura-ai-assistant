@@ -4,7 +4,6 @@ import { Sparkles } from "lucide-react";
 import type { WaitingOnRecord } from "@/lib/recall-api";
 import {
   askPath,
-  knowledgePath,
   memoryPath,
   notesPath,
   tasksPath,
@@ -141,7 +140,7 @@ export function PersonContextCard({
             {taggedKnowledge.map((k) => (
               <li key={k.id}>
                 <Link
-                  href={knowledgePath({ knowledgeId: k.id })}
+                  href={notesPath({ noteId: k.id })}
                   className="block truncate text-sm text-indigo-200 no-underline hover:underline"
                 >
                   {k.title}
@@ -151,10 +150,10 @@ export function PersonContextCard({
             ))}
           </ul>
           <Link
-            href={knowledgePath({ person: displayName })}
+            href={notesPath({ person: displayName })}
             className="mt-2 inline-block text-xs text-sky-300 no-underline hover:underline"
           >
-            View all knowledge for {first}
+            View all notes for {first}
           </Link>
         </ContextSection>
       )}

@@ -98,14 +98,6 @@ export function documentsPath(opts?: { documentId?: string }): string {
   return q ? `/documents?${q}` : "/documents";
 }
 
-export function knowledgePath(opts?: { knowledgeId?: string; person?: string }): string {
-  const params = new URLSearchParams();
-  if (opts?.knowledgeId) params.set("item", opts.knowledgeId);
-  if (opts?.person?.trim()) params.set("person", opts.person.trim());
-  const q = params.toString();
-  return q ? `/knowledge?${q}` : "/knowledge";
-}
-
 export function memoryPath(opts?: { memoryId?: string; domain?: string }): string {
   const params = new URLSearchParams();
   if (opts?.memoryId) params.set("memory", opts.memoryId);
@@ -126,7 +118,8 @@ export function entityPath(entityType: string, entityId: string): string | null 
     case "document":
       return documentsPath({ documentId: entityId });
     case "knowledge":
-      return knowledgePath({ knowledgeId: entityId });
+      // Knowledge items are migrated into notes (same id) — Sidebar consolidation.
+      return notesPath({ noteId: entityId });
     case "memory":
       return memoryPath({ memoryId: entityId });
     case "vehicle":
