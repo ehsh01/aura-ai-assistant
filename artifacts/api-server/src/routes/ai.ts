@@ -21,7 +21,14 @@ import { searchNotesForUser } from "../services/notes";
 import { pickBestNoteToOpen, userWantsNoteOpened } from "../lib/note-open-intent";
 import { z } from "zod";
 import { queryRecallForUser } from "../services/query-engine";
-import { getExtractionJobStatus } from "../services/capture-pipeline";
+import { getExtractionJobStatus, ingestCaptureForUser } from "../services/capture-pipeline";
+import { routeIntentForText } from "../services/intent-router";
+import { writeAuditLog } from "../services/audit";
+import {
+  planActionsForText,
+  confirmProposedAction,
+  type ProposedActionType,
+} from "../services/action-orchestrator";
 import { OPENAI_TTS_VOICES, synthesizeSpeech } from "../services/tts";
 import {
   createAskThreadForUser,
@@ -276,6 +283,158 @@ router.post("/ai/query/stream", async (req, res, next) => {
       message: err instanceof Error ? err.message : "Ask failed",
     });
     res.end();
+  }
+});
+
+const AiClassifyBody = z.object({
+  text: z.string().min(1).max(8000),
+});
+
+const AiSubmitBody = z.object({
+  text: z.string().min(1).max(8000),
+  threadId: z.string().min(1).max(64).optional().nullable(),
+});
+
+// Classification only — never performs a side effect. Lets the client preview
+// how an input would be routed (question vs. capture) before submitting.
+router.post("/ai/intent/classify", async (req, res, next) => {
+  try {
+    const body = AiClassifyBody.parse(req.body);
+    const decision = await routeIntentForText(body.text);
+    await writeAuditLog({
+      userId: req.user!.id,
+      action: "ask_input_classified",
+      metadata: {
+        route: decision.route,
+        primaryIntent: decision.result.primaryIntent,
+        confidence: decision.result.confidence,
+        source: decision.source,
+        degraded: decision.degraded,
+        requiresConfirmation: decision.result.requiresConfirmation,
+      },
+    });
+    res.json({
+      route: decision.route,
+      source: decision.source,
+      degraded: decision.degraded,
+      result: decision.result,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Unified Ask/Capture bridge: classify, then route to the EXISTING Ask engine
+// (questions) or the EXISTING capture pipeline / AI Inbox (everything else).
+// Raw input is always preserved. This does not replace /ai/query or the inbox.
+router.post("/ai/submit", async (req, res, next) => {
+  try {
+    const body = AiSubmitBody.parse(req.body);
+    const userId = req.user!.id;
+    const decision = await routeIntentForText(body.text);
+
+    await writeAuditLog({
+      userId,
+      action: "ask_input_classified",
+      metadata: {
+        route: decision.route,
+        primaryIntent: decision.result.primaryIntent,
+        confidence: decision.result.confidence,
+        source: decision.source,
+        degraded: decision.degraded,
+        requiresConfirmation: decision.result.requiresConfirmation,
+        threadId: body.threadId ?? null,
+      },
+    });
+
+    const routing = {
+      route: decision.route,
+      source: decision.source,
+      degraded: decision.degraded,
+      result: decision.result,
+    };
+
+    if (decision.route === "question") {
+      const question = await queryRecallForUser(userId, body.text, {
+        threadId: body.threadId ?? null,
+      });
+      res.json({ mode: "question" as const, routing, question });
+      return;
+    }
+
+    // Capture path: canonical raw capture + async extraction, carrying an Ask
+    // thread reference so the two surfaces stay linked. Lands in the AI Inbox.
+    const { capture, jobId } = await ingestCaptureForUser(userId, {
+      rawText: body.text,
+      sourceType: "ask",
+      sourceName: "Ask",
+      rawMetadata: {
+        askThreadId: body.threadId ?? null,
+        intent: {
+          primaryIntent: decision.result.primaryIntent,
+          secondaryIntents: decision.result.secondaryIntents,
+          confidence: decision.result.confidence,
+          source: decision.source,
+          requiresConfirmation: decision.result.requiresConfirmation,
+        },
+      },
+    });
+    res.status(202).json({ mode: "capture" as const, routing, capture, jobId });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Unified plan endpoint: classify, then either answer (questions) or return
+// draft review cards (captures). Nothing is written except the raw source.
+router.post("/ai/plan", async (req, res, next) => {
+  try {
+    const body = AiSubmitBody.parse(req.body);
+    const plan = await planActionsForText(req.user!.id, body.text, {
+      threadId: body.threadId ?? null,
+    });
+    res.json(plan);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const ACTION_TYPES = [
+  "create_task",
+  "create_reminder",
+  "save_memory",
+  "create_note",
+  "send_to_inbox",
+] as const satisfies readonly ProposedActionType[];
+
+const AiConfirmActionBody = z.object({
+  type: z.enum(ACTION_TYPES),
+  draft: z.object({
+    title: z.string().min(1).max(500),
+    content: z.string().min(1).max(8000),
+    dueAt: z.string().max(64).nullable().default(null),
+    priority: z.enum(["low", "medium", "high", "urgent"]).default("medium"),
+    tags: z.array(z.string().max(64)).max(24).default([]),
+    domain: z.string().max(64).nullable().default(null),
+    kind: z.enum(["deadline", "appointment", "follow_up", "other"]).nullable().default(null),
+  }),
+  rawCaptureId: z.string().min(1).max(64).nullable().default(null),
+  threadId: z.string().min(1).max(64).nullable().default(null),
+});
+
+// Execute one user-confirmed proposed action via existing domain services.
+router.post("/ai/actions/confirm", async (req, res, next) => {
+  try {
+    const body = AiConfirmActionBody.parse(req.body);
+    const result = await confirmProposedAction(req.user!.id, {
+      type: body.type,
+      draft: body.draft,
+      rawCaptureId: body.rawCaptureId,
+      threadId: body.threadId,
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    next(err);
   }
 });
 

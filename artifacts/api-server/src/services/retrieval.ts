@@ -20,6 +20,7 @@ import {
 import { listKnowledgeForUser } from "./knowledge";
 import { listDocumentsForUser } from "./documents";
 import { listCapturesForUser } from "./captures";
+import { listAttentionForToday } from "./attention";
 import { listMemoriesForUser } from "./life-memory";
 import { noteRetrievalText } from "./note-retrieval";
 import { keywordScore } from "./keyword-match";
@@ -88,6 +89,7 @@ function typeBoost(entityType: string, pinned?: boolean): number {
   if (entityType === "person") return 0.05;
   if (entityType === "vehicle" || entityType === "warranty" || entityType === "home") return 0.12;
   if (entityType === "organization" || entityType === "invoice") return 0.1;
+  if (entityType === "attention_item") return 0.15;
   return 0;
 }
 
@@ -488,6 +490,7 @@ const CORPUS = {
   memories: 200,
   documents: 100,
   captures: 100,
+  attention: 80,
   vehicles: 40,
   homes: 20,
   warranties: 40,
@@ -676,7 +679,7 @@ async function collectCorpus(
   people: PersonRef[];
   tasks: Awaited<ReturnType<typeof listTasksForUser>>;
 }> {
-  const [tasks, notes, people, knowledge, memories, documents, captures, vehiclesList, homesList, warrantiesList, orgsList, invoicesList, projectsList, sources, aliases] =
+  const [tasks, notes, people, knowledge, memories, documents, captures, attentionList, vehiclesList, homesList, warrantiesList, orgsList, invoicesList, projectsList, sources, aliases] =
     await Promise.all([
       listTasksForUser(userId, { limit: CORPUS.tasks }),
       listNotesForUser(userId, { limit: CORPUS.notes }),
@@ -685,6 +688,7 @@ async function collectCorpus(
       listMemoriesForUser(userId, { limit: CORPUS.memories }),
       listDocumentsForUser(userId, { limit: CORPUS.documents }),
       listCapturesForUser(userId, { limit: CORPUS.captures }),
+      listAttentionForToday(userId, CORPUS.attention),
       listVehiclesForUser(userId, { limit: CORPUS.vehicles }),
       listHomesForUser(userId, { limit: CORPUS.homes }),
       listWarrantiesForUser(userId, { limit: CORPUS.warranties }),
@@ -789,6 +793,17 @@ async function collectCorpus(
       title: c.title || "Capture",
       digest: c.digest?.trim() || null,
       text: `${c.title ?? ""}\n${(c.rawText ?? "").slice(0, 500)}`,
+    });
+  }
+  for (const a of attentionList.slice(0, CORPUS.attention)) {
+    records.push({
+      entityType: "attention_item",
+      entityId: a.id,
+      title: a.title,
+      digest: a.summary?.trim() || null,
+      text: `reminder: ${a.title} due=${a.dueAt} kind=${a.kind}${
+        a.summary ? ` — ${a.summary}` : ""
+      }${a.evidenceText ? ` (${a.evidenceText})` : ""}`,
     });
   }
   for (const v of vehiclesList.slice(0, CORPUS.vehicles)) {

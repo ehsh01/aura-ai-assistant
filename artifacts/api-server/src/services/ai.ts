@@ -8,6 +8,7 @@ import {
   QUERY_ANSWER_SYSTEM_PROMPT,
   QUERY_ANSWER_STREAM_SYSTEM_PROMPT,
 } from "../prompts/queryAnswer.v1";
+import type { ClassifyIntentResult } from "../prompts/classifyIntent.v1";
 
 // ---------------------------------------------------------------------------
 // Types (mirror OpenAPI / api-zod shapes)
@@ -289,6 +290,15 @@ export interface ExtractDeadlineResponse extends AiDegradedMeta {
   item: ExtractDeadlineItem;
 }
 
+export interface ClassifyIntentRequest {
+  /** The raw, untrusted user input to classify. Treated as data, never instructions. */
+  text: string;
+}
+
+export interface ClassifyIntentResponse extends AiDegradedMeta {
+  result: ClassifyIntentResult;
+}
+
 // ---------------------------------------------------------------------------
 // Service interface
 // ---------------------------------------------------------------------------
@@ -309,6 +319,7 @@ export interface AiService {
   ): Promise<DashboardDigestResponse>;
   classifyCapture(request: ClassifyCaptureRequest): Promise<ClassifyCaptureResponse>;
   extractDeadline(request: ExtractDeadlineRequest): Promise<ExtractDeadlineResponse>;
+  classifyIntent(request: ClassifyIntentRequest): Promise<ClassifyIntentResponse>;
   generateWorkNote(request: GenerateWorkNoteRequest): Promise<GenerateWorkNoteResponse>;
   answerQuery(request: AnswerQueryRequest): Promise<AnswerQueryResponse>;
   /**
@@ -577,6 +588,26 @@ class DisabledAiService implements AiService {
         personName: null,
         evidenceText: null,
         confidence: 0,
+      },
+    };
+  }
+
+  async classifyIntent(_request: ClassifyIntentRequest): Promise<ClassifyIntentResponse> {
+    // No model available: return a low-confidence "unknown" so the router
+    // safe-defaults (regex fast-path still runs first in the router itself).
+    return {
+      ...degradedMeta(),
+      result: {
+        primaryIntent: "unknown",
+        secondaryIntents: [],
+        confidence: 0,
+        requiresConfirmation: true,
+        containsQuestion: false,
+        containsAction: false,
+        containsDurableFact: false,
+        containsDeadline: false,
+        containsAttachment: false,
+        reason: "AI disabled; router safe-default applies.",
       },
     };
   }
@@ -1173,6 +1204,48 @@ class OpenAiService implements AiService {
       };
     } catch {
       return { degraded: true, degradedReason: "deadline_extract_failed", item: empty };
+    }
+  }
+
+  async classifyIntent(request: ClassifyIntentRequest): Promise<ClassifyIntentResponse> {
+    const { CLASSIFY_INTENT_SYSTEM_PROMPT, CLASSIFY_INTENT_PROMPT_VERSION, classifyIntentResultSchema } =
+      await import("../prompts/classifyIntent.v1");
+    const safeDefault: ClassifyIntentResult = {
+      primaryIntent: "unknown",
+      secondaryIntents: [],
+      confidence: 0,
+      requiresConfirmation: true,
+      containsQuestion: false,
+      containsAction: false,
+      containsDurableFact: false,
+      containsDeadline: false,
+      containsAttachment: false,
+      reason: "classification_unavailable",
+    };
+    try {
+      const completion = await this.client.chat.completions.create({
+        model: this.model,
+        messages: [
+          {
+            role: "system",
+            content: `${CLASSIFY_INTENT_SYSTEM_PROMPT} Prompt: ${CLASSIFY_INTENT_PROMPT_VERSION}.`,
+          },
+          {
+            role: "user",
+            content: `<<<INPUT>>>\n${request.text.slice(0, 4000)}\n<<<END INPUT>>>`,
+          },
+        ],
+        response_format: { type: "json_object" },
+        max_tokens: 250,
+      });
+      const raw = completion.choices[0]?.message.content ?? "{}";
+      const parsed = classifyIntentResultSchema.safeParse(JSON.parse(raw));
+      if (!parsed.success) {
+        return { degraded: true, degradedReason: "intent_parse_failed", result: safeDefault };
+      }
+      return { degraded: false, degradedReason: null, result: parsed.data };
+    } catch {
+      return { degraded: true, degradedReason: "intent_classify_failed", result: safeDefault };
     }
   }
 

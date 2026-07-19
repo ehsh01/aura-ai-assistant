@@ -849,6 +849,92 @@ export async function queryRecall(
   });
 }
 
+// --- Unified Ask & Capture (Intent Router + Action Orchestrator) ----------
+
+export type AskActionType =
+  | "create_task"
+  | "create_reminder"
+  | "save_memory"
+  | "create_note"
+  | "send_to_inbox";
+
+export type AskProposedActionDraft = {
+  title: string;
+  content: string;
+  dueAt: string | null;
+  priority: "low" | "medium" | "high" | "urgent";
+  tags: string[];
+  domain: string | null;
+  kind: "deadline" | "appointment" | "follow_up" | "other" | null;
+};
+
+export type AskProposedAction = {
+  id: string;
+  type: AskActionType;
+  label: string;
+  draft: AskProposedActionDraft;
+  confidence: number;
+  reason: string;
+};
+
+export type AskPlanRouting = {
+  route: "question" | "capture";
+  source: "regex" | "model";
+  degraded: boolean;
+  primaryIntent: string;
+  secondaryIntents: string[];
+  confidence: number;
+  requiresConfirmation: boolean;
+  reason: string;
+};
+
+export type AskPlanResult = {
+  mode: "answer" | "review";
+  routing: AskPlanRouting;
+  answer: QueryRecallResult | null;
+  actions: AskProposedAction[];
+  rawCaptureId: string | null;
+};
+
+export type AskActionResult = {
+  entityType: string;
+  entityId: string;
+  usedDefaultDueAt?: boolean;
+};
+
+/**
+ * Unified submit: classify the input, then either answer it (questions) or
+ * return draft review cards (captures). Nothing is written except the raw
+ * source; the user confirms actions via confirmAskAction().
+ */
+export async function planAskInput(
+  text: string,
+  options?: { threadId?: string | null },
+): Promise<AskPlanResult> {
+  return apiFetch("/ai/plan", {
+    method: "POST",
+    body: JSON.stringify({ text, threadId: options?.threadId ?? undefined }),
+  });
+}
+
+/** Execute one user-confirmed proposed action via the existing domain services. */
+export async function confirmAskAction(input: {
+  type: AskActionType;
+  draft: AskProposedActionDraft;
+  rawCaptureId?: string | null;
+  threadId?: string | null;
+}): Promise<AskActionResult> {
+  return apiFetch("/ai/actions/confirm", {
+    method: "POST",
+    body: JSON.stringify({
+      type: input.type,
+      draft: input.draft,
+      rawCaptureId: input.rawCaptureId ?? null,
+      threadId: input.threadId ?? null,
+    }),
+  });
+}
+
 /**
  * Streaming Ask over Server-Sent Events. Fires onMeta once (sources) then onToken
  * for each answer chunk, and resolves with the final answer. Callers should catch

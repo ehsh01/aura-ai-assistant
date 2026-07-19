@@ -8,12 +8,14 @@ import {
   getStoredAskThreadId,
   listAskThreads,
   listPeople,
-  queryRecall,
+  planAskInput,
   setStoredAskThreadId,
   type AskMessageRecord,
+  type AskProposedAction,
   type AskThreadRecord,
   type PersonRecord,
 } from "@/lib/recall-api";
+import { AskReviewCards } from "@/components/ask/AskReviewCards";
 import { useRecallData } from "@/context/RecallDataContext";
 import { type RecallCaptureItem, type RecallProject } from "@/lib/recall-context";
 import { readSearchParam } from "@/lib/recall-nav";
@@ -33,11 +35,13 @@ function imagesFromMetadata(metadata: Record<string, unknown> | undefined): AskA
 
 /** Immersive oracle Home — background + ask only. History stays behind a tab. */
 export function Dashboard() {
-  const { notes, tasks } = useRecallData();
+  const { notes, tasks, reloadTasks } = useRecallData();
   const [question, setQuestion] = useState("");
   /** Only the current turn (latest Q + A) — not the full thread. */
   const [liveMessages, setLiveMessages] = useState<AskMessageRecord[]>([]);
   const [answerImages, setAnswerImages] = useState<AskAnswerImage[]>([]);
+  const [reviewActions, setReviewActions] = useState<AskProposedAction[]>([]);
+  const [reviewCaptureId, setReviewCaptureId] = useState<string | null>(null);
   const [threadId, setThreadId] = useState<string | null>(getStoredAskThreadId());
   const [askPending, setAskPending] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -143,6 +147,8 @@ export function Dashboard() {
 
     const tempId = `local-${Date.now()}`;
     setAnswerImages([]);
+    setReviewActions([]);
+    setReviewCaptureId(null);
     setLiveMessages([
       {
         id: tempId,
@@ -154,18 +160,29 @@ export function Dashboard() {
       },
     ]);
     try {
-      const res = await queryRecall(q, { threadId: activeThreadId });
-      if (res.threadId) {
-        setThreadId(res.threadId);
-        setStoredAskThreadId(res.threadId);
+      const res = await planAskInput(q, { threadId: activeThreadId });
+      const resolvedThreadId = res.answer?.threadId ?? activeThreadId ?? "local";
+      if (res.answer?.threadId) {
+        setThreadId(res.answer.threadId);
+        setStoredAskThreadId(res.answer.threadId);
       }
-      const images = res.images ?? [];
+      const images = res.answer?.images ?? [];
       setAnswerImages(images);
-      // Only the current turn — never the full thread history.
+      setReviewActions(res.mode === "review" ? res.actions : []);
+      setReviewCaptureId(res.rawCaptureId);
+
+      // Assistant lead-in: the answer for questions/mixed, otherwise a short
+      // capture acknowledgement above the review cards.
+      const assistantText =
+        res.answer?.answer ??
+        (res.actions.length > 0
+          ? "Here's what I can save for you — review and confirm:"
+          : "Saved to your Inbox for review.");
+
       setLiveMessages([
         {
           id: tempId,
-          threadId: res.threadId ?? activeThreadId ?? "local",
+          threadId: resolvedThreadId,
           role: "user",
           content: q,
           metadata: {},
@@ -173,9 +190,9 @@ export function Dashboard() {
         },
         {
           id: `${tempId}-a`,
-          threadId: res.threadId ?? activeThreadId ?? "local",
+          threadId: resolvedThreadId,
           role: "assistant",
-          content: res.answer,
+          content: assistantText,
           metadata: { images },
           createdAt: new Date().toISOString(),
         },
@@ -183,6 +200,8 @@ export function Dashboard() {
       void refreshThreads();
     } catch {
       setAnswerImages([]);
+      setReviewActions([]);
+      setReviewCaptureId(null);
       setLiveMessages([
         {
           id: tempId,
@@ -211,6 +230,8 @@ export function Dashboard() {
     setPanelOpen(false);
     setLiveMessages([]);
     setAnswerImages([]);
+    setReviewActions([]);
+    setReviewCaptureId(null);
     setQuestion("");
     sessionActive.current = false;
   };
@@ -477,6 +498,19 @@ export function Dashboard() {
                   <div className="mx-auto w-full max-w-lg">
                     <AskAnswerImages images={answerImages} />
                   </div>
+                )}
+                {!askPending && reviewActions.length > 0 && (
+                  <AskReviewCards
+                    actions={reviewActions}
+                    rawCaptureId={reviewCaptureId}
+                    threadId={threadId}
+                    onConfirmed={() => {
+                      void reloadTasks().catch(() => {});
+                      void listCaptureInbox()
+                        .then((res) => setCaptures(res.items as RecallCaptureItem[]))
+                        .catch(() => {});
+                    }}
+                  />
                 )}
                 {askPending && (
                   <p className="text-center text-lg text-white/50">Listening to your world…</p>
