@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Recall — Complete App Guide</title>
+  <style>
+    @page { size: Letter; margin: 0.65in; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #172033;
+      font: 10.2pt/1.48 -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      background: #fff;
+    }
+    h1, h2, h3 { color: #172554; line-height: 1.18; break-after: avoid; }
+    h1 { margin: 0 0 12px; font-size: 31pt; letter-spacing: -1.2px; }
+    h2 {
+      margin: 26px 0 10px;
+      padding-bottom: 5px;
+      font-size: 18pt;
+      border-bottom: 1px solid #c7d2fe;
+    }
+    h3 { margin: 16px 0 5px; font-size: 12.5pt; }
+    p { margin: 5px 0 9px; }
+    ul, ol { margin: 5px 0 10px; padding-left: 20px; }
+    li { margin: 3px 0; }
+    a { color: #4338ca; text-decoration: none; }
+    strong { color: #111827; }
+    .cover {
+      min-height: 8.3in;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 0.25in 0.2in;
+      page-break-after: always;
+    }
+    .mark {
+      width: 64px;
+      height: 64px;
+      margin-bottom: 24px;
+      border-radius: 19px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 27px;
+      font-weight: 700;
+      background: linear-gradient(145deg, #4f46e5, #8b5cf6);
+      box-shadow: 0 12px 32px rgba(79, 70, 229, .28);
+    }
+    .tagline { max-width: 6.2in; color: #475569; font-size: 16pt; line-height: 1.45; }
+    .meta { margin-top: 30px; color: #64748b; font-size: 10pt; }
+    .callout {
+      margin: 12px 0;
+      padding: 11px 14px;
+      border-left: 4px solid #6366f1;
+      border-radius: 0 8px 8px 0;
+      background: #eef2ff;
+      break-inside: avoid;
+    }
+    .note {
+      margin: 12px 0;
+      padding: 10px 13px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: #f8fafc;
+      break-inside: avoid;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin: 10px 0;
+    }
+    .card {
+      padding: 11px 12px;
+      border: 1px solid #dbe3f0;
+      border-radius: 9px;
+      break-inside: avoid;
+    }
+    .card h3 { margin-top: 0; }
+    .label {
+      display: inline-block;
+      margin: 1px 3px 1px 0;
+      padding: 2px 7px;
+      color: #3730a3;
+      font-size: 8.5pt;
+      font-weight: 650;
+      border-radius: 999px;
+      background: #e0e7ff;
+    }
+    .toc { columns: 2; column-gap: 35px; }
+    .toc li { margin: 5px 0; break-inside: avoid; }
+    .workflow {
+      margin: 8px 0 14px;
+      padding: 10px 12px;
+      color: #312e81;
+      font-weight: 650;
+      text-align: center;
+      border: 1px solid #c7d2fe;
+      border-radius: 8px;
+      background: #f5f3ff;
+      break-inside: avoid;
+    }
+    .small { color: #64748b; font-size: 8.8pt; }
+    .page-break { page-break-before: always; }
+    .avoid { break-inside: avoid; }
+    .footer-note {
+      margin-top: 25px;
+      padding-top: 10px;
+      color: #64748b;
+      font-size: 8.5pt;
+      border-top: 1px solid #e2e8f0;
+    }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div class="mark">R</div>
+    <h1>Recall</h1>
+    <p class="tagline">The complete guide to your AI-powered personal operating system—what it can do, how its parts work together, and where your information comes from.</p>
+    <div class="meta">
+      <strong>Product:</strong> Recall<br />
+      <strong>Live app:</strong> <a href="https://recall-app.net">recall-app.net</a><br />
+      <strong>Guide current as of:</strong> July 18, 2026
+    </div>
+  </section>
+
+  <h2>What Recall is</h2>
+  <p>Recall is a personal command center for work, home, family, money, documents, and follow-ups. It gathers information from your own notes and connected services, organizes it into useful records, and lets you ask questions across everything from one place.</p>
+  <div class="callout"><strong>The core promise:</strong> Capture once. Organize automatically. Act with confidence. Verify everything.</div>
+  <p>Recall is an <strong>intelligence layer</strong>, not a replacement for Gmail, Drive, Outlook, your finance ledger, or other source systems. Those services remain authoritative. Recall syncs or captures their information, connects related records, and preserves links back to the source.</p>
+
+  <h3>The basic flow</h3>
+  <div class="workflow">Capture or sync → AI structures the information → You review or confirm → Recall connects it → Ask, Today, and search make it useful</div>
+
+  <h3>How Recall earns trust</h3>
+  <ul>
+    <li><strong>Raw sources are preserved:</strong> AI-generated structure does not replace the original message, note, file, or transaction.</li>
+    <li><strong>Answers can show evidence:</strong> Recall stores the source excerpts, related records, confidence, and caveats behind Ask answers.</li>
+    <li><strong>Financial math is deterministic:</strong> totals come from synced transaction rows, not model guesses.</li>
+    <li><strong>Human correction is first-class:</strong> AI Inbox suggestions can be accepted, edited, or dismissed.</li>
+    <li><strong>External actions require intent:</strong> integrations are generally read-only; controllable actions such as Homey device commands are explicit.</li>
+  </ul>
+
+  <h2>Contents</h2>
+  <ol class="toc">
+    <li>Home and Today</li>
+    <li>Ask Recall</li>
+    <li>Capture and AI Inbox</li>
+    <li>Notes and Notebooks</li>
+    <li>Tasks and follow-ups</li>
+    <li>Life Memory and Knowledge</li>
+    <li>People and Organizations</li>
+    <li>Projects and timelines</li>
+    <li>Documents and attachments</li>
+    <li>Finance intelligence</li>
+    <li>Vehicles, homes, and warranties</li>
+    <li>Deadline Attention System</li>
+    <li>Connectors and imports</li>
+    <li>Homey smart-home integration</li>
+    <li>Activity, privacy, and administration</li>
+    <li>Practical workflows</li>
+    <li>Important limits</li>
+  </ol>
+
+  <h2 class="page-break">1. Home and Today</h2>
+  <h3>Home: your conversational command center</h3>
+  <p>The Home screen is built around asking Recall a question. You can type or use the microphone, receive a grounded answer, hear it spoken aloud, and reopen past questions. It also provides contextual suggestions based on what Recall knows.</p>
+  <ul>
+    <li>Ask natural-language questions from a central “oracle” interface.</li>
+    <li>Use microphone input when browser speech recognition is available.</li>
+    <li>Listen to answers using browser or OpenAI-backed speech.</li>
+    <li>Review prior questions and continue work in the full Ask view.</li>
+    <li>See relevant source images when an answer is grounded in image evidence.</li>
+  </ul>
+
+  <h3>Today: one ranked action queue</h3>
+  <p>Today brings urgent and useful items into one place instead of making you inspect every module.</p>
+  <div class="grid">
+    <div class="card">
+      <h3>What it surfaces</h3>
+      <ul>
+        <li>A recommended “do now” focus</li>
+        <li>Urgent tasks and critical items</li>
+        <li>People you are waiting on</li>
+        <li>Homey alerts</li>
+        <li>AI Inbox reminders</li>
+        <li>Deadlines and appointments</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>What you can do</h3>
+      <ul>
+        <li>Jump directly to the underlying record</li>
+        <li>Create a follow-up task</li>
+        <li>Dismiss waiting-on items</li>
+        <li>Mark reminders as seen</li>
+        <li>Snooze or dismiss deadline reminders</li>
+        <li>Quickly capture a note, task, or Inbox item</li>
+      </ul>
+    </div>
+  </div>
+  <p>Today also includes a weekly digest that summarizes the week into practical sections. The digest can be dismissed when it is no longer useful.</p>
+
+  <h2>2. Ask Recall</h2>
+  <p>Ask is Recall’s evidence-backed question-and-answer system. It searches across your in-app data and connected records, then synthesizes a direct answer.</p>
+  <h3>What Ask can search</h3>
+  <p>
+    <span class="label">Notes</span>
+    <span class="label">Life Memory</span>
+    <span class="label">Knowledge</span>
+    <span class="label">People</span>
+    <span class="label">Projects</span>
+    <span class="label">Tasks</span>
+    <span class="label">Documents</span>
+    <span class="label">Captures</span>
+    <span class="label">Email</span>
+    <span class="label">Calendar</span>
+    <span class="label">Drive</span>
+    <span class="label">Finance</span>
+    <span class="label">Homey</span>
+  </p>
+  <ul>
+    <li><strong>Hybrid retrieval:</strong> combines keyword search, structured queries, and semantic embeddings.</li>
+    <li><strong>Live Google search:</strong> mail and Drive questions can search connected Google accounts live, beyond the local sync snapshot.</li>
+    <li><strong>Threaded conversations:</strong> follow-up questions retain conversational context.</li>
+    <li><strong>Evidence panels:</strong> view excerpts, source metadata, confidence, caveats, and links to related records.</li>
+    <li><strong>Durable answer history:</strong> reopening a thread restores the evidence that was used when the answer was created.</li>
+    <li><strong>Feedback:</strong> rate answers with thumbs up or down to help track quality.</li>
+    <li><strong>Custom Ask rules:</strong> Settings lets you add standing instructions that shape future answers.</li>
+    <li><strong>Privacy details:</strong> Ask can disclose which data categories and model involvement applied to a turn.</li>
+  </ul>
+  <div class="note"><strong>Example questions:</strong> “What am I waiting on from other people?”, “Find the registration with my car’s VIN,” “How much did I spend at Home Depot this year?”, “Show mail about the kitchen project,” or “What did I tell Recall about my father’s medication?”</div>
+
+  <h2 class="page-break">3. Capture and AI Inbox</h2>
+  <p>Capture is designed for interrupt-driven life: get information into Recall quickly, then structure it without losing the original.</p>
+  <h3>Ways to capture</h3>
+  <ul>
+    <li>Brain-dump text from Today or Home.</li>
+    <li>Create notes and tasks directly.</li>
+    <li>Send selected text or page context from the browser extension.</li>
+    <li>Upload documents and note attachments.</li>
+    <li>Import Evernote <code>.enex</code> files.</li>
+    <li>Import Life Memory data for review.</li>
+    <li>Sync connected mail, calendars, files, contacts, transactions, devices, and ticket email.</li>
+  </ul>
+  <h3>AI Inbox review</h3>
+  <p>Freeform captures can be classified into a cleaned title, suggested type, priority, due date, project, tags, actions, requester, and evidence quote. The suggestion remains reviewable.</p>
+  <ul>
+    <li><strong>Accept</strong> into a note, task, reminder, project item, reference, or Life Memory.</li>
+    <li><strong>Edit</strong> the proposed structure before accepting it.</li>
+    <li><strong>Dismiss</strong> irrelevant or incorrect suggestions.</li>
+    <li><strong>Retry</strong> durable background processing when extraction fails.</li>
+  </ul>
+
+  <h2>4. Notes and Notebooks</h2>
+  <p>Notes are Recall’s flexible working memory. Notebooks provide broad organization while tags, people, and projects create cross-cutting connections.</p>
+  <ul>
+    <li>Create, edit, search, and delete notes.</li>
+    <li>Organize notes into notebooks and use tags.</li>
+    <li>Link notes to a primary person and a project.</li>
+    <li>Dictate text with microphone input where supported.</li>
+    <li>Ask AI to summarize a note or search semantically.</li>
+    <li>Attach images, PDFs, and text files.</li>
+    <li>Extract text from PDFs and text files; use vision OCR for images.</li>
+    <li>Search text that exists only inside an attachment after extraction completes.</li>
+    <li>Import Evernote exports, including supported attachments.</li>
+    <li>Export individual or selected note content for portability.</li>
+  </ul>
+
+  <h2>5. Tasks and follow-ups</h2>
+  <p>Tasks can be created directly, accepted from AI Inbox, derived from waiting-on items, or connected to other records.</p>
+  <ul>
+    <li>Create tasks quickly and mark them complete or reopen them.</li>
+    <li>Assign a person and filter the list by person.</li>
+    <li>View evidence attached to a task when available.</li>
+    <li>Use the task-side Recall AI assistant, including voice where supported.</li>
+    <li>Create follow-up tasks directly from “Waiting on” recommendations.</li>
+  </ul>
+  <div class="note"><strong>UI note:</strong> some Tasks screen controls such as Upcoming/All/Filter tabs, drag handles, overflow menus, and paperclip affordances are present visually but not fully wired. Full edit/delete support exists more completely in the API than in the main Tasks UI.</div>
+
+  <h2 class="page-break">6. Life Memory and Knowledge</h2>
+  <h3>Life Memory: facts that should not get buried</h3>
+  <p>Life Memory is for durable facts you want Recall to prioritize—family relationships, home facts, vehicle information, health context, preferences, work details, and other long-lived knowledge.</p>
+  <ul>
+    <li>Create memories in life domains such as family, home, vehicles, health, work, and finance.</li>
+    <li>Pin especially important facts so Ask gives them priority.</li>
+    <li>Store evidence and source context with a memory.</li>
+    <li>Use effective/expiry dates for facts that are time-bound.</li>
+    <li>Import memories through a review flow rather than silently applying them.</li>
+    <li>Export a portable “Life File” in Markdown.</li>
+  </ul>
+
+  <h3>Knowledge: reusable reference material</h3>
+  <p>Knowledge stores structured items you may need repeatedly, such as procedures, contacts, snippets, references, checklists, and instructions.</p>
+  <ul>
+    <li>Create, edit, search, and categorize knowledge items.</li>
+    <li>Keep reusable instructions separate from time-specific notes.</li>
+    <li>Include Knowledge in Ask retrieval and evidence.</li>
+  </ul>
+
+  <h2>7. People and Organizations</h2>
+  <h3>People</h3>
+  <p>People is a lightweight personal CRM connected to your notes, tasks, projects, and synced communications.</p>
+  <ul>
+    <li>Create and edit contact profiles.</li>
+    <li>Link people to notes, tasks, captures, projects, and deadline items.</li>
+    <li>See person-centered context and activity.</li>
+    <li>Track “waiting on” items inferred from tasks, notes, captures, and Gmail.</li>
+    <li>Dismiss obsolete waiting items or turn one into a follow-up task.</li>
+    <li>Merge duplicate people while preserving aliases and linked records.</li>
+  </ul>
+
+  <h3>Organizations</h3>
+  <ul>
+    <li>Create organizations with contact and descriptive details.</li>
+    <li>Associate people with organizations using affiliation links.</li>
+    <li>Connect organizations to broader project and activity context.</li>
+    <li>Use organization relationships when navigating the personal knowledge graph.</li>
+  </ul>
+
+  <h2>8. Projects and timelines</h2>
+  <p>Projects gather the records associated with an ongoing effort—work initiatives, home construction, cases, purchases, or family plans.</p>
+  <ul>
+    <li>Create projects and open a project detail view.</li>
+    <li>Group related notes, tasks, and captures.</li>
+    <li>Search and link relevant synced Gmail/finance records through typed entity links.</li>
+    <li>Review a subject timeline of related events.</li>
+    <li>View project context and navigate back to original sources.</li>
+    <li>Use project names as conservative hints when connecting new deadline items.</li>
+  </ul>
+  <div class="note"><strong>UI note:</strong> project edit/archive controls are more complete in the API than in the visible Projects screens, which primarily emphasize creation, detail, timelines, and source linking.</div>
+
+  <h2 class="page-break">9. Documents and attachments</h2>
+  <p>Documents are first-class searchable sources. Recall keeps file metadata, extracted text, summaries, and evidence links.</p>
+  <ul>
+    <li>Import supported text, CSV, Markdown, JSON, and similar content.</li>
+    <li>Extract searchable text from supported document formats and note attachments.</li>
+    <li>Preview CSV content and generate AI summaries.</li>
+    <li>Link documents to evidence and use them in Ask retrieval.</li>
+    <li>Match receipt-like records to transactions and confirm the relationship.</li>
+    <li>Use OCR/extracted attachment text when a fact only appears in a scan or photo.</li>
+  </ul>
+  <div class="note"><strong>Processing note:</strong> a newly uploaded file may not be searchable immediately. OCR and extraction run as durable background jobs and can retry after transient failures. Documents primarily store extracted text and metadata rather than original binary files; unsupported binaries may be recorded by name only, and client-side text imports are size-bounded.</div>
+
+  <h2>10. Finance intelligence</h2>
+  <p>Recall does not replace the finance ledger. It syncs normalized transactions so you can search, calculate, connect, and explain spending.</p>
+  <ul>
+    <li>Ask exact spending questions by date range, merchant/payee, category, project, vehicle, home, or other linked subject.</li>
+    <li>View spending summaries and the transaction rows behind totals.</li>
+    <li>Classify expense, income, transfer, credit-card payment, and refund behavior.</li>
+    <li>Exclude transfers and credit-card payments from “spent” totals to avoid double counting.</li>
+    <li>Detect likely recurring subscriptions from transaction history.</li>
+    <li>Roll up spend for vehicles and homes.</li>
+    <li>Suggest transaction links for projects and other subjects, with confirmation where appropriate.</li>
+    <li>Match receipt-like records to transactions and confirm the relationship.</li>
+    <li>Preserve external transaction IDs and source provenance.</li>
+  </ul>
+  <div class="callout"><strong>Financial safety:</strong> Recall summarizes your records; it does not provide high-stakes financial advice or invent balances.</div>
+
+  <h2>11. Vehicles, homes, and warranties</h2>
+  <p>This area gives major physical assets their own durable context.</p>
+  <ul>
+    <li>Create and manage vehicle profiles.</li>
+    <li>Create and manage home profiles.</li>
+    <li>Store warranties for vehicles, homes, or other subjects.</li>
+    <li>Track provider, expiry date, notes, and linked subject.</li>
+    <li>Review subject timelines across related records.</li>
+    <li>View linked spending and suggested transaction associations.</li>
+    <li>Surface expiring warranties and related records through Recall’s broader attention model.</li>
+  </ul>
+
+  <h2 class="page-break">12. Deadline Attention System</h2>
+  <p>Recall turns important dated information into durable in-app reminders instead of leaving it buried in email or calendar.</p>
+  <h3>Automatic sources</h3>
+  <ul>
+    <li><strong>Google Calendar:</strong> future calendar events are promoted without using an LLM when a reliable start date exists.</li>
+    <li><strong>Gmail:</strong> a conservative AI extractor looks for explicit dated commitments such as court dates, hearings, appointments, response deadlines, and “scheduled for” language.</li>
+  </ul>
+  <h3>Reminder lifecycle</h3>
+  <ul>
+    <li><strong>Seen:</strong> acknowledge it while keeping it visible until the relevant date.</li>
+    <li><strong>Snooze:</strong> remind closer to the due date, including one-day-before behavior.</li>
+    <li><strong>Dismiss:</strong> permanently remove an irrelevant reminder.</li>
+    <li><strong>Complete:</strong> close an item that has been handled.</li>
+    <li><strong>Open source:</strong> return to Ask/source evidence for the original email or event.</li>
+  </ul>
+  <p>Items are deduplicated by user, source record, and due date. Today ranks overdue items first, followed by items due soon, expired snoozes, and new unseen items. Email reminders are auto-created only for high-confidence extraction.</p>
+
+  <h2>13. Connectors and imports</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Google</h3>
+      <p>Read-only OAuth sync for Gmail, Calendar, Contacts, and Drive. Multiple Google accounts can be connected.</p>
+    </div>
+    <div class="card">
+      <h3>Microsoft</h3>
+      <p>Optional read-only Microsoft Graph sync for Outlook mail and Teams chats when server OAuth is configured.</p>
+    </div>
+    <div class="card">
+      <h3>Finance API</h3>
+      <p>Imports normalized transactions while leaving the external finance service as the ledger of record.</p>
+    </div>
+    <div class="card">
+      <h3>Homey Pro</h3>
+      <p>OAuth device/flow sync, explicit status/control through Ask, and Flow webhook alerts.</p>
+    </div>
+    <div class="card">
+      <h3>Ticket email</h3>
+      <p>IMAP connector for ticket messages and requester/follow-up context.</p>
+    </div>
+    <div class="card">
+      <h3>CSV</h3>
+      <p>Imports tabular records using stable external identity and connector provenance.</p>
+    </div>
+    <div class="card">
+      <h3>Evernote</h3>
+      <p>Imports <code>.enex</code> notes and supported attachments through durable jobs.</p>
+    </div>
+    <div class="card">
+      <h3>Browser extension</h3>
+      <p>Captures selected text, visible page context, URL, and title using a narrow revocable token.</p>
+    </div>
+  </div>
+  <p>Connector runs track created, updated, failed, and synchronized records. Records are deduplicated using source-specific identifiers. Connection errors are isolated so one source does not crash the app.</p>
+
+  <h2 class="page-break">14. Homey smart-home integration</h2>
+  <ul>
+    <li>Connect a Homey Pro account through OAuth.</li>
+    <li>Sync devices and flows into searchable source records.</li>
+    <li>Ask for current device status.</li>
+    <li>Issue explicit supported device controls through Ask.</li>
+    <li>Use Homey Flows to POST important alerts to Recall.</li>
+    <li>Surface smoke, leak, prolonged-open-door, and similar alerts prominently on Today.</li>
+    <li>Rotate webhook secrets and send a test alert from Connectors.</li>
+    <li>Apply quiet-hour behavior to informational alerts while keeping emergencies prominent.</li>
+  </ul>
+
+  <h2>15. Activity, privacy, security, and administration</h2>
+  <h3>Activity and auditability</h3>
+  <ul>
+    <li>Review important actions such as captures, accepts, syncs, and Ask activity.</li>
+    <li>Filter or navigate from history entries to related entities.</li>
+    <li>Preserve evidence snapshots for past Ask answers.</li>
+  </ul>
+  <h3>Account and security controls</h3>
+  <ul>
+    <li>Authenticated access with secure server-managed sessions.</li>
+    <li>Change your password in Settings.</li>
+    <li>Use narrowly scoped, revocable, expiring browser-extension tokens.</li>
+    <li>Encrypt connector credentials server-side and keep secrets out of frontend code.</li>
+    <li>Apply rate limiting to AI and authentication-sensitive endpoints.</li>
+    <li>Review Privacy Policy and Terms from the app.</li>
+  </ul>
+  <h3>Administration</h3>
+  <p>Authorized administrators can review users, enable or disable access, grant or remove administrator status, and reset passwords.</p>
+
+  <h2>16. Practical workflows</h2>
+  <div class="avoid">
+    <h3>A lawyer emails a court date</h3>
+    <ol>
+      <li>Google sync stores the Gmail message as a source record.</li>
+      <li>The deadline extractor identifies the explicit date and evidence quote.</li>
+      <li>A high-confidence attention item appears on Today.</li>
+      <li>You mark it Seen, snooze it until one day before, dismiss it, or open its source.</li>
+      <li>Ask can still cite the original email later.</li>
+    </ol>
+  </div>
+  <div class="avoid">
+    <h3>A fact is hidden in a scanned registration</h3>
+    <ol>
+      <li>Attach the image or PDF to a note or upload it as a document.</li>
+      <li>Background extraction/OCR makes its text searchable.</li>
+      <li>Ask “What is the VIN for my car?”</li>
+      <li>Recall answers from extracted text and provides the source as evidence.</li>
+    </ol>
+  </div>
+  <div class="avoid">
+    <h3>You need a contractor spending total</h3>
+    <ol>
+      <li>Sync the finance connector.</li>
+      <li>Ask for spending by contractor and date range.</li>
+      <li>Recall calculates from transaction rows, excluding transfer-like payments.</li>
+      <li>Open the related records to verify every included transaction.</li>
+    </ol>
+  </div>
+  <div class="avoid">
+    <h3>You are interrupted with a new request</h3>
+    <ol>
+      <li>Brain-dump the request into Today or use the browser extension.</li>
+      <li>AI Inbox proposes a task, priority, requester, date, project, and evidence.</li>
+      <li>Correct anything needed and accept it.</li>
+      <li>Today and People can later surface the task or waiting-on relationship.</li>
+    </ol>
+  </div>
+
+  <h2 class="page-break">17. Important limits and expectations</h2>
+  <ul>
+    <li><strong>Configuration matters:</strong> Google, Microsoft, Homey, finance, ticket email, OCR, and AI features require their corresponding credentials or services to be configured, and useful answers require successful syncs.</li>
+    <li><strong>Most connectors are read-only:</strong> Recall generally organizes and cites external records rather than editing the source system. The Connectors UI currently emphasizes connect/sync rather than disconnect/delete.</li>
+    <li><strong>Sync is not instantaneous:</strong> connector data reflects the latest completed sync, although some Gmail and Drive searches can query Google live. Microsoft sync is intentionally bounded to recent mail and a limited Teams snippet set.</li>
+    <li><strong>AI can be uncertain:</strong> low-confidence capture suggestions require review, and Gmail deadline reminders are only auto-created above a conservative threshold.</li>
+    <li><strong>OCR takes time:</strong> attachment text becomes searchable after background extraction completes. Drive OCR may be searchable through Google’s index even when raw OCR text is not stored locally.</li>
+    <li><strong>Quick Capture file picks are limited:</strong> selected files on quick capture currently contribute filenames to the capture text rather than uploading the files themselves.</li>
+    <li><strong>Deadlines are currently in-app:</strong> the attention system supports Today, seen, dismiss, snooze, and complete; outbound email, SMS, and push notifications are not part of this milestone.</li>
+    <li><strong>Recall is not a finance ledger or advisor:</strong> source transactions remain authoritative.</li>
+    <li><strong>Recall does not silently invent your world:</strong> when evidence is missing, answers should say so and expose caveats.</li>
+    <li><strong>Canvas is a visual mockup:</strong> the Canvas page exists, but nodes, zoom, share, editing, AI input, minimap, and persistence are not wired yet. The core personal-OS workflows are Home, Today, Ask, and the connected data modules described above.</li>
+    <li><strong>Browser-extension offline queue:</strong> failed captures are retried when the extension popup is used again; there is not a continuously flushing background worker.</li>
+  </ul>
+
+  <h2>In one sentence</h2>
+  <div class="callout">Recall lets you capture or connect information once, organize it into a personal knowledge graph, act on what matters today, and ask questions across your life with evidence from your own sources.</div>
+
+  <p class="footer-note">This guide describes the implemented Recall application as of July 18, 2026. Some integrations appear only when their server-side credentials are configured. Product behavior may evolve after this date.</p>
+</body>
+</html>

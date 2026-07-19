@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Recall — AI Review Capability Packet</title>
+  <style>
+    @page { size: Letter; margin: .62in; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #172033; font: 9.5pt/1.43 Arial, sans-serif; }
+    h1, h2, h3, h4 { color: #172554; line-height: 1.18; break-after: avoid; }
+    h1 { margin: 0 0 12px; font-size: 29pt; }
+    h2 { margin: 23px 0 9px; padding-bottom: 4px; font-size: 17pt; border-bottom: 1px solid #c7d2fe; }
+    h3 { margin: 14px 0 5px; font-size: 12pt; }
+    h4 { margin: 10px 0 4px; font-size: 10pt; }
+    p { margin: 4px 0 8px; }
+    ul, ol { margin: 4px 0 9px; padding-left: 19px; }
+    li { margin: 2.5px 0; }
+    code { color: #312e81; font: 8.5pt Menlo, monospace; }
+    .cover { min-height: 8.3in; display: flex; flex-direction: column; justify-content: center; page-break-after: always; }
+    .mark { width: 60px; height: 60px; margin-bottom: 22px; border-radius: 17px; display: grid; place-items: center; color: white; font-size: 25px; font-weight: bold; background: #4f46e5; }
+    .lead { max-width: 6.4in; color: #475569; font-size: 14pt; line-height: 1.45; }
+    .meta { margin-top: 26px; color: #64748b; }
+    .callout { margin: 10px 0; padding: 9px 12px; border-left: 4px solid #6366f1; background: #eef2ff; }
+    .warning { margin: 10px 0; padding: 9px 12px; border-left: 4px solid #d97706; background: #fffbeb; }
+    .status { display: inline-block; margin-right: 4px; padding: 1px 6px; border-radius: 10px; font-size: 8pt; font-weight: bold; }
+    .live { color: #166534; background: #dcfce7; }
+    .partial { color: #92400e; background: #fef3c7; }
+    .config { color: #3730a3; background: #e0e7ff; }
+    .gap { color: #991b1b; background: #fee2e2; }
+    .item { margin: 8px 0; padding: 8px 10px; border: 1px solid #dbe3f0; border-radius: 7px; break-inside: avoid; }
+    .item h3 { margin-top: 0; }
+    .page-break { page-break-before: always; }
+    .toc { columns: 2; column-gap: 32px; }
+    .toc li { break-inside: avoid; margin: 4px 0; }
+    .path { color: #475569; font-size: 8.2pt; word-break: break-all; }
+    .small { color: #64748b; font-size: 8.3pt; }
+    .matrix { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 8.4pt; }
+    .matrix th, .matrix td { padding: 5px 6px; border: 1px solid #cbd5e1; vertical-align: top; }
+    .matrix th { color: #172554; text-align: left; background: #eef2ff; }
+    .workflow { margin: 7px 0; padding: 8px 10px; color: #312e81; font-weight: bold; text-align: center; border: 1px solid #c7d2fe; background: #f5f3ff; }
+    .footer { margin-top: 22px; padding-top: 8px; color: #64748b; font-size: 8pt; border-top: 1px solid #e2e8f0; }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div class="mark">R</div>
+    <h1>Recall</h1>
+    <p class="lead">Exhaustive Capability Packet for Independent AI Review</p>
+    <p>This document is designed to be uploaded to another AI system. It separates implemented behavior from configuration-dependent behavior, partial UI, known limitations, and roadmap-like concepts.</p>
+    <div class="meta">
+      <strong>Product:</strong> Recall personal operating system<br />
+      <strong>Production:</strong> https://recall-app.net<br />
+      <strong>Repository audited:</strong> Aura AI Personal Assistant monorepo<br />
+      <strong>Snapshot date:</strong> July 18, 2026<br />
+      <strong>Audience:</strong> product, architecture, UX, security, and capability reviewers
+    </div>
+  </section>
+
+  <h2>Instructions for the reviewing AI</h2>
+  <div class="callout">
+    Treat this as a current-state capability audit, not a roadmap or marketing document. Preserve the status labels. Do not assume configuration-dependent integrations are enabled in every deployment. Do not infer missing capabilities from the product vision.
+  </div>
+  <h3>Status legend</h3>
+  <ul>
+    <li><span class="status live">IMPLEMENTED</span> Working code and a usable product path exist.</li>
+    <li><span class="status config">CONFIG-DEPENDENT</span> Implemented, but requires credentials, external access, or synced data.</li>
+    <li><span class="status partial">PARTIAL</span> Some behavior exists, but UI, coverage, persistence, or workflow completeness is limited.</li>
+    <li><span class="status gap">NOT IMPLEMENTED</span> Explicitly absent or only represented by a static/decorative UI.</li>
+  </ul>
+
+  <h2>Executive summary</h2>
+  <p>Recall is a single-user-oriented AI personal operating system that captures and syncs information from notes, tasks, files, mail, calendars, contacts, finance, ticket email, and smart-home sources. It converts raw inputs into structured records, connects related entities, provides evidence-backed natural-language answers, and ranks actionable items on Today.</p>
+  <div class="workflow">Capture / Connect → Preserve source → Normalize → Extract structure → Human review → Link entities → Retrieve / Ask → Show evidence → Act</div>
+  <p>The strongest implemented areas are evidence-backed Ask, capture and AI Inbox, notes and attachment extraction, Life Memory, people/waiting-on, project source links, finance summaries, deadline attention, and modular connectors. The largest current product gaps are the static Canvas page, incomplete task/project controls in the visible UI, filename-only quick-capture attachments, text-centric document storage, connector removal UX, and deployment-dependent integrations.</p>
+
+  <h2>Contents</h2>
+  <ol class="toc">
+    <li>Product model and architecture</li>
+    <li>Home and Ask</li>
+    <li>Today and proactive attention</li>
+    <li>Capture and AI Inbox</li>
+    <li>Notes and Notebooks</li>
+    <li>Tasks</li>
+    <li>Life Memory</li>
+    <li>Knowledge</li>
+    <li>People and waiting-on</li>
+    <li>Organizations and invoices</li>
+    <li>Projects and timelines</li>
+    <li>Documents and attachments</li>
+    <li>Finance intelligence</li>
+    <li>Vehicles, homes, warranties</li>
+    <li>Deadline Attention System</li>
+    <li>Connectors</li>
+    <li>Homey</li>
+    <li>Browser extension</li>
+    <li>Activity, security, administration</li>
+    <li>Data and AI behavior</li>
+    <li>Known partial features and gaps</li>
+    <li>Representative workflows</li>
+    <li>Code evidence map</li>
+    <li>Suggested review questions</li>
+  </ol>
+
+  <h2 class="page-break">1. Product model and architecture</h2>
+  <p><span class="status live">IMPLEMENTED</span> Recall uses a React/Vite/TypeScript frontend, Express TypeScript API, PostgreSQL with Drizzle, OpenAI integrations, durable database jobs, and modular connectors. Production is hosted behind nginx with PM2 on DigitalOcean.</p>
+  <h3>Core architectural capabilities</h3>
+  <ul>
+    <li>Shared data model across captures, notes, tasks, people, projects, memories, knowledge, documents, assets, connectors, and evidence.</li>
+    <li>Raw external source records are preserved and deduplicated using connector/external identity.</li>
+    <li>Entity links create typed relationships such as project-to-mail, project-to-transaction, attention-to-source, attention-to-person, person-to-organization, and receipt-to-transaction.</li>
+    <li>Evidence records connect claims and derived items back to source records, excerpts, URLs, and metadata.</li>
+    <li>Durable jobs support capture extraction, attachment extraction, Evernote import, digest regeneration, and deadline scanning.</li>
+    <li>Hybrid retrieval combines full-text/keyword search, semantic embeddings, structured intent handlers, and live connector search.</li>
+    <li>External systems generally remain source of truth; Recall stores searchable normalized snapshots and provenance.</li>
+  </ul>
+
+  <h2>2. Home and Ask</h2>
+  <div class="item">
+    <h3><span class="status live">IMPLEMENTED</span> Conversational Home</h3>
+    <ul>
+      <li>Central natural-language question input.</li>
+      <li>Microphone dictation where browser speech recognition is available.</li>
+      <li>Answer read-aloud using supported speech synthesis.</li>
+      <li>Past-question history and handoff to the full Ask view.</li>
+      <li>Contextual suggestion prompts derived from current Recall data.</li>
+      <li>Related source images when answers are grounded in image evidence.</li>
+    </ul>
+  </div>
+  <div class="item">
+    <h3><span class="status live">IMPLEMENTED</span> Evidence-backed Ask</h3>
+    <ul>
+      <li>Streaming AI answers with deterministic fallback behavior when AI is unavailable.</li>
+      <li>Threaded conversations and follow-up context.</li>
+      <li>Search across notes, attachments, Life Memory, Knowledge, people, tasks, projects, documents, captures, and synced source records.</li>
+      <li>Specialized intent handling for Gmail, Drive, finance, notes, waiting-on, people, and Homey.</li>
+      <li>Confidence, caveats, related records, source metadata, evidence excerpts, and privacy details.</li>
+      <li>Durable Ask threads preserve the evidence snapshot used for each answer.</li>
+      <li>Thumbs-up/down answer feedback.</li>
+      <li>Per-user Ask rules injected as standing instructions.</li>
+      <li>Optional speech playback and answer images.</li>
+    </ul>
+  </div>
+  <div class="item">
+    <h3><span class="status config">CONFIG-DEPENDENT</span> Live external search</h3>
+    <ul>
+      <li>Live Gmail query across connected Google accounts for mail-oriented questions.</li>
+      <li>Live Drive search using Google’s full-text index, including content indexed by Google OCR.</li>
+      <li>Finance and Homey questions require connected/synced data or a live integration.</li>
+      <li>OpenAI synthesis, embeddings, vision OCR, and OpenAI TTS require configured AI credentials.</li>
+    </ul>
+  </div>
+
+  <h2 class="page-break">3. Today and proactive attention</h2>
+  <div class="item">
+    <h3><span class="status live">IMPLEMENTED</span> Ranked action queue</h3>
+    <ul>
+      <li>Combines recommended focus, urgent tasks, AI Inbox reminders, waiting-on items, Homey alerts, and attention deadlines.</li>
+      <li>Deduplicates overlapping recommendations.</li>
+      <li>Links each queue entry to the underlying entity or source context.</li>
+      <li>Allows waiting-on dismissal and follow-up task creation.</li>
+      <li>Allows deadline Seen, Dismiss, and one-day-before Snooze actions.</li>
+      <li>Supports quick brain-dump capture into note, task, or AI Inbox flows.</li>
+    </ul>
+  </div>
+  <div class="item">
+    <h3><span class="status live">IMPLEMENTED</span> Briefing and digest</h3>
+    <ul>
+      <li>Daily briefing, focus recommendation, “don’t forget” list, and Homey urgency integration.</li>
+      <li>Weekly digest with structured sections and local dismissal state.</li>
+      <li>Finance snapshot and waiting-on context can contribute to Home/Today.</li>
+    </ul>
+  </div>
+
+  <h2>4. Capture and AI Inbox</h2>
+  <div class="item">
+    <h3><span class="status live">IMPLEMENTED</span> Capture channels</h3>
+    <ul>
+      <li>Manual typed capture and dictated capture.</li>
+      <li>Today/Home brain dump.</li>
+      <li>Browser extension page/selection capture.</li>
+      <li>Connector ingestion, document import, attachment upload, Evernote import, and Life Memory import.</li>
+      <li>Offline client queue with retry for manual capture submission.</li>
+      <li>Raw capture is retained for provenance.</li>
+    </ul>
+  </div>
+  <div class="item">
+    <h3><span class="status live">IMPLEMENTED</span> AI extraction and review</h3>
+    <ul>
+      <li>Versioned classification into note, task, reminder, work note, project item, or reference.</li>
+      <li>Suggested cleaned title, priority, absolute due date, project, tags, actions, requester, confidence, and evidence quote.</li>
+      <li>Human edit/correction before acceptance.</li>
+      <li>Accept into notes, tasks, or Life Memory; dismiss irrelevant suggestions.</li>
+      <li>Person correction/resolution and source evidence preservation.</li>
+      <li>Durable processing status, retry, and failure visibility.</li>
+    </ul>
+  </div>
+  <div class="warning"><span class="status partial">PARTIAL</span> Quick Capture file selection currently appends filenames to capture/note text; it does not upload those selected files.</div>
+
+  <h2 class="page-break">5. Notes and Notebooks</h2>
+  <p><span class="status live">IMPLEMENTED</span></p>
+  <ul>
+    <li>Create, load, edit, search, pin, and delete notes.</li>
+    <li>Create notebooks and assign notes to notebooks.</li>
+    <li>Tags, person tagging, project association, and note metadata.</li>
+    <li>Keyword/full-text search and semantic search.</li>
+    <li>AI note summary and contextual AI writing/chat behavior.</li>
+    <li>Microphone dictation where supported.</li>
+    <li>Rich imported Evernote content, including embedded images where supported.</li>
+    <li>Large/chunked ENEX imports with durable progress and resume behavior.</li>
+    <li>Attachments with durable extraction jobs.</li>
+    <li>Text extraction from text/PDF-like content and vision OCR for images.</li>
+    <li>Ask and Notes search include extracted attachment text after processing.</li>
+  </ul>
+  <p><span class="status partial">PARTIAL</span> Some richer note/task operations exist in API/context code but are not exposed uniformly in the main Notes UI.</p>
+
+  <h2>6. Tasks</h2>
+  <p><span class="status live">IMPLEMENTED</span></p>
+  <ul>
+    <li>Quick task creation.</li>
+    <li>Complete and reopen tasks.</li>
+    <li>Assign a person/requester and filter by person.</li>
+    <li>Show task evidence where available.</li>
+    <li>Create follow-up tasks from waiting-on recommendations.</li>
+    <li>Task-aware AI chat with optional voice.</li>
+    <li>API support includes broader update/delete and structured task fields.</li>
+  </ul>
+  <div class="warning"><span class="status partial">PARTIAL</span> Upcoming/All/Filter tabs, drag handle, overflow menu, and paperclip are decorative or incomplete. The visible page does not expose the API’s full edit/delete surface.</div>
+
+  <h2>7. Life Memory</h2>
+  <p><span class="status live">IMPLEMENTED</span> Life Memory stores durable personal facts that should rank above transient notes.</p>
+  <ul>
+    <li>Create categorized facts across family, home, vehicles, health, work, finance, preferences, and other domains.</li>
+    <li>AI-assisted classification and conservative extraction.</li>
+    <li>Search, filter, pin, edit, archive, and inspect history.</li>
+    <li>Corrections preserve history using version supersession rather than destructive overwrite.</li>
+    <li>Effective and expiry dates for time-bound facts.</li>
+    <li>Evidence/source metadata attached to memories.</li>
+    <li>Import review flow before records become active.</li>
+    <li>Markdown “Life File” export.</li>
+    <li>Active/pinned memories are prioritized in Ask retrieval.</li>
+  </ul>
+
+  <h2>8. Knowledge</h2>
+  <p><span class="status live">IMPLEMENTED</span></p>
+  <ul>
+    <li>Create, edit, delete, search, and categorize reusable knowledge items.</li>
+    <li>Supported concepts include procedures, references, contacts, snippets, instructions, and checklists.</li>
+    <li>Person tagging and evidence metadata.</li>
+    <li>Knowledge items participate in Ask retrieval.</li>
+  </ul>
+
+  <h2 class="page-break">9. People and waiting-on</h2>
+  <p><span class="status live">IMPLEMENTED</span></p>
+  <ul>
+    <li>Contact create/read/update/delete and search.</li>
+    <li>Profile details and person-centric navigation.</li>
+    <li>Primary-person links from notes, tasks, captures, and attention items.</li>
+    <li>Person timelines and related notes/tasks/knowledge/memories.</li>
+    <li>Duplicate-person merge with foreign-key/link reassignment and alias preservation.</li>
+    <li>Automatic waiting-on heuristics across tasks, notes, captures, and Gmail.</li>
+    <li>Durable waiting-on dismissals.</li>
+    <li>Create a follow-up task directly from a waiting-on item.</li>
+  </ul>
+
+  <h2>10. Organizations, vendors, and invoices</h2>
+  <p><span class="status live">IMPLEMENTED</span></p>
+  <ul>
+    <li>Create, edit, delete, search, and view organizations.</li>
+    <li>Organization classifications include vendor/contractor-oriented use.</li>
+    <li>Typed person-to-organization affiliation links.</li>
+    <li>Organization-associated records and activity context.</li>
+    <li>Invoice create/update/status tracking tied to organizations.</li>
+    <li>Invoice amounts, dates, descriptions, and related records.</li>
+  </ul>
+
+  <h2>11. Projects and timelines</h2>
+  <p><span class="status live">IMPLEMENTED</span></p>
+  <ul>
+    <li>Create projects and open a project detail page.</li>
+    <li>Group related notes, tasks, and captures.</li>
+    <li>Project context cards and subject timelines.</li>
+    <li>Search synced Gmail and finance records from project detail.</li>
+    <li>Confirm link/unlink of mail and transactions using typed entity links.</li>
+    <li>Navigate from project context to original source records.</li>
+    <li>Project-name keyword hints support conservative linking suggestions.</li>
+    <li>API supports broader project patch/status behavior.</li>
+  </ul>
+  <div class="warning"><span class="status partial">PARTIAL</span> The visible project UI emphasizes creation, detail, timeline, and source linking. Project edit/archive controls are not fully exposed.</div>
+
+  <h2 class="page-break">12. Documents and attachments</h2>
+  <p><span class="status live">IMPLEMENTED</span></p>
+  <ul>
+    <li>Import text, CSV, Markdown, JSON, and similar content.</li>
+    <li>CSV preview and structured metadata.</li>
+    <li>AI document summaries.</li>
+    <li>Search/cite stored document text in Ask.</li>
+    <li>Evidence links and source navigation.</li>
+    <li>Receipt-to-transaction matching with confirmation workflow.</li>
+    <li>Note attachments support background text extraction and image OCR.</li>
+  </ul>
+  <div class="warning"><span class="status partial">PARTIAL</span> The Documents module primarily stores extracted text and metadata, not original binary content. Unsupported binaries may be stored by filename only. Client-side text imports are bounded to approximately 200 KB.</div>
+
+  <h2>13. Finance intelligence</h2>
+  <p><span class="status config">CONFIG-DEPENDENT</span> Requires a configured finance API connector and successful sync.</p>
+  <ul>
+    <li>Normalized transaction ingestion with stable external IDs and source provenance.</li>
+    <li>Deterministic spending, income, and net calculations.</li>
+    <li>Date-range, category, payee/merchant, account, project, vehicle, and home analysis.</li>
+    <li>Transaction breakdowns behind reported totals.</li>
+    <li>Classification of expense, income, transfer, credit-card payment, and refund.</li>
+    <li>Transfer and credit-card-payment exclusion from spending totals to avoid double counting.</li>
+    <li>Payee/category summaries and finance snapshot.</li>
+    <li>Likely-subscription detection from recurring transactions.</li>
+    <li>Receipt matching and confirmable transaction links.</li>
+    <li>Project/asset spending suggestions and confirmed typed links.</li>
+    <li>Ask finance intents use records and deterministic aggregation rather than model arithmetic.</li>
+  </ul>
+  <p><span class="status gap">NOT IMPLEMENTED</span> Recall is not the authoritative ledger and is not a high-stakes financial advisor. Budget editing and financial write-back are not core current behavior.</p>
+
+  <h2>14. Vehicles, homes, and warranties</h2>
+  <p><span class="status live">IMPLEMENTED</span></p>
+  <ul>
+    <li>Vehicle profiles with identifying/metadata fields such as VIN.</li>
+    <li>Home profiles with address and descriptive metadata.</li>
+    <li>Warranty CRUD linked to vehicle, home, or other subject.</li>
+    <li>Warranty provider, expiry, notes, and status context.</li>
+    <li>Subject timelines across linked records.</li>
+    <li>Spend rollups and transaction suggestions for assets.</li>
+    <li>Confirm or unlink asset-to-transaction relationships.</li>
+  </ul>
+
+  <h2 class="page-break">15. Deadline Attention System</h2>
+  <p><span class="status live">IMPLEMENTED</span></p>
+  <ul>
+    <li>Durable attention records with title, summary, due date, kind, status, source, evidence, person/project links, confidence, and metadata.</li>
+    <li>Status lifecycle: Open, Seen, Snoozed, Dismissed, Completed.</li>
+    <li>Google Calendar future events promoted without an LLM when start metadata exists.</li>
+    <li>Gmail dated-commitment extraction using a versioned structured prompt.</li>
+    <li>High-confidence auto-create threshold; explicit dated commitments only.</li>
+    <li>Source/person entity links and source evidence.</li>
+    <li>Deduplication by user, source entity, source ID, and due date.</li>
+    <li>Today ranking: overdue, due soon, snooze-expired, then new unseen.</li>
+    <li>API actions for Seen, Dismiss, Snooze presets/custom date, and Complete.</li>
+    <li>Automatic attention scan job after Google sync and a manual API scan endpoint.</li>
+  </ul>
+  <p><span class="status partial">PARTIAL</span> Today exposes Seen, Dismiss, and one-day-before Snooze, not every API action/preset. No visible manual “scan now” control was found.</p>
+  <p><span class="status gap">NOT IMPLEMENTED</span> Outbound email, SMS, and push reminder delivery.</p>
+
+  <h2>16. Connectors</h2>
+  <table class="matrix">
+    <tr><th>Connector</th><th>Status</th><th>Current capabilities</th><th>Important limits</th></tr>
+    <tr><td>Google</td><td>Config-dependent</td><td>Multi-account OAuth; Gmail, Calendar, Contacts, Drive read-only sync; live Gmail/Drive search; attention scan after sync.</td><td>Cached sync is bounded. Drive OCR may remain in Google’s index rather than being downloaded as raw text.</td></tr>
+    <tr><td>Microsoft</td><td>Config-dependent</td><td>OAuth; recent Outlook mail and Teams chat/message snippets.</td><td>Bounded recent data. Tenant policy may block Teams access.</td></tr>
+    <tr><td>Finance API</td><td>Config-dependent</td><td>Transaction fetch, normalize, dedupe, classify, summarize, and evidence mapping.</td><td>Often environment/bootstrap configured; no ledger write-back.</td></tr>
+    <tr><td>Homey Pro</td><td>Config-dependent</td><td>OAuth; device/flow sync; Ask status/control; flow triggering; webhook alerts.</td><td>Requires Athom app credentials and supported device capabilities.</td></tr>
+    <tr><td>Ticket email</td><td>Config-dependent</td><td>IMAP connection; ticket email parsing into source records and follow-up context.</td><td>Requires accessible IMAP credentials/server.</td></tr>
+    <tr><td>CSV</td><td>Implemented</td><td>Normalize/import tabular source records with stable connector identity.</td><td>Field quality depends on imported data.</td></tr>
+    <tr><td>Manual capture</td><td>Implemented</td><td>Freeform capture, source metadata, AI Inbox extraction.</td><td>AI extraction may require review.</td></tr>
+    <tr><td>Evernote ENEX</td><td>Implemented</td><td>Chunked import of notes and supported attachments with durable jobs.</td><td>Format edge cases and unsupported attachments may be partial.</td></tr>
+    <tr><td>Browser extension</td><td>Implemented</td><td>Capture selected/current-page text, URL/title, Outlook/Teams context, retry queue.</td><td>Queue retries when popup is used again; no continuous background flush.</td></tr>
+  </table>
+  <p><span class="status live">IMPLEMENTED</span> Sync runs record fetched, created, updated, failed, completion, and error states. Source records are deduplicated. Connector failures are isolated.</p>
+  <p><span class="status partial">PARTIAL</span> Connectors UI emphasizes connect/test/sync; no complete disconnect/delete flow is exposed.</p>
+
+  <h2 class="page-break">17. Homey smart-home capabilities</h2>
+  <p><span class="status config">CONFIG-DEPENDENT</span></p>
+  <ul>
+    <li>OAuth connection and encrypted credentials.</li>
+    <li>Device and Flow inventory sync into source records.</li>
+    <li>Ask queries for device status.</li>
+    <li>Explicit capability control and supported Flow triggering.</li>
+    <li>Authenticated webhook endpoint for Homey Flow alerts.</li>
+    <li>Alert severity, acknowledgement, Today/Urgency ranking, and quiet-hour handling for informational alerts.</li>
+    <li>Webhook secret rotation, webhook detail display, and test alert action.</li>
+    <li>Documented recipes for smoke, leak, and prolonged-open-door alerts.</li>
+  </ul>
+
+  <h2>18. Browser extension</h2>
+  <p><span class="status live">IMPLEMENTED</span> Chrome/Edge Manifest V3 extension.</p>
+  <ul>
+    <li>Capture selected text or current-page visible text.</li>
+    <li>Capture URL, title, hostname, timestamp, and contextual metadata.</li>
+    <li>Specialized Outlook and Teams page-context collection.</li>
+    <li>Preview/edit before sending.</li>
+    <li>Capture-only revocable token; cannot access notes, Ask, finance, connectors, or settings.</li>
+    <li>Token stored client-side while only its SHA-256 hash is stored by Recall.</li>
+    <li>Offline/failure queue with retry during later popup use.</li>
+  </ul>
+  <p><span class="status gap">NOT IMPLEMENTED</span> A continuously running service worker that flushes queued captures without opening the popup.</p>
+
+  <h2>19. Activity, privacy, security, and administration</h2>
+  <div class="item">
+    <h3><span class="status live">IMPLEMENTED</span> Activity and audit</h3>
+    <ul>
+      <li>Activity history for captures, acceptance, sync, Ask, and other actions.</li>
+      <li>Entity/source navigation from activity where applicable.</li>
+      <li>Durable Ask evidence and privacy snapshots.</li>
+    </ul>
+  </div>
+  <div class="item">
+    <h3><span class="status live">IMPLEMENTED</span> Authentication and account security</h3>
+    <ul>
+      <li>Login and deployment-policy-controlled registration/invitation behavior.</li>
+      <li>Bcrypt password hashing.</li>
+      <li>Revocable HttpOnly server sessions.</li>
+      <li>Password change with session revocation behavior.</li>
+      <li>CORS restrictions and endpoint rate limiting.</li>
+      <li>Encrypted connector credentials server-side.</li>
+      <li>Narrow, revocable, expiring browser-extension tokens.</li>
+      <li>Privacy Policy and Terms pages.</li>
+    </ul>
+  </div>
+  <div class="item">
+    <h3><span class="status live">IMPLEMENTED</span> Administration</h3>
+    <ul>
+      <li>List users.</li>
+      <li>Enable/disable user access.</li>
+      <li>Grant/remove administrator role.</li>
+      <li>Reset a user password.</li>
+      <li>Manage personal Ask rules separately from administrator controls.</li>
+    </ul>
+  </div>
+
+  <h2 class="page-break">20. Data, evidence, and AI behavior</h2>
+  <h3>Evidence model</h3>
+  <ul>
+    <li>Evidence can identify entity, claim type, source record, excerpt, URL, row/page metadata, and additional metadata.</li>
+    <li>Connector sync updates current evidence rather than appending duplicates indefinitely.</li>
+    <li>Legacy duplicate evidence is collapsed for display.</li>
+    <li>Ask stores exact excerpts and source metadata used at answer time.</li>
+    <li>Financial totals expose their period and underlying transaction rows.</li>
+  </ul>
+  <h3>AI behavior</h3>
+  <ul>
+    <li>Versioned prompts for important structured extraction.</li>
+    <li>Structured JSON validation and deterministic fallbacks.</li>
+    <li>Confidence/caveat handling.</li>
+    <li>Conservative person, project, due-date, and deadline extraction.</li>
+    <li>AI is used for synthesis, semantic matching, classification, summarization, and OCR—not deterministic finance arithmetic.</li>
+    <li>User corrections are preserved and may guide later behavior.</li>
+    <li>Ask rules provide user-defined standing instructions.</li>
+  </ul>
+  <h3>Core entity families</h3>
+  <p>Users, sessions, notebooks, notes, note attachments, captures, capture items, tasks, people, projects, organizations, invoices, vehicles, homes, warranties, Life Memory, Knowledge, documents, connectors, sync runs, source records, evidence, entity links, entity embeddings, Ask threads/messages, jobs, waiting dismissals, user rules, corrections, attention items, and audit/activity records.</p>
+
+  <h2>21. Consolidated partial features and gaps</h2>
+  <table class="matrix">
+    <tr><th>Area</th><th>Status</th><th>Current limitation</th></tr>
+    <tr><td>Canvas</td><td>Not implemented beyond mockup</td><td>Static visual page; nodes, editing, zoom, minimap, AI input, share, and persistence are not wired.</td></tr>
+    <tr><td>Tasks UI</td><td>Partial</td><td>Several controls are decorative; full edit/delete and richer fields are not consistently exposed.</td></tr>
+    <tr><td>Projects UI</td><td>Partial</td><td>Creation/detail/source linking work; edit/archive controls are not fully surfaced.</td></tr>
+    <tr><td>Quick Capture files</td><td>Partial</td><td>Selected filenames are appended; files are not uploaded through this flow.</td></tr>
+    <tr><td>Documents</td><td>Partial</td><td>Text/metadata-centric; original binaries are not generally retained by the Documents module.</td></tr>
+    <tr><td>Connector removal</td><td>Partial</td><td>No complete disconnect/delete management UI.</td></tr>
+    <tr><td>Finance creation</td><td>Partial/config</td><td>Finance connector is typically environment/bootstrap driven rather than created from visible UI.</td></tr>
+    <tr><td>Microsoft</td><td>Bounded/config</td><td>Recent bounded mail/chat data; tenant policy can block Teams.</td></tr>
+    <tr><td>Google cache</td><td>Bounded/config</td><td>Local sync is bounded, offset by live Gmail/Drive query paths.</td></tr>
+    <tr><td>Attention UI</td><td>Partial</td><td>Not all server actions/presets or manual scan are exposed visibly.</td></tr>
+    <tr><td>Outbound reminders</td><td>Not implemented</td><td>No SMS, push, or reminder email delivery.</td></tr>
+    <tr><td>Extension retry</td><td>Partial</td><td>Retry depends on reopening/using the popup.</td></tr>
+    <tr><td>External write-back</td><td>Mostly not implemented by design</td><td>Most connectors are read-only; Homey explicit control is the principal exception.</td></tr>
+  </table>
+
+  <h2 class="page-break">22. Representative end-to-end workflows</h2>
+  <h3>A. Capture a work request</h3>
+  <div class="workflow">Dictate/paste → Raw capture → AI classification → Review person/date/priority → Accept task → Today/People surface follow-up → Evidence returns to source</div>
+  <h3>B. Lawyer email with court date</h3>
+  <div class="workflow">Google sync → Gmail source record → Structured deadline extraction → Confidence gate → Attention item + person/source links → Today → Seen/Snooze/Dismiss → Ask cites email</div>
+  <h3>C. Find a fact in a scanned document</h3>
+  <div class="workflow">Attach image/PDF → Durable extraction/OCR → Indexed text → Ask/Notes search → Answer + evidence excerpt/source</div>
+  <h3>D. Analyze project spending</h3>
+  <div class="workflow">Finance sync → Normalize/classify → Suggest/confirm project links → Deterministic aggregation → Ask answer → Inspect transactions</div>
+  <h3>E. Track something owed by another person</h3>
+  <div class="workflow">Task/note/capture/Gmail → Waiting-on heuristic → People/Today → Dismiss or create follow-up task</div>
+  <h3>F. Home emergency alert</h3>
+  <div class="workflow">Homey Flow → Authenticated Recall webhook → Alert severity → Today/Urgency queue → Acknowledge → Source/device context</div>
+  <h3>G. Teach Recall a permanent fact</h3>
+  <div class="workflow">Create/import capture → Life Memory review → Categorize/pin/evidence → Ask priority → Correct via versioned supersession → Export Life File</div>
+
+  <h2>23. Code evidence map</h2>
+  <p class="small">Paths are repository-relative.</p>
+  <table class="matrix">
+    <tr><th>Capability area</th><th>Primary implementation evidence</th></tr>
+    <tr><td>Application routes/pages</td><td><code>artifacts/recall-app/src/App.tsx</code>; <code>artifacts/recall-app/src/pages/</code></td></tr>
+    <tr><td>Home and Ask UI</td><td><code>pages/Dashboard.tsx</code>; <code>pages/Ask.tsx</code></td></tr>
+    <tr><td>Ask retrieval/reasoning</td><td><code>api-server/src/services/query-engine.ts</code>; retrieval, Gmail, Drive, finance, Homey services</td></tr>
+    <tr><td>Today</td><td><code>pages/Today.tsx</code>; <code>components/home/TodayActionQueue.tsx</code>; <code>routes/today.ts</code></td></tr>
+    <tr><td>Capture/Inbox</td><td><code>components/CaptureModal.tsx</code>; <code>pages/Inbox.tsx</code>; <code>routes/captures.ts</code>; capture pipeline services</td></tr>
+    <tr><td>Notes/attachments</td><td><code>pages/Notes.tsx</code>; <code>routes/notes.ts</code>; <code>routes/attachments.ts</code>; attachment extraction service</td></tr>
+    <tr><td>Tasks</td><td><code>pages/Tasks.tsx</code>; <code>routes/tasks.ts</code></td></tr>
+    <tr><td>Memory/Knowledge</td><td><code>pages/Memory.tsx</code>; <code>pages/Knowledge.tsx</code>; <code>routes/memory.ts</code>; life-memory service</td></tr>
+    <tr><td>People/Organizations</td><td><code>pages/People.tsx</code>; <code>pages/Organizations.tsx</code>; corresponding API routes/services</td></tr>
+    <tr><td>Projects</td><td><code>pages/Projects.tsx</code>; <code>pages/ProjectDetail.tsx</code>; <code>routes/projects.ts</code>; project source/timeline services</td></tr>
+    <tr><td>Documents</td><td><code>pages/Documents.tsx</code>; <code>routes/documents.ts</code>; receipt match services</td></tr>
+    <tr><td>Finance</td><td><code>services/finance-sync.ts</code>; <code>connectors/finance-api.ts</code>; finance classification/aggregation services</td></tr>
+    <tr><td>Vehicles/homes/warranties</td><td><code>pages/Vehicles.tsx</code>; <code>routes/vehicles.ts</code>; subject spend/timeline services</td></tr>
+    <tr><td>Deadline attention</td><td><code>routes/attention.ts</code>; <code>services/attention*.ts</code>; <code>prompts/extractDeadline.v1.ts</code></td></tr>
+    <tr><td>Connectors</td><td><code>pages/Connectors.tsx</code>; <code>routes/connectors.ts</code>; <code>api-server/src/connectors/</code></td></tr>
+    <tr><td>Homey</td><td><code>connectors/homey.ts</code>; Homey services; <code>routes/webhooks-homey.ts</code>; <code>docs/Homey_Flow_Cookbook.md</code></td></tr>
+    <tr><td>Browser extension</td><td><code>artifacts/recall-extension/manifest.json</code>; <code>popup.js</code></td></tr>
+    <tr><td>Security/auth</td><td><code>routes/auth.ts</code>; <code>middleware/security.ts</code>; <code>lib/secret-box.ts</code>; session/extension-token services</td></tr>
+    <tr><td>Database schema</td><td><code>lib/db/src/schema/</code>; <code>lib/db/migrations/</code></td></tr>
+  </table>
+
+  <h2>24. Suggested questions for the reviewing AI</h2>
+  <ol>
+    <li>Which implemented workflows create the most user value, and which are difficult to discover?</li>
+    <li>Where do the current UI limitations prevent the backend capabilities from being useful?</li>
+    <li>Which capabilities overlap or create competing mental models?</li>
+    <li>Does Today rank the right categories, and how should Seen/Snooze/Complete differ?</li>
+    <li>Is the evidence model sufficient for high-trust personal, legal, and financial questions?</li>
+    <li>Which connector behaviors should remain read-only, and where is write-back justified?</li>
+    <li>What privacy, security, prompt-injection, or data-retention risks deserve priority?</li>
+    <li>How should Recall communicate sync freshness, extraction confidence, and missing data?</li>
+    <li>Which partial features should be completed, removed, or hidden?</li>
+    <li>What is the clearest product information architecture for Home, Today, Ask, Memory, Notes, and Knowledge?</li>
+    <li>What test/evaluation suite should measure answer grounding, deadline precision, finance correctness, and waiting-on quality?</li>
+    <li>What three milestones would most improve reliability and daily usefulness?</li>
+  </ol>
+
+  <h2>Final scope statement</h2>
+  <div class="callout">This packet aims to enumerate all material implemented capabilities and all material known limitations in the audited repository as of July 18, 2026. It is more exhaustive and technically explicit than the separate user-facing app guide. It intentionally does not list every database column, every API parameter, or every decorative UI element.</div>
+  <p class="footer">Prepared from repository documentation plus direct audit of routed frontend pages, API route families, services, connectors, jobs, security implementation, and browser-extension code. No secrets or credentials are included.</p>
+</body>
+</html>
