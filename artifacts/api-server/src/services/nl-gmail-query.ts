@@ -330,6 +330,35 @@ Rules:
 }
 
 /**
+ * Backfill a Gmail plan with a person already resolved elsewhere (e.g. Ask's
+ * People/Life-Memory retrieval, which maps relationship words like "wife" to
+ * an actual contact via their `role` field). Neither the heuristic nor the AI
+ * planner above sees that resolved corpus, so relationship phrasing such as
+ * "my wife's last email" would otherwise plan a literal "wife" keyword search
+ * that can never match a real inbox — only fill in when the planner (or the
+ * caller, when plan is null) found no person of its own.
+ */
+export function backfillGmailPlanWithNamedPerson(
+  plan: PlannedGmailSearch | null,
+  person: { displayName: string; email?: string | null } | null | undefined,
+  ...dateSourceTexts: string[]
+): PlannedGmailSearch | null {
+  if (!person || plan?.personName) return plan;
+  const personQuery = buildGmailPersonQuery(person.displayName, person.email ?? null);
+  if (!personQuery) return plan;
+  let datePart: string | null = null;
+  for (const text of dateSourceTexts) {
+    datePart = extractGmailDateConstraint(text);
+    if (datePart) break;
+  }
+  return {
+    query: datePart ? `(${personQuery} ${datePart})` : personQuery,
+    personName: person.displayName,
+    source: "heuristic",
+  };
+}
+
+/**
  * Plan a live Gmail search from natural language.
  * Prefers AI when available; falls back to heuristics then keyword stripping.
  */

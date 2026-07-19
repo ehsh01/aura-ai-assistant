@@ -20,7 +20,11 @@ import {
   liveSearchDriveForUser,
   liveSearchGmailForUser,
 } from "./connectors";
-import { isEmailSearchIntent, planGmailSearch } from "./nl-gmail-query";
+import {
+  backfillGmailPlanWithNamedPerson,
+  isEmailSearchIntent,
+  planGmailSearch,
+} from "./nl-gmail-query";
 import { isDriveSearchIntent, planDriveSearch } from "./nl-drive-query";
 import { isHomeyAskIntent, planHomeyAsk } from "./nl-homey-query";
 import { extractMailboxHint, retrieveRelevantRecords } from "./retrieval";
@@ -477,7 +481,7 @@ export async function queryRecallForUser(
     const accountsLabel =
       mailboxes.length > 0 ? mailboxes.join(", ") : "your connected Google accounts";
 
-    const [gmailPlan, drivePlan] = await Promise.all([
+    const [gmailPlanRaw, drivePlan] = await Promise.all([
       wantsEmailAsk
         ? planGmailSearch(retrievalQuestion).then((p) =>
             p ??
@@ -495,6 +499,15 @@ export async function queryRecallForUser(
           )
         : Promise.resolve(null),
     ]);
+
+    const gmailPlan = wantsEmailAsk
+      ? backfillGmailPlanWithNamedPerson(
+          gmailPlanRaw,
+          namedPeople[0],
+          retrievalQuestion,
+          question,
+        )
+      : gmailPlanRaw;
 
     const [gmailHits, driveHits] = await Promise.all([
       gmailPlan?.query

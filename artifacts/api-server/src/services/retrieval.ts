@@ -948,7 +948,13 @@ export async function retrieveRelevantRecords(
 ): Promise<{
   records: RetrievedRecord[];
   usedSemantic: boolean;
-  namedPeople: { id: string; displayName: string }[];
+  namedPeople: {
+    id: string;
+    displayName: string;
+    email?: string | null;
+    firstName?: string | null;
+    lastName?: string | null;
+  }[];
   tasks: Awaited<ReturnType<typeof listTasksForUser>>;
 }> {
   const noteQuery = (options?.noteSearchQuery ?? question).trim() || question;

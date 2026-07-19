@@ -911,7 +911,7 @@ export function buildGmailSearchQuery(question: string): string | null {
 }
 
 /** Build a Gmail query for an explicit person name (follow-ups / history). */
-export function buildGmailPersonQuery(personName: string): string | null {
+export function buildGmailPersonQuery(personName: string, email?: string | null): string | null {
   const who = cleanMailPersonName(personName);
   if (!who) return null;
   const tokens = who.split(/\s+/).filter(Boolean);
@@ -921,6 +921,7 @@ export function buildGmailPersonQuery(personName: string): string | null {
     `"${who}"`,
     `(${who})`,
   ];
+  if (email?.trim()) fromParts.unshift(`from:${email.trim()}`);
   return `(${[...new Set(fromParts)].join(" OR ")})`;
 }
 
