@@ -1,7 +1,45 @@
-import { describe, expect, it } from "vitest";
-import { draftProposedActions, defaultReminderDue } from "./action-orchestrator";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ClassifyIntentResult, IntentKind } from "../prompts/classifyIntent.v1";
 import type { CaptureClassificationItem } from "./ai";
+
+const mocks = vi.hoisted(() => ({
+  getCaptureForUser: vi.fn(),
+  updateCaptureStatusForUser: vi.fn(),
+  createEvidenceForUser: vi.fn(),
+  upsertAttentionItemForUser: vi.fn(),
+  createTaskForUser: vi.fn(),
+  writeAuditLog: vi.fn(),
+}));
+
+// confirmProposedAction touches several domain services; mock at the module
+// boundary so these tests never require a real DB connection.
+vi.mock("./captures", () => ({
+  createCaptureForUser: vi.fn(),
+  getCaptureForUser: mocks.getCaptureForUser,
+  updateCaptureStatusForUser: mocks.updateCaptureStatusForUser,
+}));
+vi.mock("./evidence", () => ({ createEvidenceForUser: mocks.createEvidenceForUser }));
+vi.mock("./attention", () => ({
+  upsertAttentionItemForUser: mocks.upsertAttentionItemForUser,
+  dueAtFromDateString: (raw: string) => {
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : d;
+  },
+}));
+vi.mock("./tasks", () => ({ createTaskForUser: mocks.createTaskForUser }));
+vi.mock("./life-memory", () => ({ createMemoryForUser: vi.fn() }));
+vi.mock("./notes", () => ({ createNoteForUser: vi.fn() }));
+vi.mock("./capture-pipeline", () => ({
+  queueCaptureExtraction: vi.fn(),
+  ingestCaptureForUser: vi.fn(),
+}));
+vi.mock("./audit", () => ({ writeAuditLog: mocks.writeAuditLog }));
+
+import {
+  draftProposedActions,
+  defaultReminderDue,
+  confirmProposedAction,
+} from "./action-orchestrator";
 
 function intent(overrides: Partial<ClassifyIntentResult> = {}): ClassifyIntentResult {
   return {
@@ -117,12 +155,10 @@ describe("draftProposedActions — multi-intent fan-out", () => {
 });
 
 describe("defaultReminderDue — dateless reminders still get a real time", () => {
-  it("returns tomorrow at 9:00 AM (never in the past)", () => {
+  it("returns exactly one hour from now", () => {
     const now = new Date("2026-07-19T15:30:00");
     const due = defaultReminderDue(now);
-    expect(due.getTime()).toBeGreaterThan(now.getTime());
-    expect(due.getHours()).toBe(9);
-    expect(due.getDate()).toBe(20);
+    expect(due.getTime() - now.getTime()).toBe(60 * 60_000);
   });
 });
 
@@ -154,5 +190,87 @@ describe("draftProposedActions — draft field mapping", () => {
       classification({ cleanedTitle: "", suggestedType: "note" }),
     );
     expect(action?.draft.title).toBe("First line here");
+  });
+});
+
+function draft(overrides: Partial<import("./action-orchestrator").ProposedActionDraft> = {}) {
+  return {
+    title: "Put oil in my car",
+    content: "remind me to put oil in my car",
+    dueAt: null,
+    priority: "medium" as const,
+    tags: [],
+    domain: null,
+    kind: null,
+    ...overrides,
+  };
+}
+
+describe("confirmProposedAction — capture status transition (regression)", () => {
+  beforeEach(() => {
+    Object.values(mocks).forEach((m) => m.mockReset());
+    mocks.upsertAttentionItemForUser.mockResolvedValue({ id: "attn-1" });
+    mocks.createTaskForUser.mockResolvedValue({ id: "task-1" });
+  });
+
+  it("does NOT throw when the raw capture is still 'pending' (the reported bug)", async () => {
+    mocks.getCaptureForUser.mockResolvedValue({ id: "raw-1", processedStatus: "pending" });
+    mocks.updateCaptureStatusForUser.mockResolvedValue({ id: "raw-1" });
+
+    const result = await confirmProposedAction("user-1", {
+      type: "create_reminder",
+      draft: draft(),
+      rawCaptureId: "raw-1",
+    });
+
+    expect(result.entityType).toBe("attention_item");
+    // pending → processing → processed, never pending → processed directly.
+    expect(mocks.updateCaptureStatusForUser).toHaveBeenNthCalledWith(1, "user-1", "raw-1", {
+      processedStatus: "processing",
+    });
+    expect(mocks.updateCaptureStatusForUser).toHaveBeenNthCalledWith(2, "user-1", "raw-1", {
+      processedStatus: "processed",
+    });
+  });
+
+  it("applies the 1-hour default due date when the draft has no date", async () => {
+    mocks.getCaptureForUser.mockResolvedValue({ id: "raw-1", processedStatus: "pending" });
+    mocks.updateCaptureStatusForUser.mockResolvedValue({ id: "raw-1" });
+
+    const before = Date.now();
+    await confirmProposedAction("user-1", {
+      type: "create_reminder",
+      draft: draft({ dueAt: null }),
+      rawCaptureId: "raw-1",
+    });
+
+    const call = mocks.upsertAttentionItemForUser.mock.calls[0]?.[1];
+    expect(call.dueAt.getTime() - before).toBeGreaterThan(59 * 60_000);
+    expect(call.dueAt.getTime() - before).toBeLessThan(61 * 60_000);
+  });
+
+  it("does not touch capture status when already 'processed' (idempotent)", async () => {
+    mocks.getCaptureForUser.mockResolvedValue({ id: "raw-1", processedStatus: "processed" });
+
+    await confirmProposedAction("user-1", {
+      type: "create_reminder",
+      draft: draft(),
+      rawCaptureId: "raw-1",
+    });
+
+    expect(mocks.updateCaptureStatusForUser).not.toHaveBeenCalled();
+  });
+
+  it("never throws even if the capture status update itself fails", async () => {
+    mocks.getCaptureForUser.mockResolvedValue({ id: "raw-1", processedStatus: "pending" });
+    mocks.updateCaptureStatusForUser.mockRejectedValue(new Error("Cannot transition capture"));
+
+    await expect(
+      confirmProposedAction("user-1", {
+        type: "create_task",
+        draft: draft(),
+        rawCaptureId: "raw-1",
+      }),
+    ).resolves.toMatchObject({ entityType: "task" });
   });
 });

@@ -2,7 +2,12 @@ import { routeIntentForText, type IntentRouteDecision } from "./intent-router";
 import type { ClassifyIntentResult } from "../prompts/classifyIntent.v1";
 import { aiService, type CaptureClassificationItem } from "./ai";
 import { queryRecallForUser, type QueryAnswer } from "./query-engine";
-import { createCaptureForUser, updateCaptureStatusForUser } from "./captures";
+import {
+  createCaptureForUser,
+  getCaptureForUser,
+  updateCaptureStatusForUser,
+  type CaptureProcessedStatus,
+} from "./captures";
 import { queueCaptureExtraction, ingestCaptureForUser } from "./capture-pipeline";
 import { createTaskForUser } from "./tasks";
 import {
@@ -284,12 +289,34 @@ export interface ConfirmActionResult {
   usedDefaultDueAt?: boolean;
 }
 
-/** Default reminder time when the user gave no date: tomorrow at 9:00 AM. */
+/** Default reminder time when the text specifies no date: one hour from now. */
 export function defaultReminderDue(now: Date = new Date()): Date {
-  const d = new Date(now);
-  d.setDate(d.getDate() + 1);
-  d.setHours(9, 0, 0, 0);
-  return d;
+  return new Date(now.getTime() + 60 * 60_000);
+}
+
+/**
+ * Raw captures start "pending" and the status machine only allows
+ * pending → processing → processed (never pending → processed directly).
+ * Best-effort, idempotent, and never throws — capture bookkeeping must never
+ * mask an already-successful task/reminder/memory/note creation.
+ */
+async function markCaptureProcessedSafely(
+  userId: string,
+  captureId: string | null | undefined,
+): Promise<void> {
+  if (!captureId) return;
+  try {
+    const current = await getCaptureForUser(userId, captureId);
+    if (!current) return;
+    const status = current.processedStatus as CaptureProcessedStatus;
+    if (status === "processed" || status === "archived") return;
+    if (status === "pending" || status === "failed") {
+      await updateCaptureStatusForUser(userId, captureId, { processedStatus: "processing" });
+    }
+    await updateCaptureStatusForUser(userId, captureId, { processedStatus: "processed" });
+  } catch {
+    // Best-effort only.
+  }
 }
 
 /** Map our draft priority to the task service's accepted values. */
@@ -316,7 +343,7 @@ async function linkEvidence(
     evidenceText: draft.content.slice(0, 500),
     evidenceMetadata: { via: "ask_action_confirmed" },
   });
-  await updateCaptureStatusForUser(userId, rawCaptureId, { processedStatus: "processed" });
+  await markCaptureProcessedSafely(userId, rawCaptureId);
 }
 
 /** Execute one confirmed proposed action via the existing domain service. */
@@ -359,9 +386,7 @@ export async function confirmProposedAction(
         confidence: draft.priority === "urgent" ? 0.9 : 0.8,
         metadata: { via: "ask" },
       });
-      if (rawCaptureId) {
-        await updateCaptureStatusForUser(userId, rawCaptureId, { processedStatus: "processed" });
-      }
+      await markCaptureProcessedSafely(userId, rawCaptureId);
       result = { entityType: "attention_item", entityId: item.id, usedDefaultDueAt: !explicitDue };
       break;
     }

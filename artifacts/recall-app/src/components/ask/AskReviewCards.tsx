@@ -60,14 +60,48 @@ function confidenceLabel(score: number): string {
   return "Low";
 }
 
-/** Tomorrow as YYYY-MM-DD, used to prefill reminders that have no detected date. */
-function defaultReminderDate(): string {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+/** One hour from now (ISO) — matches the backend default when no date was detected. */
+function defaultReminderDateTime(): string {
+  return new Date(Date.now() + 60 * 60_000).toISOString();
+}
+
+/** Date-only strings mean "noon local", matching the backend's dueAtFromDateString convention. */
+function parseDueAtLocal(dueAt: string): Date | null {
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dueAt);
+  if (dateOnly) {
+    const [, y, m, d] = dateOnly;
+    return new Date(Number(y), Number(m) - 1, Number(d), 12, 0, 0, 0);
+  }
+  const parsed = new Date(dueAt);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** Value for <input type="datetime-local">. */
+function toDateTimeInputValue(dueAt: string): string {
+  const d = parseDueAtLocal(dueAt);
+  if (!d) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Reverse of toDateTimeInputValue — sends a full ISO string back to the server. */
+function fromDateTimeInputValue(local: string): string | null {
+  if (!local) return null;
+  const d = new Date(local);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+/** Human-friendly due label for the read-only chip; date-only stays unambiguous. */
+function formatDueAtChip(dueAt: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dueAt)) return dueAt;
+  const d = new Date(dueAt);
+  if (Number.isNaN(d.getTime())) return dueAt;
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function ReviewCard({
@@ -82,10 +116,11 @@ function ReviewCard({
   onConfirmed?: (result: { entityType: string }) => void;
 }) {
   const [status, setStatus] = useState<CardStatus>("idle");
-  // Reminders need a time to be visible on Today; prefill a default the user can edit.
+  // Reminders need a time to be visible on Today; prefill the same 1-hour
+  // default the backend applies, so the card preview matches what gets saved.
   const [draft, setDraft] = useState<AskProposedActionDraft>(() =>
     action.type === "create_reminder" && !action.draft.dueAt
-      ? { ...action.draft, dueAt: defaultReminderDate() }
+      ? { ...action.draft, dueAt: defaultReminderDateTime() }
       : action.draft,
   );
   const [error, setError] = useState<string | null>(null);
@@ -152,7 +187,15 @@ function ReviewCard({
             className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white/90 outline-none"
             placeholder="Details"
           />
-          {(action.type === "create_reminder" || action.type === "create_task") && (
+          {action.type === "create_reminder" && (
+            <input
+              type="datetime-local"
+              value={draft.dueAt ? toDateTimeInputValue(draft.dueAt) : ""}
+              onChange={(e) => setDraft({ ...draft, dueAt: fromDateTimeInputValue(e.target.value) })}
+              className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white/90 outline-none [color-scheme:dark]"
+            />
+          )}
+          {action.type === "create_task" && (
             <input
               value={draft.dueAt ?? ""}
               onChange={(e) => setDraft({ ...draft, dueAt: e.target.value || null })}
@@ -167,7 +210,7 @@ function ReviewCard({
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-white/45">
             {draft.dueAt && (
               <span className="rounded-full bg-white/5 px-2 py-0.5 text-white/70">
-                {draft.dueAt}
+                {formatDueAtChip(draft.dueAt)}
               </span>
             )}
             {draft.priority !== "medium" && <span>Priority: {draft.priority}</span>}
