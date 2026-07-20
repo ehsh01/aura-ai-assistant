@@ -17,6 +17,7 @@ import {
   type AskThreadRecord,
   type EvidenceRecord,
   type PersonRecord,
+  type SourceConsulted,
 } from "@/lib/recall-api";
 import { AskReviewCards } from "@/components/ask/AskReviewCards";
 import { useRecallData } from "@/context/RecallDataContext";
@@ -44,6 +45,7 @@ type AnswerMeta = {
   relatedRecords: { entityType: string; entityId: string; title: string }[];
   images: AskAnswerImage[];
   suggestedNextAction: string | null;
+  sourcesConsulted?: SourceConsulted[];
   privacy?: {
     model: string | null;
     dataLeftDevice: boolean;
@@ -232,6 +234,7 @@ export function Dashboard() {
               images,
               suggestedNextAction: res.answer.suggestedNextAction,
               privacy: res.answer.privacy,
+              sourcesConsulted: res.answer.sourcesConsulted ?? [],
             }
           : null,
       );
@@ -720,7 +723,32 @@ export function Dashboard() {
                   </div>
                 )}
                 {askPending && (
-                  <p className="text-center text-lg text-white/50">Listening to your world…</p>
+                  <p className="text-center text-lg text-white/50">
+                    Checking your connected sources…
+                  </p>
+                )}
+                {!askPending && answerMeta?.sourcesConsulted && answerMeta.sourcesConsulted.length > 0 && (
+                  <div className="flex flex-wrap justify-center gap-2 px-2">
+                    {answerMeta.sourcesConsulted.map((s) => (
+                      <span
+                        key={`${s.id}-${s.label}`}
+                        className={`rounded-full px-2.5 py-1 text-[11px] ${
+                          s.status === "ok"
+                            ? "bg-emerald-500/15 text-emerald-200"
+                            : s.status === "empty"
+                              ? "bg-white/10 text-white/60"
+                              : "bg-amber-500/15 text-amber-200"
+                        }`}
+                        title={s.detail ?? undefined}
+                      >
+                        {s.label}
+                        {s.hitCount != null ? ` · ${s.hitCount}` : ""}
+                        {s.status === "missing" || s.status === "error"
+                          ? ` · ${s.status}`
+                          : ""}
+                      </span>
+                    ))}
+                  </div>
                 )}
                 <div ref={bottomRef} />
               </div>

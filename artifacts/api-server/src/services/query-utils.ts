@@ -155,6 +155,12 @@ export function parseDateRange(
   if (/\b(today|due today)\b/.test(q)) {
     return { startDate: today, endDate: today, label: "today" };
   }
+  if (/\byesterday\b/.test(q)) {
+    const d = new Date(`${today}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - 1);
+    const yday = d.toISOString().slice(0, 10);
+    return { startDate: yday, endDate: yday, label: "yesterday" };
+  }
   if (/\b(this week|past week|last week|last 7 days)\b/.test(q)) {
     const d = new Date(`${today}T00:00:00Z`);
     d.setUTCDate(d.getUTCDate() - 6);

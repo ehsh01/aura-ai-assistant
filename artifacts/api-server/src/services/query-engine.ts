@@ -19,6 +19,7 @@ import {
   getConnectedGoogleMailboxes,
   liveSearchDriveForUser,
   liveSearchGmailForUser,
+  listConnectorsForUser,
 } from "./connectors";
 import {
   backfillGmailPlanWithNamedPerson,
@@ -52,6 +53,14 @@ import { listOpenHomeyAlertsForUser } from "./homey-alerts";
 import { formatUserRulesForPrompt } from "./user-rules";
 import { listRecentAskFeedbackHints } from "./ask-feedback";
 import { logger } from "../lib/logger";
+import { detectAskAmbiguity } from "./ask-ambiguity";
+import { routeSourcePlan } from "./source-router";
+import {
+  confidenceFromSources,
+  type SourceConsulted,
+} from "./ask-accuracy-policy";
+import { verifyFinanceAmountsInAnswer } from "./ask-verifier";
+import { isRelationLiteral } from "./ask-accuracy-policy";
 
 function buildFinanceBreakdownAnswer(
   finance: QueryFinanceAggregate,
@@ -97,6 +106,39 @@ function buildFinanceBreakdownAnswer(
   return `${head}${range}:\n\n${lines.join("\n")}${truncated}`;
 }
 
+/** Deterministic spend/income/net sentence — no LLM paraphrase of the number. */
+function buildFinanceTotalAnswer(
+  finance: QueryFinanceAggregate,
+  metric: "spent" | "income" | "net",
+): string {
+  const primary = primaryFinanceFigure(finance, metric);
+  const range = finance.rangeLabel ? ` for ${finance.rangeLabel}` : "";
+  const top = finance.formatted.topPayees[0];
+  if (metric === "spent") {
+    if (finance.expenseCount === 0) {
+      return `No matching expenses were found${range}.`;
+    }
+    return (
+      `You spent ${primary.formatted} across ${finance.expenseCount} expense(s)${range}.` +
+      (top ? ` Largest: ${top.payee} (${top.total}).` : "")
+    );
+  }
+  if (metric === "income") {
+    if (finance.incomeCount === 0) {
+      return `No matching income was found${range}.`;
+    }
+    return (
+      `Your income was ${primary.formatted} across ${finance.incomeCount} credit(s)${range}.` +
+      (top ? ` Largest: ${top.payee} (${top.total}).` : "")
+    );
+  }
+  return (
+    `Net total is ${primary.formatted} across ${finance.count} transaction(s)${range}` +
+    ` (spent ${finance.formatted.spent}, income ${finance.formatted.income}).` +
+    (top ? ` Largest: ${top.payee} (${top.total}).` : "")
+  );
+}
+
 export type QueryAnswer = {
   answer: string;
   confidence: number;
@@ -111,6 +153,8 @@ export type QueryAnswer = {
   threadId: string | null;
   /** Persisted assistant message id for feedback. */
   assistantMessageId?: string | null;
+  /** Which systems were consulted for this answer (trust UI). */
+  sourcesConsulted?: SourceConsulted[];
   privacy: {
     model: string | null;
     dataLeftDevice: boolean;
@@ -125,6 +169,7 @@ export type QueryStreamMeta = {
   relatedRecords: { entityType: string; entityId: string; title: string }[];
   images: AskAnswerImage[];
   privacy: QueryAnswer["privacy"];
+  sourcesConsulted?: SourceConsulted[];
 };
 
 /** Streaming callbacks for the SSE Ask endpoint. */
@@ -188,9 +233,17 @@ export async function queryRecallForUser(
   const degraded = status.degraded;
   const stream = options?.stream ?? null;
   let streamMetaEmitted = false;
-  const waitingIntent = WAITING_INTENT.test(question);
-  const personIntent = PERSON_INTENT.test(question);
-  const familyIntent = FAMILY_RELATION_INTENT.test(question);
+  const sourcesConsulted: SourceConsulted[] = [];
+
+  const ambiguity = detectAskAmbiguity(question);
+  const workingQuestion = ambiguity.needsClarify
+    ? question
+    : ambiguity.normalizedQuestion;
+  const sourcePlan = routeSourcePlan(workingQuestion);
+
+  const waitingIntent = WAITING_INTENT.test(workingQuestion);
+  const personIntent = PERSON_INTENT.test(workingQuestion);
+  const familyIntent = FAMILY_RELATION_INTENT.test(workingQuestion);
 
   const thread = await ensureAskThreadForUser(userId, options?.threadId, question);
   const priorTurns = await listRecentTurnsForThread(userId, thread.id);
@@ -198,7 +251,10 @@ export async function queryRecallForUser(
   const conversation: ConversationTurn[] = familyIntent
     ? priorTurns.filter((t) => t.role === "user").slice(-3)
     : priorTurns;
-  const retrievalQuestion = retrievalQueryFromHistory(question, conversation);
+  const retrievalQuestion = retrievalQueryFromHistory(
+    workingQuestion,
+    conversation,
+  );
 
   await appendAskMessage({
     userId,
@@ -206,6 +262,50 @@ export async function queryRecallForUser(
     role: "user",
     content: question,
   });
+
+  // Shared finish helper is declared later; for clarify we need a local early path.
+  if (ambiguity.needsClarify) {
+    const clarifyAnswer: QueryAnswer = {
+      answer: ambiguity.question,
+      confidence: 0.7,
+      caveats: "Clarifying before searching so I don't guess the wrong date or filter.",
+      evidence: [],
+      relatedRecords: [],
+      images: [],
+      suggestedNextAction: ambiguity.suggestions[0]
+        ? `Reply “${ambiguity.suggestions[0]}”`
+        : null,
+      promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+      degraded: false,
+      threadId: thread.id,
+      sourcesConsulted: [],
+      privacy: {
+        model: null,
+        dataLeftDevice: true,
+        categoriesSent: [],
+      },
+    };
+    const assistantMsg = await appendAskMessage({
+      userId,
+      threadId: thread.id,
+      role: "assistant",
+      content: clarifyAnswer.answer,
+      metadata: buildAskAnswerMetadata(clarifyAnswer),
+    });
+    clarifyAnswer.assistantMessageId = assistantMsg.id;
+    if (stream) {
+      stream.onMeta({
+        threadId: thread.id,
+        evidence: [],
+        relatedRecords: [],
+        images: [],
+        privacy: clarifyAnswer.privacy,
+        sourcesConsulted: [],
+      });
+      stream.onToken(clarifyAnswer.answer);
+    }
+    return clarifyAnswer;
+  }
 
   // retrieveRelevantRecords already loads the task list while building the corpus,
   // so reuse it here instead of issuing a duplicate listTasksForUser query.
@@ -219,7 +319,7 @@ export async function queryRecallForUser(
       familyIntent || /\b(email|emails|gmail|inbox|mail)\b/i.test(retrievalQuestion) ? 16 : 12,
       // FTS uses only the current turn so prior thread context (emails, etc.)
       // doesn't AND-pollute the notes query.
-      { noteSearchQuery: question },
+      { noteSearchQuery: workingQuestion },
     ),
     waitingIntent || personIntent
       ? listWaitingOnForUser(userId, 12)
@@ -257,6 +357,8 @@ export async function queryRecallForUser(
 
   let finance: QueryFinanceAggregate | null = null;
   let financeNeedsSync = false;
+  let financeConnectorMissing = false;
+  let financePayeeDistrusted = false;
   const evidence: EvidenceDto[] = [];
 
   if (waitingItems.length > 0) {
@@ -283,70 +385,125 @@ export async function queryRecallForUser(
     }
   }
 
-  if (
-    FINANCE_INTENT.test(question) ||
-    FINANCE_BREAKDOWN_INTENT.test(question) ||
-    FINANCE_INTENT.test(retrievalQuestion)
-  ) {
-    // Don't block the answer on an external MyFamilyBudget sync. Serve the
-    // currently-synced data now and refresh in the background for next time;
-    // loadSyncedFinanceAggregate still flags needsSync when nothing is synced yet.
-    void ensureUserFinanceFresh(userId, { awaitSync: false });
+  const wantsFinance =
+    sourcePlan.required.includes("finance") ||
+    FINANCE_INTENT.test(workingQuestion) ||
+    FINANCE_BREAKDOWN_INTENT.test(workingQuestion) ||
+    FINANCE_INTENT.test(retrievalQuestion);
+
+  if (wantsFinance) {
+    // Accuracy first: wait for a fresh MyFamilyBudget sync on finance questions.
+    await ensureUserFinanceFresh(userId, { awaitSync: true, maxAgeMs: 5 * 60_000 });
     try {
-      const synced = await loadSyncedFinanceAggregate(userId, retrievalQuestion, today);
-      if (synced) {
-        finance = synced.finance;
-        financeNeedsSync = synced.needsSync;
-        const metric = financeMetricForQuestion(retrievalQuestion);
-        const primary = primaryFinanceFigure(finance, metric);
-        const wantsBreakdown = FINANCE_BREAKDOWN_INTENT.test(question);
-        evidence.push(
-          makeEvidence({
-            claimType: "amount_calculated_from",
-            evidenceText: synced.needsSync
-              ? "Finance connector is configured but no transactions are synced yet. Sync on Connectors first."
-              : `Primary (${primary.label}): ${primary.formatted}. Spent ${finance.formatted.spent} (${finance.expenseCount} expenses), income ${finance.formatted.income} (${finance.incomeCount} credits), net ${finance.formatted.net} across ${finance.count} transaction(s)${
-                  finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""
-                }. Source: synced MyFamilyBudget records in Recall.`,
-            metadata: {
-              rangeLabel: finance.rangeLabel,
-              metric,
-              spent: finance.spent,
-              income: finance.income,
-              net: finance.total,
-              formatted: finance.formatted,
-              topPayees: finance.formatted.topPayees.slice(0, 5),
-              topCategories: finance.formatted.topCategories.slice(0, 5),
-              transactionCount: finance.transactions.length,
-              wantsBreakdown,
-              connectorId: synced.connectorId,
-              payeeFilter: synced.payeeFilter,
-              needsSync: synced.needsSync,
-              source: "synced_source_records",
-            },
-          }),
+      const connectors = await listConnectorsForUser(userId);
+      const financeConn = connectors.find((c) => c.type === "finance_api" && c.enabled);
+      if (!financeConn) {
+        financeConnectorMissing = true;
+        sourcesConsulted.push({
+          id: "finance",
+          label: "MyFamilyBudget",
+          status: "missing",
+          detail: "No finance connector enabled",
+        });
+      } else {
+        let synced = await loadSyncedFinanceAggregate(
+          userId,
+          retrievalQuestion,
+          today,
         );
-        if (wantsBreakdown) {
-          for (const t of finance.transactions.slice(0, 80)) {
-            evidence.push(
-              makeEvidence({
-                claimType: "amount_calculated_from",
-                evidenceText: `${t.date} | ${t.payee} | ${t.amountFormatted}${
-                  t.category ? ` | ${t.category}` : ""
-                }`,
-                metadata: {
-                  relatedEntityType: "finance_transaction",
-                  payee: t.payee,
-                  date: t.date,
-                  amount: t.amount,
-                },
-              }),
-            );
+        // Empty-filter distrust: a payee filter that zeros everything out is
+        // usually a bad extract — re-run without payee before reporting $0.
+        if (
+          synced &&
+          !synced.needsSync &&
+          synced.payeeFilter &&
+          synced.finance.count === 0
+        ) {
+          const unfiltered = await loadSyncedFinanceAggregate(
+            userId,
+            retrievalQuestion,
+            today,
+            { skipPayeeHint: true },
+          );
+          if (unfiltered && unfiltered.finance.count > 0) {
+            financePayeeDistrusted = true;
+            synced = unfiltered;
+          }
+        }
+        if (synced) {
+          finance = synced.finance;
+          financeNeedsSync = synced.needsSync;
+          sourcesConsulted.push({
+            id: "finance",
+            label: "MyFamilyBudget",
+            status: synced.needsSync
+              ? "empty"
+              : financePayeeDistrusted
+                ? "ok"
+                : "ok",
+            detail: synced.needsSync
+              ? "Connected but no transactions synced yet"
+              : financePayeeDistrusted
+                ? `Ignored suspicious payee filter “${synced.payeeFilter ?? "?"}”; showing unfiltered totals`
+                : `Synced · ${synced.finance.count} transaction(s)`,
+            hitCount: synced.finance.count,
+          });
+          const metric = financeMetricForQuestion(retrievalQuestion);
+          const primary = primaryFinanceFigure(finance, metric);
+          const wantsBreakdown = FINANCE_BREAKDOWN_INTENT.test(workingQuestion);
+          evidence.push(
+            makeEvidence({
+              claimType: "amount_calculated_from",
+              evidenceText: synced.needsSync
+                ? "Finance connector is configured but no transactions are synced yet. Sync on Connectors first."
+                : `Primary (${primary.label}): ${primary.formatted}. Spent ${finance.formatted.spent} (${finance.expenseCount} expenses), income ${finance.formatted.income} (${finance.incomeCount} credits), net ${finance.formatted.net} across ${finance.count} transaction(s)${
+                    finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""
+                  }. Source: synced MyFamilyBudget records in Recall.`,
+              metadata: {
+                rangeLabel: finance.rangeLabel,
+                metric,
+                spent: finance.spent,
+                income: finance.income,
+                net: finance.total,
+                formatted: finance.formatted,
+                topPayees: finance.formatted.topPayees.slice(0, 5),
+                topCategories: finance.formatted.topCategories.slice(0, 5),
+                transactionCount: finance.transactions.length,
+                wantsBreakdown,
+                connectorId: synced.connectorId,
+                payeeFilter: financePayeeDistrusted ? null : synced.payeeFilter,
+                needsSync: synced.needsSync,
+                source: "synced_source_records",
+              },
+            }),
+          );
+          if (wantsBreakdown) {
+            for (const t of finance.transactions.slice(0, 80)) {
+              evidence.push(
+                makeEvidence({
+                  claimType: "amount_calculated_from",
+                  evidenceText: `${t.date} | ${t.payee} | ${t.amountFormatted}${
+                    t.category ? ` | ${t.category}` : ""
+                  }`,
+                  metadata: {
+                    relatedEntityType: "finance_transaction",
+                    payee: t.payee,
+                    date: t.date,
+                    amount: t.amount,
+                  },
+                }),
+              );
+            }
           }
         }
       }
     } catch {
-      // Finance data unavailable — proceed without it.
+      sourcesConsulted.push({
+        id: "finance",
+        label: "MyFamilyBudget",
+        status: "error",
+        detail: "Finance sync or load failed",
+      });
     }
   }
 
@@ -436,14 +593,18 @@ export async function queryRecallForUser(
     };
   });
   const wantsEmailAsk =
-    isEmailSearchIntent(question) || isEmailSearchIntent(retrievalQuestion);
+    sourcePlan.required.includes("gmail") ||
+    isEmailSearchIntent(workingQuestion) ||
+    isEmailSearchIntent(retrievalQuestion);
   const wantsDriveAsk =
-    isDriveSearchIntent(question) || isDriveSearchIntent(retrievalQuestion);
+    sourcePlan.required.includes("drive") ||
+    isDriveSearchIntent(workingQuestion) ||
+    isDriveSearchIntent(retrievalQuestion);
 
   const retrievalContext = relevant.map((r, rankIndex) => {
     const date = formatInstantForUser(r.updatedAt);
     const body = promptTextForRetrievedRecord(r, {
-      question,
+      question: workingQuestion,
       rankIndex,
       emailIntent: wantsEmailAsk,
       forceExpand: r.method === "keyword" && r.entityType === "note",
@@ -474,27 +635,45 @@ export async function queryRecallForUser(
     date?: string | null;
     pinned?: boolean;
   }[] = [];
+  let liveGmailHitCount = 0;
+  let liveDriveHitCount = 0;
+  let lastGmailQuery: string | null = null;
+  let topGmailHit: {
+    mailbox: string;
+    title: string;
+    text: string;
+    sourceCreatedAt: string | null;
+  } | null = null;
 
   if (wantsEmailAsk || wantsDriveAsk) {
     const mailboxes = await getConnectedGoogleMailboxes(userId);
-    const mailboxHint = extractMailboxHint(question, mailboxes);
+    const mailboxHint = extractMailboxHint(workingQuestion, mailboxes);
     const accountsLabel =
       mailboxes.length > 0 ? mailboxes.join(", ") : "your connected Google accounts";
 
+    if (wantsEmailAsk && mailboxes.length === 0) {
+      sourcesConsulted.push({
+        id: "gmail",
+        label: "Gmail",
+        status: "missing",
+        detail: "No Google account connected",
+      });
+    }
+
     const [gmailPlanRaw, drivePlan] = await Promise.all([
-      wantsEmailAsk
+      wantsEmailAsk && mailboxes.length > 0
         ? planGmailSearch(retrievalQuestion).then((p) =>
             p ??
-            (retrievalQuestion.trim() !== question.trim()
-              ? planGmailSearch(question)
+            (retrievalQuestion.trim() !== workingQuestion.trim()
+              ? planGmailSearch(workingQuestion)
               : null),
           )
         : Promise.resolve(null),
-      wantsDriveAsk
+      wantsDriveAsk && mailboxes.length > 0
         ? planDriveSearch(retrievalQuestion).then((p) =>
             p ??
-            (retrievalQuestion.trim() !== question.trim()
-              ? planDriveSearch(question)
+            (retrievalQuestion.trim() !== workingQuestion.trim()
+              ? planDriveSearch(workingQuestion)
               : null),
           )
         : Promise.resolve(null),
@@ -505,12 +684,26 @@ export async function queryRecallForUser(
           gmailPlanRaw,
           namedPeople[0],
           retrievalQuestion,
-          question,
+          workingQuestion,
         )
       : gmailPlanRaw;
 
+    // If planner still has a relation literal and we have no named person, refuse later.
+    if (
+      gmailPlan?.personName &&
+      isRelationLiteral(gmailPlan.personName) &&
+      !namedPeople[0]
+    ) {
+      sourcesConsulted.push({
+        id: "gmail",
+        label: "Gmail",
+        status: "error",
+        detail: `Could not resolve “${gmailPlan.personName}” to a person in People`,
+      });
+    }
+
     const [gmailHits, driveHits] = await Promise.all([
-      gmailPlan?.query
+      gmailPlan?.query && !isRelationLiteral(gmailPlan.personName)
         ? liveSearchGmailForUser(userId, gmailPlan.query, {
             mailboxHint,
             maxPerMailbox: 15,
@@ -525,7 +718,29 @@ export async function queryRecallForUser(
         : Promise.resolve([]),
     ]);
 
+    liveGmailHitCount = gmailHits.length;
+    liveDriveHitCount = driveHits.length;
+    lastGmailQuery = gmailPlan?.query ?? null;
+    if (gmailHits[0]) {
+      topGmailHit = {
+        mailbox: gmailHits[0].mailbox,
+        title: gmailHits[0].title,
+        text: gmailHits[0].text,
+        sourceCreatedAt: gmailHits[0].sourceCreatedAt,
+      };
+    }
+
     if (gmailPlan?.query) {
+      sourcesConsulted.push({
+        id: "gmail",
+        label: "Gmail",
+        status: gmailHits.length > 0 ? "ok" : "empty",
+        detail:
+          gmailHits.length > 0
+            ? `${gmailHits.length} message(s) · ${accountsLabel}`
+            : `No messages for “${gmailPlan.query}” across ${accountsLabel}`,
+        hitCount: gmailHits.length,
+      });
       for (const hit of gmailHits.slice(0, 24)) {
         const date = formatInstantForUser(hit.sourceCreatedAt);
         liveMailContext.push({
@@ -573,6 +788,16 @@ export async function queryRecallForUser(
     }
 
     if (drivePlan?.query) {
+      sourcesConsulted.push({
+        id: "drive",
+        label: "Google Drive",
+        status: driveHits.length > 0 ? "ok" : "empty",
+        detail:
+          driveHits.length > 0
+            ? `${driveHits.length} file(s)`
+            : `No files for “${drivePlan.query}”`,
+        hitCount: driveHits.length,
+      });
       for (const hit of driveHits.slice(0, 24)) {
         const date = formatInstantForUser(hit.sourceCreatedAt);
         liveMailContext.push({
@@ -674,6 +899,7 @@ export async function queryRecallForUser(
       answer,
       images,
       threadId: thread.id,
+      sourcesConsulted: result.sourcesConsulted ?? sourcesConsulted,
       privacy: result.privacy ?? {
         model: status.model,
         dataLeftDevice: !result.degraded && Boolean(status.enabled),
@@ -692,6 +918,7 @@ export async function queryRecallForUser(
           relatedRecords: withPrivacy.relatedRecords,
           images: withPrivacy.images,
           privacy: withPrivacy.privacy,
+          sourcesConsulted: withPrivacy.sourcesConsulted,
         });
       }
       if (!streamOpts?.streamed) {
@@ -830,22 +1057,174 @@ export async function queryRecallForUser(
   }
 
   // Full transaction lists are deterministic — don't let the model truncate them.
-  if (finance && !financeNeedsSync && FINANCE_BREAKDOWN_INTENT.test(question)) {
+  if (finance && !financeNeedsSync && FINANCE_BREAKDOWN_INTENT.test(workingQuestion)) {
+    const verdict = confidenceFromSources({
+      requiredOk: true,
+      requiredEmptyAfterSafeFilter: finance.expenseCount === 0 && finance.incomeCount === 0,
+      stale: false,
+      connectorMissing: false,
+      authError: false,
+      hasGrounding: true,
+    });
     return finish({
       answer: buildFinanceBreakdownAnswer(
         finance,
         financeMetricForQuestion(retrievalQuestion),
       ),
-      confidence: 0.95,
+      confidence: verdict.confidence,
       caveats:
         finance.count > finance.transactions.length
           ? `Listed ${finance.transactions.length} of ${finance.count} matching transactions.`
-          : null,
+          : financePayeeDistrusted
+            ? "Ignored a suspicious merchant filter that matched nothing."
+            : null,
       evidence,
       relatedRecords,
       suggestedNextAction: "Open Connectors → Finance",
       promptVersion: QUERY_ANSWER_PROMPT_VERSION,
       degraded: false,
+      sourcesConsulted,
+    });
+  }
+
+  // Connector health: finance required but missing.
+  if (sourcePlan.required.includes("finance") && financeConnectorMissing) {
+    return finish({
+      answer:
+        "I can't answer spending questions until MyFamilyBudget is connected. Open Connectors and connect Finance, then ask again.",
+      confidence: 0.35,
+      caveats: "Finance connector missing.",
+      evidence,
+      relatedRecords,
+      suggestedNextAction: "Open Connectors → Finance",
+      promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+      degraded: false,
+      sourcesConsulted,
+    });
+  }
+
+  if (sourcePlan.required.includes("finance") && financeNeedsSync) {
+    return finish({
+      answer:
+        "Your finance connector is set up, but no transactions are synced yet. Open Connectors and sync Finance, then ask again.",
+      confidence: 0.4,
+      caveats: "No synced finance records.",
+      evidence,
+      relatedRecords,
+      suggestedNextAction: "Open Connectors → Sync Finance",
+      promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+      degraded: false,
+      sourcesConsulted,
+    });
+  }
+
+  // Deterministic finance totals — LLM must not paraphrase the dollar amount.
+  if (
+    finance &&
+    !financeNeedsSync &&
+    (sourcePlan.answerMode === "deterministic_total" ||
+      (sourcePlan.required.includes("finance") &&
+        !FINANCE_BREAKDOWN_INTENT.test(workingQuestion)))
+  ) {
+    const metric = financeMetricForQuestion(retrievalQuestion);
+    const verdict = confidenceFromSources({
+      requiredOk: true,
+      requiredEmptyAfterSafeFilter:
+        metric === "spent"
+          ? finance.expenseCount === 0
+          : metric === "income"
+            ? finance.incomeCount === 0
+            : finance.count === 0,
+      stale: false,
+      connectorMissing: false,
+      authError: false,
+      hasGrounding: true,
+    });
+    return finish({
+      answer: buildFinanceTotalAnswer(finance, metric),
+      confidence: verdict.confidence,
+      caveats: financePayeeDistrusted
+        ? "Ignored a suspicious merchant filter that matched nothing; totals are for the date range only."
+        : null,
+      evidence,
+      relatedRecords,
+      suggestedNextAction: "Ask for a breakdown to see every transaction",
+      promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+      degraded: false,
+      sourcesConsulted,
+    });
+  }
+
+  // Deterministic last-email answer from top live hit.
+  if (sourcePlan.answerMode === "deterministic_email") {
+    if (sourcesConsulted.some((s) => s.id === "gmail" && s.status === "missing")) {
+      return finish({
+        answer:
+          "I can't search email until a Google account is connected. Open Connectors and connect Google, then ask again.",
+        confidence: 0.35,
+        caveats: "Gmail not connected.",
+        evidence,
+        relatedRecords,
+        suggestedNextAction: "Open Connectors → Google",
+        promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+        degraded: false,
+        sourcesConsulted,
+      });
+    }
+    if (
+      sourcesConsulted.some((s) =>
+        s.detail?.includes("Could not resolve"),
+      )
+    ) {
+      const who =
+        workingQuestion.match(/\bmy\s+(\w+)/i)?.[1] ?? "that person";
+      return finish({
+        answer: `I know you're asking about your ${who}, but I couldn't match that to someone in People. Add or update their role (e.g. role=wife), then ask again.`,
+        confidence: 0.55,
+        caveats: "Person not resolved.",
+        evidence,
+        relatedRecords,
+        suggestedNextAction: "Open People",
+        promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+        degraded: false,
+        sourcesConsulted,
+      });
+    }
+    if (topGmailHit) {
+      const date = formatInstantForUser(topGmailHit.sourceCreatedAt);
+      const fromLine =
+        topGmailHit.text.match(/^from:\s*(.+)$/im)?.[1]?.trim() ??
+        topGmailHit.text.match(/sender_name:\s*(.+)$/im)?.[1]?.trim() ??
+        "unknown sender";
+      const who = namedPeople[0]?.displayName ?? fromLine;
+      return finish({
+        answer: date
+          ? `The latest email from ${who} is “${topGmailHit.title}” (${date}, mailbox ${topGmailHit.mailbox}).`
+          : `The latest email from ${who} is “${topGmailHit.title}” (mailbox ${topGmailHit.mailbox}).`,
+        confidence: 0.95,
+        caveats: null,
+        evidence,
+        relatedRecords,
+        suggestedNextAction: null,
+        promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+        degraded: false,
+        sourcesConsulted,
+      });
+    }
+    return finish({
+      answer: lastGmailQuery
+        ? `I searched Gmail for “${lastGmailQuery}” and found no matching messages. If you expected mail from someone, check their People record email/name or try a broader phrasing.`
+        : "I couldn't build a Gmail search for that question. Try “last email from [name]”.",
+      confidence: 0.9,
+      caveats: "Live Gmail search returned no hits.",
+      evidence,
+      relatedRecords,
+      suggestedNextAction: namedPeople[0]
+        ? `Open People → ${namedPeople[0].displayName}`
+        : "Open Connectors → Google",
+      promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+      degraded: false,
+      sourcesConsulted,
     });
   }
 
@@ -927,16 +1306,43 @@ export async function queryRecallForUser(
           stream.onToken(delta),
         );
         const hasGrounding =
-          relevant.length > 0 || waitingItems.length > 0 || (finance && !financeNeedsSync);
+          relevant.length > 0 ||
+          waitingItems.length > 0 ||
+          liveGmailHitCount > 0 ||
+          liveDriveHitCount > 0 ||
+          (finance && !financeNeedsSync);
+        const verdict = confidenceFromSources({
+          requiredOk: Boolean(
+            (sourcePlan.required.includes("finance") && finance && !financeNeedsSync) ||
+              (sourcePlan.required.includes("gmail") && liveGmailHitCount > 0) ||
+              (sourcePlan.required.includes("drive") && liveDriveHitCount > 0) ||
+              sourcePlan.required.length === 0,
+          ),
+          requiredEmptyAfterSafeFilter: false,
+          stale: false,
+          connectorMissing: false,
+          authError: false,
+          hasGrounding: Boolean(hasGrounding),
+        });
+        let answerText = streamed.answer;
+        if (finance && !financeNeedsSync) {
+          const check = verifyFinanceAmountsInAnswer(answerText, [
+            finance.formatted.spent,
+            finance.formatted.income,
+            finance.formatted.net,
+            ...finance.formatted.topPayees.map((p) => p.total),
+            ...finance.transactions.slice(0, 40).map((t) => t.amountFormatted),
+          ]);
+          if (!check.ok) {
+            answerText = buildFinanceTotalAnswer(
+              finance,
+              financeMetricForQuestion(retrievalQuestion),
+            );
+          }
+        }
         const confidence = financeNeedsSync
           ? 0.4
-          : finance
-            ? 0.85
-            : hasGrounding
-              ? usedSemantic
-                ? 0.8
-                : 0.72
-              : 0.4;
+          : verdict.confidence;
         const caveats = financeNeedsSync
           ? "Finance data needs a sync on Connectors before totals are reliable."
           : !hasGrounding
@@ -944,7 +1350,7 @@ export async function queryRecallForUser(
             : null;
         return finish(
           {
-            answer: streamed.answer,
+            answer: answerText,
             confidence,
             caveats,
             evidence,
@@ -952,27 +1358,66 @@ export async function queryRecallForUser(
             suggestedNextAction: defaultNext,
             promptVersion: QUERY_ANSWER_PROMPT_VERSION,
             degraded: streamed.degraded,
+            sourcesConsulted,
           },
           { streamed: true },
         );
       }
 
       const ai = await aiService.answerQuery(answerRequest);
+      let answerText = ai.answer;
       let caveats = ai.caveats;
+      if (finance && !financeNeedsSync) {
+        const check = verifyFinanceAmountsInAnswer(answerText, [
+          finance.formatted.spent,
+          finance.formatted.income,
+          finance.formatted.net,
+          ...finance.formatted.topPayees.map((p) => p.total),
+          ...finance.transactions.slice(0, 40).map((t) => t.amountFormatted),
+        ]);
+        if (!check.ok) {
+          answerText = buildFinanceTotalAnswer(
+            finance,
+            financeMetricForQuestion(retrievalQuestion),
+          );
+          caveats = [caveats, "Corrected invented dollar amounts from synced totals."]
+            .filter(Boolean)
+            .join(" ");
+        }
+      }
       if (financeNeedsSync) {
         caveats = [caveats, "Finance data needs a sync on Connectors before totals are reliable."]
           .filter(Boolean)
           .join(" ");
       }
+      const hasGrounding =
+        relevant.length > 0 ||
+        waitingItems.length > 0 ||
+        liveGmailHitCount > 0 ||
+        liveDriveHitCount > 0 ||
+        (finance && !financeNeedsSync);
+      const verdict = confidenceFromSources({
+        requiredOk: Boolean(
+          (sourcePlan.required.includes("finance") && finance && !financeNeedsSync) ||
+            (sourcePlan.required.includes("gmail") && liveGmailHitCount > 0) ||
+            sourcePlan.required.length === 0,
+        ),
+        requiredEmptyAfterSafeFilter: false,
+        stale: false,
+        connectorMissing: false,
+        authError: false,
+        hasGrounding: Boolean(hasGrounding),
+      });
       return finish({
-        answer: ai.answer,
-        confidence: ai.confidence,
+        answer: answerText,
+        confidence: Math.min(ai.confidence, verdict.confidence),
         caveats,
         evidence,
         relatedRecords,
         suggestedNextAction: ai.suggestedNextAction ?? defaultNext,
         promptVersion: QUERY_ANSWER_PROMPT_VERSION,
         degraded: ai.degraded,
+        sourcesConsulted,
       });
     } catch {
       // Fall through to rule-based answer.

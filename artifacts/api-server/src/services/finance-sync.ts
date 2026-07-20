@@ -176,6 +176,8 @@ export async function loadSyncedFinanceAggregate(
     startDate?: string;
     endDate?: string;
     payee?: string;
+    /** When true, never extract a payee from the question (empty-filter distrust). */
+    skipPayeeHint?: boolean;
   },
 ): Promise<SyncedFinanceResult | null> {
   const connectors = await listConnectorsForUser(userId);
@@ -195,7 +197,9 @@ export async function loadSyncedFinanceAggregate(
         label: [options?.startDate, options?.endDate].filter(Boolean).join(" to "),
       }
     : parsedRange;
-  const payeeFilter = options?.payee?.trim() || extractPayeeHint(question);
+  const payeeFilter = options?.skipPayeeHint
+    ? null
+    : options?.payee?.trim() || extractPayeeHint(question);
 
   const rows = await getDb()
     .select({

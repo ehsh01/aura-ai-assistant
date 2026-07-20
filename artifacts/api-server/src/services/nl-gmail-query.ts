@@ -4,6 +4,7 @@ import {
   cleanMailPersonName,
   extractMailPersonName,
 } from "./connectors";
+import { isRelationLiteral } from "./ask-accuracy-policy";
 
 export type PlannedGmailSearch = {
   query: string;
@@ -330,20 +331,21 @@ Rules:
 }
 
 /**
- * Backfill a Gmail plan with a person already resolved elsewhere (e.g. Ask's
- * People/Life-Memory retrieval, which maps relationship words like "wife" to
- * an actual contact via their `role` field). Neither the heuristic nor the AI
- * planner above sees that resolved corpus, so relationship phrasing such as
- * "my wife's last email" would otherwise plan a literal "wife" keyword search
- * that can never match a real inbox — only fill in when the planner (or the
- * caller, when plan is null) found no person of its own.
+ * Prefer a person already resolved from People/Life Memory over whatever the
+ * Gmail planner invented. Relationship phrasing ("my wife's last email") often
+ * produces personName="wife" from AI/heuristics — that must be overridden, not
+ * only filled when null.
  */
 export function backfillGmailPlanWithNamedPerson(
   plan: PlannedGmailSearch | null,
   person: { displayName: string; email?: string | null } | null | undefined,
   ...dateSourceTexts: string[]
 ): PlannedGmailSearch | null {
-  if (!person || plan?.personName) return plan;
+  if (!person) return plan;
+  const plannerName = plan?.personName?.trim() ?? null;
+  // Keep a real proper name the planner found; override relation literals / empty.
+  if (plannerName && !isRelationLiteral(plannerName)) return plan;
+
   const personQuery = buildGmailPersonQuery(person.displayName, person.email ?? null);
   if (!personQuery) return plan;
   let datePart: string | null = null;

@@ -1,5 +1,6 @@
 import type { EvidenceDto } from "./evidence";
 import type { AskAnswerImage } from "./ask-images";
+import type { SourceConsulted } from "./ask-accuracy-policy";
 
 export type PersistedAskAnswerMetadata = {
   confidence: number;
@@ -15,6 +16,7 @@ export type PersistedAskAnswerMetadata = {
   suggestedNextAction: string | null;
   promptVersion: string;
   degraded: boolean;
+  sourcesConsulted?: SourceConsulted[];
 };
 
 /** Preserve the exact source snapshots used for an answer in its thread row. */
@@ -31,5 +33,6 @@ export function buildAskAnswerMetadata(
     suggestedNextAction: answer.suggestedNextAction,
     promptVersion: answer.promptVersion,
     degraded: answer.degraded,
+    sourcesConsulted: (answer.sourcesConsulted ?? []).slice(0, 8),
   };
 }

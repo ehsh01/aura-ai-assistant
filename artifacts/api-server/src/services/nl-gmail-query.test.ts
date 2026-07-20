@@ -99,6 +99,15 @@ describe("backfillGmailPlanWithNamedPerson", () => {
     expect(backfilled?.personName?.toLowerCase()).toContain("nancy");
   });
 
+  it("overrides a relation-literal personName from the planner", () => {
+    const backfilled = backfillGmailPlanWithNamedPerson(
+      { query: "from:wife", personName: "wife", source: "ai" },
+      { displayName: "Sandra Hernandez", email: "s@example.com" },
+    );
+    expect(backfilled?.personName).toBe("Sandra Hernandez");
+    expect(backfilled?.query).toContain("from:s@example.com");
+  });
+
   it("adds a date constraint when the question mentions one", () => {
     const backfilled = backfillGmailPlanWithNamedPerson(
       null,

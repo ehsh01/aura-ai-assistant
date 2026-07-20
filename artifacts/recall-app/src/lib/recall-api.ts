@@ -811,6 +811,14 @@ export type AskAnswerImage = {
   mimeType: string;
 };
 
+export type SourceConsulted = {
+  id: string;
+  label: string;
+  status: "ok" | "empty" | "stale" | "missing" | "auth_error" | "error";
+  detail?: string | null;
+  hitCount?: number | null;
+};
+
 export type QueryRecallResult = {
   answer: string;
   confidence: number;
@@ -821,6 +829,7 @@ export type QueryRecallResult = {
   suggestedNextAction: string | null;
   threadId: string | null;
   assistantMessageId?: string | null;
+  sourcesConsulted?: SourceConsulted[];
   privacy?: {
     model: string | null;
     dataLeftDevice: boolean;
@@ -834,6 +843,7 @@ export type QueryRecallStreamMeta = {
   relatedRecords: { entityType: string; entityId: string; title: string }[];
   images?: AskAnswerImage[];
   privacy?: QueryRecallResult["privacy"];
+  sourcesConsulted?: SourceConsulted[];
 };
 
 export async function queryRecall(
