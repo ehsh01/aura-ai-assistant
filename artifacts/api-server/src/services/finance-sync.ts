@@ -50,18 +50,86 @@ export function financeSummaryFromSynced(result: SyncedFinanceResult): {
   };
 }
 
-/** Pull a likely payee/merchant name out of a spending question. */
+// Generic words that regularly follow "spend"/"spent"/"pay" in ordinary
+// phrasing but are never merchant names on their own (e.g. "did I spend
+// *any* money today?", "did I spend *anything*?"). Treating one of these as
+// a payee filter used to silently zero out every real transaction because
+// no payee literally contains the word "any" — the answer would then
+// (wrongly) report $0 spent with full confidence. Every word making up the
+// candidate must fail this check for it to be trusted as a real merchant.
+const PAYEE_STOPWORDS = new Set([
+  "last",
+  "this",
+  "the",
+  "my",
+  "a",
+  "an",
+  "month",
+  "week",
+  "year",
+  "today",
+  "yesterday",
+  "money",
+  "cash",
+  "any",
+  "anything",
+  "something",
+  "some",
+  "much",
+  "more",
+  "extra",
+  "it",
+  "on",
+  "for",
+  "in",
+  "of",
+  "up",
+  "out",
+  "else",
+  "so",
+  "too",
+  "many",
+  "lot",
+  "lots",
+  "all",
+  "that",
+  "those",
+  "these",
+  "things",
+  "stuff",
+  "dollar",
+  "dollars",
+]);
+
+/** True when every word in a candidate merchant match is a generic filler word. */
+function isPayeeStopPhrase(raw: string): boolean {
+  const words = raw.toLowerCase().split(/\s+/).filter(Boolean);
+  return words.length === 0 || words.every((w) => PAYEE_STOPWORDS.has(w));
+}
+
+/**
+ * Pull a likely payee/merchant name out of a spending question.
+ * Both patterns require an actual preposition (at/on/to/from/with/for) right
+ * before the candidate word. A prior version let the second pattern grab
+ * *any* bare word immediately after "spent"/"paid" with no preposition —
+ * that swallowed typos of date words ("how much did I spent yeaterday in
+ * total" -> payee "yeaterday") and fillers ("did I spend any money" ->
+ * payee "any") as if they were merchant names, silently zeroing out every
+ * real transaction and reporting "you did not spend any money" at full
+ * confidence. Requiring a preposition (plus the stopword guard below) means
+ * an unrecognized word is left as "no merchant filter" instead of a bogus
+ * one — missing a real filter is far safer than fabricating one.
+ */
 export function extractPayeeHint(question: string): string | null {
   const patterns = [
-    /\b(?:at|from|to|with)\s+([A-Za-z0-9&.'\-\s]{2,40}?)(?:\s+(?:last|this|in|for|during|on)\b|[?.!]|$)/i,
-    /\b(?:spent|spend|spending|paid|pay|bought|purchase(?:d)?)\s+(?:at\s+)?([A-Za-z0-9&.'\-]{2,40})\b/i,
+    /\b(?:at|from|to|with|on)\s+([A-Za-z0-9&.'\-\s]{2,40}?)(?:\s+(?:last|this|in|for|during|on)\b|[?.!]|$)/i,
+    /\b(?:spent|spend|spending|paid|pay|bought|purchase(?:d)?)\s+(?:at|on|for|to|from|with)\s+([A-Za-z0-9&.'\-]{2,40})\b/i,
   ];
   for (const re of patterns) {
     const m = question.match(re);
     const raw = m?.[1]?.trim();
     if (!raw) continue;
-    // Drop generic time/filler words that aren't merchants.
-    if (/^(last|this|the|my|a|an|month|week|year|today|money|cash)$/i.test(raw)) continue;
+    if (isPayeeStopPhrase(raw)) continue;
     return raw.replace(/\s+/g, " ").slice(0, 60);
   }
   return null;

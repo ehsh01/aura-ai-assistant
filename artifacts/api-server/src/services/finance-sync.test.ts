@@ -14,6 +14,41 @@ describe("extractPayeeHint", () => {
   it("returns null when no merchant is present", () => {
     expect(extractPayeeHint("How much did I spend this month?")).toBeNull();
   });
+
+  it("does not treat 'any' as a merchant (false $0 spent bug)", () => {
+    expect(extractPayeeHint("did I spend any money today?")).toBeNull();
+  });
+
+  it("does not treat 'anything' as a merchant", () => {
+    expect(extractPayeeHint("did I spend anything today?")).toBeNull();
+  });
+
+  it("does not treat a trailing filler word as a merchant", () => {
+    expect(extractPayeeHint("how much have I spent this week?")).toBeNull();
+  });
+
+  it("finds the real merchant after 'spend on'", () => {
+    expect(extractPayeeHint("how much did I spend on Amazon this month?")).toBe(
+      "Amazon",
+    );
+  });
+
+  it("does not treat 'at all' as a merchant", () => {
+    expect(extractPayeeHint("did I spend at all today?")).toBeNull();
+  });
+
+  it("does not treat a typo of a date word as a merchant (real production bug)", () => {
+    // Actual user question that triggered "You did not spend any money
+    // yesterday." even though the day had real transactions — "yeaterday"
+    // isn't a preposition-led merchant, so it must not become a payee filter.
+    expect(
+      extractPayeeHint("how much money did i spent yeaterday in total"),
+    ).toBeNull();
+  });
+
+  it("requires a preposition, not just any bare word after 'spend'", () => {
+    expect(extractPayeeHint("how much did I spend groceries this week")).toBeNull();
+  });
 });
 
 describe("financeSummaryFromSynced", () => {
