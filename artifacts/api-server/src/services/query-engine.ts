@@ -451,7 +451,9 @@ export async function queryRecallForUser(
       } else {
         let synced = await loadSyncedFinanceAggregate(
           userId,
-          retrievalQuestion,
+          // Use the current question only — history concatenation can inject an
+          // older "yesterday" and steal the date from "day before yesterday".
+          workingQuestion,
           today,
         );
         // Empty-filter distrust: a payee filter that zeros everything out is
@@ -464,7 +466,7 @@ export async function queryRecallForUser(
         ) {
           const unfiltered = await loadSyncedFinanceAggregate(
             userId,
-            retrievalQuestion,
+            workingQuestion,
             today,
             { skipPayeeHint: true },
           );
@@ -491,7 +493,7 @@ export async function queryRecallForUser(
                 : `Synced · ${synced.finance.count} transaction(s)`,
             hitCount: synced.finance.count,
           });
-          const metric = financeMetricForQuestion(retrievalQuestion);
+          const metric = financeMetricForQuestion(workingQuestion);
           const primary = primaryFinanceFigure(finance, metric);
           const wantsBreakdown = FINANCE_BREAKDOWN_INTENT.test(workingQuestion);
           evidence.push(
@@ -1190,7 +1192,7 @@ export async function queryRecallForUser(
       (sourcePlan.required.includes("finance") &&
         !FINANCE_BREAKDOWN_INTENT.test(workingQuestion)))
   ) {
-    const metric = financeMetricForQuestion(retrievalQuestion);
+    const metric = financeMetricForQuestion(workingQuestion);
     const verdict = confidenceFromSources({
       requiredOk: true,
       requiredEmptyAfterSafeFilter:
@@ -1204,6 +1206,11 @@ export async function queryRecallForUser(
       authError: false,
       hasGrounding: true,
     });
+    const financeOnlyEvidence = evidence.filter(
+      (ev) =>
+        ev.claimType === "amount_calculated_from" ||
+        ev.evidenceMetadata?.source === "synced_source_records",
+    );
     return finish({
       answer: buildFinanceTotalAnswer(finance, metric),
       confidence: verdict.confidence,
@@ -1217,12 +1224,18 @@ export async function queryRecallForUser(
       ]
         .filter(Boolean)
         .join(" ") || null,
-      evidence,
-      relatedRecords,
-      suggestedNextAction: "Ask for a breakdown to see every transaction",
+      evidence: financeOnlyEvidence.slice(0, 1),
+      relatedRecords: [],
+      suggestedNextAction: null,
       promptVersion: QUERY_ANSWER_PROMPT_VERSION,
       degraded: false,
-      sourcesConsulted,
+      sourcesConsulted: sourcesConsulted.filter((s) => s.id === "finance"),
+      presentation: "compact",
+      privacy: {
+        model: null,
+        dataLeftDevice: false,
+        categoriesSent: ["finance_transaction"],
+      },
     });
   }
 
