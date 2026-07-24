@@ -155,6 +155,13 @@ export function parseDateRange(
   if (/\b(today|due today)\b/.test(q)) {
     return { startDate: today, endDate: today, label: "today" };
   }
+  // Must run before the bare "yesterday" match ("day before yesterday" contains it).
+  if (/\bday before yesterday\b|\b2 days ago\b|\btwo days ago\b/.test(q)) {
+    const d = new Date(`${today}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - 2);
+    const day = d.toISOString().slice(0, 10);
+    return { startDate: day, endDate: day, label: "the day before yesterday" };
+  }
   if (/\byesterday\b/.test(q)) {
     const d = new Date(`${today}T12:00:00Z`);
     d.setUTCDate(d.getUTCDate() - 1);

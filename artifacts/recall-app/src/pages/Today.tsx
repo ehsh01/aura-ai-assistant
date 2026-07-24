@@ -254,7 +254,13 @@ export function Today() {
     <AppLayout>
       <div className="nebula-bg relative h-full text-zinc-100">
         <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
-          <NeuralBrainBackground graph={brainGraph} opacity={0.22} />
+          <NeuralBrainBackground
+            graph={brainGraph}
+            opacity={0.22}
+            density={0.75}
+            speed={0.6}
+            intensity={0.7}
+          />
           <div className="orb-1 nebula-orb opacity-20" />
           <div className="orb-3 nebula-orb opacity-10" />
         </div>

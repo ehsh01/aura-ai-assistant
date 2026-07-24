@@ -830,6 +830,7 @@ export type QueryRecallResult = {
   threadId: string | null;
   assistantMessageId?: string | null;
   sourcesConsulted?: SourceConsulted[];
+  presentation?: "full" | "compact";
   privacy?: {
     model: string | null;
     dataLeftDevice: boolean;
@@ -924,6 +925,8 @@ export async function planAskInput(
   return apiFetch("/ai/plan", {
     method: "POST",
     body: JSON.stringify({ text, threadId: options?.threadId ?? undefined }),
+    // Finance sync + live Gmail can be slow; fail the UI instead of spinning forever.
+    signal: AbortSignal.timeout(45_000),
   });
 }
 

@@ -590,6 +590,22 @@ export type LiveGmailHit = {
   sourceCreatedAt: string | null;
 };
 
+/** Prefer authuser so multi-account Gmail opens the right mailbox. */
+export function gmailOpenUrl(
+  sourceUrl: string | null | undefined,
+  mailbox: string | null | undefined,
+): string | null {
+  if (!sourceUrl) return null;
+  const idMatch = sourceUrl.match(/#(?:inbox|all|label\/[^/]+)\/([a-zA-Z0-9_-]+)/);
+  const messageId = idMatch?.[1];
+  if (!messageId) return sourceUrl;
+  const account = mailbox?.trim();
+  if (account && account.includes("@")) {
+    return `https://mail.google.com/mail/?authuser=${encodeURIComponent(account)}#inbox/${messageId}`;
+  }
+  return `https://mail.google.com/mail/u/0/#inbox/${messageId}`;
+}
+
 export type LiveDriveHit = {
   /** Owning connected account (Google email). */
   account: string;
@@ -708,7 +724,7 @@ export async function liveSearchGmailForUser(
             title: r.recordTitle,
             text: mailbox ? `Mailbox: ${mailbox}\n${r.recordText}` : r.recordText,
             externalId: r.externalId,
-            sourceUrl: r.sourceUrl ?? null,
+            sourceUrl: gmailOpenUrl(r.sourceUrl, mailbox),
             sourceCreatedAt: r.sourceCreatedAt ?? null,
           }));
         } catch {

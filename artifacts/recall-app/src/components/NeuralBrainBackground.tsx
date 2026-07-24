@@ -6,15 +6,45 @@ import {
   type ProjectedPoint,
 } from "@/lib/neural-brain";
 
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
+const fract = (value: number) => value - Math.floor(value);
+
 type Props = {
   graph?: MemoryGraphInput;
   className?: string;
   /** Overall canvas opacity. */
   opacity?: number;
-  /** Brighter particles/synapses (Home oracle). */
-  intensity?: "normal" | "vivid";
+  /**
+   * Glow / alpha strength (memory-network style).
+   * Useful range ~0.6–1.1; default 0.8 for a calm app background.
+   */
+  intensity?: number;
+  /**
+   * Particle-budget multiplier.
+   * Useful range ~0.6–1.3; default 0.9.
+   */
+  density?: number;
+  /**
+   * Animation speed multiplier.
+   * Useful range ~0.5–1.1; default 0.7.
+   */
+  speed?: number;
+  /**
+   * Cursor drift + local repel. Keep off on input-heavy Ask Home.
+   */
+  interactive?: boolean;
   /** Scale the constellation to cover most of the viewport. */
   fillScreen?: boolean;
+};
+
+type RecallSignal = {
+  a: number;
+  b: number;
+  offset: number;
+  rate: number;
+  size: number;
 };
 
 function prefersReducedMotion(): boolean {
@@ -22,6 +52,13 @@ function prefersReducedMotion(): boolean {
     typeof window !== "undefined" &&
     window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
+}
+
+function prefersSaveData(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const conn = (navigator as Navigator & { connection?: { saveData?: boolean } })
+    .connection;
+  return Boolean(conn?.saveData);
 }
 
 function isMobileViewport(): boolean {
@@ -80,17 +117,82 @@ function withCursorRepel(
       if (d2 < repelR2 && d2 > 0.0001) {
         const d = Math.sqrt(d2);
         const falloff = 1 - d / repelR;
-        // Smooth falloff: strong near the cursor, gentle at the edge.
         const push = falloff * falloff * maxPush;
         dx = (ox / d) * push;
         dy = (oy / d) * push;
       } else if (d2 <= 0.0001) {
-        // Cursor dead-center on a particle — nudge it up so it doesn't stick.
         dy = -maxPush;
       }
     }
     return { ...pt, dx, dy };
   });
+}
+
+function buildRecallSignals(
+  synapseCount: number,
+  particleCount: number,
+): RecallSignal[] {
+  if (synapseCount === 0 || particleCount < 2) return [];
+  const signalCount = clamp(Math.round(particleCount / 220), 3, 8);
+  const signals: RecallSignal[] = [];
+  for (let i = 0; i < signalCount; i += 1) {
+    signals.push({
+      a: i % particleCount,
+      b: (i * 7 + 3) % particleCount,
+      offset: (i * 0.137) % 1,
+      rate: 0.055 + (i % 5) * 0.011,
+      size: 1 + (i % 3) * 0.35,
+    });
+  }
+  return signals;
+}
+
+function drawRecallSignals(
+  ctx: CanvasRenderingContext2D,
+  byIndex: DisplayPoint[],
+  synapses: { a: number; b: number; strength: number }[],
+  signals: RecallSignal[],
+  time: number,
+  intensity: number,
+  fillScreen: boolean,
+) {
+  if (signals.length === 0 || byIndex.length === 0) return;
+
+  ctx.save();
+  ctx.globalCompositeOperation = fillScreen ? "source-over" : "lighter";
+
+  for (let i = 0; i < signals.length; i += 1) {
+    const signal = signals[i]!;
+    // Prefer a real synapse edge when available so pulses travel along links.
+    const syn = synapses[i % Math.max(1, synapses.length)];
+    const aIdx = syn?.a ?? signal.a;
+    const bIdx = syn?.b ?? signal.b;
+    const a = byIndex[aIdx % byIndex.length];
+    const b = byIndex[bIdx % byIndex.length];
+    if (!a || !b) continue;
+
+    const ax = a.x + a.dx;
+    const ay = a.y + a.dy;
+    const bx = b.x + b.dx;
+    const by = b.y + b.dy;
+    const progress = fract(time * signal.rate + signal.offset);
+    const fade = Math.sin(progress * Math.PI);
+    const x = ax + (bx - ax) * progress;
+    const y = ay + (by - ay) * progress;
+    const radius = signal.size * (0.7 + fade * 0.55);
+
+    // Teal accent every third pulse; otherwise indigo — matches Recall palette.
+    const hue = i % 3 === 0 ? 168 : 250;
+    ctx.globalAlpha = fade * 0.55 * intensity;
+    ctx.fillStyle = `hsla(${hue}, 85%, 68%, 1)`;
+    ctx.shadowColor = `hsla(${hue}, 90%, 70%, 0.9)`;
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
 }
 
 function renderFrame(
@@ -99,16 +201,15 @@ function renderFrame(
   height: number,
   projected: ProjectedPoint[],
   synapses: { a: number; b: number; strength: number }[],
+  signals: RecallSignal[],
   time: number,
-  vivid: boolean,
+  intensity: number,
   fillScreen: boolean,
-  /** Cursor in canvas CSS pixels; nearby triangles move aside. */
   cursor: { x: number; y: number; active: boolean },
 ) {
   ctx.clearRect(0, 0, width, height);
 
-  const boost = vivid ? 1.7 : 1;
-  // Home fillScreen: avoid "lighter" — overlapping synapses stack to pure white.
+  const boost = intensity;
   const additive = !fillScreen;
 
   const glow = ctx.createRadialGradient(
@@ -119,8 +220,18 @@ function renderFrame(
     height * (fillScreen ? 0.46 : 0.42),
     Math.min(width, height) * (fillScreen ? 0.55 : 0.4),
   );
-  glow.addColorStop(0, vivid ? "rgba(128, 82, 255, 0.22)" : fillScreen ? "rgba(120, 90, 230, 0.28)" : "rgba(128, 82, 255, 0.10)");
-  glow.addColorStop(0.45, vivid ? "rgba(21, 132, 110, 0.1)" : fillScreen ? "rgba(40, 160, 140, 0.12)" : "rgba(21, 132, 110, 0.04)");
+  glow.addColorStop(
+    0,
+    fillScreen
+      ? `rgba(120, 90, 230, ${0.22 * intensity})`
+      : `rgba(128, 82, 255, ${0.1 * intensity})`,
+  );
+  glow.addColorStop(
+    0.45,
+    fillScreen
+      ? `rgba(40, 160, 140, ${0.1 * intensity})`
+      : `rgba(21, 132, 110, ${0.04 * intensity})`,
+  );
   glow.addColorStop(1, "rgba(0, 0, 0, 0)");
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
@@ -137,8 +248,8 @@ function renderFrame(
     const alpha = Math.max(
       0.04,
       Math.min(
-        vivid ? 0.38 : fillScreen ? 0.28 : 0.2,
-        s.strength * (0.55 - depth * 0.12) * (fillScreen ? 1.05 : boost),
+        fillScreen ? 0.28 : 0.2,
+        s.strength * (0.55 - depth * 0.12) * (fillScreen ? 1.05 : 1) * boost,
       ),
     );
     const pulse = 0.8 + 0.2 * Math.sin(time * 1.6 + s.a * 0.05);
@@ -146,7 +257,8 @@ function renderFrame(
     const ay = a.y + a.dy;
     const bx = b.x + b.dx;
     const by = b.y + b.dy;
-    const nudged = Math.abs(a.dx) + Math.abs(a.dy) + Math.abs(b.dx) + Math.abs(b.dy) > 0.5;
+    const nudged =
+      Math.abs(a.dx) + Math.abs(a.dy) + Math.abs(b.dx) + Math.abs(b.dy) > 0.5;
 
     ctx.beginPath();
     ctx.moveTo(ax, ay);
@@ -166,6 +278,8 @@ function renderFrame(
   }
   ctx.restore();
 
+  drawRecallSignals(ctx, byIndex, synapses, signals, time, intensity, fillScreen);
+
   ctx.save();
   ctx.globalCompositeOperation = additive ? "lighter" : "source-over";
   for (const pt of byIndex) {
@@ -179,16 +293,15 @@ function renderFrame(
         : 0.65 + 0.35 * Math.sin(time * 1.7 + p.phase);
     const size =
       p.size *
-      (p.kind === "entity" ? (vivid ? 1.55 : 1.35) : fillScreen ? 1.12 : 1) *
+      (p.kind === "entity" ? 1.35 : fillScreen ? 1.12 : 1) *
       Math.max(0.55, 1 - pt.depth * 0.25) *
-      (window.devicePixelRatio > 1.5 ? 0.9 : 1) *
-      (vivid ? 1.1 : 1);
+      (window.devicePixelRatio > 1.5 ? 0.9 : 1);
     const alpha =
-      (p.kind === "entity" ? (vivid ? 0.75 : 0.7) : vivid ? 0.42 : fillScreen ? 0.88 : 0.28) *
+      (p.kind === "entity" ? 0.7 : fillScreen ? 0.88 : 0.28) *
       depthFade *
-      twinkle;
+      twinkle *
+      intensity;
 
-    // Soft colored dots — kept modest so they don't stack to white.
     if (p.kind === "entity" || (fillScreen && size > 1.8)) {
       ctx.beginPath();
       ctx.arc(x, y, size * (p.kind === "entity" ? 2.4 : 1.9), 0, Math.PI * 2);
@@ -212,34 +325,47 @@ function renderFrame(
 /**
  * Dala-inspired neural constellation: triangular particles forming a brain,
  * with synapses linking ambient points and real Recall memory entities.
+ * Tunable density/speed/intensity and traveling recall signals (ported from
+ * the memory-network Web Component patterns) without losing brainGraph data.
  */
 export function NeuralBrainBackground({
   graph,
   className = "",
   opacity = 0.42,
-  intensity = "normal",
+  intensity: intensityProp = 0.8,
+  density: densityProp = 0.9,
+  speed: speedProp = 0.7,
+  interactive = false,
   fillScreen = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  /** Continuous drift from mouse movement (keeps going in that direction). */
   const driftRef = useRef({ rotY: 0, rotX: 0, velY: 0, velX: 0 });
   const cursorRef = useRef({ x: 0, y: 0, active: false, movedAt: 0 });
   const lastPointerRef = useRef({ x: 0, y: 0, t: 0 });
   const reduced = useMemo(() => prefersReducedMotion(), []);
-  const vivid = intensity === "vivid";
+  const saveData = useMemo(() => prefersSaveData(), []);
+  const staticFrame = reduced || saveData;
 
-  const { particles, synapses } = useMemo(() => {
-    const count = isMobileViewport()
+  const intensity = clamp(intensityProp, 0.35, 1.6);
+  const density = clamp(densityProp, 0.35, 1.8);
+  const speed = clamp(speedProp, 0.15, 2.5);
+
+  const { particles, synapses, signals } = useMemo(() => {
+    const mobileFactor = isMobileViewport() ? 0.72 : 1;
+    const base = isMobileViewport()
       ? fillScreen
-        ? 1100
-        : 700
-      : reduced
-        ? 1200
+        ? 900
+        : 550
+      : staticFrame
+        ? 900
         : fillScreen
-          ? 1800
-          : 1600;
-    return buildMemoryGraph(graph ?? {}, count, fillScreen);
-  }, [graph, reduced, fillScreen]);
+          ? 1400
+          : 1200;
+    const count = clamp(Math.round(base * density * mobileFactor), 200, 1800);
+    const built = buildMemoryGraph(graph ?? {}, count, fillScreen);
+    const signals = buildRecallSignals(built.synapses.length, built.particles.length);
+    return { ...built, signals };
+  }, [graph, staticFrame, fillScreen, density]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -258,7 +384,8 @@ export function NeuralBrainBackground({
         width: window.innerWidth,
         height: window.innerHeight,
       };
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      // Cap DPR at 1.75 (memory-network production hardening).
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.75);
       canvas.width = Math.max(1, Math.floor(rect.width * dpr));
       canvas.height = Math.max(1, Math.floor(rect.height * dpr));
       canvas.style.width = `${rect.width}px`;
@@ -271,6 +398,7 @@ export function NeuralBrainBackground({
     if (parent) ro.observe(parent);
 
     const onPointer = (e: PointerEvent) => {
+      if (!interactive || staticFrame) return;
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -280,8 +408,8 @@ export function NeuralBrainBackground({
       if (prev.t > 0) {
         const dx = (x - prev.x) / Math.max(1, rect.width);
         const dy = (y - prev.y) / Math.max(1, rect.height);
-        const speed = Math.hypot(dx, dy);
-        moving = speed > 0.0005;
+        const pointerSpeed = Math.hypot(dx, dy);
+        moving = pointerSpeed > 0.0005;
         if (moving) {
           const drift = driftRef.current;
           drift.velY += dx * 1.8;
@@ -291,7 +419,6 @@ export function NeuralBrainBackground({
         }
       }
       lastPointerRef.current = { x, y, t: now };
-      // Repel triangles only while the mouse is moving — idle = normal mesh.
       cursorRef.current = {
         x,
         y,
@@ -307,27 +434,26 @@ export function NeuralBrainBackground({
 
     const onVisibility = () => {
       running = document.visibilityState === "visible";
-      if (running) {
-        start = performance.now() - (performance.now() - start);
+      if (running && !staticFrame) {
         lastFrame = performance.now();
         raf = requestAnimationFrame(tick);
       }
     };
 
-    window.addEventListener("pointermove", onPointer, { passive: true });
-    window.addEventListener("pointerleave", onPointerLeave, { passive: true });
+    if (interactive && !staticFrame) {
+      window.addEventListener("pointermove", onPointer, { passive: true });
+      window.addEventListener("pointerleave", onPointerLeave, { passive: true });
+    }
     document.addEventListener("visibilitychange", onVisibility);
 
-    const tick = (now: number) => {
-      if (!running) return;
+    const paint = (now: number, animate: boolean) => {
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       const dt = Math.min(0.05, (now - lastFrame) / 1000);
       lastFrame = now;
-      const time = reduced ? 0 : (now - start) / 1000;
+      const time = animate ? ((now - start) / 1000) * speed : 0;
 
-      // Integrate mouse-driven velocity; settle fast when the mouse stops.
-      if (!reduced) {
+      if (animate && interactive) {
         const drift = driftRef.current;
         drift.rotY += drift.velY * dt;
         drift.rotX += drift.velX * dt;
@@ -338,27 +464,48 @@ export function NeuralBrainBackground({
         if (Math.abs(drift.velX) < 0.003) drift.velX = 0;
       }
 
-      // Repel nearby triangles only during recent mouse movement.
       const cursor = cursorRef.current;
       const repelling =
-        cursor.active && cursor.movedAt > 0 && now - cursor.movedAt < 140;
+        interactive &&
+        cursor.active &&
+        cursor.movedAt > 0 &&
+        now - cursor.movedAt < 140;
       const projected = projectParticles(
         particles,
         w,
         h,
         time,
-        { rotY: driftRef.current.rotY, rotX: driftRef.current.rotX },
+        {
+          rotY: interactive ? driftRef.current.rotY : 0,
+          rotX: interactive ? driftRef.current.rotX : 0,
+        },
         fillScreen,
       );
-      renderFrame(ctx, w, h, projected, synapses, time, vivid, fillScreen, {
-        x: cursor.x,
-        y: cursor.y,
-        active: repelling,
-      });
-      if (!reduced) raf = requestAnimationFrame(tick);
+      renderFrame(
+        ctx,
+        w,
+        h,
+        projected,
+        synapses,
+        signals,
+        time,
+        intensity,
+        fillScreen,
+        { x: cursor.x, y: cursor.y, active: repelling },
+      );
     };
 
-    raf = requestAnimationFrame(tick);
+    const tick = (now: number) => {
+      if (!running) return;
+      paint(now, true);
+      raf = requestAnimationFrame(tick);
+    };
+
+    if (staticFrame) {
+      paint(performance.now(), false);
+    } else {
+      raf = requestAnimationFrame(tick);
+    }
 
     return () => {
       running = false;
@@ -368,13 +515,22 @@ export function NeuralBrainBackground({
       window.removeEventListener("pointerleave", onPointerLeave);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [particles, synapses, reduced, vivid, fillScreen]);
+  }, [
+    particles,
+    synapses,
+    signals,
+    staticFrame,
+    intensity,
+    speed,
+    interactive,
+    fillScreen,
+  ]);
 
   return (
     <div
       className={`pointer-events-none absolute inset-0 overflow-hidden ${className}`}
       aria-hidden
-      style={{ opacity }}
+      style={{ opacity, contain: "strict" }}
     >
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
       <div className="absolute inset-0 bg-gradient-to-b from-[#060610]/15 via-transparent to-[#060610]/40" />

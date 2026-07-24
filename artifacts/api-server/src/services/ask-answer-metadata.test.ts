@@ -52,6 +52,7 @@ describe("buildAskAnswerMetadata", () => {
     expect(metadata.privacy.categoriesSent).toEqual(["note"]);
     expect(metadata.suggestedNextAction).toBe("Open the note");
     expect(metadata.promptVersion).toBe("query-answer.v1");
+    expect(metadata.presentation).toBe("full");
   });
 
   it("caps related records without dropping evidence", () => {

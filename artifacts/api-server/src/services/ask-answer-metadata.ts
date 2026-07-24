@@ -17,6 +17,8 @@ export type PersistedAskAnswerMetadata = {
   promptVersion: string;
   degraded: boolean;
   sourcesConsulted?: SourceConsulted[];
+  /** Compact UI: short answer + primary link, no evidence dump. */
+  presentation?: "full" | "compact";
 };
 
 /** Preserve the exact source snapshots used for an answer in its thread row. */
@@ -34,5 +36,6 @@ export function buildAskAnswerMetadata(
     promptVersion: answer.promptVersion,
     degraded: answer.degraded,
     sourcesConsulted: (answer.sourcesConsulted ?? []).slice(0, 8),
+    presentation: answer.presentation ?? "full",
   };
 }

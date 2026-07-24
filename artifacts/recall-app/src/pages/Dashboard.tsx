@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "wouter";
-import { ArrowRight, History, Search, ShieldCheck, Volume2, VolumeX, X } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronRight, History, Search, ShieldCheck, X } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
@@ -27,7 +27,6 @@ import { NeuralBrainBackground } from "@/components/NeuralBrainBackground";
 import { NeuralBrainOrb } from "@/components/NeuralBrainOrb";
 import { MicButton } from "@/components/MicButton";
 import { RecallLogo } from "@/components/RecallLogo";
-import { useSpeakAnswer } from "@/hooks/use-speak-answer";
 import { stopSpeaking } from "@/lib/speech-synthesis";
 import { AskAnswerImages } from "@/components/AskAnswerImages";
 import type { AskAnswerImage } from "@/lib/recall-api";
@@ -38,6 +37,32 @@ function imagesFromMetadata(metadata: Record<string, unknown> | undefined): AskA
   return metadata.images as AskAnswerImage[];
 }
 
+function primaryLinkFromEvidence(evidence: EvidenceRecord[]): {
+  url: string;
+  label: string;
+} | null {
+  for (const ev of evidence) {
+    const url =
+      typeof ev.evidenceMetadata?.sourceUrl === "string"
+        ? ev.evidenceMetadata.sourceUrl
+        : null;
+    if (!url || !/^https?:\/\//i.test(url)) continue;
+    const explicit =
+      typeof ev.evidenceMetadata?.primaryLinkLabel === "string"
+        ? ev.evidenceMetadata.primaryLinkLabel
+        : null;
+    const label =
+      explicit ??
+      (/mail\.google\.com/i.test(url)
+        ? "Open in Gmail"
+        : /(drive|docs|sheets|slides)\.google\.com/i.test(url)
+          ? "Open in Drive"
+          : "Open source");
+    return { url, label };
+  }
+  return null;
+}
+
 type AnswerMeta = {
   confidence: number;
   caveats: string | null;
@@ -46,38 +71,13 @@ type AnswerMeta = {
   images: AskAnswerImage[];
   suggestedNextAction: string | null;
   sourcesConsulted?: SourceConsulted[];
+  presentation?: "full" | "compact";
   privacy?: {
     model: string | null;
     dataLeftDevice: boolean;
     categoriesSent: string[];
   };
 };
-
-function confidenceLabel(score: number): { label: string; className: string } {
-  if (score >= 0.8) return { label: "High confidence", className: "text-emerald-300 bg-emerald-500/10" };
-  if (score >= 0.5) return { label: "Needs review", className: "text-amber-300 bg-amber-500/10" };
-  return { label: "Low confidence", className: "text-red-300 bg-red-500/10" };
-}
-
-function privacyChipLabel(privacy: NonNullable<AnswerMeta["privacy"]>): string {
-  const cats = privacy.categoriesSent
-    .map((c) => {
-      if (c === "memory") return "Memory";
-      if (c === "note") return "Notes";
-      if (c === "task") return "Tasks";
-      if (c === "knowledge") return "Knowledge";
-      if (c === "person") return "People";
-      return c;
-    })
-    .filter((v, i, a) => a.indexOf(v) === i)
-    .slice(0, 4);
-  const used = cats.length > 0 ? cats.join(" + ") : "your data";
-  if (!privacy.dataLeftDevice) {
-    return `Answer used ${used} · stayed on device`;
-  }
-  const model = privacy.model ? ` · sent to ${privacy.model}` : " · sent to AI";
-  return `Answer used ${used}${model}`;
-}
 
 /** Immersive oracle Home — background + ask only. History stays behind a tab. */
 export function Dashboard() {
@@ -91,6 +91,7 @@ export function Dashboard() {
   const [answerMeta, setAnswerMeta] = useState<AnswerMeta | null>(null);
   const [assistantMessageId, setAssistantMessageId] = useState<string | null>(null);
   const [feedbackSent, setFeedbackSent] = useState<"up" | "down" | null>(null);
+  const [sourcesExpanded, setSourcesExpanded] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(getStoredAskThreadId());
   const [askPending, setAskPending] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -201,6 +202,7 @@ export function Dashboard() {
     setAnswerMeta(null);
     setAssistantMessageId(null);
     setFeedbackSent(null);
+    setSourcesExpanded(false);
     setLiveMessages([
       {
         id: tempId,
@@ -235,6 +237,7 @@ export function Dashboard() {
               suggestedNextAction: res.answer.suggestedNextAction,
               privacy: res.answer.privacy,
               sourcesConsulted: res.answer.sourcesConsulted ?? [],
+              presentation: res.answer.presentation ?? "compact",
             }
           : null,
       );
@@ -266,7 +269,9 @@ export function Dashboard() {
         },
       ]);
       void refreshThreads();
-    } catch {
+    } catch (err) {
+      const timedOut =
+        err instanceof DOMException && err.name === "TimeoutError";
       setAnswerImages([]);
       setReviewActions([]);
       setReviewCaptureId(null);
@@ -285,7 +290,9 @@ export function Dashboard() {
           id: `${tempId}-a`,
           threadId: "local",
           role: "assistant",
-          content: "Could not reach Recall. Check that you are signed in and try again.",
+          content: timedOut
+            ? "That took too long — usually while refreshing finance. Try again in a moment."
+            : "Could not reach Recall. Check that you are signed in and try again.",
           metadata: {},
           createdAt: new Date().toISOString(),
         },
@@ -305,14 +312,12 @@ export function Dashboard() {
     setAnswerMeta(null);
     setAssistantMessageId(null);
     setFeedbackSent(null);
+    setSourcesExpanded(false);
     setQuestion("");
     sessionActive.current = false;
   };
 
-  const latestAssistant =
-    [...liveMessages].reverse().find((m) => m.role === "assistant")?.content ?? null;
-  const voice = useSpeakAnswer(latestAssistant, Boolean(latestAssistant && !askPending && panelOpen));
-  const conf = answerMeta ? confidenceLabel(answerMeta.confidence) : null;
+  const primaryLink = answerMeta ? primaryLinkFromEvidence(answerMeta.evidence) : null;
 
   const brainGraph = useMemo(
     () => ({
@@ -358,7 +363,14 @@ export function Dashboard() {
             showAnswer || historyOpen ? "scale-[1.03] blur-[2px]" : "scale-100 blur-0"
           }`}
         >
-          <NeuralBrainBackground graph={brainGraph} opacity={1} fillScreen />
+          <NeuralBrainBackground
+            graph={brainGraph}
+            opacity={1}
+            fillScreen
+            density={0.9}
+            speed={0.7}
+            intensity={0.8}
+          />
           <div className="orb-1 nebula-orb opacity-50" />
           <div className="orb-2 nebula-orb opacity-40" />
           <div className="orb-3 nebula-orb opacity-36" />
@@ -561,7 +573,7 @@ export function Dashboard() {
                       className={`max-w-[95%] whitespace-pre-wrap text-base leading-relaxed md:text-lg ${
                         m.role === "user"
                           ? "rounded-2xl bg-indigo-500/25 px-4 py-2 text-left text-indigo-50"
-                          : "text-center text-white/95"
+                          : "w-full max-w-lg text-left text-white/95"
                       }`}
                     >
                       {m.content}
@@ -588,6 +600,17 @@ export function Dashboard() {
                 )}
                 {!askPending && answerMeta && (
                   <div className="mx-auto w-full max-w-lg space-y-4 pt-2 text-left">
+                    {primaryLink && (
+                      <a
+                        href={primaryLink.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-400/30 bg-indigo-500/15 px-3 py-2 text-sm font-medium text-indigo-100 no-underline hover:bg-indigo-500/25"
+                      >
+                        {primaryLink.label}
+                        <ArrowRight size={14} />
+                      </a>
+                    )}
                     {assistantMessageId && (
                       <div className="flex flex-wrap items-center gap-2 text-xs text-white/45">
                         <span>Was this helpful?</span>
@@ -622,47 +645,6 @@ export function Dashboard() {
                         </button>
                       </div>
                     )}
-                    <div className="flex flex-wrap items-center gap-2">
-                      {conf && (
-                        <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${conf.className}`}>
-                          {conf.label} · {Math.round(answerMeta.confidence * 100)}%
-                        </span>
-                      )}
-                      {answerMeta.privacy && (
-                        <span className="rounded-full bg-white/5 px-2.5 py-1 text-xs font-medium text-white/55">
-                          {privacyChipLabel(answerMeta.privacy)}
-                        </span>
-                      )}
-                      {voice.supported && (
-                        <div className="ml-auto flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (voice.speaking) voice.stop();
-                              else voice.replay();
-                            }}
-                            className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
-                            aria-label={voice.speaking ? "Stop speaking" : "Read answer aloud"}
-                          >
-                            <Volume2 size={16} className={voice.speaking ? "text-indigo-300" : undefined} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => voice.setVoiceEnabled(!voice.enabled)}
-                            className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white"
-                            aria-label={voice.enabled ? "Mute voice answers" : "Enable voice answers"}
-                          >
-                            {voice.enabled ? (
-                              <span className="px-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-300">
-                                Voice
-                              </span>
-                            ) : (
-                              <VolumeX size={16} />
-                            )}
-                          </button>
-                        </div>
-                      )}
-                    </div>
                     {answerMeta.caveats && (
                       <p className="text-sm text-amber-200/80">⚠ {answerMeta.caveats}</p>
                     )}
@@ -673,52 +655,74 @@ export function Dashboard() {
                       </div>
                     )}
                     <section>
-                      <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/45">
+                      <button
+                        type="button"
+                        onClick={() => setSourcesExpanded((v) => !v)}
+                        className="mb-2 flex w-full items-center gap-2 text-left text-xs font-semibold uppercase tracking-wider text-white/45 hover:text-white/70"
+                      >
+                        {sourcesExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                         <ShieldCheck size={14} className="text-indigo-300" />
-                        Evidence ({answerMeta.evidence.length})
-                      </div>
-                      {answerMeta.evidence.length === 0 ? (
-                        <p className="rounded-xl border border-white/10 bg-white/[0.02] p-4 text-sm text-white/40">
-                          No specific evidence was linked for this answer.
-                        </p>
-                      ) : (
-                        <div className="space-y-2">
-                          {answerMeta.evidence.map((ev) => {
-                            const relatedType =
-                              typeof ev.evidenceMetadata?.relatedEntityType === "string"
-                                ? ev.evidenceMetadata.relatedEntityType
-                                : ev.entityType;
-                            const relatedId =
-                              typeof ev.evidenceMetadata?.relatedEntityId === "string"
-                                ? ev.evidenceMetadata.relatedEntityId
-                                : ev.entityId;
-                            const href = entityPath(relatedType, relatedId);
-                            return (
-                              <article
-                                key={ev.id}
-                                className="rounded-xl border border-white/10 bg-white/[0.03] p-4"
-                              >
-                                <p className="text-xs uppercase tracking-wider text-indigo-300/80">
-                                  {ev.claimType.replace(/_/g, " ")} · {relatedType}
-                                </p>
-                                {ev.evidenceText && (
-                                  <p className="mt-2 whitespace-pre-wrap text-sm text-white/75">
-                                    {ev.evidenceText}
+                        Sources
+                        {answerMeta.evidence.length > 0
+                          ? ` (${answerMeta.evidence.length})`
+                          : ""}
+                      </button>
+                      {sourcesExpanded &&
+                        (answerMeta.evidence.length === 0 ? (
+                          <p className="rounded-xl border border-white/10 bg-white/[0.02] p-4 text-sm text-white/40">
+                            No specific sources were linked for this answer.
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {answerMeta.evidence.map((ev) => {
+                              const relatedType =
+                                typeof ev.evidenceMetadata?.relatedEntityType === "string"
+                                  ? ev.evidenceMetadata.relatedEntityType
+                                  : ev.entityType;
+                              const relatedId =
+                                typeof ev.evidenceMetadata?.relatedEntityId === "string"
+                                  ? ev.evidenceMetadata.relatedEntityId
+                                  : ev.entityId;
+                              const href = entityPath(relatedType, relatedId);
+                              const sourceUrl =
+                                typeof ev.evidenceMetadata?.sourceUrl === "string"
+                                  ? ev.evidenceMetadata.sourceUrl
+                                  : null;
+                              return (
+                                <article
+                                  key={ev.id}
+                                  className="rounded-xl border border-white/10 bg-white/[0.03] p-4"
+                                >
+                                  <p className="text-xs uppercase tracking-wider text-indigo-300/80">
+                                    {ev.claimType.replace(/_/g, " ")} · {relatedType}
                                   </p>
-                                )}
-                                {href && (
-                                  <Link
-                                    href={href}
-                                    className="mt-2 inline-block text-xs text-indigo-300 no-underline hover:underline"
-                                  >
-                                    Open {relatedType}
-                                  </Link>
-                                )}
-                              </article>
-                            );
-                          })}
-                        </div>
-                      )}
+                                  {ev.evidenceText && (
+                                    <p className="mt-2 whitespace-pre-wrap text-sm text-white/75">
+                                      {ev.evidenceText}
+                                    </p>
+                                  )}
+                                  {sourceUrl ? (
+                                    <a
+                                      href={sourceUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="mt-2 inline-block text-xs text-indigo-300 no-underline hover:underline"
+                                    >
+                                      Open link
+                                    </a>
+                                  ) : href ? (
+                                    <Link
+                                      href={href}
+                                      className="mt-2 inline-block text-xs text-indigo-300 no-underline hover:underline"
+                                    >
+                                      Open {relatedType}
+                                    </Link>
+                                  ) : null}
+                                </article>
+                              );
+                            })}
+                          </div>
+                        ))}
                     </section>
                   </div>
                 )}
@@ -726,29 +730,6 @@ export function Dashboard() {
                   <p className="text-center text-lg text-white/50">
                     Checking your connected sources…
                   </p>
-                )}
-                {!askPending && answerMeta?.sourcesConsulted && answerMeta.sourcesConsulted.length > 0 && (
-                  <div className="flex flex-wrap justify-center gap-2 px-2">
-                    {answerMeta.sourcesConsulted.map((s) => (
-                      <span
-                        key={`${s.id}-${s.label}`}
-                        className={`rounded-full px-2.5 py-1 text-[11px] ${
-                          s.status === "ok"
-                            ? "bg-emerald-500/15 text-emerald-200"
-                            : s.status === "empty"
-                              ? "bg-white/10 text-white/60"
-                              : "bg-amber-500/15 text-amber-200"
-                        }`}
-                        title={s.detail ?? undefined}
-                      >
-                        {s.label}
-                        {s.hitCount != null ? ` · ${s.hitCount}` : ""}
-                        {s.status === "missing" || s.status === "error"
-                          ? ` · ${s.status}`
-                          : ""}
-                      </span>
-                    ))}
-                  </div>
                 )}
                 <div ref={bottomRef} />
               </div>

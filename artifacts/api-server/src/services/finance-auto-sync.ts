@@ -66,6 +66,11 @@ export type EnsureFinanceFreshOptions = {
   maxAgeMs?: number;
   /** Wait for sync to finish before returning (Home / Ask). Default true. */
   awaitSync?: boolean;
+  /**
+   * When awaitSync is true, give up waiting after this many ms and let the
+   * caller answer from the last synced snapshot (sync continues in background).
+   */
+  timeoutMs?: number;
 };
 
 /**
@@ -86,6 +91,12 @@ function runCoalescedSync(userId: string, connectorId: string): Promise<unknown>
   return run;
 }
 
+function delay(ms: number): Promise<"timeout"> {
+  return new Promise((resolve) => {
+    setTimeout(() => resolve("timeout"), ms);
+  });
+}
+
 /**
  * Refresh the user's finance connector from MyFamilyBudget.
  * Used on app open and before finance Ask answers.
@@ -93,9 +104,10 @@ function runCoalescedSync(userId: string, connectorId: string): Promise<unknown>
 export async function ensureUserFinanceFresh(
   userId: string,
   opts?: EnsureFinanceFreshOptions,
-): Promise<{ synced: boolean; skipped: boolean }> {
+): Promise<{ synced: boolean; skipped: boolean; timedOut?: boolean }> {
   const maxAgeMs = opts?.maxAgeMs ?? OPEN_COOLDOWN_MS;
   const awaitSync = opts?.awaitSync !== false;
+  const timeoutMs = opts?.timeoutMs;
 
   const rows = await getDb()
     .select({
@@ -126,7 +138,21 @@ export async function ensureUserFinanceFresh(
   const run = runCoalescedSync(userId, conn.id);
   if (awaitSync) {
     try {
-      await run;
+      if (timeoutMs != null && timeoutMs > 0) {
+        const winner = await Promise.race([
+          run.then(() => "done" as const),
+          delay(timeoutMs),
+        ]);
+        if (winner === "timeout") {
+          logger.warn(
+            { userId, connectorId: conn.id, timeoutMs },
+            "On-demand finance sync still running; answering from last snapshot",
+          );
+          return { synced: false, skipped: false, timedOut: true };
+        }
+      } else {
+        await run;
+      }
       return { synced: true, skipped: false };
     } catch (err) {
       logger.warn({ err, userId, connectorId: conn.id }, "On-demand finance sync failed");

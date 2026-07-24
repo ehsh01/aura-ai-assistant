@@ -43,6 +43,10 @@ import {
 } from "./ask-threads";
 import { buildAskAnswerMetadata } from "./ask-answer-metadata";
 import {
+  annotatePrimaryExternalLink,
+  compactSuggestedNextAction,
+} from "./ask-compact-ui";
+import {
   noteIdsForAskImages,
   wantsShowSavedImage,
   type AskAnswerImage,
@@ -155,6 +159,8 @@ export type QueryAnswer = {
   assistantMessageId?: string | null;
   /** Which systems were consulted for this answer (trust UI). */
   sourcesConsulted?: SourceConsulted[];
+  /** Compact UI: short answer + primary link, no evidence dump. */
+  presentation?: "full" | "compact";
   privacy: {
     model: string | null;
     dataLeftDevice: boolean;
@@ -212,6 +218,36 @@ function makeEvidence(input: {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+/** Short body preview for last-email answers (subject is shown separately). */
+function emailAboutSnippet(text: string): string | null {
+  const lines = text.split("\n");
+  let bodyStart = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^Subject:\s*/i.test(lines[i] ?? "")) {
+      bodyStart = i + 1;
+      break;
+    }
+  }
+  let body = lines
+    .slice(bodyStart)
+    .join("\n")
+    .replace(/\r/g, "")
+    .replace(/^Mailbox:\s*.+$/im, "")
+    .replace(/^Email message\s*$/im, "")
+    .replace(/^From:\s*.+$/im, "")
+    .replace(/^To:\s*.+$/im, "")
+    .replace(/^sender_name:\s*.+$/im, "")
+    .replace(/^sender_email:\s*.+$/im, "")
+    .replace(/Sent from Yahoo Mail[^\n]*/gi, "")
+    .replace(/On .+? wrote:\s*/gis, " ")
+    .replace(/_{2,}/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!body) return null;
+  if (body.length > 140) body = `${body.slice(0, 137).trim()}…`;
+  return body;
 }
 
 /**
@@ -272,13 +308,14 @@ export async function queryRecallForUser(
       evidence: [],
       relatedRecords: [],
       images: [],
-      suggestedNextAction: ambiguity.suggestions[0]
-        ? `Reply “${ambiguity.suggestions[0]}”`
-        : null,
+      suggestedNextAction: compactSuggestedNextAction(
+        ambiguity.suggestions[0] ? `Reply “${ambiguity.suggestions[0]}”` : null,
+      ),
       promptVersion: QUERY_ANSWER_PROMPT_VERSION,
       degraded: false,
       threadId: thread.id,
       sourcesConsulted: [],
+      presentation: "compact",
       privacy: {
         model: null,
         dataLeftDevice: true,
@@ -359,6 +396,7 @@ export async function queryRecallForUser(
   let financeNeedsSync = false;
   let financeConnectorMissing = false;
   let financePayeeDistrusted = false;
+  let financeSyncTimedOut = false;
   const evidence: EvidenceDto[] = [];
 
   if (waitingItems.length > 0) {
@@ -392,8 +430,13 @@ export async function queryRecallForUser(
     FINANCE_INTENT.test(retrievalQuestion);
 
   if (wantsFinance) {
-    // Accuracy first: wait for a fresh MyFamilyBudget sync on finance questions.
-    await ensureUserFinanceFresh(userId, { awaitSync: true, maxAgeMs: 5 * 60_000 });
+    // Accuracy first, but never block Ask forever on a large MyFamilyBudget sync.
+    const financeFresh = await ensureUserFinanceFresh(userId, {
+      awaitSync: true,
+      maxAgeMs: 5 * 60_000,
+      timeoutMs: 8_000,
+    });
+    financeSyncTimedOut = Boolean(financeFresh.timedOut);
     try {
       const connectors = await listConnectorsForUser(userId);
       const financeConn = connectors.find((c) => c.type === "finance_api" && c.enabled);
@@ -642,6 +685,8 @@ export async function queryRecallForUser(
     mailbox: string;
     title: string;
     text: string;
+    externalId: string;
+    sourceUrl: string | null;
     sourceCreatedAt: string | null;
   } | null = null;
 
@@ -702,11 +747,13 @@ export async function queryRecallForUser(
       });
     }
 
+    const emailOnlyLatest =
+      sourcePlan.answerMode === "deterministic_email";
     const [gmailHits, driveHits] = await Promise.all([
       gmailPlan?.query && !isRelationLiteral(gmailPlan.personName)
         ? liveSearchGmailForUser(userId, gmailPlan.query, {
             mailboxHint,
-            maxPerMailbox: 15,
+            maxPerMailbox: emailOnlyLatest ? 8 : 15,
             personName: gmailPlan.personName,
           }).catch(() => [])
         : Promise.resolve([]),
@@ -726,6 +773,8 @@ export async function queryRecallForUser(
         mailbox: gmailHits[0].mailbox,
         title: gmailHits[0].title,
         text: gmailHits[0].text,
+        externalId: gmailHits[0].externalId,
+        sourceUrl: gmailHits[0].sourceUrl,
         sourceCreatedAt: gmailHits[0].sourceCreatedAt,
       };
     }
@@ -737,11 +786,17 @@ export async function queryRecallForUser(
         status: gmailHits.length > 0 ? "ok" : "empty",
         detail:
           gmailHits.length > 0
-            ? `${gmailHits.length} message(s) · ${accountsLabel}`
+            ? emailOnlyLatest
+              ? `Latest match · ${accountsLabel}`
+              : `${gmailHits.length} message(s) · ${accountsLabel}`
             : `No messages for “${gmailPlan.query}” across ${accountsLabel}`,
-        hitCount: gmailHits.length,
+        hitCount: emailOnlyLatest && gmailHits.length > 0 ? 1 : gmailHits.length,
       });
-      for (const hit of gmailHits.slice(0, 24)) {
+      // Last-email answers only need the top hit; skip stuffing the UI with the thread.
+      const hitsForContext = emailOnlyLatest
+        ? gmailHits.slice(0, 1)
+        : gmailHits.slice(0, 24);
+      for (const hit of hitsForContext) {
         const date = formatInstantForUser(hit.sourceCreatedAt);
         liveMailContext.push({
           entityType: "source_record",
@@ -754,24 +809,26 @@ export async function queryRecallForUser(
             date ? `\nDate: ${date}` : ""
           }\n${hit.text}`,
         });
-        evidence.push(
-          makeEvidence({
-            claimType: "source_excerpt",
-            evidenceText: `[${hit.mailbox}] ${hit.title}${date ? ` (${date})` : ""}\n${hit.text.slice(0, 450)}`,
-            metadata: {
-              relatedEntityType: "gmail_message",
-              mailbox: hit.mailbox,
-              retrievalMethod: "live_gmail_search",
-              gmailQuery: gmailPlan.query,
-              querySource: gmailPlan.source,
-              sourceUrl: hit.sourceUrl,
-              sourceCreatedAt: hit.sourceCreatedAt,
-              sourceCreatedAtLocal: date,
-            },
-          }),
-        );
+        if (!emailOnlyLatest) {
+          evidence.push(
+            makeEvidence({
+              claimType: "source_excerpt",
+              evidenceText: `[${hit.mailbox}] ${hit.title}${date ? ` (${date})` : ""}\n${hit.text.slice(0, 450)}`,
+              metadata: {
+                relatedEntityType: "gmail_message",
+                mailbox: hit.mailbox,
+                retrievalMethod: "live_gmail_search",
+                gmailQuery: gmailPlan.query,
+                querySource: gmailPlan.source,
+                sourceUrl: hit.sourceUrl,
+                sourceCreatedAt: hit.sourceCreatedAt,
+                sourceCreatedAtLocal: date,
+              },
+            }),
+          );
+        }
       }
-      if (gmailHits.length === 0) {
+      if (gmailHits.length === 0 && !emailOnlyLatest) {
         evidence.push(
           makeEvidence({
             claimType: "summary_based_on",
@@ -899,6 +956,13 @@ export async function queryRecallForUser(
       answer,
       images,
       threadId: thread.id,
+      evidence: annotatePrimaryExternalLink(result.evidence),
+      suggestedNextAction: compactSuggestedNextAction(result.suggestedNextAction, {
+        answer,
+        confidence: result.confidence,
+        caveats: result.caveats,
+      }),
+      presentation: result.presentation ?? "compact",
       sourcesConsulted: result.sourcesConsulted ?? sourcesConsulted,
       privacy: result.privacy ?? {
         model: status.model,
@@ -1143,9 +1207,16 @@ export async function queryRecallForUser(
     return finish({
       answer: buildFinanceTotalAnswer(finance, metric),
       confidence: verdict.confidence,
-      caveats: financePayeeDistrusted
-        ? "Ignored a suspicious merchant filter that matched nothing; totals are for the date range only."
-        : null,
+      caveats: [
+        financePayeeDistrusted
+          ? "Ignored a suspicious merchant filter that matched nothing; totals are for the date range only."
+          : null,
+        financeSyncTimedOut
+          ? "Finance refresh was still running — this total is from the last completed sync."
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" ") || null,
       evidence,
       relatedRecords,
       suggestedNextAction: "Ask for a breakdown to see every transaction",
@@ -1157,18 +1228,25 @@ export async function queryRecallForUser(
 
   // Deterministic last-email answer from top live hit.
   if (sourcePlan.answerMode === "deterministic_email") {
+    const compactPrivacy = {
+      model: null,
+      dataLeftDevice: false,
+      categoriesSent: ["gmail_message"],
+    };
     if (sourcesConsulted.some((s) => s.id === "gmail" && s.status === "missing")) {
       return finish({
         answer:
           "I can't search email until a Google account is connected. Open Connectors and connect Google, then ask again.",
         confidence: 0.35,
         caveats: "Gmail not connected.",
-        evidence,
-        relatedRecords,
+        evidence: [],
+        relatedRecords: [],
         suggestedNextAction: "Open Connectors → Google",
         promptVersion: QUERY_ANSWER_PROMPT_VERSION,
         degraded: false,
         sourcesConsulted,
+        presentation: "compact",
+        privacy: compactPrivacy,
       });
     }
     if (
@@ -1182,12 +1260,14 @@ export async function queryRecallForUser(
         answer: `I know you're asking about your ${who}, but I couldn't match that to someone in People. Add or update their role (e.g. role=wife), then ask again.`,
         confidence: 0.55,
         caveats: "Person not resolved.",
-        evidence,
-        relatedRecords,
+        evidence: [],
+        relatedRecords: [],
         suggestedNextAction: "Open People",
         promptVersion: QUERY_ANSWER_PROMPT_VERSION,
         degraded: false,
         sourcesConsulted,
+        presentation: "compact",
+        privacy: compactPrivacy,
       });
     }
     if (topGmailHit) {
@@ -1197,18 +1277,45 @@ export async function queryRecallForUser(
         topGmailHit.text.match(/sender_name:\s*(.+)$/im)?.[1]?.trim() ??
         "unknown sender";
       const who = namedPeople[0]?.displayName ?? fromLine;
+      const about = emailAboutSnippet(topGmailHit.text);
+      const whenLine = date ?? "date unknown";
+      const answerLines = [
+        `Latest email from ${who}`,
+        `When: ${whenLine}`,
+        `Subject: ${topGmailHit.title}`,
+      ];
+      if (about) answerLines.push(`About: ${about}`);
+      answerLines.push(`Mailbox: ${topGmailHit.mailbox}`);
+      const emailEvidence = [
+        makeEvidence({
+          claimType: "source_excerpt",
+          evidenceText: `${topGmailHit.title}${date ? ` (${date})` : ""}\n${about ?? ""}`.trim(),
+          entityType: "gmail_message",
+          entityId: topGmailHit.externalId,
+          metadata: {
+            relatedEntityType: "gmail_message",
+            relatedEntityId: topGmailHit.externalId,
+            mailbox: topGmailHit.mailbox,
+            retrievalMethod: "live_gmail_search",
+            sourceUrl: topGmailHit.sourceUrl,
+            sourceCreatedAt: topGmailHit.sourceCreatedAt,
+            sourceCreatedAtLocal: date,
+            primaryLinkLabel: "Open in Gmail",
+          },
+        }),
+      ];
       return finish({
-        answer: date
-          ? `The latest email from ${who} is “${topGmailHit.title}” (${date}, mailbox ${topGmailHit.mailbox}).`
-          : `The latest email from ${who} is “${topGmailHit.title}” (mailbox ${topGmailHit.mailbox}).`,
+        answer: answerLines.join("\n"),
         confidence: 0.95,
         caveats: null,
-        evidence,
-        relatedRecords,
+        evidence: emailEvidence,
+        relatedRecords: [],
         suggestedNextAction: null,
         promptVersion: QUERY_ANSWER_PROMPT_VERSION,
         degraded: false,
-        sourcesConsulted,
+        sourcesConsulted: sourcesConsulted.filter((s) => s.id === "gmail"),
+        presentation: "compact",
+        privacy: compactPrivacy,
       });
     }
     return finish({
@@ -1217,14 +1324,16 @@ export async function queryRecallForUser(
         : "I couldn't build a Gmail search for that question. Try “last email from [name]”.",
       confidence: 0.9,
       caveats: "Live Gmail search returned no hits.",
-      evidence,
-      relatedRecords,
+      evidence: [],
+      relatedRecords: [],
       suggestedNextAction: namedPeople[0]
         ? `Open People → ${namedPeople[0].displayName}`
         : "Open Connectors → Google",
       promptVersion: QUERY_ANSWER_PROMPT_VERSION,
       degraded: false,
-      sourcesConsulted,
+      sourcesConsulted: sourcesConsulted.filter((s) => s.id === "gmail"),
+      presentation: "compact",
+      privacy: compactPrivacy,
     });
   }
 
@@ -1455,8 +1564,7 @@ export async function queryRecallForUser(
         answer =
           `You spent ${primary.formatted} across ${finance.expenseCount} expense(s)` +
           `${finance.rangeLabel ? ` for ${finance.rangeLabel}` : ""}.` +
-          (topPayee ? ` Largest: ${topPayee.payee} (${topPayee.total}).` : "") +
-          ` Ask for a breakdown to see every transaction.`;
+          (topPayee ? ` Largest: ${topPayee.payee} (${topPayee.total}).` : "");
       } else if (metric === "income") {
         answer =
           `Your income was ${primary.formatted} across ${finance.incomeCount} credit(s)` +
@@ -1470,7 +1578,7 @@ export async function queryRecallForUser(
           (topPayee ? ` Largest: ${topPayee.payee} (${topPayee.total}).` : "");
       }
       confidence = 0.85;
-      suggestedNextAction = "Ask for a breakdown to see every transaction";
+      suggestedNextAction = null;
     }
   } else if (personIntent && (relevant.length > 0 || waitingItems.length > 0)) {
     const who = namedPeople[0]?.displayName ?? "them";

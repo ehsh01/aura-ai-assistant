@@ -130,6 +130,11 @@ describe("parseDateRange", () => {
       endDate: "2026-07-08",
       label: "yesterday",
     });
+    expect(parseDateRange("expense the day before yesterday", today)).toEqual({
+      startDate: "2026-07-07",
+      endDate: "2026-07-07",
+      label: "the day before yesterday",
+    });
   });
 
   it("resolves rolling 7-day window", () => {
