@@ -20,7 +20,7 @@ import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
 import { toast } from "@/hooks/use-toast";
 import { type RecallCaptureItem, type RecallProject } from "@/lib/recall-context";
-import { notesPath, readSearchParam } from "@/lib/recall-nav";
+import { askPath, notesPath, readSearchParam } from "@/lib/recall-nav";
 import {
   buildDailyBriefing,
   buildDontForget,
@@ -309,7 +309,7 @@ export function Today() {
 
       <BrainDumpInput
         initialText={capturePrefill}
-        onAsk={(text) => navigate(`/?q=${encodeURIComponent(text.trim())}`)}
+        onAsk={(text) => navigate(askPath({ q: text }))}
         onSaveNote={handleSaveNote}
         onSaveTask={handleSaveTask}
         onSendInbox={(text) => void handleSendInbox(text)}

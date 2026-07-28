@@ -30,7 +30,7 @@ export function homePath(opts?: { capture?: string }): string {
   const params = new URLSearchParams();
   if (opts?.capture?.trim()) params.set("capture", opts.capture.trim());
   const q = params.toString();
-  // Captures land on Today (pending workspace); bare home is the oracle Ask screen.
+  // Captures land on Today with the pending text; bare home is Today itself.
   if (q) return `/today?${q}`;
   return "/";
 }

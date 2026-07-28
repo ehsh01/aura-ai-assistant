@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Inbox, Plus, FolderKanban, FileText, Brain, Car, Settings, CalendarClock } from "lucide-react";
+import { Inbox, Plus, FolderKanban, FileText, Brain, Car, Settings, CalendarClock, Sparkles } from "lucide-react";
 import { CaptureModal } from "@/components/CaptureModal";
 import { MobileBottomNav, MobileMoreSheet } from "@/components/MobileShell";
 import { OfflineQueueBanner } from "@/components/OfflineQueueBanner";
@@ -9,7 +9,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useRecallData } from "@/context/RecallDataContext";
 import { subscribeCaptureQueue } from "@/lib/capture-queue";
 import { refreshFinance } from "@/lib/recall-api";
-import { notesPath, readSearchParam } from "@/lib/recall-nav";
+import { askPath, notesPath, readSearchParam } from "@/lib/recall-nav";
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -44,19 +44,6 @@ const staticNavItems: Array<{
 }> = [
   {
     id: "/",
-    label: "Home",
-    section: "ask",
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="3" y="3" width="7" height="7" rx="1.5"/>
-        <rect x="14" y="3" width="7" height="7" rx="1.5"/>
-        <rect x="3" y="14" width="7" height="7" rx="1.5"/>
-        <rect x="14" y="14" width="7" height="7" rx="1.5"/>
-      </svg>
-    ),
-  },
-  {
-    id: "/today",
     label: "Today",
     section: "ask",
     icon: (
@@ -66,6 +53,12 @@ const staticNavItems: Array<{
         <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/>
       </svg>
     ),
+  },
+  {
+    id: "/ask",
+    label: "Ask Aura",
+    section: "ask",
+    icon: <Sparkles width={18} height={18} strokeWidth={1.8} />,
   },
   {
     id: "/deadlines",
@@ -261,7 +254,7 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
     e.preventDefault();
     const q = sidebarQuery.trim();
     if (!q) return;
-    navigate(notesPath({ q }));
+    navigate(askPath({ q }));
     setSidebarQuery("");
   };
 
@@ -304,16 +297,17 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
         label: item.label,
         icon: item.icon,
         isActive:
-          item.id === "/projects"
-            ? location === "/projects" || location.startsWith("/projects/")
-            : location === item.id,
+          item.id === "/"
+            ? location === "/" || location === "/today"
+            : item.id === "/projects"
+              ? location === "/projects" || location.startsWith("/projects/")
+              : location === item.id,
       },
     });
   }
 
   const moreActive =
     location === "/tasks" ||
-    location === "/today" ||
     location === "/deadlines" ||
     location === "/canvas" ||
     location === "/documents" ||
@@ -382,7 +376,7 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
                 type="search"
                 value={sidebarQuery}
                 onChange={(e) => setSidebarQuery(e.target.value)}
-                placeholder="Search notes…"
+                placeholder="Ask Aura anything…"
                 className="text-xs text-white/70 flex-1 bg-transparent border-none outline-none placeholder:text-white/30 min-w-0"
               />
               <kbd className="hidden lg:inline text-[10px] text-white/20 border border-white/10 rounded px-1 flex-shrink-0">⌘K</kbd>

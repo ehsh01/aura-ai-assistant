@@ -3,10 +3,10 @@ import { Link } from "wouter";
 import {
   Brain,
   Cable,
+  CalendarClock,
   CheckSquare,
   FileText,
   FolderKanban,
-  Home,
   Inbox,
   LayoutGrid,
   LogOut,
@@ -14,6 +14,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
   Users,
   Car,
 } from "lucide-react";
@@ -35,15 +36,15 @@ type TabItem = {
 const primaryTabs: TabItem[] = [
   {
     href: "/",
-    label: "Home",
-    icon: <Home size={22} strokeWidth={1.8} />,
-    match: (path) => path === "/",
-  },
-  {
-    href: "/today",
     label: "Today",
     icon: <LayoutGrid size={22} strokeWidth={1.8} />,
-    match: (path) => path === "/today",
+    match: (path) => path === "/" || path === "/today",
+  },
+  {
+    href: "/ask",
+    label: "Ask",
+    icon: <Sparkles size={22} strokeWidth={1.8} />,
+    match: (path) => path === "/ask",
   },
   {
     href: "/inbox",
@@ -192,9 +193,17 @@ export function MobileMoreSheet({
           <p className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
             Ask
           </p>
-          <Link href="/today" onClick={close} className={linkClass(location === "/today")}>
+          <Link href="/" onClick={close} className={linkClass(location === "/" || location === "/today")}>
             <LayoutGrid size={18} />
             <span className="flex-1 text-sm font-medium">Today</span>
+          </Link>
+          <Link href="/ask" onClick={close} className={linkClass(location === "/ask")}>
+            <Sparkles size={18} />
+            <span className="flex-1 text-sm font-medium">Ask Aura</span>
+          </Link>
+          <Link href="/deadlines" onClick={close} className={linkClass(location === "/deadlines")}>
+            <CalendarClock size={18} />
+            <span className="flex-1 text-sm font-medium">Deadlines</span>
           </Link>
 
           <p className="px-1 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">

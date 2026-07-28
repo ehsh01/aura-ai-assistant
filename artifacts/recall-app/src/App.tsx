@@ -87,9 +87,9 @@ function AuthedRoutes() {
   return (
     <RequireAuth>
       <Switch>
-        <Route path="/" component={Dashboard} />
+        {/* Today is the default landing; Ask Aura lives at /ask as the full-screen workspace. */}
+        <Route path="/" component={Today} />
         <Route path="/today" component={Today} />
-        {/* Threads folded into Home — old /ask deep links (askPath()) still land on the same oracle UI. */}
         <Route path="/ask" component={Dashboard} />
         <Route path="/notes" component={Notes} />
         <Route path="/notebooks" component={RedirectToNotes} />
@@ -110,7 +110,7 @@ function AuthedRoutes() {
         <Route path="/deadlines" component={Deadlines} />
         <Route path="/tasks" component={Tasks} />
         <Route path="/canvas" component={Canvas} />
-        {/* Signed-in users hitting /login land on Home */}
+        {/* Signed-in users hitting /login land on Today */}
         <Route path="/login" component={RedirectHome} />
         <Route component={RedirectHome} />
       </Switch>

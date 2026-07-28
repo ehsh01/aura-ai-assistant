@@ -126,7 +126,7 @@ export function Dashboard() {
     if (stored) setThreadId(stored);
   }, []);
 
-  // Deep link: /?q=… auto-ask
+  // Deep link: /ask?q=… auto-ask
   useEffect(() => {
     const q = readSearchParam("q")?.trim();
     if (!q) return;

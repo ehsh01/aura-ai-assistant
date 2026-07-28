@@ -17,10 +17,14 @@ export const APP_PATHS = [
   "/canvas",
   "/vehicles",
   "/organizations",
+  "/deadlines",
   "/privacy",
   "/terms",
   "/login",
 ] as const;
+
+/** Detail routes with dynamic segments, allowed alongside APP_PATHS. */
+const APP_PATH_PREFIXES = ["/projects/", "/waiting/"] as const;
 
 export type AppPath = (typeof APP_PATHS)[number];
 
@@ -34,7 +38,10 @@ export function normalizeBrowserPath(): void {
   if (path.endsWith("/index.html")) {
     path = path.slice(0, -"/index.html".length) || "/";
   }
-  if (!APP_PATHS.includes(path as AppPath) && !path.startsWith("/projects/")) {
+  if (
+    !APP_PATHS.includes(path as AppPath) &&
+    !APP_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))
+  ) {
     path = "/";
   }
   const next = path + window.location.search + window.location.hash;
@@ -46,5 +53,8 @@ export function normalizeBrowserPath(): void {
 }
 
 export function isAppPath(path: string): path is AppPath {
-  return (APP_PATHS as readonly string[]).includes(path) || path.startsWith("/projects/");
+  return (
+    (APP_PATHS as readonly string[]).includes(path) ||
+    APP_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))
+  );
 }
