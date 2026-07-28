@@ -36,7 +36,7 @@ export const waitingItems = pgTable(
     expectedAt: timestamp("expected_at", { withTimezone: true }),
     /** certain | uncertain | none — how solid expectedAt is. */
     dateConfidence: varchar("date_confidence", { length: 16 }).notNull().default("none"),
-    /** open | snoozed | completed | dismissed */
+    /** candidate | open | snoozed | completed | dismissed */
     status: varchar("status", { length: 24 }).notNull().default("open"),
     /** Next follow-up date; surfaces in Today when reached. */
     followUpAt: timestamp("follow_up_at", { withTimezone: true }),
@@ -46,6 +46,9 @@ export const waitingItems = pgTable(
     /** completed | revised_delayed | still_waiting | unclear */
     lastOutcome: varchar("last_outcome", { length: 24 }),
     lastReplySourceRecordId: varchar("last_reply_source_record_id", { length: 64 }),
+    /** Optional links to an existing project / delegated task. */
+    projectId: varchar("project_id", { length: 64 }),
+    taskId: varchar("task_id", { length: 64 }),
     /** Extraction confidence 0..1. */
     confidence: real("confidence").notNull().default(0.5),
     /** Normalized owner+deliverable used to dedupe active commitments. */
@@ -59,10 +62,10 @@ export const waitingItems = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    // One active commitment per owner+deliverable; history stays in audit_log.
+    // One active commitment/candidate per owner+deliverable; history in audit_log.
     uniqueIndex("waiting_items_active_fingerprint_uidx")
       .on(table.userId, table.fingerprint)
-      .where(sql`status in ('open', 'snoozed')`),
+      .where(sql`status in ('open', 'snoozed', 'candidate')`),
     index("waiting_items_user_status_followup_idx").on(
       table.userId,
       table.status,

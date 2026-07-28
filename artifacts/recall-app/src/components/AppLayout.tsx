@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Inbox, Plus, FolderKanban, FileText, Brain, Car, Settings, CalendarClock, Sparkles } from "lucide-react";
+import { Inbox, Plus, FolderKanban, FileText, Brain, Car, Settings, CalendarClock, Sparkles, Hourglass } from "lucide-react";
 import { CaptureModal } from "@/components/CaptureModal";
 import { MobileBottomNav, MobileMoreSheet } from "@/components/MobileShell";
 import { OfflineQueueBanner } from "@/components/OfflineQueueBanner";
@@ -65,6 +65,12 @@ const staticNavItems: Array<{
     label: "Deadlines",
     section: "ask",
     icon: <CalendarClock width={18} height={18} strokeWidth={1.8} />,
+  },
+  {
+    id: "/waiting",
+    label: "Waiting",
+    section: "ask",
+    icon: <Hourglass width={18} height={18} strokeWidth={1.8} />,
   },
   {
     id: "/inbox",
@@ -301,7 +307,9 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
             ? location === "/" || location === "/today"
             : item.id === "/projects"
               ? location === "/projects" || location.startsWith("/projects/")
-              : location === item.id,
+              : item.id === "/waiting"
+                ? location === "/waiting" || location.startsWith("/waiting/")
+                : location === item.id,
       },
     });
   }
@@ -309,6 +317,8 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
   const moreActive =
     location === "/tasks" ||
     location === "/deadlines" ||
+    location === "/waiting" ||
+    location.startsWith("/waiting/") ||
     location === "/canvas" ||
     location === "/documents" ||
     location === "/memory" ||

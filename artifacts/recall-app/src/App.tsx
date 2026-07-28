@@ -19,6 +19,7 @@ import { Connectors } from "@/pages/Connectors";
 import { Projects } from "@/pages/Projects";
 import { ProjectDetail } from "@/pages/ProjectDetail";
 import { WaitingDetail } from "@/pages/WaitingDetail";
+import { WaitingList } from "@/pages/WaitingList";
 import { Deadlines } from "@/pages/Deadlines";
 import { Documents } from "@/pages/Documents";
 import { Memory } from "@/pages/Memory";
@@ -106,6 +107,7 @@ function AuthedRoutes() {
         <Route path="/settings" component={Settings} />
         <Route path="/projects" component={Projects} />
         <Route path="/projects/:projectId" component={ProjectDetail} />
+        <Route path="/waiting" component={WaitingList} />
         <Route path="/waiting/:id" component={WaitingDetail} />
         <Route path="/deadlines" component={Deadlines} />
         <Route path="/tasks" component={Tasks} />

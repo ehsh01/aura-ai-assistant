@@ -45,6 +45,9 @@ function toWaitingItems(items: WaitingOnRecord[]): WaitingItem[] {
     days: w.days,
     href: w.href,
     followUp: w.followUp,
+    sourceType: w.sourceType,
+    ...(w.dueReason ? { dueReason: w.dueReason } : {}),
+    trackedId: w.id.startsWith("durable:") ? w.id.slice("durable:".length) : null,
   }));
 }
 

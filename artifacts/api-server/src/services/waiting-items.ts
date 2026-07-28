@@ -10,7 +10,7 @@ import {
 import { createEvidenceForUser } from "./evidence";
 import { writeAuditLog } from "./audit";
 
-export type WaitingStatus = "open" | "snoozed" | "completed" | "dismissed";
+export type WaitingStatus = "candidate" | "open" | "snoozed" | "completed" | "dismissed";
 export type WaitingOutcome =
   | "completed"
   | "revised_delayed"
@@ -18,6 +18,15 @@ export type WaitingOutcome =
   | "unclear";
 export type DateConfidence = "certain" | "uncertain" | "none";
 export type WaitingDueReason = "needs_review" | "follow_up_due" | "expected_overdue";
+
+/** A reply strongly suggests the commitment is done; the user must confirm. */
+export type WaitingResolutionSuggestion = {
+  outcome: "completed";
+  reason: string;
+  replySourceRecordId: string | null;
+  confidence: number;
+  at: string;
+};
 
 export const WAITING_DEFAULT_FOLLOWUP_DAYS = 3;
 
@@ -41,7 +50,12 @@ export type WaitingItemDto = {
   threadId: string | null;
   sourceEntityType: string;
   sourceEntityId: string;
+  projectId: string | null;
+  taskId: string | null;
   needsReview: boolean;
+  /** Why Aura flagged an unconfirmed candidate. */
+  candidateReason: string | null;
+  suggestedResolution: WaitingResolutionSuggestion | null;
   metadata: Record<string, unknown>;
   href: string;
   createdAt: string;
@@ -60,6 +74,8 @@ export type WaitingItemPatch = {
   dateConfidence?: string | null;
   followUpAt?: string | null;
   threadId?: string | null;
+  projectId?: string | null;
+  taskId?: string | null;
 };
 
 const DATE_CONFIDENCES = new Set<DateConfidence>(["certain", "uncertain", "none"]);
@@ -91,6 +107,7 @@ export function waitingFingerprint(ownerName: string, deliverable: string): stri
 }
 
 const TRANSITIONS: Record<WaitingStatus, WaitingStatus[]> = {
+  candidate: ["open", "snoozed", "dismissed"],
   open: ["snoozed", "completed", "dismissed"],
   snoozed: ["open", "completed", "dismissed"],
   completed: ["open"],
@@ -164,6 +181,8 @@ export function validateWaitingPatch(patch: WaitingItemPatch): {
   dateConfidence?: DateConfidence;
   followUpAt?: Date | null;
   threadId?: string | null;
+  projectId?: string | null;
+  taskId?: string | null;
 } {
   const out: ReturnType<typeof validateWaitingPatch> = {};
   if (patch.ownerName !== undefined) {
@@ -205,7 +224,32 @@ export function validateWaitingPatch(patch: WaitingItemPatch): {
     const v = (patch.threadId ?? "").trim().slice(0, 128);
     out.threadId = v || null;
   }
+  if (patch.projectId !== undefined) {
+    const v = (patch.projectId ?? "").trim().slice(0, 64);
+    out.projectId = v || null;
+  }
+  if (patch.taskId !== undefined) {
+    const v = (patch.taskId ?? "").trim().slice(0, 64);
+    out.taskId = v || null;
+  }
   return out;
+}
+
+/** Read the resolution suggestion a reply classification left for review. */
+export function suggestedResolutionFromMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): WaitingResolutionSuggestion | null {
+  const raw = metadata?.suggestedResolution;
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (r.outcome !== "completed") return null;
+  return {
+    outcome: "completed",
+    reason: typeof r.reason === "string" ? r.reason : "",
+    replySourceRecordId: typeof r.replySourceRecordId === "string" ? r.replySourceRecordId : null,
+    confidence: typeof r.confidence === "number" ? r.confidence : 0,
+    at: typeof r.at === "string" ? r.at : "",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -233,7 +277,14 @@ function toDto(row: WaitingItem): WaitingItemDto {
     threadId: row.threadId ?? null,
     sourceEntityType: row.sourceEntityType,
     sourceEntityId: row.sourceEntityId,
+    projectId: row.projectId ?? null,
+    taskId: row.taskId ?? null,
     needsReview: row.metadata?.needsReview === true,
+    candidateReason:
+      typeof row.metadata?.candidateReason === "string"
+        ? row.metadata.candidateReason
+        : null,
+    suggestedResolution: suggestedResolutionFromMetadata(row.metadata),
     metadata: row.metadata ?? {},
     href: `/waiting/${row.id}`,
     createdAt: row.createdAt.toISOString(),
@@ -252,7 +303,7 @@ async function findActiveByFingerprint(
       and(
         eq(waitingItems.userId, userId),
         eq(waitingItems.fingerprint, fingerprint),
-        inArray(waitingItems.status, ["open", "snoozed"]),
+        inArray(waitingItems.status, ["open", "snoozed", "candidate"]),
       ),
     )
     .limit(1);
@@ -270,6 +321,12 @@ export type CreateWaitingItemInput = {
   followUpAt?: Date | null;
   confidence?: number;
   threadId?: string | null;
+  projectId?: string | null;
+  taskId?: string | null;
+  /** "candidate" parks the item in the review queue instead of opening it. */
+  status?: "open" | "candidate";
+  /** Plain-language reason Aura believes a follow-up is needed. */
+  candidateReason?: string | null;
   sourceEntityType: string;
   sourceEntityId: string;
   /** Evidence linking the commitment to its source; written when provided. */
@@ -277,6 +334,17 @@ export type CreateWaitingItemInput = {
   evidenceSnippet?: string | null;
   metadata?: Record<string, unknown>;
 };
+
+/**
+ * evidence.source_capture_id references raw captures, but capture-originated
+ * waiting items point at the capture_items inbox row — the raw id rides along
+ * in metadata so the evidence FK stays valid.
+ */
+function evidenceCaptureId(input: CreateWaitingItemInput): string | null {
+  if (input.sourceEntityType !== "capture_item") return null;
+  const raw = input.metadata?.rawCaptureId;
+  return typeof raw === "string" && raw ? raw : null;
+}
 
 /**
  * Create a durable waiting item, or return the existing active commitment with
@@ -303,8 +371,7 @@ export async function upsertWaitingItemForUser(
         claimType: "waiting_commitment",
         sourceRecordId:
           input.sourceEntityType === "source_record" ? input.sourceEntityId : null,
-        sourceCaptureId:
-          input.sourceEntityType === "capture_item" ? input.sourceEntityId : null,
+        sourceCaptureId: evidenceCaptureId(input),
         evidenceText: input.evidenceText,
         evidenceMetadata: {
           sourceUrl: input.metadata?.sourceUrl ?? null,
@@ -339,15 +406,20 @@ export async function upsertWaitingItemForUser(
       promisedAt: input.promisedAt ?? null,
       expectedAt: input.expectedAt ?? null,
       dateConfidence,
-      status: "open",
+      status: input.status ?? "open",
       followUpAt: followUp,
       confidence: Math.min(1, Math.max(0, input.confidence ?? 0.5)),
       fingerprint,
       threadId: input.threadId ?? null,
+      projectId: input.projectId ?? null,
+      taskId: input.taskId ?? null,
       sourceEntityType: input.sourceEntityType,
       sourceEntityId: input.sourceEntityId,
       metadata: {
         ...(input.metadata ?? {}),
+        ...(input.candidateReason
+          ? { candidateReason: input.candidateReason.slice(0, 300) }
+          : {}),
         ...(input.evidenceSnippet
           ? { evidenceSnippet: input.evidenceSnippet.slice(0, 500) }
           : {}),
@@ -364,8 +436,7 @@ export async function upsertWaitingItemForUser(
       claimType: "waiting_commitment",
       sourceRecordId:
         input.sourceEntityType === "source_record" ? input.sourceEntityId : null,
-      sourceCaptureId:
-        input.sourceEntityType === "capture_item" ? input.sourceEntityId : null,
+      sourceCaptureId: evidenceCaptureId(input),
       evidenceText: input.evidenceText,
       evidenceMetadata: {
         sourceUrl: input.metadata?.sourceUrl ?? null,
@@ -375,7 +446,8 @@ export async function upsertWaitingItemForUser(
   }
   await writeAuditLog({
     userId,
-    action: "waiting_item_created",
+    action:
+      input.status === "candidate" ? "waiting_candidate_created" : "waiting_item_created",
     entityType: "waiting_item",
     entityId: id,
     metadata: {
@@ -384,6 +456,9 @@ export async function upsertWaitingItemForUser(
       sourceEntityType: input.sourceEntityType,
       sourceEntityId: input.sourceEntityId,
       dateConfidence,
+      ...(input.candidateReason
+        ? { candidateReason: input.candidateReason.slice(0, 300) }
+        : {}),
     },
   });
   return { item: toDto(row!), created: true };
@@ -596,8 +671,25 @@ export async function dismissWaitingItem(userId: string, id: string) {
   return transition(userId, id, "dismissed", "waiting_item_dismissed");
 }
 
+/** User confirms a review-queue candidate; it becomes a tracked commitment. */
+export async function confirmWaitingCandidate(
+  userId: string,
+  id: string,
+): Promise<WaitingItemDto | null> {
+  const prev = await getRow(userId, id);
+  if (!prev) return null;
+  const metadata = { ...(prev.metadata ?? {}) };
+  delete metadata.candidateReason;
+  return transition(userId, id, "open", "waiting_candidate_confirmed", { metadata });
+}
+
 export async function completeWaitingItem(userId: string, id: string) {
-  return transition(userId, id, "completed", "waiting_item_completed");
+  const prev = await getRow(userId, id);
+  if (!prev) return null;
+  const metadata = { ...(prev.metadata ?? {}) };
+  delete metadata.needsReview;
+  delete metadata.suggestedResolution;
+  return transition(userId, id, "completed", "waiting_item_completed", { metadata });
 }
 
 export async function reopenWaitingItem(userId: string, id: string) {
@@ -617,6 +709,7 @@ export async function advanceWaitingFollowUp(
   const next = computeNextFollowUpAt(now, days);
   const metadata = { ...(prev.metadata ?? {}) };
   delete metadata.needsReview;
+  delete metadata.suggestedResolution;
   const [row] = await getDb()
     .update(waitingItems)
     .set({

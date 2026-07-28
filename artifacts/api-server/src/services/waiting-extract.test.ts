@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTOMATED_SENDER_RE,
+  candidateReasonForConfidence,
+  hasOutboundRequestCues,
   hasWaitingCues,
+  isAutomatedGmailRecord,
   isInboundGmailRecord,
+  isOutboundGmailRecord,
   mapCommitmentDates,
+  parseToField,
+  perspectiveForRecord,
+  waitingStatusForConfidence,
 } from "./waiting-extract";
 
 describe("hasWaitingCues (pre-filter)", () => {
@@ -36,6 +44,106 @@ describe("isInboundGmailRecord", () => {
 
   it("treats missing mailbox as inbound when a sender exists", () => {
     expect(isInboundGmailRecord({ senderEmail: "vendor@acme.com" })).toBe(true);
+  });
+});
+
+describe("isAutomatedGmailRecord (newsletter/marketing filter)", () => {
+  it("flags automated sender addresses", () => {
+    for (const sender of [
+      "noreply@acme.com",
+      "no-reply@acme.com",
+      "donotreply@acme.com",
+      "mailer-daemon@acme.com",
+      "newsletters@e.iheart.com",
+      "marketing@shop.com",
+      "notifications@social.com",
+      "receipts@store.com",
+    ]) {
+      expect(AUTOMATED_SENDER_RE.test(sender)).toBe(true);
+      expect(isAutomatedGmailRecord({ senderEmail: sender })).toBe(true);
+    }
+  });
+
+  it("flags bulk-mail body markers even from normal addresses", () => {
+    const body = "Hi there, sale ends today! Click to unsubscribe from this list.";
+    expect(isAutomatedGmailRecord({ senderEmail: "deals@shop.com" }, body)).toBe(true);
+  });
+
+  it("keeps real people", () => {
+    expect(
+      isAutomatedGmailRecord(
+        { senderEmail: "carlos@acmepermits.com" },
+        "I'll send the as-built documents by Friday.",
+      ),
+    ).toBe(false);
+    expect(isAutomatedGmailRecord({ senderEmail: "maria.lopez@gmail.com" })).toBe(false);
+  });
+});
+
+describe("hasOutboundRequestCues", () => {
+  it("matches the owner's requests", () => {
+    expect(hasOutboundRequestCues("Can you send the inspection confirmation?")).toBe(true);
+    expect(hasOutboundRequestCues("Please review the attached plans and let me know")).toBe(true);
+    expect(hasOutboundRequestCues("When will the permit be ready?")).toBe(true);
+    expect(hasOutboundRequestCues("Any update on the city revision?")).toBe(true);
+  });
+
+  it("ignores plain statements and small talk", () => {
+    expect(hasOutboundRequestCues("Thanks, received everything.")).toBe(false);
+    expect(hasOutboundRequestCues("See you at the office party.")).toBe(false);
+  });
+});
+
+describe("isOutboundGmailRecord / perspectiveForRecord", () => {
+  it("detects messages the owner wrote", () => {
+    const meta = { senderEmail: "me@x.com", mailbox: "me@x.com" };
+    expect(isOutboundGmailRecord(meta)).toBe(true);
+    expect(perspectiveForRecord(meta)).toBe("outbound");
+    expect(perspectiveForRecord({ senderEmail: "them@x.com", mailbox: "me@x.com" })).toBe(
+      "inbound",
+    );
+  });
+});
+
+describe("parseToField", () => {
+  it("parses named and bare recipients", () => {
+    expect(parseToField("From: Me <me@x.com>\nTo: Carlos <carlos@acme.com>")).toEqual({
+      name: "Carlos",
+      email: "carlos@acme.com",
+    });
+    expect(parseToField("To: carlos@acme.com, other@acme.com")).toEqual({
+      name: "",
+      email: "carlos@acme.com",
+    });
+    expect(parseToField("Subject: hello")).toEqual({ name: "", email: "" });
+  });
+});
+
+describe("waitingStatusForConfidence (confidence/review model)", () => {
+  it("opens only explicit commitments", () => {
+    expect(waitingStatusForConfidence(0.9)).toBe("open");
+    expect(waitingStatusForConfidence(0.7)).toBe("open");
+  });
+
+  it("queues plausible guesses for review", () => {
+    expect(waitingStatusForConfidence(0.55)).toBe("candidate");
+    expect(waitingStatusForConfidence(0.45)).toBe("candidate");
+  });
+
+  it("excludes low-confidence guesses entirely", () => {
+    expect(waitingStatusForConfidence(0.44)).toBeNull();
+    expect(waitingStatusForConfidence(0.1)).toBeNull();
+  });
+
+  it("manual extraction lowers the review floor, never the open bar", () => {
+    expect(waitingStatusForConfidence(0.65, 0.4)).toBe("candidate");
+    expect(waitingStatusForConfidence(0.42, 0.4)).toBe("candidate");
+    expect(waitingStatusForConfidence(0.39, 0.4)).toBeNull();
+  });
+
+  it("explains why in plain language", () => {
+    expect(candidateReasonForConfidence("inbound", 0.5)).toMatch(/possible commitment/i);
+    expect(candidateReasonForConfidence("outbound", 0.5)).toMatch(/you asked/i);
   });
 });
 

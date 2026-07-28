@@ -107,6 +107,14 @@ export type WaitingOnRecord = {
 
 // --- Durable "Waiting On" commitments ---------------------------------------
 
+export type WaitingResolutionSuggestion = {
+  outcome: "completed";
+  reason: string;
+  replySourceRecordId: string | null;
+  confidence: number;
+  at: string;
+};
+
 export type WaitingItemRecord = {
   id: string;
   ownerPersonId: string | null;
@@ -116,7 +124,7 @@ export type WaitingItemRecord = {
   promisedAt: string | null;
   expectedAt: string | null;
   dateConfidence: "certain" | "uncertain" | "none";
-  status: "open" | "snoozed" | "completed" | "dismissed";
+  status: "candidate" | "open" | "snoozed" | "completed" | "dismissed";
   followUpAt: string | null;
   snoozedUntil: string | null;
   completedAt: string | null;
@@ -127,7 +135,11 @@ export type WaitingItemRecord = {
   threadId: string | null;
   sourceEntityType: string;
   sourceEntityId: string;
+  projectId: string | null;
+  taskId: string | null;
   needsReview: boolean;
+  candidateReason: string | null;
+  suggestedResolution: WaitingResolutionSuggestion | null;
   metadata: Record<string, unknown>;
   href: string;
   createdAt: string;
@@ -200,6 +212,8 @@ export async function patchWaitingItem(
     dateConfidence: "certain" | "uncertain" | "none" | null;
     followUpAt: string | null;
     threadId: string | null;
+    projectId: string | null;
+    taskId: string | null;
   }>,
 ): Promise<WaitingItemRecord> {
   return apiFetch(`/waiting-items/${encodeURIComponent(id)}`, {
@@ -224,6 +238,10 @@ export async function snoozeWaitingItem(
   input: { until?: string | null; preset?: string | null },
 ): Promise<WaitingItemRecord> {
   return postWaitingAction(id, "snooze", input as Record<string, unknown>);
+}
+
+export async function confirmWaitingCandidate(id: string): Promise<WaitingItemRecord> {
+  return postWaitingAction(id, "confirm");
 }
 
 export async function dismissWaitingItem(id: string): Promise<WaitingItemRecord> {

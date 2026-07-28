@@ -4,6 +4,7 @@ import {
   computeNextFollowUpAt,
   defaultFollowUpAt,
   isWaitingDue,
+  suggestedResolutionFromMetadata,
   validateWaitingPatch,
   waitingDueReason,
   waitingFingerprint,
@@ -45,6 +46,15 @@ describe("canTransitionWaitingStatus", () => {
     expect(canTransitionWaitingStatus("dismissed", "open")).toBe(true);
     expect(canTransitionWaitingStatus("completed", "snoozed")).toBe(false);
     expect(canTransitionWaitingStatus("dismissed", "completed")).toBe(false);
+  });
+
+  it("candidates can be confirmed, snoozed, or dismissed — never auto-completed", () => {
+    expect(canTransitionWaitingStatus("candidate", "open")).toBe(true);
+    expect(canTransitionWaitingStatus("candidate", "snoozed")).toBe(true);
+    expect(canTransitionWaitingStatus("candidate", "dismissed")).toBe(true);
+    expect(canTransitionWaitingStatus("candidate", "completed")).toBe(false);
+    expect(canTransitionWaitingStatus("open", "candidate")).toBe(false);
+    expect(canTransitionWaitingStatus("completed", "candidate")).toBe(false);
   });
 });
 
@@ -147,6 +157,63 @@ describe("waitingDueReason / isWaitingDue", () => {
       ).toBe(false);
     }
   });
+
+  it("candidates never surface in Today", () => {
+    expect(
+      isWaitingDue(
+        { ...base, status: "candidate", followUpAt: new Date("2026-07-01T12:00:00Z") },
+        now,
+      ),
+    ).toBe(false);
+  });
+
+  it("a pending resolution suggestion surfaces as needs_review", () => {
+    expect(
+      waitingDueReason(
+        {
+          ...base,
+          followUpAt: new Date("2026-08-10T12:00:00Z"),
+          expectedAt: null,
+          metadata: {
+            needsReview: true,
+            suggestedResolution: {
+              outcome: "completed",
+              reason: "Attached the final documents.",
+              replySourceRecordId: "sr-9",
+              confidence: 0.8,
+              at: "2026-07-27T10:00:00Z",
+            },
+          },
+        },
+        now,
+      ),
+    ).toBe("needs_review");
+  });
+});
+
+describe("suggestedResolutionFromMetadata", () => {
+  it("parses a well-formed suggestion", () => {
+    const out = suggestedResolutionFromMetadata({
+      suggestedResolution: {
+        outcome: "completed",
+        reason: "All done",
+        replySourceRecordId: "sr-1",
+        confidence: 0.8,
+        at: "2026-07-27T10:00:00Z",
+      },
+    });
+    expect(out?.outcome).toBe("completed");
+    expect(out?.replySourceRecordId).toBe("sr-1");
+    expect(out?.confidence).toBe(0.8);
+  });
+
+  it("returns null for missing or malformed data", () => {
+    expect(suggestedResolutionFromMetadata(null)).toBeNull();
+    expect(suggestedResolutionFromMetadata({})).toBeNull();
+    expect(
+      suggestedResolutionFromMetadata({ suggestedResolution: { outcome: "unclear" } }),
+    ).toBeNull();
+  });
 });
 
 describe("validateWaitingPatch", () => {
@@ -175,6 +242,15 @@ describe("validateWaitingPatch", () => {
     const out = validateWaitingPatch({ ownerOrg: "", expectedAt: null });
     expect(out.ownerOrg).toBeNull();
     expect(out.expectedAt).toBeNull();
+  });
+
+  it("accepts project/task links and clears them", () => {
+    const linked = validateWaitingPatch({ projectId: " proj-1 ", taskId: "task-2" });
+    expect(linked.projectId).toBe("proj-1");
+    expect(linked.taskId).toBe("task-2");
+    const cleared = validateWaitingPatch({ projectId: "", taskId: null });
+    expect(cleared.projectId).toBeNull();
+    expect(cleared.taskId).toBeNull();
   });
 });
 

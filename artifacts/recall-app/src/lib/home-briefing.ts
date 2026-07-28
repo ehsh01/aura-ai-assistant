@@ -61,6 +61,10 @@ export interface WaitingItem {
   days: number;
   href: string;
   followUp: string;
+  sourceType?: "note" | "knowledge" | "task" | "mail" | "durable";
+  dueReason?: "needs_review" | "follow_up_due" | "expected_overdue";
+  /** Raw waiting_items id for durable rows (id is "durable:<id>"). */
+  trackedId?: string | null;
 }
 
 export type InsightKind =

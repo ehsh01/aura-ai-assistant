@@ -33,6 +33,8 @@ const ACTION_LABELS: Record<string, string> = {
   follow_up_created: "Follow-up task created",
   waiting_dismissed: "Waiting item dismissed",
   waiting_item_created: "Waiting item tracked",
+  waiting_candidate_created: "Follow-up suggestion queued for review",
+  waiting_candidate_confirmed: "Follow-up suggestion confirmed",
   waiting_item_updated: "Waiting item corrected",
   waiting_item_snoozed: "Waiting item snoozed",
   waiting_item_dismissed: "Waiting item dismissed",

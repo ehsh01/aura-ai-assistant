@@ -7,6 +7,7 @@ import {
   CheckSquare,
   FileText,
   FolderKanban,
+  Hourglass,
   Inbox,
   LayoutGrid,
   LogOut,
@@ -204,6 +205,14 @@ export function MobileMoreSheet({
           <Link href="/deadlines" onClick={close} className={linkClass(location === "/deadlines")}>
             <CalendarClock size={18} />
             <span className="flex-1 text-sm font-medium">Deadlines</span>
+          </Link>
+          <Link
+            href="/waiting"
+            onClick={close}
+            className={linkClass(location === "/waiting" || location.startsWith("/waiting/"))}
+          >
+            <Hourglass size={18} />
+            <span className="flex-1 text-sm font-medium">Waiting</span>
           </Link>
 
           <p className="px-1 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">

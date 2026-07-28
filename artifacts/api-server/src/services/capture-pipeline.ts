@@ -211,6 +211,31 @@ export async function processCaptureExtraction(
       // Deadline promotion must never break capture processing.
     }
 
+    // Follow-up promotion: follow_up captures (or waiting language) become
+    // waiting items — open only when explicit, otherwise review candidates.
+    // Reuses the classification's own fields — no second LLM call.
+    try {
+      const { createWaitingItemFromCapture } = await import("./waiting-candidates");
+      const personLink = links.find((l) => l.entityType === "person" && l.matched);
+      const projectLink = links.find((l) => l.entityType === "project" && l.matched);
+      await createWaitingItemFromCapture({
+        userId,
+        captureItemId: inboxId,
+        rawCaptureId: captureId,
+        types,
+        confidence,
+        rawText: capture.rawText,
+        cleanedTitle: item.cleanedTitle ?? "",
+        evidenceText: item.evidenceText ?? null,
+        ownerName: personLink?.name ?? item.personName ?? null,
+        ownerPersonId: personLink?.entityId ?? null,
+        projectId: projectLink?.entityId ?? null,
+        sourceUrl: capture.sourceUrl ?? null,
+      });
+    } catch {
+      // Waiting promotion must never break capture processing.
+    }
+
     // High-confidence, low-risk captures organize themselves: materialize via
     // the same accept flow the user would trigger, flagged as automatic.
     if (autoAcceptEligible({ types, confidence, dueDate: item.suggestedDueDate, links })) {

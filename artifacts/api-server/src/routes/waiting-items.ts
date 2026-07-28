@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireAuth } from "../middleware/auth";
 import {
   completeWaitingItem,
+  confirmWaitingCandidate,
   dismissWaitingItem,
   getWaitingItemForUser,
   listWaitingAuditForItem,
@@ -59,6 +60,8 @@ const patchSchema = z.object({
   dateConfidence: z.enum(["certain", "uncertain", "none"]).optional().nullable(),
   followUpAt: z.string().optional().nullable(),
   threadId: z.string().max(128).optional().nullable(),
+  projectId: z.string().max(64).optional().nullable(),
+  taskId: z.string().max(64).optional().nullable(),
 });
 
 const extractSchema = z.object({
@@ -74,10 +77,10 @@ router.get("/waiting-items", async (req, res, next) => {
       res.json({ items });
       return;
     }
-    const status = ["open", "snoozed", "completed", "dismissed", "active", "all"].includes(
+    const status = ["candidate", "open", "snoozed", "completed", "dismissed", "active", "all"].includes(
       statusRaw,
     )
-      ? (statusRaw as "open" | "snoozed" | "completed" | "dismissed" | "active" | "all")
+      ? (statusRaw as "candidate" | "open" | "snoozed" | "completed" | "dismissed" | "active" | "all")
       : "active";
     const items = await listWaitingItemsForUser(req.user!.id, { status });
     res.json({ items });
@@ -182,6 +185,20 @@ router.post("/waiting-items/:id/snooze", async (req, res, next) => {
       until: body.until,
       preset: (body.preset ?? null) as SnoozePreset | null,
     });
+    if (!item) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Waiting item not found" });
+      return;
+    }
+    res.json(item);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Confirm a review-queue candidate so it becomes a tracked commitment. */
+router.post("/waiting-items/:id/confirm", async (req, res, next) => {
+  try {
+    const item = await confirmWaitingCandidate(req.user!.id, req.params.id);
     if (!item) {
       res.status(404).json({ error: "NOT_FOUND", message: "Waiting item not found" });
       return;

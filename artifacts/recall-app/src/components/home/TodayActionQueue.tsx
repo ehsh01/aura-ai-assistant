@@ -5,12 +5,14 @@ import type { BriefingItem, FocusNow, WaitingItem } from "@/lib/home-briefing";
 import type { AttentionItemRecord } from "@/lib/recall-api";
 import {
   completeAttention,
+  completeWaitingItem,
   confirmAttention,
   createWaitingFollowUp,
   dismissAttention,
   dismissWaitingOn,
   markAttentionSeen,
   snoozeAttention,
+  snoozeWaitingItem,
 } from "@/lib/recall-api";
 import { rememberDismissedWaitingId } from "@/lib/waiting-dismissals";
 import { toast } from "@/hooks/use-toast";
@@ -47,6 +49,16 @@ function waitLabel(days: number): string {
   if (days <= 0) return "today";
   if (days === 1) return "1 day";
   return `${days} days`;
+}
+
+/** Plain-language reason a durable waiting item is on Today right now. */
+function waitingDetail(w: WaitingItem): string {
+  if (w.dueReason === "needs_review") return `Reply from ${w.person} needs review`;
+  if (w.dueReason === "expected_overdue") {
+    return `You asked ${w.person} ${waitLabel(w.days)} ago · expected earlier`;
+  }
+  if (w.trackedId) return `You asked ${w.person} ${waitLabel(w.days)} ago`;
+  return `${w.person} · waiting ${waitLabel(w.days)}`;
 }
 
 function dueDetail(item: AttentionItemRecord): string {
@@ -154,7 +166,7 @@ export function buildTodayQueue(input: {
       id: w.id,
       kind: "waiting",
       title: w.item,
-      detail: `${w.person} · waiting ${waitLabel(w.days)}`,
+      detail: waitingDetail(w),
       href: w.href,
       waiting: w,
     });
@@ -210,6 +222,44 @@ export function TodayActionQueue({
     } catch (err) {
       toast({
         title: "Could not create follow-up",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const snoozeTracked = async (item: WaitingItem) => {
+    if (busyId || !item.trackedId) return;
+    setBusyId(item.id);
+    setHiddenIds((prev) => new Set(prev).add(item.id));
+    try {
+      await snoozeWaitingItem(item.trackedId, { preset: "3d" });
+      toast({ title: "Snoozed", description: "Back in 3 days if there's still no reply." });
+      onWaitingChanged?.();
+    } catch (err) {
+      toast({
+        title: "Could not snooze",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const resolveTracked = async (item: WaitingItem) => {
+    if (busyId || !item.trackedId) return;
+    setBusyId(item.id);
+    setHiddenIds((prev) => new Set(prev).add(item.id));
+    try {
+      await completeWaitingItem(item.trackedId);
+      toast({ title: "Marked resolved", description: `${item.person} came through.` });
+      onWaitingChanged?.();
+    } catch (err) {
+      toast({
+        title: "Could not mark resolved",
         description: err instanceof Error ? err.message : undefined,
         variant: "destructive",
       });
@@ -390,6 +440,30 @@ export function TodayActionQueue({
                   >
                     <X size={15} strokeWidth={2.25} />
                   </button>
+                  {item.waiting.trackedId && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void snoozeTracked(item.waiting!)}
+                        disabled={busyId === item.waiting.id}
+                        title="Snooze 3 days"
+                        aria-label={`Snooze ${item.title} for 3 days`}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/20 text-white/70 hover:bg-white/[0.08] hover:text-white disabled:opacity-50"
+                      >
+                        <Hourglass size={14} strokeWidth={2.25} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void resolveTracked(item.waiting!)}
+                        disabled={busyId === item.waiting.id}
+                        title="Mark resolved"
+                        aria-label={`Mark ${item.title} resolved`}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-emerald-400/40 text-emerald-300 hover:bg-emerald-400/10 disabled:opacity-50"
+                      >
+                        <Check size={15} strokeWidth={2.25} />
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     onClick={() => void followUp(item.waiting!)}

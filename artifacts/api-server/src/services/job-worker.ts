@@ -88,12 +88,24 @@ const handlers: Record<string, JobHandler> = {
     logger.info({ userId: job.userId, ...result }, "Attention scan complete");
   },
   [JOB_TYPE_WAITING_SCAN]: async (job) => {
+    const noteId =
+      typeof job.payload.noteId === "string" && job.payload.noteId
+        ? job.payload.noteId
+        : null;
+    if (noteId) {
+      const { scanNoteForWaitingCandidates } = await import("./waiting-candidates");
+      const result = await scanNoteForWaitingCandidates(job.userId, noteId);
+      logger.info({ userId: job.userId, noteId, ...result }, "Note waiting scan complete");
+      return;
+    }
     const { processWaitingScanJob } = await import("./waiting-extract");
     const scan = await processWaitingScanJob(job.userId);
     const { processWaitingOutcomesForUser } = await import("./waiting-outcomes");
     const outcomes = await processWaitingOutcomesForUser(job.userId);
+    const { scanTaskWaitingCandidates } = await import("./waiting-candidates");
+    const taskCandidates = await scanTaskWaitingCandidates(job.userId);
     logger.info(
-      { userId: job.userId, ...scan, ...outcomes },
+      { userId: job.userId, ...scan, ...outcomes, taskCandidates },
       "Waiting scan complete",
     );
   },

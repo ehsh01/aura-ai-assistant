@@ -6,7 +6,7 @@ import { aiService, type WaitingReplyOutcome } from "./ai";
 import { createEvidenceForUser } from "./evidence";
 import { writeAuditLog } from "./audit";
 import { defaultFollowUpAt, type DateConfidence } from "./waiting-items";
-import { isInboundGmailRecord } from "./waiting-extract";
+import { isAutomatedGmailRecord, isInboundGmailRecord } from "./waiting-extract";
 import { dueAtFromDateString } from "./attention";
 import { CLASSIFY_WAITING_REPLY_PROMPT_VERSION } from "../prompts/classifyWaitingReply.v1";
 
@@ -73,17 +73,22 @@ export function matchWaitingItemForReply<T extends WaitingItem>(
   return null;
 }
 
-export type OutcomeApplication = "complete" | "revise" | "note" | "review";
+export type OutcomeApplication = "complete" | "suggest_resolve" | "revise" | "note" | "review";
 
 /**
- * Auto-apply policy: completions need high confidence; revisions and
+ * Auto-apply policy: only very-high-confidence completions close the item;
+ * plausible completions become a user-confirmed suggestion; revisions and
  * still-waiting notes are low-risk; anything unclear goes to human review.
  */
 export function decideOutcomeApplication(
   outcome: WaitingReplyOutcome,
   confidence: number,
 ): OutcomeApplication {
-  if (outcome === "completed" && confidence >= 0.75) return "complete";
+  if (outcome === "completed") {
+    if (confidence >= 0.9) return "complete";
+    if (confidence >= 0.55) return "suggest_resolve";
+    return "review";
+  }
   if (outcome === "revised_delayed" && confidence >= 0.6) return "revise";
   if (outcome === "still_waiting" && confidence >= 0.5) return "note";
   return "review";
@@ -148,7 +153,10 @@ export async function listUnprocessedInboundReplies(
       if (typeof meta.waitingOutcomeScanAt === "string" && meta.waitingOutcomeScanAt) {
         return false;
       }
-      return isInboundGmailRecord(meta);
+      if (!isInboundGmailRecord(meta)) return false;
+      // Newsletters/automated mail can never be a reply that resolves a
+      // commitment — excluding them also keeps LLM costs down.
+      return !isAutomatedGmailRecord(meta, r.recordText ?? "");
     })
     .slice(0, limit);
 }
@@ -220,6 +228,18 @@ export async function applyWaitingOutcome(
     set.status = "completed";
     set.completedAt = now;
     delete metadata.needsReview;
+    delete metadata.suggestedResolution;
+  } else if (application === "suggest_resolve") {
+    // Trust-but-verify: the reply likely resolves the commitment, but closing
+    // it is consequential — leave it open and ask the user to confirm.
+    metadata.needsReview = true;
+    metadata.suggestedResolution = {
+      outcome: "completed",
+      reason: classification.reason.slice(0, 300),
+      replySourceRecordId: reply.id,
+      confidence: classification.confidence,
+      at: now.toISOString(),
+    };
   } else if (application === "revise") {
     const revised = computeRevisedDates({
       revisedExpectedAt: classification.revisedExpectedAt,
@@ -232,12 +252,16 @@ export async function applyWaitingOutcome(
     set.dateConfidence = revised.dateConfidence;
     set.followUpAt = revised.followUpAt;
     delete metadata.needsReview;
+    delete metadata.suggestedResolution;
     metadata.revisedReason = classification.reason.slice(0, 300);
   } else if (application === "note") {
     metadata.lastStillWaitingAt = now.toISOString();
+    delete metadata.needsReview;
+    delete metadata.suggestedResolution;
   } else {
     metadata.needsReview = true;
     metadata.needsReviewReason = classification.reason.slice(0, 300) || "Reply needs review";
+    delete metadata.suggestedResolution;
   }
   set.metadata = metadata;
 

@@ -317,6 +317,10 @@ export interface ExtractWaitingRequest {
   body: string;
   fromName?: string | null;
   fromEmail?: string | null;
+  /** inbound: sender owes the owner. outbound: the owner asked the recipient. */
+  perspective?: "inbound" | "outbound";
+  toName?: string | null;
+  toEmail?: string | null;
 }
 
 export interface WaitingCommitment {
@@ -1408,7 +1412,7 @@ class OpenAiService implements AiService {
     request: ExtractWaitingRequest,
   ): Promise<ExtractWaitingResponse> {
     const { EXTRACT_WAITING_SYSTEM_PROMPT, EXTRACT_WAITING_PROMPT_VERSION } = await import(
-      "../prompts/extractWaiting.v1"
+      "../prompts/extractWaiting.v2"
     );
     const today = currentDateContext();
     try {
@@ -1425,8 +1429,11 @@ class OpenAiService implements AiService {
             role: "user",
             content: JSON.stringify({
               today: today.iso,
+              perspective: request.perspective ?? "inbound",
               fromName: request.fromName ?? null,
               fromEmail: request.fromEmail ?? null,
+              toName: request.toName ?? null,
+              toEmail: request.toEmail ?? null,
               subject: request.subject.slice(0, 400),
               body: request.body.slice(0, 5000),
             }),

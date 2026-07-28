@@ -25,7 +25,7 @@ export const FAMILY_RELATION_INTENT =
   /\b(wife|husband|spouse|son|daughter|sister|brother|mom|mother|dad|father|nephew|niece|aunt|uncle|cousin|kids|children|family|boyfriend|girlfriend|grandson|granddaughter|grandchild|in-?laws?)\b/i;
 
 export const WAITING_INTENT =
-  /\b(waiting|follow[- ]?up|awaiting|who.*(owe|owed|pending)|what.*(pending|waiting))\b/i;
+  /\b(waiting|follow[- ]?up|awaiting|who.*(owe|owed|pending)|what.*(pending|waiting)|(has(n'?t| not)|did(n'?t| not)|never)\s+(reply|replied|respond|responded|get back|gotten back)|(haven'?t|have not|still no)\s+heard back|no (reply|response) (from|yet))\b/i;
 
 /**
  * Deadline / what's-due questions — answered deterministically from

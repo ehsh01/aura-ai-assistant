@@ -4,6 +4,7 @@ import { AppLayout } from "@/components/AppLayout";
 import { toast } from "@/hooks/use-toast";
 import {
   completeWaitingItem,
+  confirmWaitingCandidate,
   dismissWaitingItem,
   draftWaitingFollowUp,
   getWaitingItem,
@@ -16,6 +17,7 @@ import {
 } from "@/lib/recall-api";
 
 const STATUS_STYLE: Record<WaitingItemRecord["status"], string> = {
+  candidate: "bg-violet-500/15 text-violet-300 border-violet-400/30",
   open: "bg-sky-500/15 text-sky-300 border-sky-400/30",
   snoozed: "bg-amber-500/15 text-amber-300 border-amber-400/30",
   completed: "bg-emerald-500/15 text-emerald-300 border-emerald-400/30",
@@ -24,6 +26,8 @@ const STATUS_STYLE: Record<WaitingItemRecord["status"], string> = {
 
 const AUDIT_LABEL: Record<string, string> = {
   waiting_item_created: "Tracked",
+  waiting_candidate_created: "Suggested for review",
+  waiting_candidate_confirmed: "Confirmed",
   waiting_item_updated: "Corrected",
   waiting_item_snoozed: "Snoozed",
   waiting_item_dismissed: "Dismissed",
@@ -223,9 +227,66 @@ export function WaitingDetail() {
                 {formatDate(item.promisedAt)} · next follow-up {formatDate(item.followUpAt)}
               </p>
 
+              {item.status === "candidate" && (
+                <div className="mt-4 rounded-2xl border border-violet-400/30 bg-violet-500/10 px-4 py-3">
+                  <p className="text-sm font-medium text-violet-200">Aura isn't sure yet</p>
+                  <p className="mt-0.5 text-sm text-white/60">
+                    {item.candidateReason ??
+                      "Possible follow-up — confirm to start tracking it."}
+                  </p>
+                </div>
+              )}
+
+              {item.suggestedResolution && item.status === "open" && (
+                <div className="mt-4 rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3">
+                  <p className="text-sm font-medium text-emerald-200">
+                    A reply suggests this is resolved
+                  </p>
+                  <p className="mt-0.5 text-sm text-white/60">
+                    {item.suggestedResolution.reason ||
+                      "The latest reply looks like it closes this out."}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <ActionButton
+                      busy={busy === "resolve"}
+                      onClick={() => run("resolve", () => completeWaitingItem(id!))}
+                      label="Mark resolved"
+                      primary
+                    />
+                    <ActionButton
+                      busy={busy === "keep-waiting"}
+                      onClick={() =>
+                        run("keep-waiting", () => markWaitingFollowUpSent(id!, { days: 3 }))
+                      }
+                      label="Keep waiting"
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* Actions */}
               <div className="mt-4 flex flex-wrap gap-2">
-                {item.status !== "completed" && item.status !== "dismissed" && (
+                {item.status === "candidate" && (
+                  <>
+                    <ActionButton
+                      busy={busy === "confirm"}
+                      onClick={() => run("confirm", () => confirmWaitingCandidate(id!))}
+                      label="Confirm — track it"
+                      primary
+                    />
+                    <ActionButton
+                      busy={busy === "snooze3"}
+                      onClick={() => run("snooze3", () => snoozeWaitingItem(id!, { preset: "3d" }))}
+                      label="Snooze 3d"
+                    />
+                    <ActionButton
+                      busy={busy === "dismiss"}
+                      onClick={() => run("dismiss", () => dismissWaitingItem(id!))}
+                      label="Dismiss"
+                    />
+                  </>
+                )}
+                {(item.status === "open" || item.status === "snoozed") && (
                   <>
                     <ActionButton
                       busy={busy === "draft"}

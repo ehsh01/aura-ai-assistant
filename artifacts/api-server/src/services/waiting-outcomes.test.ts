@@ -90,9 +90,20 @@ describe("matchWaitingItemForReply precedence", () => {
 });
 
 describe("decideOutcomeApplication (outcome → state matrix)", () => {
-  it("completed needs high confidence", () => {
+  it("completed closes automatically only at very high confidence", () => {
+    expect(decideOutcomeApplication("completed", 0.95)).toBe("complete");
     expect(decideOutcomeApplication("completed", 0.9)).toBe("complete");
-    expect(decideOutcomeApplication("completed", 0.6)).toBe("review");
+  });
+
+  it("plausible completions suggest resolving instead of silently closing", () => {
+    expect(decideOutcomeApplication("completed", 0.75)).toBe("suggest_resolve");
+    expect(decideOutcomeApplication("completed", 0.55)).toBe("suggest_resolve");
+    expect(decideOutcomeApplication("completed", 0.89)).toBe("suggest_resolve");
+  });
+
+  it("weak completions stay human-reviewed", () => {
+    expect(decideOutcomeApplication("completed", 0.54)).toBe("review");
+    expect(decideOutcomeApplication("completed", 0.2)).toBe("review");
   });
 
   it("revised applies at moderate confidence", () => {
