@@ -3,7 +3,6 @@ import { Link, useLocation } from "wouter";
 import { AppLayout } from "@/components/AppLayout";
 import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
 import {
-  fetchHome,
   listAttention,
   listHomeyAlerts,
   listPeople,
@@ -13,6 +12,7 @@ import {
   type PersonRecord,
   type WaitingOnRecord,
 } from "@/lib/recall-api";
+import { loadHome } from "@/lib/home-cache";
 import { pressingFeed, type HomeyUrgencyAlert } from "@/lib/urgency";
 import { ingestCaptureReliable } from "@/lib/capture-queue";
 import { useAuth } from "@/context/AuthContext";
@@ -32,6 +32,7 @@ import {
   buildTodayQueue,
   TodayActionQueue,
 } from "@/components/home/TodayActionQueue";
+import { NeedsReviewStrip } from "@/components/home/NeedsReviewStrip";
 import { DontForgetSection } from "@/components/home/DontForgetSection";
 import { BrainDumpInput } from "@/components/home/BrainDumpInput";
 import { NeuralBrainBackground } from "@/components/NeuralBrainBackground";
@@ -103,7 +104,8 @@ export function Today() {
   }, []);
 
   const refreshHome = useCallback(() => {
-    void fetchHome()
+    // Shared cache: one /home fetch also feeds the nav review badges.
+    void loadHome({ force: true })
       .then((next) => {
         setHome(next);
         if (Array.isArray(next.waiting)) {
@@ -307,6 +309,10 @@ export function Today() {
                     ))}
                 </ul>
               </section>
+            )}
+
+            {home?.review && home.review.total > 0 && (
+              <NeedsReviewStrip review={home.review} onChanged={refreshHome} />
             )}
 
             <TodayActionQueue

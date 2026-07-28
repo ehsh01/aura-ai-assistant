@@ -8,7 +8,8 @@ import { RecallLogo } from "@/components/RecallLogo";
 import { useAuth } from "@/context/AuthContext";
 import { useRecallData } from "@/context/RecallDataContext";
 import { subscribeCaptureQueue } from "@/lib/capture-queue";
-import { refreshFinance } from "@/lib/recall-api";
+import { refreshFinance, type BriefingReview } from "@/lib/recall-api";
+import { getCachedHome, loadHome, subscribeHome } from "@/lib/home-cache";
 import { askPath, notesPath, readSearchParam } from "@/lib/recall-nav";
 
 interface AppLayoutProps {
@@ -236,6 +237,34 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
 
   useEffect(() => subscribeCaptureQueue(setQueuedCaptures), []);
 
+  // Review badges (Waiting / Deadlines / AI Inbox) — share Today's briefing
+  // via the home cache so nav stays honest without duplicate /home calls.
+  const [review, setReview] = useState<BriefingReview | null>(
+    () => getCachedHome()?.review ?? null,
+  );
+  useEffect(() => {
+    const unsubscribe = subscribeHome((home) => setReview(home.review ?? null));
+    if (user) {
+      void loadHome().catch(() => {
+        // Badge-less fallback: nav still works when the briefing is unavailable.
+      });
+    }
+    return unsubscribe;
+  }, [user?.id]);
+
+  const reviewCountFor = (id: string): number | undefined => {
+    if (!review) return undefined;
+    const count =
+      id === "/waiting"
+        ? review.waitingCandidates
+        : id === "/deadlines"
+          ? review.unconfirmedDeadlines
+          : id === "/inbox"
+            ? review.inboxPending
+            : 0;
+    return count > 0 ? count : undefined;
+  };
+
   // Refresh finance from MyFamilyBudget whenever the signed-in app shell mounts.
   useEffect(() => {
     if (!user) return;
@@ -310,6 +339,7 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
               : item.id === "/waiting"
                 ? location === "/waiting" || location.startsWith("/waiting/")
                 : location === item.id,
+        count: reviewCountFor(item.id),
       },
     });
   }

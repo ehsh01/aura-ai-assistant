@@ -966,6 +966,24 @@ export interface HomeBriefingItem {
   href: string;
 }
 
+export type ReviewQueue = "waiting" | "deadline" | "inbox";
+
+export interface ReviewQueueItem {
+  id: string;
+  queue: ReviewQueue;
+  title: string;
+  detail: string;
+  href: string;
+}
+
+export interface BriefingReview {
+  waitingCandidates: number;
+  unconfirmedDeadlines: number;
+  inboxPending: number;
+  total: number;
+  items: ReviewQueueItem[];
+}
+
 export interface HomeBriefingResponse {
   date: string;
   briefing: {
@@ -1035,6 +1053,7 @@ export interface HomeBriefingResponse {
     href: string;
     needsSync: boolean;
   } | null;
+  review: BriefingReview;
 }
 
 export async function fetchHome(): Promise<HomeBriefingResponse> {

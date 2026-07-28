@@ -19,6 +19,12 @@ import { listTasksForUser, type RecallTaskDto } from "./tasks";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
 import { ensureUserFinanceFresh } from "./finance-auto-sync";
 import { listWaitingOnForUser } from "./waiting-on";
+import { listWaitingItemsForUser, type WaitingItemDto } from "./waiting-items";
+import {
+  attentionDueReason,
+  listAttentionForToday,
+  type AttentionItemDto,
+} from "./attention";
 import { buildProactiveInsights } from "./proactive-insights";
 import { listOpenHomeyAlertsForUser } from "./homey-alerts";
 import { todayIso } from "./query-utils";
@@ -78,6 +84,85 @@ export interface WaitingItem {
   dueReason?: "needs_review" | "follow_up_due" | "expected_overdue";
 }
 
+// ---------------------------------------------------------------------------
+// Review surface: every place Aura is waiting on a user confirmation.
+// ---------------------------------------------------------------------------
+
+export type ReviewQueue = "waiting" | "deadline" | "inbox";
+
+export interface ReviewQueueItemDto {
+  id: string;
+  queue: ReviewQueue;
+  title: string;
+  detail: string;
+  href: string;
+}
+
+export interface BriefingReview {
+  waitingCandidates: number;
+  unconfirmedDeadlines: number;
+  inboxPending: number;
+  total: number;
+  /** Capped preview for the Today strip; counts above are always full. */
+  items: ReviewQueueItemDto[];
+}
+
+/**
+ * Assemble the "needs your confirmation" roll-up. Waiting candidates lead
+ * (trust-critical), then unconfirmed deadlines by soonest due, then oldest
+ * pending inbox items. Pure — unit-tested.
+ */
+export function buildReviewStrip(input: {
+  waiting: WaitingItemDto[];
+  attention: AttentionItemDto[];
+  inbox: RecallCaptureItemDto[];
+  limit?: number;
+}): BriefingReview {
+  const candidates = [...input.waiting]
+    .filter((w) => w.status === "candidate")
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // Same "unconfirmed" definition as attentionDueReason (uncertain + not confirmed).
+  const unconfirmed = [...input.attention]
+    .filter((a) => attentionDueReason(a).unconfirmed)
+    .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
+  const pending = [...input.inbox]
+    .filter((c) => c.status === "pending")
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  const items: ReviewQueueItemDto[] = [
+    ...candidates.map((w): ReviewQueueItemDto => ({
+      id: w.id,
+      queue: "waiting",
+      title: w.deliverable.slice(0, 120),
+      detail: w.candidateReason ?? `Confirm to track this follow-up with ${w.ownerName}`,
+      href: w.href,
+    })),
+    ...unconfirmed.map((a): ReviewQueueItemDto => ({
+      id: a.id,
+      queue: "deadline",
+      title: a.title.slice(0, 120),
+      detail: `Confirm this date — due ${a.dueAt.slice(0, 10)}`,
+      href: `/deadlines?item=${encodeURIComponent(a.id)}`,
+    })),
+    ...pending.map((c): ReviewQueueItemDto => ({
+      id: c.id,
+      queue: "inbox",
+      title: c.cleanedTitle.slice(0, 120),
+      detail: "Review this capture",
+      href: inboxPath(c.id),
+    })),
+  ];
+
+  const limit = Math.max(1, input.limit ?? 3);
+  return {
+    waitingCandidates: candidates.length,
+    unconfirmedDeadlines: unconfirmed.length,
+    inboxPending: pending.length,
+    total: candidates.length + unconfirmed.length + pending.length,
+    items: items.slice(0, limit),
+  };
+}
+
 export type InsightKind =
   | "no-task"
   | "stale"
@@ -124,6 +209,7 @@ export interface HomeBriefingResponse {
   insights: InsightItem[];
   contextAreas: ContextArea[];
   finance: FinanceSnapshot | null;
+  review: BriefingReview;
 }
 
 // ---------------------------------------------------------------------------
@@ -547,14 +633,23 @@ export async function buildHomeBriefing(
 ): Promise<HomeBriefingResponse> {
   const today = todayIso();
 
-  const [tasks, notes, captures, projects, finance, homeyAlerts] = await Promise.all([
-    listTasksForUser(userId),
-    listNoteMetadataForUser(userId),
-    listCaptureInboxForUser(userId),
-    listProjectsForUser(userId),
-    buildFinanceSnapshot(userId, today),
-    listOpenHomeyAlertsForUser(userId, { limit: 6, hours: 48 }),
-  ]);
+  const [tasks, notes, captures, projects, finance, homeyAlerts, waitingAll, attentionDue] =
+    await Promise.all([
+      listTasksForUser(userId),
+      listNoteMetadataForUser(userId),
+      listCaptureInboxForUser(userId),
+      listProjectsForUser(userId),
+      buildFinanceSnapshot(userId, today),
+      listOpenHomeyAlertsForUser(userId, { limit: 6, hours: 48 }),
+      listWaitingItemsForUser(userId, { status: "candidate", limit: 50 }),
+      listAttentionForToday(userId, 40),
+    ]);
+
+  const review = buildReviewStrip({
+    waiting: waitingAll,
+    attention: attentionDue,
+    inbox: captures,
+  });
 
   const criticalFromTasks: BriefingItem[] = rankedTasks(tasks, today)
     .slice(0, 3)
@@ -675,5 +770,6 @@ export async function buildHomeBriefing(
     insights,
     contextAreas: buildContextAreas(notes, tasks, captures, projects),
     finance,
+    review,
   };
 }

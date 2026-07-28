@@ -26,6 +26,17 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { notesPath } from "@/lib/recall-nav";
+import { getCachedHome, subscribeHome } from "@/lib/home-cache";
+import type { BriefingReview } from "@/lib/recall-api";
+
+function CountPill({ count }: { count?: number }) {
+  if (!count) return null;
+  return (
+    <span className="rounded-full bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-violet-300">
+      {count}
+    </span>
+  );
+}
 
 type TabItem = {
   href: string;
@@ -172,6 +183,14 @@ export function MobileMoreSheet({
   onLogout,
 }: MobileMoreSheetProps) {
   const close = () => onOpenChange(false);
+  const [review, setReview] = React.useState<BriefingReview | null>(
+    () => getCachedHome()?.review ?? null,
+  );
+
+  React.useEffect(
+    () => subscribeHome((home) => setReview(home.review ?? null)),
+    [],
+  );
 
   const linkClass = (active: boolean) =>
     `flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left no-underline transition-colors ${
@@ -205,6 +224,7 @@ export function MobileMoreSheet({
           <Link href="/deadlines" onClick={close} className={linkClass(location === "/deadlines")}>
             <CalendarClock size={18} />
             <span className="flex-1 text-sm font-medium">Deadlines</span>
+            <CountPill count={review?.unconfirmedDeadlines} />
           </Link>
           <Link
             href="/waiting"
@@ -213,6 +233,7 @@ export function MobileMoreSheet({
           >
             <Hourglass size={18} />
             <span className="flex-1 text-sm font-medium">Waiting</span>
+            <CountPill count={review?.waitingCandidates} />
           </Link>
 
           <p className="px-1 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
