@@ -10,6 +10,7 @@ export const JOB_TYPE_ATTACHMENT_EXTRACT = "attachment_extract" as const;
 export const JOB_TYPE_ENEX_IMPORT = "enex_import" as const;
 export const JOB_TYPE_DIGEST_REGEN = "digest_regen" as const;
 export const JOB_TYPE_ATTENTION_SCAN = "attention_scan" as const;
+export const JOB_TYPE_WAITING_SCAN = "waiting_scan" as const;
 
 export type JobStatus = "queued" | "processing" | "complete" | "failed";
 

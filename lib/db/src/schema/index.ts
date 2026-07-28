@@ -29,5 +29,6 @@ export * from "./invoices";
 export * from "./auth-sessions";
 export * from "./jobs";
 export * from "./waiting-dismissals";
+export * from "./waiting-items";
 export * from "./user-rules";
 export * from "./attention-items";

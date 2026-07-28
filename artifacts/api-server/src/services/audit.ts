@@ -30,6 +30,18 @@ const ACTION_LABELS: Record<string, string> = {
   person_created: "Person added",
   follow_up_created: "Follow-up task created",
   waiting_dismissed: "Waiting item dismissed",
+  waiting_item_created: "Waiting item tracked",
+  waiting_item_updated: "Waiting item corrected",
+  waiting_item_snoozed: "Waiting item snoozed",
+  waiting_item_dismissed: "Waiting item dismissed",
+  waiting_item_reopened: "Waiting item reopened",
+  waiting_item_completed: "Waiting item completed",
+  waiting_reply_completed: "Reply resolved the commitment",
+  waiting_reply_revised: "Reply revised the commitment",
+  waiting_reply_still_waiting: "Reply: still waiting",
+  waiting_reply_unclear: "Reply needs review",
+  waiting_follow_up_drafted: "Follow-up drafted",
+  waiting_follow_up_sent: "Follow-up marked sent",
 };
 
 function labelFor(action: string): string {
@@ -56,6 +68,8 @@ function hrefFor(entityType: string | null, entityId: string | null): string | n
       return `/documents?doc=${encodeURIComponent(entityId)}`;
     case "query":
       return "/ask";
+    case "waiting_item":
+      return `/waiting/${encodeURIComponent(entityId)}`;
     default:
       return null;
   }

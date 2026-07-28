@@ -18,6 +18,7 @@ import { Organizations } from "@/pages/Organizations";
 import { Connectors } from "@/pages/Connectors";
 import { Projects } from "@/pages/Projects";
 import { ProjectDetail } from "@/pages/ProjectDetail";
+import { WaitingDetail } from "@/pages/WaitingDetail";
 import { Documents } from "@/pages/Documents";
 import { Memory } from "@/pages/Memory";
 import { Activity } from "@/pages/Activity";
@@ -104,6 +105,7 @@ function AuthedRoutes() {
         <Route path="/settings" component={Settings} />
         <Route path="/projects" component={Projects} />
         <Route path="/projects/:projectId" component={ProjectDetail} />
+        <Route path="/waiting/:id" component={WaitingDetail} />
         <Route path="/tasks" component={Tasks} />
         <Route path="/canvas" component={Canvas} />
         {/* Signed-in users hitting /login land on Home */}

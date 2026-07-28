@@ -290,6 +290,64 @@ export interface ExtractDeadlineResponse extends AiDegradedMeta {
   item: ExtractDeadlineItem;
 }
 
+// --- Waiting-on commitments -------------------------------------------------
+
+export interface ExtractWaitingRequest {
+  subject: string;
+  body: string;
+  fromName?: string | null;
+  fromEmail?: string | null;
+}
+
+export interface WaitingCommitment {
+  ownerName: string | null;
+  ownerOrg: string | null;
+  deliverable: string;
+  promisedAt: string | null;
+  expectedAt: string | null;
+  dateConfidence: "certain" | "uncertain" | "none";
+  evidenceText: string | null;
+  confidence: number;
+}
+
+export interface ExtractWaitingResponse extends AiDegradedMeta {
+  commitments: WaitingCommitment[];
+}
+
+export interface ClassifyWaitingReplyRequest {
+  ownerName: string;
+  deliverable: string;
+  expectedAt: string | null;
+  replySubject: string;
+  replyBody: string;
+}
+
+export type WaitingReplyOutcome =
+  | "completed"
+  | "revised_delayed"
+  | "still_waiting"
+  | "unclear";
+
+export interface ClassifyWaitingReplyResponse extends AiDegradedMeta {
+  outcome: WaitingReplyOutcome;
+  revisedExpectedAt: string | null;
+  reason: string;
+  confidence: number;
+}
+
+export interface DraftWaitingFollowUpRequest {
+  ownerName: string;
+  deliverable: string;
+  promisedAt: string | null;
+  expectedAt: string | null;
+  threadExcerpt: string;
+}
+
+export interface DraftWaitingFollowUpResponse extends AiDegradedMeta {
+  subject: string;
+  body: string;
+}
+
 export interface ClassifyIntentRequest {
   /** The raw, untrusted user input to classify. Treated as data, never instructions. */
   text: string;
@@ -319,6 +377,15 @@ export interface AiService {
   ): Promise<DashboardDigestResponse>;
   classifyCapture(request: ClassifyCaptureRequest): Promise<ClassifyCaptureResponse>;
   extractDeadline(request: ExtractDeadlineRequest): Promise<ExtractDeadlineResponse>;
+  extractWaitingCommitments(
+    request: ExtractWaitingRequest,
+  ): Promise<ExtractWaitingResponse>;
+  classifyWaitingReply(
+    request: ClassifyWaitingReplyRequest,
+  ): Promise<ClassifyWaitingReplyResponse>;
+  draftWaitingFollowUp(
+    request: DraftWaitingFollowUpRequest,
+  ): Promise<DraftWaitingFollowUpResponse>;
   classifyIntent(request: ClassifyIntentRequest): Promise<ClassifyIntentResponse>;
   generateWorkNote(request: GenerateWorkNoteRequest): Promise<GenerateWorkNoteResponse>;
   answerQuery(request: AnswerQueryRequest): Promise<AnswerQueryResponse>;
@@ -427,6 +494,31 @@ function normalizeDueDate(value: unknown, todayIso: string): string | null {
 
 function degradedMeta(reason: string = DISABLED_REASON): AiDegradedMeta {
   return { degraded: true, degradedReason: reason };
+}
+
+/**
+ * Normalize an LLM-extracted date to YYYY-MM-DD (past dates allowed for
+ * promise dates). Returns null for anything unparseable — never guess.
+ */
+function normalizeExtractedDate(
+  value: unknown,
+  todayIso: string,
+  allowPast: boolean,
+): string | null {
+  if (typeof value !== "string") return null;
+  const v = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
+  const [y, m, d] = v.split("-").map(Number);
+  const date = new Date(Date.UTC(y!, m! - 1, d!));
+  if (
+    date.getUTCFullYear() !== y ||
+    date.getUTCMonth() !== m! - 1 ||
+    date.getUTCDate() !== d
+  ) {
+    return null;
+  }
+  if (!allowPast && v < todayIso) return null;
+  return v;
 }
 
 function fallbackCaptureClassification(
@@ -589,6 +681,34 @@ class DisabledAiService implements AiService {
         evidenceText: null,
         confidence: 0,
       },
+    };
+  }
+
+  async extractWaitingCommitments(
+    _request: ExtractWaitingRequest,
+  ): Promise<ExtractWaitingResponse> {
+    return { ...degradedMeta(), commitments: [] };
+  }
+
+  async classifyWaitingReply(
+    _request: ClassifyWaitingReplyRequest,
+  ): Promise<ClassifyWaitingReplyResponse> {
+    return {
+      ...degradedMeta(),
+      outcome: "unclear",
+      revisedExpectedAt: null,
+      reason: "AI disabled; reply needs manual review.",
+      confidence: 0,
+    };
+  }
+
+  async draftWaitingFollowUp(
+    request: DraftWaitingFollowUpRequest,
+  ): Promise<DraftWaitingFollowUpResponse> {
+    return {
+      ...degradedMeta(),
+      subject: `Following up: ${request.deliverable.slice(0, 80)}`,
+      body: `Hi ${request.ownerName},\n\nJust checking in on ${request.deliverable}. Any update on timing?\n\n[Your name]`,
     };
   }
 
@@ -1204,6 +1324,209 @@ class OpenAiService implements AiService {
       };
     } catch {
       return { degraded: true, degradedReason: "deadline_extract_failed", item: empty };
+    }
+  }
+
+  async extractWaitingCommitments(
+    request: ExtractWaitingRequest,
+  ): Promise<ExtractWaitingResponse> {
+    const { EXTRACT_WAITING_SYSTEM_PROMPT, EXTRACT_WAITING_PROMPT_VERSION } = await import(
+      "../prompts/extractWaiting.v1"
+    );
+    const today = currentDateContext();
+    try {
+      const completion = await this.client.chat.completions.create({
+        model: this.model,
+        messages: [
+          {
+            role: "system",
+            content:
+              EXTRACT_WAITING_SYSTEM_PROMPT +
+              ` Today is ${today.weekday}, ${today.iso}. Prompt: ${EXTRACT_WAITING_PROMPT_VERSION}.`,
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              today: today.iso,
+              fromName: request.fromName ?? null,
+              fromEmail: request.fromEmail ?? null,
+              subject: request.subject.slice(0, 400),
+              body: request.body.slice(0, 5000),
+            }),
+          },
+        ],
+        response_format: { type: "json_object" },
+        max_tokens: 700,
+      });
+      const raw = completion.choices[0]?.message.content ?? "{}";
+      const parsed = JSON.parse(raw) as {
+        commitments?: Partial<WaitingCommitment>[];
+      };
+      const commitments = (Array.isArray(parsed.commitments) ? parsed.commitments : [])
+        .filter((c) => typeof c?.deliverable === "string" && c.deliverable.trim())
+        .slice(0, 5)
+        .map((c) => {
+          const confidence =
+            typeof c.confidence === "number" ? Math.max(0, Math.min(1, c.confidence)) : 0;
+          const dateConfidence =
+            c.dateConfidence === "certain" ||
+            c.dateConfidence === "uncertain" ||
+            c.dateConfidence === "none"
+              ? c.dateConfidence
+              : "none";
+          const promisedAt = normalizeExtractedDate(c.promisedAt, today.iso, true);
+          let expectedAt = normalizeExtractedDate(c.expectedAt, today.iso, false);
+          // Never invent deadlines: an expected date requires explicit confidence.
+          if (expectedAt && dateConfidence === "none") expectedAt = null;
+          return {
+            ownerName: typeof c.ownerName === "string" ? c.ownerName : null,
+            ownerOrg: typeof c.ownerOrg === "string" ? c.ownerOrg : null,
+            deliverable: String(c.deliverable).trim().slice(0, 500),
+            promisedAt,
+            expectedAt,
+            dateConfidence: expectedAt ? dateConfidence : "none",
+            evidenceText: typeof c.evidenceText === "string" ? c.evidenceText : null,
+            confidence,
+          } satisfies WaitingCommitment;
+        });
+      return { degraded: false, degradedReason: null, commitments };
+    } catch {
+      return { degraded: true, degradedReason: "waiting_extract_failed", commitments: [] };
+    }
+  }
+
+  async classifyWaitingReply(
+    request: ClassifyWaitingReplyRequest,
+  ): Promise<ClassifyWaitingReplyResponse> {
+    const { CLASSIFY_WAITING_REPLY_SYSTEM_PROMPT, CLASSIFY_WAITING_REPLY_PROMPT_VERSION } =
+      await import("../prompts/classifyWaitingReply.v1");
+    const today = currentDateContext();
+    const fallback: ClassifyWaitingReplyResponse = {
+      degraded: true,
+      degradedReason: null,
+      outcome: "unclear",
+      revisedExpectedAt: null,
+      reason: "Could not classify the reply; needs manual review.",
+      confidence: 0,
+    };
+    try {
+      const completion = await this.client.chat.completions.create({
+        model: this.model,
+        messages: [
+          {
+            role: "system",
+            content:
+              CLASSIFY_WAITING_REPLY_SYSTEM_PROMPT +
+              ` Today is ${today.weekday}, ${today.iso}. Prompt: ${CLASSIFY_WAITING_REPLY_PROMPT_VERSION}.`,
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              today: today.iso,
+              commitment: {
+                ownerName: request.ownerName.slice(0, 200),
+                deliverable: request.deliverable.slice(0, 500),
+                expectedAt: request.expectedAt,
+              },
+              reply: {
+                subject: request.replySubject.slice(0, 400),
+                body: request.replyBody.slice(0, 4000),
+              },
+            }),
+          },
+        ],
+        response_format: { type: "json_object" },
+        max_tokens: 250,
+      });
+      const raw = completion.choices[0]?.message.content ?? "{}";
+      const parsed = JSON.parse(raw) as {
+        outcome?: string;
+        revisedExpectedAt?: string | null;
+        reason?: string;
+        confidence?: number;
+      };
+      const outcome: WaitingReplyOutcome =
+        parsed.outcome === "completed" ||
+        parsed.outcome === "revised_delayed" ||
+        parsed.outcome === "still_waiting" ||
+        parsed.outcome === "unclear"
+          ? parsed.outcome
+          : "unclear";
+      const revisedExpectedAt =
+        outcome === "revised_delayed"
+          ? normalizeExtractedDate(parsed.revisedExpectedAt, today.iso, false)
+          : null;
+      const confidence =
+        typeof parsed.confidence === "number"
+          ? Math.max(0, Math.min(1, parsed.confidence))
+          : 0;
+      return {
+        degraded: false,
+        degradedReason: null,
+        outcome: confidence < 0.5 ? "unclear" : outcome,
+        revisedExpectedAt,
+        reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 300) : "",
+        confidence,
+      };
+    } catch {
+      return { ...fallback, degradedReason: "waiting_reply_classify_failed" };
+    }
+  }
+
+  async draftWaitingFollowUp(
+    request: DraftWaitingFollowUpRequest,
+  ): Promise<DraftWaitingFollowUpResponse> {
+    const { DRAFT_FOLLOW_UP_SYSTEM_PROMPT, DRAFT_FOLLOW_UP_PROMPT_VERSION } = await import(
+      "../prompts/draftFollowUp.v1"
+    );
+    const today = currentDateContext();
+    const fallbackSubject = `Following up: ${request.deliverable.slice(0, 80)}`;
+    const fallbackBody = `Hi ${request.ownerName},\n\nJust checking in on ${request.deliverable}. Any update on timing?\n\n[Your name]`;
+    try {
+      const completion = await this.client.chat.completions.create({
+        model: this.model,
+        messages: [
+          {
+            role: "system",
+            content:
+              DRAFT_FOLLOW_UP_SYSTEM_PROMPT +
+              ` Today is ${today.weekday}, ${today.iso}. Prompt: ${DRAFT_FOLLOW_UP_PROMPT_VERSION}.`,
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              today: today.iso,
+              commitment: {
+                ownerName: request.ownerName.slice(0, 200),
+                deliverable: request.deliverable.slice(0, 500),
+                promisedAt: request.promisedAt,
+                expectedAt: request.expectedAt,
+              },
+              threadExcerpt: request.threadExcerpt.slice(0, 4000),
+            }),
+          },
+        ],
+        response_format: { type: "json_object" },
+        max_tokens: 450,
+      });
+      const raw = completion.choices[0]?.message.content ?? "{}";
+      const parsed = JSON.parse(raw) as { subject?: string; body?: string };
+      const subject =
+        typeof parsed.subject === "string" && parsed.subject.trim()
+          ? parsed.subject.trim().slice(0, 200)
+          : fallbackSubject;
+      const body =
+        typeof parsed.body === "string" && parsed.body.trim()
+          ? parsed.body.trim().slice(0, 3000)
+          : fallbackBody;
+      return { degraded: false, degradedReason: null, subject, body };
+    } catch {
+      return {
+        degraded: true,
+        degradedReason: "waiting_follow_up_draft_failed",
+        subject: fallbackSubject,
+        body: fallbackBody,
+      };
     }
   }
 

@@ -7,6 +7,7 @@ import {
   JOB_TYPE_CAPTURE_EXTRACTION,
   JOB_TYPE_DIGEST_REGEN,
   JOB_TYPE_ENEX_IMPORT,
+  JOB_TYPE_WAITING_SCAN,
   attachmentIdFromPayload,
   captureIdFromPayload,
   claimNextJob,
@@ -75,6 +76,16 @@ const handlers: Record<string, JobHandler> = {
     const { processAttentionScanJob } = await import("./attention-extract");
     const result = await processAttentionScanJob(job.userId);
     logger.info({ userId: job.userId, ...result }, "Attention scan complete");
+  },
+  [JOB_TYPE_WAITING_SCAN]: async (job) => {
+    const { processWaitingScanJob } = await import("./waiting-extract");
+    const scan = await processWaitingScanJob(job.userId);
+    const { processWaitingOutcomesForUser } = await import("./waiting-outcomes");
+    const outcomes = await processWaitingOutcomesForUser(job.userId);
+    logger.info(
+      { userId: job.userId, ...scan, ...outcomes },
+      "Waiting scan complete",
+    );
   },
 };
 

@@ -74,6 +74,8 @@ export interface WaitingItem {
   days: number;
   href: string;
   followUp: string;
+  /** Present for durable tracked commitments: why it is surfacing now. */
+  dueReason?: "needs_review" | "follow_up_due" | "expected_overdue";
 }
 
 export type InsightKind =
@@ -246,7 +248,7 @@ function buildFocusNow(
 
   if (top) {
     let reason = "This is the highest-priority thing on your plate.";
-    if (isDueToday(top.time ?? null, today)) reason = "It's due today ù best to clear it first.";
+    if (isDueToday(top.time ?? null, today)) reason = "It's due today ? best to clear it first.";
     else if (top.priority === "high") reason = "You flagged this as high priority.";
     else if (/\b(urgent|asap|deadline|blocked)\b/i.test(top.title))
       reason = "It looks time-sensitive based on how you described it.";
@@ -269,7 +271,7 @@ function buildFocusNow(
       title: `Continue ${activeProject.name}`,
       reason:
         open > 0
-          ? `Your most active project ù ${open} open item${open === 1 ? "" : "s"} waiting.`
+          ? `Your most active project ? ${open} open item${open === 1 ? "" : "s"} waiting.`
           : "Your most active project right now.",
       estimatedTime: "~45 min",
       actionLabel: "Resume",
@@ -360,6 +362,7 @@ async function buildWaitingOn(userId: string, limit = 4): Promise<WaitingItem[]>
     days: w.days,
     href: w.href,
     followUp: w.followUp,
+    ...(w.dueReason ? { dueReason: w.dueReason } : {}),
   }));
 }
 
@@ -405,7 +408,7 @@ function buildInsights(
     insights.push({
       id: `no-task-${note.id}`,
       kind: "no-task",
-      text: `You mentioned ù${note.title}ù but never turned it into a task.`,
+      text: `You mentioned ?${note.title}? but never turned it into a task.`,
       href: notesPath({ noteId: note.id }),
     });
   }
@@ -419,7 +422,7 @@ function buildInsights(
     insights.push({
       id: `stale-${capture.id}`,
       kind: "stale",
-      text: `ù${capture.cleanedTitle}ù has been sitting in your inbox since yesterday.`,
+      text: `?${capture.cleanedTitle}? has been sitting in your inbox since yesterday.`,
       href: inboxPath(capture.id),
     });
   }
@@ -430,7 +433,7 @@ function buildInsights(
     insights.push({
       id: `follow-${note.id}`,
       kind: "follow-up",
-      text: `ù${note.title}ù looks like it may need a follow-up.`,
+      text: `?${note.title}? looks like it may need a follow-up.`,
       href: notesPath({ noteId: note.id }),
     });
   }
@@ -444,7 +447,7 @@ function buildInsights(
       insights.push({
         id: `related-${related.id}`,
         kind: "related",
-        text: `ù${related.title}ù looks related to your ${project.name} project.`,
+        text: `?${related.title}? looks related to your ${project.name} project.`,
         href: notesPath({ noteId: related.id }),
       });
     }
@@ -506,7 +509,7 @@ function fallbackSummary(attentionCount: number, parts: string[]): string {
   const phrase = copy.length ? `${copy.join(", ")} and ${last}` : last;
   return `Here ${attentionCount === 1 ? "is" : "are"} the ${attentionCount} thing${
     attentionCount === 1 ? "" : "s"
-  } that need your attention today ù ${phrase}.`;
+  } that need your attention today ? ${phrase}.`;
 }
 
 /** This-month finance snapshot from already-synced source_records. */
@@ -516,7 +519,7 @@ async function buildFinanceSnapshot(userId: string, today: string): Promise<Fina
   const synced = await loadSyncedFinanceAggregate(userId, "this month", today);
   if (!synced) return null;
   const top = synced.finance.topPayees[0] ?? null;
-  // Home card is labeled "Spending" ù show dollars spent, not net.
+  // Home card is labeled "Spending" ? show dollars spent, not net.
   return {
     total: synced.finance.spent,
     transactionCount: synced.finance.expenseCount || synced.finance.count,

@@ -216,6 +216,7 @@ async function fetchGmailMessageDetails(
       : `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`;
     const full = await googleGet<{
       id: string;
+      threadId?: string;
       snippet?: string;
       internalDate?: string;
       payload?: GmailPart & { headers?: { name?: string; value?: string }[] };
@@ -262,6 +263,7 @@ async function fetchGmailMessageDetails(
         subject,
         senderName: fromParsed.name || null,
         senderEmail: fromParsed.email || null,
+        threadId: full.threadId ?? null,
         hasFullBody: Boolean(body),
       },
     };

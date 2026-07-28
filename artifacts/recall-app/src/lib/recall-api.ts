@@ -100,9 +100,160 @@ export type WaitingOnRecord = {
   days: number;
   href: string;
   followUp: string;
-  sourceType: "note" | "knowledge" | "task" | "mail";
+  sourceType: "note" | "knowledge" | "task" | "mail" | "durable";
   evidenceText: string;
+  dueReason?: "needs_review" | "follow_up_due" | "expected_overdue";
 };
+
+// --- Durable "Waiting On" commitments ---------------------------------------
+
+export type WaitingItemRecord = {
+  id: string;
+  ownerPersonId: string | null;
+  ownerName: string;
+  ownerOrg: string | null;
+  deliverable: string;
+  promisedAt: string | null;
+  expectedAt: string | null;
+  dateConfidence: "certain" | "uncertain" | "none";
+  status: "open" | "snoozed" | "completed" | "dismissed";
+  followUpAt: string | null;
+  snoozedUntil: string | null;
+  completedAt: string | null;
+  dismissedAt: string | null;
+  lastOutcome: "completed" | "revised_delayed" | "still_waiting" | "unclear" | null;
+  lastReplySourceRecordId: string | null;
+  confidence: number;
+  threadId: string | null;
+  sourceEntityType: string;
+  sourceEntityId: string;
+  needsReview: boolean;
+  metadata: Record<string, unknown>;
+  href: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WaitingItemAuditEntry = {
+  id: string;
+  action: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type WaitingItemDetail = {
+  item: WaitingItemRecord;
+  evidence: EvidenceRecord[];
+  audit: WaitingItemAuditEntry[];
+};
+
+export async function listWaitingItems(opts?: {
+  status?: string;
+  due?: boolean;
+}): Promise<{ items: WaitingItemRecord[] }> {
+  const params = new URLSearchParams();
+  if (opts?.status) params.set("status", opts.status);
+  if (opts?.due) params.set("due", "true");
+  const q = params.toString();
+  return apiFetch(`/waiting-items${q ? `?${q}` : ""}`);
+}
+
+export async function getWaitingItem(id: string): Promise<WaitingItemDetail> {
+  return apiFetch(`/waiting-items/${encodeURIComponent(id)}`);
+}
+
+export async function createWaitingItem(input: {
+  ownerName: string;
+  ownerOrg?: string | null;
+  deliverable: string;
+  promisedAt?: string | null;
+  expectedAt?: string | null;
+  dateConfidence?: "certain" | "uncertain" | "none";
+  followUpAt?: string | null;
+  evidenceText?: string | null;
+}): Promise<WaitingItemRecord> {
+  return apiFetch("/waiting-items", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function extractWaitingFromSource(sourceRecordId: string): Promise<{
+  created: number;
+  items: WaitingItemRecord[];
+}> {
+  return apiFetch("/waiting-items/extract", {
+    method: "POST",
+    body: JSON.stringify({ sourceRecordId }),
+  });
+}
+
+export async function patchWaitingItem(
+  id: string,
+  patch: Partial<{
+    ownerName: string | null;
+    ownerOrg: string | null;
+    ownerPersonId: string | null;
+    deliverable: string | null;
+    promisedAt: string | null;
+    expectedAt: string | null;
+    dateConfidence: "certain" | "uncertain" | "none" | null;
+    followUpAt: string | null;
+    threadId: string | null;
+  }>,
+): Promise<WaitingItemRecord> {
+  return apiFetch(`/waiting-items/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+async function postWaitingAction(
+  id: string,
+  action: string,
+  body?: Record<string, unknown>,
+): Promise<WaitingItemRecord> {
+  return apiFetch(`/waiting-items/${encodeURIComponent(id)}/${action}`, {
+    method: "POST",
+    body: JSON.stringify(body ?? {}),
+  });
+}
+
+export async function snoozeWaitingItem(
+  id: string,
+  input: { until?: string | null; preset?: string | null },
+): Promise<WaitingItemRecord> {
+  return postWaitingAction(id, "snooze", input as Record<string, unknown>);
+}
+
+export async function dismissWaitingItem(id: string): Promise<WaitingItemRecord> {
+  return postWaitingAction(id, "dismiss");
+}
+
+export async function reopenWaitingItem(id: string): Promise<WaitingItemRecord> {
+  return postWaitingAction(id, "reopen");
+}
+
+export async function completeWaitingItem(id: string): Promise<WaitingItemRecord> {
+  return postWaitingAction(id, "complete");
+}
+
+export async function draftWaitingFollowUp(id: string): Promise<{
+  item: WaitingItemRecord;
+  draft: { subject: string; body: string; degraded: boolean };
+}> {
+  return apiFetch(`/waiting-items/${encodeURIComponent(id)}/follow-up-draft`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function markWaitingFollowUpSent(
+  id: string,
+  opts?: { days?: number },
+): Promise<WaitingItemRecord> {
+  return postWaitingAction(id, "follow-up", opts ? { days: opts.days } : {});
+}
 
 export async function ingestCapture(input: {
   rawText: string;
@@ -760,6 +911,7 @@ export interface HomeBriefingResponse {
     days: number;
     href: string;
     followUp: string;
+    dueReason?: "needs_review" | "follow_up_due" | "expected_overdue";
   }[];
   dontForget: HomeBriefingItem[];
   insights: {

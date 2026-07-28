@@ -8,6 +8,12 @@ import { createTaskForUser, listTasksForUser, type RecallTaskDto } from "./tasks
 import { createEvidenceForUser } from "./evidence";
 import { writeAuditLog } from "./audit";
 import { listPersonNameAliases, peopleWithAliasNames } from "./user-corrections";
+import {
+  listWaitingDueForUser,
+  listWaitingItemsForUser,
+  getWaitingItemForUser,
+  type WaitingDueReason,
+} from "./waiting-items";
 
 const WAITING_RE =
   /\b(waiting|follow[- ]?up|awaiting|need(?:s)? (?:a |the )?(?:quote|reply|response|call|email)|still need|pending (?:from|on)|haven't heard|no response)\b/i;
@@ -23,8 +29,10 @@ export type WaitingOnItem = {
   days: number;
   href: string;
   followUp: string;
-  sourceType: "note" | "knowledge" | "task" | "mail";
+  sourceType: "note" | "knowledge" | "task" | "mail" | "durable";
   evidenceText: string;
+  /** Durable commitments only: why this belongs on Today right now. */
+  dueReason?: WaitingDueReason;
 };
 
 function daysSince(iso?: string | null): number {
@@ -100,6 +108,30 @@ export function matchPersonId(
 }
 
 /**
+ * Merge durable tracked commitments ahead of heuristic rows, suppressing
+ * heuristic rows whose source is already tracked and honoring dismissals.
+ */
+export function mergeWaitingOnLists(input: {
+  durable: WaitingOnItem[];
+  heuristic: WaitingOnItem[];
+  dismissedIds: Set<string>;
+  suppressHeuristicIds: Set<string>;
+  limit: number;
+}): WaitingOnItem[] {
+  const byDaysDesc = (a: WaitingOnItem, b: WaitingOnItem) => b.days - a.days;
+  const durable = input.durable
+    .filter((item) => !input.dismissedIds.has(item.id))
+    .sort(byDaysDesc);
+  const heuristic = input.heuristic
+    .filter(
+      (item) =>
+        !input.dismissedIds.has(item.id) && !input.suppressHeuristicIds.has(item.id),
+    )
+    .sort(byDaysDesc);
+  return [...durable, ...heuristic].slice(0, input.limit);
+}
+
+/**
  * Build a cross-source "waiting on others" list with evidence snippets.
  */
 export async function listWaitingOnForUser(
@@ -125,6 +157,51 @@ export async function listWaitingOnForUser(
   const peopleForMatch = peopleWithAliasNames(people, aliases);
   const peopleNames = peopleForMatch.map((p) => p.displayName).filter(Boolean);
   const items: WaitingOnItem[] = [];
+
+  // Durable tracked commitments come first; heuristic rows whose source is
+  // already tracked are suppressed below.
+  const [dueDurable, activeDurable] = await Promise.all([
+    listWaitingDueForUser(userId),
+    listWaitingItemsForUser(userId, { status: "active", limit: 200 }),
+  ]);
+  const durableItems: WaitingOnItem[] = dueDurable.map((d) => ({
+    id: `durable:${d.id}`,
+    person: d.ownerName,
+    personId: d.ownerPersonId,
+    item: d.deliverable.slice(0, 120),
+    days: daysSince(d.promisedAt ?? d.createdAt),
+    href: `/waiting/${d.id}`,
+    followUp:
+      d.dueReason === "needs_review"
+        ? `Review reply from ${d.ownerName}`
+        : d.dueReason === "expected_overdue"
+          ? `Follow up with ${d.ownerName} — was expected ${
+              d.expectedAt ? d.expectedAt.slice(0, 10) : "earlier"
+            }`
+          : `Follow up with ${d.ownerName}`,
+    sourceType: "durable",
+    evidenceText:
+      (typeof d.metadata?.evidenceSnippet === "string"
+        ? d.metadata.evidenceSnippet
+        : d.deliverable
+      ).slice(0, 280),
+    dueReason: d.dueReason,
+  }));
+
+  const suppressHeuristicIds = new Set<string>();
+  const trackedThreadIds = new Set<string>();
+  for (const d of activeDurable) {
+    if (d.sourceEntityType === "source_record") {
+      suppressHeuristicIds.add(`mail:${d.sourceEntityId}`);
+    } else if (
+      d.sourceEntityType === "note" ||
+      d.sourceEntityType === "task" ||
+      d.sourceEntityType === "knowledge"
+    ) {
+      suppressHeuristicIds.add(`${d.sourceEntityType}:${d.sourceEntityId}`);
+    }
+    if (d.threadId) trackedThreadIds.add(d.threadId);
+  }
 
   for (const n of notes) {
     const blob = `${n.title} ${n.preview}`;
@@ -208,6 +285,9 @@ export async function listWaitingOnForUser(
   for (const m of mailRows) {
     const blob = `${m.recordTitle ?? ""} ${m.recordText ?? ""}`;
     if (!WAITING_RE.test(blob)) continue;
+    const mailThreadId =
+      typeof m.metadata?.threadId === "string" ? m.metadata.threadId : null;
+    if (mailThreadId && trackedThreadIds.has(mailThreadId)) continue;
     const iso =
       m.sourceCreatedAt?.toISOString() ||
       (typeof m.metadata?.date === "string" ? m.metadata.date : null) ||
@@ -229,10 +309,13 @@ export async function listWaitingOnForUser(
   }
 
   const dismissed = await listDismissedWaitingItemIds(userId);
-  return items
-    .filter((item) => !dismissed.has(item.id))
-    .sort((a, b) => b.days - a.days)
-    .slice(0, limit);
+  return mergeWaitingOnLists({
+    durable: durableItems,
+    heuristic: items,
+    dismissedIds: dismissed,
+    suppressHeuristicIds,
+    limit,
+  });
 }
 
 async function listDismissedWaitingItemIds(userId: string): Promise<Set<string>> {
@@ -314,6 +397,25 @@ export async function resolveWaitingItemForFollowUp(
   if (colon > 0) {
     const prefix = raw.slice(0, colon);
     sourceId = raw.slice(colon + 1);
+    if (prefix === "durable") {
+      const d = await getWaitingItemForUser(userId, sourceId);
+      if (!d) return null;
+      return {
+        id: `durable:${d.id}`,
+        person: d.ownerName,
+        personId: d.ownerPersonId,
+        item: d.deliverable.slice(0, 120),
+        days: daysSince(d.promisedAt ?? d.createdAt),
+        href: `/waiting/${d.id}`,
+        followUp: `Follow up with ${d.ownerName}`,
+        sourceType: "durable",
+        evidenceText:
+          (typeof d.metadata?.evidenceSnippet === "string"
+            ? d.metadata.evidenceSnippet
+            : d.deliverable
+          ).slice(0, 280),
+      };
+    }
     if (
       prefix === "note" ||
       prefix === "knowledge" ||
