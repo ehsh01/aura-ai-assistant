@@ -54,6 +54,14 @@ export interface RecallProject {
   updatedAt: string;
 }
 
+export interface CaptureSuggestedLink {
+  entityType: "person" | "project";
+  entityId: string | null;
+  name: string;
+  matched: boolean;
+  reason: string;
+}
+
 export interface RecallCaptureItem {
   id: string;
   rawText: string;
@@ -65,9 +73,16 @@ export interface RecallCaptureItem {
   suggestedTags: string[];
   suggestedActions: string[];
   suggestedPersonName?: string | null;
-  status: "pending" | "accepted" | "dismissed";
+  status: "pending" | "accepted" | "dismissed" | "snoozed";
   projectId?: string | null;
   notebookId?: string | null;
+  confidence?: number | null;
+  confidenceLabel?: "high" | "needs_review" | "uncertain";
+  sourceType?: string | null;
+  sourceUrl?: string | null;
+  suggestedLinks?: CaptureSuggestedLink[];
+  snoozedUntil?: string | null;
+  autoAccepted?: boolean;
   attachmentCount: number;
   createdAt: string;
   updatedAt: string;

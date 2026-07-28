@@ -1,5 +1,5 @@
 import { and, desc, eq, lt } from "drizzle-orm";
-import { captureItems, type CaptureItem } from "@workspace/db/schema";
+import { captureItems, captures, type CaptureItem, type CaptureSuggestedLink } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newCaptureId } from "../lib/recall-format";
 import { createEvidenceForUser } from "./evidence";
@@ -16,6 +16,7 @@ import { createTaskForUser, type RecallTaskDto } from "./tasks";
 import { extractPerson, matchPersonId } from "./waiting-on";
 import { listPersonNameAliases, peopleWithAliasNames } from "./user-corrections";
 import { writeAuditLog } from "./audit";
+import { captureConfidenceLabel } from "./capture-classify";
 
 export type CaptureSuggestedType =
   | "note"
@@ -26,7 +27,7 @@ export type CaptureSuggestedType =
   | "reference";
 
 export type CaptureSuggestedPriority = "low" | "medium" | "high" | "urgent";
-export type CaptureStatus = "pending" | "accepted" | "dismissed";
+export type CaptureStatus = "pending" | "accepted" | "dismissed" | "snoozed";
 
 export type RecallCaptureItemDto = {
   id: string;
@@ -44,6 +45,17 @@ export type RecallCaptureItemDto = {
   status: CaptureStatus;
   projectId: string | null;
   notebookId: string | null;
+  /** Classification confidence 0..1 (null for legacy rows). */
+  confidence: number | null;
+  confidenceLabel: "high" | "needs_review" | "uncertain";
+  /** Raw capture source, joined at read time (null for legacy inline items). */
+  sourceType: string | null;
+  sourceUrl: string | null;
+  /** Match-only link suggestions — never silently created. */
+  suggestedLinks: CaptureSuggestedLink[];
+  snoozedUntil: string | null;
+  /** True when Aura auto-organized the capture (high confidence, low risk). */
+  autoAccepted: boolean;
   attachmentCount: number;
   createdAt: string;
   updatedAt: string;
@@ -71,7 +83,19 @@ export type CreateCaptureInput = {
 };
 
 export type UpdateCaptureInput = Partial<
-  Omit<RecallCaptureItemDto, "id" | "attachmentCount" | "createdAt" | "updatedAt">
+  Omit<
+    RecallCaptureItemDto,
+    | "id"
+    | "attachmentCount"
+    | "createdAt"
+    | "updatedAt"
+    | "confidence"
+    | "confidenceLabel"
+    | "sourceType"
+    | "sourceUrl"
+    | "suggestedLinks"
+    | "autoAccepted"
+  >
 >;
 
 export type AcceptCaptureInput = {
@@ -230,7 +254,11 @@ function suggestPersonName(
   return !name || name === "Someone" ? null : name;
 }
 
-function toDto(row: CaptureItem, peopleNames: string[] = []): RecallCaptureItemDto {
+function toDto(
+  row: CaptureItem,
+  peopleNames: string[] = [],
+  source?: { sourceType: string | null; sourceUrl: string | null },
+): RecallCaptureItemDto {
   return {
     id: row.id,
     rawCaptureId: row.rawCaptureId ?? null,
@@ -243,9 +271,19 @@ function toDto(row: CaptureItem, peopleNames: string[] = []): RecallCaptureItemD
     suggestedTags: row.suggestedTags ?? [],
     suggestedActions: row.suggestedActions ?? [],
     suggestedPersonName: suggestPersonName(row.cleanedTitle, row.rawText, peopleNames),
-    status: row.status === "accepted" || row.status === "dismissed" ? row.status : "pending",
+    status:
+      row.status === "accepted" || row.status === "dismissed" || row.status === "snoozed"
+        ? row.status
+        : "pending",
     projectId: row.projectId ?? null,
     notebookId: row.notebookId ?? null,
+    confidence: row.confidence ?? null,
+    confidenceLabel: captureConfidenceLabel(row.confidence),
+    sourceType: source?.sourceType ?? null,
+    sourceUrl: source?.sourceUrl ?? null,
+    suggestedLinks: row.suggestedLinks ?? [],
+    snoozedUntil: row.snoozedUntil?.toISOString() ?? null,
+    autoAccepted: row.metadata?.autoAccepted === true,
     attachmentCount: 0,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -305,15 +343,34 @@ export async function listCaptureInboxForUser(userId: string): Promise<RecallCap
       ),
     );
 
+  // Resurface snoozed items whose time has come — self-healing, no cron needed.
+  await db
+    .update(captureItems)
+    .set({ status: "pending", snoozedUntil: null, updatedAt: new Date() })
+    .where(
+      and(
+        eq(captureItems.userId, userId),
+        eq(captureItems.status, "snoozed"),
+        lt(captureItems.snoozedUntil, new Date()),
+      ),
+    );
+
   const [rows, peopleNames] = await Promise.all([
     db
-      .select()
+      .select({
+        item: captureItems,
+        sourceType: captures.sourceType,
+        sourceUrl: captures.sourceUrl,
+      })
       .from(captureItems)
+      .leftJoin(captures, eq(captureItems.rawCaptureId, captures.id))
       .where(and(eq(captureItems.userId, userId), eq(captureItems.status, "pending")))
       .orderBy(desc(captureItems.updatedAt)),
     peopleNamesForUser(userId),
   ]);
-  return rows.map((row) => toDto(row, peopleNames));
+  return rows.map((row) =>
+    toDto(row.item, peopleNames, { sourceType: row.sourceType, sourceUrl: row.sourceUrl }),
+  );
 }
 
 export async function updateCaptureForUser(
@@ -339,6 +396,21 @@ export async function updateCaptureForUser(
     });
   }
 
+  // Snooze defaults to +24h when no explicit time is given; leaving snooze
+  // (back to pending or any terminal status) clears the timer.
+  const snoozedUntil =
+    input.status === "snoozed"
+      ? input.snoozedUntil
+        ? new Date(input.snoozedUntil)
+        : new Date(Date.now() + 86_400_000)
+      : input.status !== undefined
+        ? null
+        : input.snoozedUntil !== undefined
+          ? input.snoozedUntil
+            ? new Date(input.snoozedUntil)
+            : null
+          : undefined;
+
   const [row] = await getDb()
     .update(captureItems)
     .set({
@@ -353,6 +425,7 @@ export async function updateCaptureForUser(
       ...(input.suggestedTags !== undefined ? { suggestedTags: input.suggestedTags } : {}),
       ...(input.suggestedActions !== undefined ? { suggestedActions: input.suggestedActions } : {}),
       ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(snoozedUntil !== undefined ? { snoozedUntil } : {}),
       ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
       ...(input.notebookId !== undefined ? { notebookId: input.notebookId } : {}),
       updatedAt: new Date(),
@@ -367,6 +440,16 @@ export async function updateCaptureForUser(
       entityType: "capture_item",
       entityId: captureId,
       metadata: { title: row.cleanedTitle },
+    });
+  }
+
+  if (row && input.status === "snoozed" && existing.status !== "snoozed") {
+    await writeAuditLog({
+      userId,
+      action: "capture_snoozed",
+      entityType: "capture_item",
+      entityId: captureId,
+      metadata: { title: row.cleanedTitle, snoozedUntil: row.snoozedUntil?.toISOString() ?? null },
     });
   }
 

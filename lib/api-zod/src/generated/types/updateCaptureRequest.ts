@@ -19,6 +19,8 @@ export interface UpdateCaptureRequest {
   suggestedTags?: string[];
   suggestedActions?: string[];
   status?: CaptureStatus;
+  /** ISO datetime; required when status is snoozed, cleared on unsnooze. */
+  snoozedUntil?: string | null;
   projectId?: string | null;
   notebookId?: string | null;
 }

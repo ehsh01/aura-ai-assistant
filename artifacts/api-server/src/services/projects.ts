@@ -10,6 +10,7 @@ import {
 import { getDb } from "../lib/db";
 import { newProjectId, noteDateLabel } from "../lib/recall-format";
 import type { RecallCaptureItemDto } from "./capture-items";
+import { captureConfidenceLabel } from "./capture-classify";
 import type { RecallNoteMetadataDto } from "./notes";
 import type { RecallTaskDto } from "./tasks";
 
@@ -253,6 +254,13 @@ export async function getProjectDetailForUser(
       status: item.status as RecallCaptureItemDto["status"],
       projectId: item.projectId ?? null,
       notebookId: item.notebookId ?? null,
+      confidence: item.confidence ?? null,
+      confidenceLabel: captureConfidenceLabel(item.confidence),
+      sourceType: null,
+      sourceUrl: null,
+      suggestedLinks: item.suggestedLinks ?? [],
+      snoozedUntil: item.snoozedUntil?.toISOString() ?? null,
+      autoAccepted: item.metadata?.autoAccepted === true,
       attachmentCount: 0,
       createdAt: item.createdAt.toISOString(),
       updatedAt: item.updatedAt.toISOString(),

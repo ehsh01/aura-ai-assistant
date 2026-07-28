@@ -13,6 +13,22 @@ export interface User {
   isAdmin: boolean;
 }
 
+export interface ChangePasswordRequest {
+  /** @minLength 1 */
+  currentPassword: string;
+  /** @minLength 8 */
+  newPassword: string;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  name: string;
+  isAdmin: boolean;
+  disabledAt?: string | null;
+  createdAt: string;
+}
+
 export interface RegisterRequest {
   email: string;
   /** @minLength 8 */
@@ -453,7 +469,34 @@ export const CaptureStatus = {
   pending: 'pending',
   accepted: 'accepted',
   dismissed: 'dismissed',
+  snoozed: 'snoozed',
 } as const;
+
+export type RecallCaptureItemConfidenceLabel = typeof RecallCaptureItemConfidenceLabel[keyof typeof RecallCaptureItemConfidenceLabel];
+
+
+export const RecallCaptureItemConfidenceLabel = {
+  high: 'high',
+  needs_review: 'needs_review',
+  uncertain: 'uncertain',
+} as const;
+
+export type CaptureSuggestedLinkEntityType = typeof CaptureSuggestedLinkEntityType[keyof typeof CaptureSuggestedLinkEntityType];
+
+
+export const CaptureSuggestedLinkEntityType = {
+  person: 'person',
+  project: 'project',
+} as const;
+
+export interface CaptureSuggestedLink {
+  entityType: CaptureSuggestedLinkEntityType;
+  /** Matched row id; null when the name has no match (created only on user accept). */
+  entityId: string | null;
+  name: string;
+  matched: boolean;
+  reason: string;
+}
 
 export interface RecallCaptureItem {
   id: string;
@@ -470,6 +513,17 @@ export interface RecallCaptureItem {
   status: CaptureStatus;
   projectId?: string | null;
   notebookId?: string | null;
+  /** Classification confidence 0..1 (null for legacy rows). */
+  confidence?: number | null;
+  confidenceLabel: RecallCaptureItemConfidenceLabel;
+  /** Raw capture source (manual, email, extension, ...). */
+  sourceType?: string | null;
+  sourceUrl?: string | null;
+  /** Match-only link suggestions; nothing is created silently. */
+  suggestedLinks: CaptureSuggestedLink[];
+  snoozedUntil?: string | null;
+  /** True when Aura auto-organized the capture (high confidence, low risk). */
+  autoAccepted: boolean;
   attachmentCount: number;
   createdAt: string;
   updatedAt: string;
@@ -549,6 +603,8 @@ export interface UpdateCaptureRequest {
   suggestedTags?: string[];
   suggestedActions?: string[];
   status?: CaptureStatus;
+  /** ISO datetime; required when status is snoozed, cleared on unsnooze. */
+  snoozedUntil?: string | null;
   projectId?: string | null;
   notebookId?: string | null;
 }
@@ -648,6 +704,16 @@ export const LifeMemorySourceType = {
   import: 'import',
 } as const;
 
+export type LifeMemoryStatus = typeof LifeMemoryStatus[keyof typeof LifeMemoryStatus];
+
+
+export const LifeMemoryStatus = {
+  active: 'active',
+  superseded: 'superseded',
+  expired: 'expired',
+  archived: 'archived',
+} as const;
+
 export interface LifeMemory {
   id: string;
   domain: LifeMemoryDomain;
@@ -659,6 +725,9 @@ export interface LifeMemory {
   sourceType?: LifeMemorySourceType;
   sourceId?: string | null;
   pinned: boolean;
+  status: LifeMemoryStatus;
+  supersedesId?: string | null;
+  expiresAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -6,10 +6,9 @@
  * OpenAPI spec version: 0.7.0
  */
 
-export interface User {
-  id: string;
-  email: string;
-  name: string;
-  /** Whether the user can manage other accounts */
-  isAdmin: boolean;
+export interface ChangePasswordRequest {
+  /** @minLength 1 */
+  currentPassword: string;
+  /** @minLength 8 */
+  newPassword: string;
 }

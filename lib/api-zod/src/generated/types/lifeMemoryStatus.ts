@@ -6,12 +6,12 @@
  * OpenAPI spec version: 0.7.0
  */
 
-export type CaptureStatus = typeof CaptureStatus[keyof typeof CaptureStatus];
+export type LifeMemoryStatus = typeof LifeMemoryStatus[keyof typeof LifeMemoryStatus];
 
 
-export const CaptureStatus = {
-  pending: 'pending',
-  accepted: 'accepted',
-  dismissed: 'dismissed',
-  snoozed: 'snoozed',
+export const LifeMemoryStatus = {
+  active: 'active',
+  superseded: 'superseded',
+  expired: 'expired',
+  archived: 'archived',
 } as const;

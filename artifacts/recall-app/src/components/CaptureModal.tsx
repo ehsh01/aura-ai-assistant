@@ -16,13 +16,17 @@ function firstLineTitle(text: string): string {
   return line.length > 80 ? `${line.slice(0, 77)}...` : line;
 }
 
+const TEXT_FILE_RE = /\.(txt|md|csv|json|log)$/i;
+const TEXT_FILE_CAP = 10_000;
+
 export function CaptureModal({ open, onClose }: Props) {
   const { notebooks, addNote, addTask } = useRecallData();
   const [text, setText] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [notebookId, setNotebookId] = useState("");
   const [projectId, setProjectId] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [binaryNames, setBinaryNames] = useState<string[]>([]);
   const [projects, setProjects] = useState<RecallProject[]>([]);
   const [workNote, setWorkNote] = useState<null | {
     internalWorkNote: string;
@@ -39,24 +43,49 @@ export function CaptureModal({ open, onClose }: Props) {
   }, [open]);
 
   const attachmentSummary = useMemo(() => {
-    if (files.length === 0) return "";
-    return `\n\nAttachments selected: ${files.map((file) => file.name).join(", ")}`;
-  }, [files]);
+    if (binaryNames.length === 0) return "";
+    return `\n\nAttachments selected: ${binaryNames.join(", ")}`;
+  }, [binaryNames]);
 
   if (!open) return null;
 
   const reset = () => {
     setText("");
+    setSourceUrl("");
     setDueDate("");
     setNotebookId("");
     setProjectId("");
-    setFiles([]);
+    setBinaryNames([]);
     setWorkNote(null);
   };
 
   const close = () => {
     reset();
     onClose();
+  };
+
+  // Text-like files are inlined into the capture so the AI sees their content;
+  // binaries keep filename-only placeholders (no OCR pipeline yet).
+  const handleFiles = async (list: File[]) => {
+    const textParts: string[] = [];
+    const binaries: string[] = [];
+    for (const file of list) {
+      const isText = TEXT_FILE_RE.test(file.name) || file.type.startsWith("text/");
+      if (isText) {
+        try {
+          const content = (await file.text()).slice(0, TEXT_FILE_CAP);
+          textParts.push(`--- ${file.name} ---\n${content}`);
+        } catch {
+          binaries.push(file.name);
+        }
+      } else {
+        binaries.push(file.name);
+      }
+    }
+    setBinaryNames(binaries);
+    if (textParts.length > 0) {
+      setText((prev) => [prev.trim(), ...textParts].filter(Boolean).join("\n\n"));
+    }
   };
 
   const requireText = () => {
@@ -100,6 +129,7 @@ export function CaptureModal({ open, onClose }: Props) {
         sourceType: "manual",
         sourceName: "Capture Modal",
         title: firstLineTitle(text),
+        sourceUrl: sourceUrl.trim() || undefined,
       });
       toast({
         title: result.queued ? "Saved offline" : "Sent to AI Inbox",
@@ -225,18 +255,29 @@ export function CaptureModal({ open, onClose }: Props) {
             </select>
           </div>
 
+          <input
+            type="url"
+            value={sourceUrl}
+            onChange={(e) => setSourceUrl(e.target.value)}
+            placeholder="Link (optional) — paste a URL this capture came from"
+            className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white/80 outline-none placeholder:text-white/30"
+          />
+
           <label className="block rounded-xl border border-dashed border-white/10 bg-white/[0.03] p-3 text-sm text-white/55">
-            Optional files/images/PDFs
+            Optional files — .txt/.md/.csv/.json/.log are inlined into the capture
             <input
               type="file"
               multiple
               className="mt-2 block w-full text-xs text-white/45"
-              onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+              onChange={(e) => void handleFiles(Array.from(e.target.files ?? []))}
             />
+            <span className="mt-1 block text-xs text-white/35">
+              Images/PDFs keep a filename placeholder for now — their content isn't analyzed yet.
+            </span>
           </label>
-          {files.length > 0 && (
+          {binaryNames.length > 0 && (
             <p className="text-xs text-white/40">
-              Selected: {files.map((file) => file.name).join(", ")}
+              Attached by name: {binaryNames.join(", ")}
             </p>
           )}
 

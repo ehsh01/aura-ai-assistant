@@ -9,6 +9,12 @@ import {
   QUERY_ANSWER_STREAM_SYSTEM_PROMPT,
 } from "../prompts/queryAnswer.v1";
 import type { ClassifyIntentResult } from "../prompts/classifyIntent.v1";
+import {
+  normalizeCaptureTypes,
+  primaryTypeToSuggestedType,
+  suggestedTypeToType,
+  type CaptureTypeLabel,
+} from "./capture-classify";
 
 // ---------------------------------------------------------------------------
 // Types (mirror OpenAPI / api-zod shapes)
@@ -142,6 +148,14 @@ export interface CaptureClassificationItem {
   suggestedProject: string | null;
   suggestedTags: string[];
   suggestedActions: string[];
+  /** v2 multi-label classification, most relevant first. */
+  types?: CaptureTypeLabel[];
+  /** 0..1 classification certainty (null when the model didn't provide one). */
+  confidence?: number | null;
+  /** Exact quote supporting the classification. */
+  evidenceText?: string | null;
+  /** Person explicitly named in the text — match-only downstream, never auto-created. */
+  personName?: string | null;
 }
 
 export interface ClassifyCaptureRequest {
@@ -539,6 +553,15 @@ function fallbackCaptureClassification(
   const isProject = /\b(permit|inspection|contractor|construction|project|city of miami)\b/.test(lower);
   const urgent = /\b(urgent|asap|critical|emergency|blocked|down)\b/.test(lower);
   const high = urgent || /\b(follow up|waiting|call|deadline|due today)\b/.test(lower);
+  const types: CaptureTypeLabel[] = isReminder
+    ? ["deadline"]
+    : isTask
+      ? ["task"]
+      : isWork
+        ? ["note"]
+        : isProject
+          ? ["project_update"]
+          : ["note"];
   return {
     cleanedTitle: firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine,
     suggestedType: isReminder
@@ -559,6 +582,10 @@ function fallbackCaptureClassification(
       ...(isWork ? ["Generate IT work note"] : []),
       ...(isProject ? ["Attach to project"] : []),
     ],
+    types,
+    confidence: 0.4,
+    evidenceText: firstLine,
+    personName: null,
   };
 }
 
@@ -1193,17 +1220,14 @@ class OpenAiService implements AiService {
   }
 
   async classifyCapture(request: ClassifyCaptureRequest): Promise<ClassifyCaptureResponse> {
+    const { CLASSIFY_CAPTURE_SYSTEM_PROMPT } = await import("../prompts/classifyCapture.v2");
     const today = currentDateContext();
     const completion = await this.client.chat.completions.create({
       model: this.model,
       messages: [
         {
           role: "system",
-          content:
-            `Classify a short personal capture for Recall. Today is ${today.weekday}, ${today.iso}. ` +
-            "Resolve any relative dates (today, tomorrow, tonight, this/next weekday, in N days, next week) to an absolute calendar date in strict YYYY-MM-DD format for suggestedDueDate, computed relative to today. " +
-            "Never guess or carry over a year from prior knowledge — always compute from today's date. If no due date is implied, set suggestedDueDate to null. " +
-            "Return JSON only: {\"cleanedTitle\":\"...\",\"suggestedType\":\"note|task|reminder|work_note|project_item|reference\",\"suggestedPriority\":\"low|medium|high|urgent\",\"suggestedDueDate\":null,\"suggestedProject\":null,\"suggestedTags\":[],\"suggestedActions\":[]}. Do not infer from any wider note library.",
+          content: `${CLASSIFY_CAPTURE_SYSTEM_PROMPT}\nToday is ${today.weekday}, ${today.iso}.`,
         },
         {
           role: "user",
@@ -1216,26 +1240,44 @@ class OpenAiService implements AiService {
         },
       ],
       response_format: { type: "json_object" },
-      max_tokens: 350,
+      max_tokens: 450,
     });
 
     const fallback = fallbackCaptureClassification(request);
     const raw = completion.choices[0]?.message.content ?? "{}";
     try {
-      const parsed = JSON.parse(raw) as Partial<CaptureClassificationItem>;
+      const parsed = JSON.parse(raw) as Partial<CaptureClassificationItem> & {
+        types?: unknown;
+      };
+      const legacyType =
+        parsed.suggestedType === "task" ||
+        parsed.suggestedType === "reminder" ||
+        parsed.suggestedType === "work_note" ||
+        parsed.suggestedType === "project_item" ||
+        parsed.suggestedType === "reference"
+          ? parsed.suggestedType
+          : null;
+      const types = normalizeCaptureTypes(
+        parsed.types,
+        legacyType && legacyType !== fallback.suggestedType
+          ? [suggestedTypeToType(legacyType)]
+          : (fallback.types ?? ["note"]),
+      );
+      const confidence =
+        typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+          ? Math.min(1, Math.max(0, parsed.confidence))
+          : null;
+      const personName =
+        typeof parsed.personName === "string" && parsed.personName.trim() &&
+        parsed.personName.trim().toLowerCase() !== "someone"
+          ? parsed.personName.trim()
+          : null;
       return {
         degraded: false,
         degradedReason: null,
         item: {
           cleanedTitle: parsed.cleanedTitle || fallback.cleanedTitle,
-          suggestedType:
-            parsed.suggestedType === "task" ||
-            parsed.suggestedType === "reminder" ||
-            parsed.suggestedType === "work_note" ||
-            parsed.suggestedType === "project_item" ||
-            parsed.suggestedType === "reference"
-              ? parsed.suggestedType
-              : fallback.suggestedType,
+          suggestedType: legacyType && parsed.types == null ? legacyType : primaryTypeToSuggestedType(types[0]!),
           suggestedPriority:
             parsed.suggestedPriority === "low" ||
             parsed.suggestedPriority === "high" ||
@@ -1246,11 +1288,21 @@ class OpenAiService implements AiService {
           // computed absolute date (validated), else nothing.
           suggestedDueDate:
             request.dueDate ?? normalizeDueDate(parsed.suggestedDueDate, today.iso),
-          suggestedProject: parsed.suggestedProject ?? null,
+          suggestedProject:
+            typeof parsed.suggestedProject === "string" && parsed.suggestedProject.trim()
+              ? parsed.suggestedProject.trim()
+              : null,
           suggestedTags: Array.isArray(parsed.suggestedTags) ? parsed.suggestedTags : fallback.suggestedTags,
           suggestedActions: Array.isArray(parsed.suggestedActions)
             ? parsed.suggestedActions
             : fallback.suggestedActions,
+          types,
+          confidence,
+          evidenceText:
+            typeof parsed.evidenceText === "string" && parsed.evidenceText.trim()
+              ? parsed.evidenceText.trim()
+              : fallback.evidenceText ?? null,
+          personName,
         },
       };
     } catch {

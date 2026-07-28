@@ -6,10 +6,11 @@
  * OpenAPI spec version: 0.7.0
  */
 
-export interface User {
+export interface AdminUser {
   id: string;
   email: string;
   name: string;
-  /** Whether the user can manage other accounts */
   isAdmin: boolean;
+  disabledAt?: Date | null;
+  createdAt: Date;
 }

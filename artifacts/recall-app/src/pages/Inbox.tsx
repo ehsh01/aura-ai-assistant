@@ -7,7 +7,7 @@ import { useRecallData } from "@/context/RecallDataContext";
 import { toast } from "@/hooks/use-toast";
 import type { RecallCaptureItem } from "@/lib/recall-context";
 import { listPeople, type PersonRecord } from "@/lib/recall-api";
-import { notesPath, memoryPath, readSearchParam } from "@/lib/recall-nav";
+import { notesPath, memoryPath, readSearchParam, peoplePath, projectsPath } from "@/lib/recall-nav";
 import { LIFE_MEMORY_DOMAINS, type LifeMemoryDomain } from "@/lib/recall-api";
 
 const priorityClass: Record<RecallCaptureItem["suggestedPriority"], string> = {
@@ -16,6 +16,29 @@ const priorityClass: Record<RecallCaptureItem["suggestedPriority"], string> = {
   high: "text-orange-300 bg-orange-500/10",
   urgent: "text-red-300 bg-red-500/10",
 };
+
+const confidenceChip: Record<string, { label: string; className: string }> = {
+  high: { label: "High confidence", className: "text-emerald-300 bg-emerald-500/10" },
+  needs_review: { label: "Needs review", className: "text-amber-300 bg-amber-500/10" },
+  uncertain: { label: "Uncertain", className: "text-white/55 bg-white/5" },
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  manual: "Manual",
+  email: "Email",
+  extension: "Extension",
+  sms: "SMS",
+  api: "API",
+};
+
+const TYPE_OPTIONS: RecallCaptureItem["suggestedType"][] = [
+  "note",
+  "task",
+  "reminder",
+  "work_note",
+  "project_item",
+  "reference",
+];
 
 const DOMAIN_LABELS: Record<LifeMemoryDomain, string> = {
   family: "Family",
@@ -44,6 +67,13 @@ export function Inbox() {
   const [pickerFor, setPickerFor] = useState<string | null>(null);
   /** Optional domain override when saving to Memory. */
   const [memoryDomain, setMemoryDomain] = useState<Record<string, LifeMemoryDomain | "">>({});
+  /** Inline edit-before-accept state. */
+  const [editingFor, setEditingFor] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<
+    Record<string, { title: string; type: RecallCaptureItem["suggestedType"]; dueDate: string }>
+  >({});
+  /** Snooze picker state (Tomorrow / Next week). */
+  const [snoozeFor, setSnoozeFor] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -183,6 +213,51 @@ export function Inbox() {
     }
   };
 
+  const startEdit = (item: RecallCaptureItem) => {
+    setEditDraft((prev) => ({
+      ...prev,
+      [item.id]: {
+        title: item.cleanedTitle,
+        type: item.suggestedType,
+        dueDate: item.suggestedDueDate ?? "",
+      },
+    }));
+    setEditingFor(item.id);
+    setSnoozeFor(null);
+  };
+
+  const saveEdit = async (item: RecallCaptureItem) => {
+    const draft = editDraft[item.id];
+    if (!draft) return;
+    try {
+      await updateCapture(item.id, {
+        cleanedTitle: draft.title.trim() || item.cleanedTitle,
+        suggestedType: draft.type,
+        suggestedDueDate: draft.dueDate.trim() || null,
+      });
+      setEditingFor(null);
+      await load();
+      toast({ title: "Updated", description: "Changes saved — accept when ready." });
+    } catch {
+      toast({ title: "Could not update capture", variant: "destructive" });
+    }
+  };
+
+  const snooze = async (item: RecallCaptureItem, days: 1 | 7) => {
+    try {
+      const snoozedUntil = new Date(Date.now() + days * 86_400_000).toISOString();
+      await updateCapture(item.id, { status: "snoozed", snoozedUntil });
+      setSnoozeFor(null);
+      await load();
+      toast({
+        title: days === 1 ? "Snoozed until tomorrow" : "Snoozed for a week",
+        description: "It will resurface here automatically. Logged in Activity.",
+      });
+    } catch {
+      toast({ title: "Could not snooze capture", variant: "destructive" });
+    }
+  };
+
   return (
     <AppLayout>
       <div className="h-full overflow-y-auto bg-[#0a0a0f] p-4 md:p-8 text-white">
@@ -213,6 +288,11 @@ export function Inbox() {
             {items.map((item) => {
               const person = personFor(item);
               const picking = pickerFor === item.id;
+              const editing = editingFor === item.id;
+              const draft = editDraft[item.id];
+              const links = item.suggestedLinks ?? [];
+              const confidence =
+                item.confidenceLabel != null ? confidenceChip[item.confidenceLabel] : undefined;
               return (
               <article
                 id={`capture-${item.id}`}
@@ -229,6 +309,36 @@ export function Inbox() {
                       <span className={`rounded-full px-2 py-1 ${priorityClass[item.suggestedPriority]}`}>
                         {item.suggestedPriority}
                       </span>
+                      {confidence && (
+                        <span
+                          className={`rounded-full px-2 py-1 ${confidence.className}`}
+                          title={
+                            item.confidence != null
+                              ? `Classification confidence ${(item.confidence * 100).toFixed(0)}%`
+                              : undefined
+                          }
+                        >
+                          {confidence.label}
+                        </span>
+                      )}
+                      {item.sourceType && (
+                        <span className="rounded-full bg-white/5 px-2 py-1 text-white/55">
+                          via {SOURCE_LABELS[item.sourceType] ?? item.sourceType}
+                          {item.sourceUrl && (
+                            <>
+                              {" · "}
+                              <a
+                                href={item.sourceUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-indigo-300 hover:underline"
+                              >
+                                open source
+                              </a>
+                            </>
+                          )}
+                        </span>
+                      )}
                       {item.suggestedDueDate && (
                         <span className="rounded-full bg-white/5 px-2 py-1 text-white/55">
                           due {item.suggestedDueDate}
@@ -276,8 +386,82 @@ export function Inbox() {
                         </button>
                       )}
                     </div>
+                    {links.length > 0 && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                        <span className="text-white/35">Aura suggests:</span>
+                        {links.map((link) =>
+                          link.matched && link.entityId ? (
+                            <Link
+                              key={`${link.entityType}-${link.name}`}
+                              href={
+                                link.entityType === "person"
+                                  ? peoplePath({ personId: link.entityId })
+                                  : projectsPath(link.entityId)
+                              }
+                              title={`${link.reason} — linked on accept`}
+                              className="rounded-full border border-violet-500/25 bg-violet-500/10 px-2 py-1 text-violet-200 no-underline hover:bg-violet-500/20"
+                            >
+                              {link.entityType === "person" ? "Person" : "Project"}: {link.name}
+                            </Link>
+                          ) : (
+                            <span
+                              key={`${link.entityType}-${link.name}`}
+                              title={`${link.reason} — no match; created only if you accept`}
+                              className="rounded-full border border-dashed border-white/15 px-2 py-1 text-white/45"
+                            >
+                              {link.entityType === "person" ? "Person" : "Project"}: {link.name} ·
+                              new on accept
+                            </span>
+                          ),
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => (editing ? setEditingFor(null) : startEdit(item))}
+                      className="rounded-xl border border-white/10 px-3 py-2 text-sm text-white/70 hover:bg-white/5"
+                    >
+                      {editing ? "Cancel edit" : "Edit"}
+                    </button>
+                    {snoozeFor === item.id ? (
+                      <span className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => void snooze(item, 1)}
+                          className="rounded-xl border border-white/10 px-3 py-2 text-sm text-white/70 hover:bg-white/5"
+                        >
+                          Tomorrow
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void snooze(item, 7)}
+                          className="rounded-xl border border-white/10 px-3 py-2 text-sm text-white/70 hover:bg-white/5"
+                        >
+                          Next week
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSnoozeFor(null)}
+                          className="px-1.5 text-white/40 hover:text-white/70"
+                          title="Cancel snooze"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSnoozeFor(item.id);
+                          setEditingFor(null);
+                        }}
+                        className="rounded-xl border border-white/10 px-3 py-2 text-sm text-white/55 hover:text-white"
+                      >
+                        Snooze
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setEvidenceTarget(item)}
@@ -433,6 +617,77 @@ export function Inbox() {
                     Will link to <span className="font-medium text-sky-100">{person}</span> on
                     accept. Tap the chip to clear if wrong.
                   </p>
+                )}
+                {editing && draft && (
+                  <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                    <div className="grid gap-2 sm:grid-cols-[1fr_170px_150px]">
+                      <label className="block text-xs text-white/50">
+                        Title
+                        <input
+                          value={draft.title}
+                          onChange={(e) =>
+                            setEditDraft((prev) => ({
+                              ...prev,
+                              [item.id]: { ...draft, title: e.target.value },
+                            }))
+                          }
+                          className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none focus:border-indigo-400/50"
+                        />
+                      </label>
+                      <label className="block text-xs text-white/50">
+                        Save as
+                        <select
+                          value={draft.type}
+                          onChange={(e) =>
+                            setEditDraft((prev) => ({
+                              ...prev,
+                              [item.id]: {
+                                ...draft,
+                                type: e.target.value as RecallCaptureItem["suggestedType"],
+                              },
+                            }))
+                          }
+                          className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-2 py-2 text-sm text-white/80"
+                        >
+                          {TYPE_OPTIONS.map((t) => (
+                            <option key={t} value={t}>
+                              {t.replace("_", " ")}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="block text-xs text-white/50">
+                        Due date
+                        <input
+                          type="date"
+                          value={draft.dueDate}
+                          onChange={(e) =>
+                            setEditDraft((prev) => ({
+                              ...prev,
+                              [item.id]: { ...draft, dueDate: e.target.value },
+                            }))
+                          }
+                          className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-2 py-2 text-sm text-white/80"
+                        />
+                      </label>
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void saveEdit(item)}
+                        className="rounded-lg bg-indigo-500/80 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500"
+                      >
+                        Save changes
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingFor(null)}
+                        className="rounded-lg px-2.5 py-1.5 text-xs text-white/45 hover:text-white/70"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
                 )}
                 <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-white/70">{item.rawText}</p>
                 {item.suggestedActions.length > 0 && (

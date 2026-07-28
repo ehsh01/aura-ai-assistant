@@ -6,8 +6,10 @@
  * OpenAPI spec version: 0.7.0
  */
 import type { CaptureStatus } from './captureStatus';
+import type { CaptureSuggestedLink } from './captureSuggestedLink';
 import type { CaptureSuggestedPriority } from './captureSuggestedPriority';
 import type { CaptureSuggestedType } from './captureSuggestedType';
+import type { RecallCaptureItemConfidenceLabel } from './recallCaptureItemConfidenceLabel';
 
 export interface RecallCaptureItem {
   id: string;
@@ -24,6 +26,17 @@ export interface RecallCaptureItem {
   status: CaptureStatus;
   projectId?: string | null;
   notebookId?: string | null;
+  /** Classification confidence 0..1 (null for legacy rows). */
+  confidence?: number | null;
+  confidenceLabel: RecallCaptureItemConfidenceLabel;
+  /** Raw capture source (manual, email, extension, ...). */
+  sourceType?: string | null;
+  sourceUrl?: string | null;
+  /** Match-only link suggestions; nothing is created silently. */
+  suggestedLinks: CaptureSuggestedLink[];
+  snoozedUntil?: string | null;
+  /** True when Aura auto-organized the capture (high confidence, low risk). */
+  autoAccepted: boolean;
   attachmentCount: number;
   createdAt: string;
   updatedAt: string;

@@ -6,12 +6,10 @@
  * OpenAPI spec version: 0.7.0
  */
 
-export type CaptureStatus = typeof CaptureStatus[keyof typeof CaptureStatus];
+export type CaptureSuggestedLinkEntityType = typeof CaptureSuggestedLinkEntityType[keyof typeof CaptureSuggestedLinkEntityType];
 
 
-export const CaptureStatus = {
-  pending: 'pending',
-  accepted: 'accepted',
-  dismissed: 'dismissed',
-  snoozed: 'snoozed',
+export const CaptureSuggestedLinkEntityType = {
+  person: 'person',
+  project: 'project',
 } as const;

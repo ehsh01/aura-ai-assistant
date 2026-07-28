@@ -1741,7 +1741,29 @@ components:
       enum: [low, medium, high, urgent]
     CaptureStatus:
       type: string
-      enum: [pending, accepted, dismissed]
+      enum: [pending, accepted, dismissed, snoozed]
+    CaptureSuggestedLink:
+      type: object
+      properties:
+        entityType:
+          type: string
+          enum: [person, project]
+        entityId:
+          type: string
+          nullable: true
+          description: Matched row id; null when the name has no match (created only on user accept).
+        name:
+          type: string
+        matched:
+          type: boolean
+        reason:
+          type: string
+      required:
+        - entityType
+        - entityId
+        - name
+        - matched
+        - reason
     RecallCaptureItem:
       type: object
       properties:
@@ -1781,6 +1803,31 @@ components:
         notebookId:
           type: string
           nullable: true
+        confidence:
+          type: number
+          nullable: true
+          description: Classification confidence 0..1 (null for legacy rows).
+        confidenceLabel:
+          type: string
+          enum: [high, needs_review, uncertain]
+        sourceType:
+          type: string
+          nullable: true
+          description: Raw capture source (manual, email, extension, ...).
+        sourceUrl:
+          type: string
+          nullable: true
+        suggestedLinks:
+          type: array
+          items:
+            $ref: "#/components/schemas/CaptureSuggestedLink"
+          description: Match-only link suggestions; nothing is created silently.
+        snoozedUntil:
+          type: string
+          nullable: true
+        autoAccepted:
+          type: boolean
+          description: True when Aura auto-organized the capture (high confidence, low risk).
         attachmentCount:
           type: integer
         createdAt:
@@ -1796,6 +1843,9 @@ components:
         - suggestedTags
         - suggestedActions
         - status
+        - confidenceLabel
+        - suggestedLinks
+        - autoAccepted
         - attachmentCount
         - createdAt
         - updatedAt
@@ -1860,6 +1910,10 @@ components:
             type: string
         status:
           $ref: "#/components/schemas/CaptureStatus"
+        snoozedUntil:
+          type: string
+          nullable: true
+          description: ISO datetime; required when status is snoozed, cleared on unsnooze.
         projectId:
           type: string
           nullable: true

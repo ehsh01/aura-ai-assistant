@@ -7,6 +7,7 @@
  */
 import type { LifeMemoryDomain } from './lifeMemoryDomain';
 import type { LifeMemorySourceType } from './lifeMemorySourceType';
+import type { LifeMemoryStatus } from './lifeMemoryStatus';
 
 export interface LifeMemory {
   id: string;
@@ -19,6 +20,9 @@ export interface LifeMemory {
   sourceType?: LifeMemorySourceType;
   sourceId?: string | null;
   pinned: boolean;
+  status: LifeMemoryStatus;
+  supersedesId?: string | null;
+  expiresAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }

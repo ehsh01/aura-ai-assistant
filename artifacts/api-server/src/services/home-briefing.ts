@@ -212,14 +212,19 @@ function scoreTaskUrgency(task: RecallTaskDto, today: string): number {
   return score;
 }
 
-function scoreCaptureUrgency(item: RecallCaptureItemDto, today: string): number {
+/**
+ * Today is an action queue, not a capture inbox: only actionable or
+ * time-sensitive captures surface. Everything else waits in the Inbox review
+ * queue — so there is no base score, and a score of 0 means "exclude".
+ */
+export function scoreCaptureUrgency(item: RecallCaptureItemDto, today: string): number {
   if (item.status !== "pending") return -1;
-  let score = 5;
+  let score = 0;
   if (item.suggestedPriority === "urgent") score += 60;
-  if (item.suggestedPriority === "high") score += 40;
+  else if (item.suggestedPriority === "high") score += 40;
   if (isDueNowOrPast(item.suggestedDueDate, today)) score += 45;
   if (URGENCY_KEYWORDS.test(`${item.cleanedTitle} ${item.rawText}`)) score += 20;
-  return score;
+  return score > 0 ? score : -1;
 }
 
 function rankedTasks(tasks: RecallTaskDto[], today: string): RecallTaskDto[] {
@@ -581,6 +586,7 @@ export async function buildHomeBriefing(
   const reminders: BriefingItem[] = captures
     .filter((c) => c.status === "pending" && isRecentForHome(c.createdAt))
     .map((c) => ({ item: c, score: scoreCaptureUrgency(c, today) }))
+    .filter((row) => row.score >= 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, 3)
     .map(({ item }) => ({ id: item.id, label: item.cleanedTitle, href: inboxPath(item.id) }));

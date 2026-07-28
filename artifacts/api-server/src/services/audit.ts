@@ -18,6 +18,8 @@ const ACTION_LABELS: Record<string, string> = {
   capture_created: "Capture created",
   capture_extracted: "AI extracted a capture",
   capture_accepted: "Inbox item accepted",
+  capture_auto_accepted: "Capture auto-organized",
+  capture_snoozed: "Inbox item snoozed",
   capture_dismissed: "Inbox item dismissed",
   task_created: "Task created",
   task_completed: "Task completed",

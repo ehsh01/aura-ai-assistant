@@ -53,6 +53,14 @@ function firstLineTitle(text: string, fallback = "Quick capture"): string {
   return line.length > 80 ? `${line.slice(0, 77)}…` : line;
 }
 
+/** Merge ?capture= (internal deep link) with PWA share-target params into one prefill. */
+function readCapturePrefillParams(): string | null {
+  const parts = ["capture", "title", "text", "url"]
+    .map((key) => readSearchParam(key)?.trim())
+    .filter((part): part is string => Boolean(part));
+  return parts.length ? parts.join("\n") : null;
+}
+
 /** One queue of things you can act on — nothing else. */
 export function Today() {
   const { user } = useAuth();
@@ -67,7 +75,7 @@ export function Today() {
   const [attention, setAttention] = useState<AttentionItemRecord[]>([]);
   const [homeyAlerts, setHomeyAlerts] = useState<HomeyUrgencyAlert[]>([]);
   const [capturePrefill, setCapturePrefill] = useState<string | null>(() =>
-    readSearchParam("capture"),
+    readCapturePrefillParams(),
   );
 
   const refreshCaptures = () =>
@@ -130,11 +138,13 @@ export function Today() {
   }, [refreshHome]);
 
   useEffect(() => {
-    const raw = readSearchParam("capture");
+    const raw = readCapturePrefillParams();
     if (!raw?.trim()) return;
     setCapturePrefill(raw);
     const url = new URL(window.location.href);
-    url.searchParams.delete("capture");
+    for (const key of ["capture", "title", "text", "url"]) {
+      url.searchParams.delete(key);
+    }
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }, []);
 

@@ -4,7 +4,7 @@ import { getDb } from "../lib/db";
 import { newAiExtractionId, newCaptureId, newExtractionJobId } from "../lib/recall-format";
 import {
   CLASSIFY_CAPTURE_PROMPT_VERSION,
-} from "../prompts/classifyCapture.v1";
+} from "../prompts/classifyCapture.v2";
 import { writeAuditLog } from "./audit";
 import { createCaptureForUser, getCaptureForUser, updateCaptureStatusForUser } from "./captures";
 import { createEvidenceForUser } from "./evidence";
@@ -15,15 +15,14 @@ import {
   getJobForUser,
 } from "./job-queue";
 import { nudgeJobWorker } from "./job-worker";
-import { resolvePersonByName } from "./people";
 import { aiService } from "./ai";
-import type { CaptureClassificationItem } from "./ai";
-
-type ExtendedClassification = CaptureClassificationItem & {
-  confidence?: number;
-  requesterName?: string | null;
-  evidenceText?: string;
-};
+import {
+  autoAcceptEligible,
+  normalizeCaptureTypes,
+  resolveCaptureLinks,
+  suggestedTypeToType,
+} from "./capture-classify";
+import { acceptCaptureForUser } from "./capture-items";
 
 function confidenceLabel(score: number | null | undefined): "high" | "needs_review" | "uncertain" {
   if (score == null) return "uncertain";
@@ -67,13 +66,18 @@ export async function processCaptureExtraction(
   await updateCaptureStatusForUser(userId, captureId, { processedStatus: "processing" });
 
   const aiResult = await aiService.classifyCapture({ rawText: capture.rawText });
-  const item = aiResult.item as ExtendedClassification;
+  const item = aiResult.item;
   const confidence =
     typeof item.confidence === "number"
       ? Math.min(1, Math.max(0, item.confidence))
       : aiResult.degraded
         ? 0.4
         : 0.75;
+  const types = normalizeCaptureTypes(item.types, [suggestedTypeToType(item.suggestedType)]);
+  const links = await resolveCaptureLinks(userId, {
+    personName: item.personName,
+    projectName: item.suggestedProject,
+  });
 
   const now = new Date();
   const extractionId = newAiExtractionId();
@@ -92,11 +96,14 @@ export async function processCaptureExtraction(
     updatedAt: now,
   });
 
-  const inboxId = newCaptureId();
-  await getDb().insert(captureItems).values({
-    id: inboxId,
-    userId,
-    rawCaptureId: captureId,
+  // Idempotent inbox upsert: one row per raw capture. Reprocessing refreshes a
+  // still-pending row but never resurrects one the user already triaged.
+  const metadata: Record<string, unknown> = {
+    types,
+    promptVersion: CLASSIFY_CAPTURE_PROMPT_VERSION,
+    autoAccepted: false,
+  };
+  const classificationFields = {
     rawText: capture.rawText,
     cleanedTitle: item.cleanedTitle,
     suggestedType: item.suggestedType,
@@ -105,61 +112,128 @@ export async function processCaptureExtraction(
     suggestedProject: item.suggestedProject,
     suggestedTags: item.suggestedTags,
     suggestedActions: item.suggestedActions,
-    status: "pending",
-    projectId: null,
-    notebookId: null,
-    createdAt: now,
+    confidence,
+    suggestedLinks: links,
+    metadata,
     updatedAt: now,
-  });
+  };
 
-  await createEvidenceForUser(userId, {
-    entityType: "capture_item",
-    entityId: inboxId,
-    claimType: "summary_based_on",
-    sourceCaptureId: captureId,
-    evidenceText: item.evidenceText ?? capture.rawText.slice(0, 500),
-    url: capture.sourceUrl,
-    evidenceMetadata: {
-      confidence,
-      confidenceLabel: confidenceLabel(confidence),
-      extractionId,
-      promptVersion: CLASSIFY_CAPTURE_PROMPT_VERSION,
-    },
-  });
+  const findInboxRow = async () => {
+    const rows = await getDb()
+      .select({ id: captureItems.id, status: captureItems.status })
+      .from(captureItems)
+      .where(and(eq(captureItems.rawCaptureId, captureId), eq(captureItems.userId, userId)))
+      .limit(1);
+    return rows[0];
+  };
 
-  // Promote a suggested due date onto the deadline radar (attention_items).
-  // Reuses the classification's own date — no second LLM call.
-  try {
-    const { captureDueDatePromotion } = await import("./attention-extract");
-    const { upsertAttentionItemForUser } = await import("./attention");
-    const promotion = captureDueDatePromotion({
-      suggestedDueDate: item.suggestedDueDate,
-      confidence,
-    });
-    if (promotion) {
-      await upsertAttentionItemForUser(userId, {
-        title: (item.cleanedTitle ?? "Deadline").trim().slice(0, 500) || "Deadline",
-        summary: item.evidenceText ?? capture.rawText.slice(0, 300),
-        dueAt: promotion.dueAt,
-        kind: "deadline",
-        sourceEntityType: "capture_item",
-        sourceEntityId: inboxId,
-        evidenceText: item.evidenceText ?? capture.rawText.slice(0, 500),
-        confidence,
-        dateConfidence: promotion.dateConfidence,
-        metadata: {
-          extractedFrom: "capture",
-          promptVersion: CLASSIFY_CAPTURE_PROMPT_VERSION,
-          captureId,
-        },
+  let inboxId: string;
+  let alreadyTriaged = false;
+  const existingRow = await findInboxRow();
+  if (existingRow && existingRow.status !== "pending") {
+    inboxId = existingRow.id;
+    alreadyTriaged = true;
+  } else if (existingRow) {
+    await getDb().update(captureItems).set(classificationFields).where(eq(captureItems.id, existingRow.id));
+    inboxId = existingRow.id;
+  } else {
+    inboxId = newCaptureId();
+    try {
+      await getDb().insert(captureItems).values({
+        id: inboxId,
+        userId,
+        rawCaptureId: captureId,
+        ...classificationFields,
+        status: "pending",
+        projectId: null,
+        notebookId: null,
+        createdAt: now,
+        updatedAt: now,
       });
+    } catch {
+      // A concurrent run won the insert race — adopt its row.
+      const raced = await findInboxRow();
+      if (!raced) throw new Error("capture inbox upsert failed");
+      inboxId = raced.id;
+      alreadyTriaged = raced.status !== "pending";
+      if (!alreadyTriaged) {
+        await getDb().update(captureItems).set(classificationFields).where(eq(captureItems.id, inboxId));
+      }
     }
-  } catch {
-    // Deadline promotion must never break capture processing.
   }
 
-  if (item.requesterName?.trim()) {
-    await resolvePersonByName(userId, item.requesterName.trim());
+  if (!alreadyTriaged) {
+    await createEvidenceForUser(userId, {
+      entityType: "capture_item",
+      entityId: inboxId,
+      claimType: "summary_based_on",
+      sourceCaptureId: captureId,
+      evidenceText: item.evidenceText ?? capture.rawText.slice(0, 500),
+      url: capture.sourceUrl,
+      evidenceMetadata: {
+        confidence,
+        confidenceLabel: confidenceLabel(confidence),
+        extractionId,
+        promptVersion: CLASSIFY_CAPTURE_PROMPT_VERSION,
+        types,
+        suggestedLinks: links,
+      },
+    });
+
+    // Promote a suggested due date onto the deadline radar (attention_items).
+    // Reuses the classification's own date — no second LLM call.
+    try {
+      const { captureDueDatePromotion } = await import("./attention-extract");
+      const { upsertAttentionItemForUser } = await import("./attention");
+      const promotion = captureDueDatePromotion({
+        suggestedDueDate: item.suggestedDueDate,
+        confidence,
+      });
+      if (promotion) {
+        await upsertAttentionItemForUser(userId, {
+          title: (item.cleanedTitle ?? "Deadline").trim().slice(0, 500) || "Deadline",
+          summary: item.evidenceText ?? capture.rawText.slice(0, 300),
+          dueAt: promotion.dueAt,
+          kind: "deadline",
+          sourceEntityType: "capture_item",
+          sourceEntityId: inboxId,
+          evidenceText: item.evidenceText ?? capture.rawText.slice(0, 500),
+          confidence,
+          dateConfidence: promotion.dateConfidence,
+          metadata: {
+            extractedFrom: "capture",
+            promptVersion: CLASSIFY_CAPTURE_PROMPT_VERSION,
+            captureId,
+          },
+        });
+      }
+    } catch {
+      // Deadline promotion must never break capture processing.
+    }
+
+    // High-confidence, low-risk captures organize themselves: materialize via
+    // the same accept flow the user would trigger, flagged as automatic.
+    if (autoAcceptEligible({ types, confidence, dueDate: item.suggestedDueDate, links })) {
+      const personLink = links.find((l) => l.entityType === "person" && l.matched);
+      const projectLink = links.find((l) => l.entityType === "project" && l.matched);
+      const accepted = await acceptCaptureForUser(userId, inboxId, {
+        personId: personLink?.entityId ?? undefined,
+        projectId: projectLink?.entityId ?? undefined,
+      });
+      if (accepted) {
+        await getDb()
+          .update(captureItems)
+          .set({ metadata: { ...metadata, autoAccepted: true }, updatedAt: new Date() })
+          .where(eq(captureItems.id, inboxId));
+        await writeAuditLog({
+          userId,
+          action: "capture_auto_accepted",
+          entityType: accepted.task ? "task" : accepted.note ? "note" : accepted.memory ? "memory" : "capture_item",
+          entityId: accepted.task?.id ?? accepted.note?.id ?? accepted.memory?.id ?? inboxId,
+          metadata: { captureItemId: inboxId, captureId, confidence, types },
+        });
+      }
+    }
   }
 
   await updateCaptureStatusForUser(userId, captureId, { processedStatus: "processed" });

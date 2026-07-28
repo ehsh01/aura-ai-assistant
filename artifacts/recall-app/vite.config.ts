@@ -61,6 +61,15 @@ export default defineConfig({
         scope: basePath,
         start_url: basePath,
         categories: ["productivity", "utilities"],
+        share_target: {
+          action: `${basePath}today`,
+          method: "GET",
+          params: {
+            title: "title",
+            text: "text",
+            url: "url",
+          },
+        },
         icons: [
           {
             src: `${basePath}pwa-192x192.png`,

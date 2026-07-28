@@ -49,7 +49,7 @@ export const LoginResponse = zod.object({
   "id": zod.string().uuid(),
   "email": zod.string().email(),
   "name": zod.string(),
-  "isAdmin": zod.boolean()
+  "isAdmin": zod.boolean().describe('Whether the user can manage other accounts')
 })
 })
 
@@ -62,7 +62,7 @@ export const GetCurrentUserResponse = zod.object({
   "id": zod.string().uuid(),
   "email": zod.string().email(),
   "name": zod.string(),
-  "isAdmin": zod.boolean()
+  "isAdmin": zod.boolean().describe('Whether the user can manage other accounts')
 })
 })
 
@@ -702,9 +702,22 @@ export const ListCaptureInboxResponse = zod.object({
   "suggestedTags": zod.array(zod.string()),
   "suggestedActions": zod.array(zod.string()),
   "suggestedPersonName": zod.string().nullish().describe('Person name detected in the capture text (preview before accept).'),
-  "status": zod.enum(['pending', 'accepted', 'dismissed']),
+  "status": zod.enum(['pending', 'accepted', 'dismissed', 'snoozed']),
   "projectId": zod.string().nullish(),
   "notebookId": zod.string().nullish(),
+  "confidence": zod.number().nullish().describe('Classification confidence 0..1 (null for legacy rows).'),
+  "confidenceLabel": zod.enum(['high', 'needs_review', 'uncertain']),
+  "sourceType": zod.string().nullish().describe('Raw capture source (manual, email, extension, ...).'),
+  "sourceUrl": zod.string().nullish(),
+  "suggestedLinks": zod.array(zod.object({
+  "entityType": zod.enum(['person', 'project']),
+  "entityId": zod.string().nullable().describe('Matched row id; null when the name has no match (created only on user accept).'),
+  "name": zod.string(),
+  "matched": zod.boolean(),
+  "reason": zod.string()
+})).describe('Match-only link suggestions; nothing is created silently.'),
+  "snoozedUntil": zod.string().nullish(),
+  "autoAccepted": zod.boolean().describe('True when Aura auto-organized the capture (high confidence, low risk).'),
   "attachmentCount": zod.number(),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
@@ -728,7 +741,8 @@ export const UpdateCaptureBody = zod.object({
   "suggestedProject": zod.string().nullish(),
   "suggestedTags": zod.array(zod.string()).optional(),
   "suggestedActions": zod.array(zod.string()).optional(),
-  "status": zod.enum(['pending', 'accepted', 'dismissed']).optional(),
+  "status": zod.enum(['pending', 'accepted', 'dismissed', 'snoozed']).optional(),
+  "snoozedUntil": zod.string().nullish().describe('ISO datetime; required when status is snoozed, cleared on unsnooze.'),
   "projectId": zod.string().nullish(),
   "notebookId": zod.string().nullish()
 })
@@ -744,9 +758,22 @@ export const UpdateCaptureResponse = zod.object({
   "suggestedTags": zod.array(zod.string()),
   "suggestedActions": zod.array(zod.string()),
   "suggestedPersonName": zod.string().nullish().describe('Person name detected in the capture text (preview before accept).'),
-  "status": zod.enum(['pending', 'accepted', 'dismissed']),
+  "status": zod.enum(['pending', 'accepted', 'dismissed', 'snoozed']),
   "projectId": zod.string().nullish(),
   "notebookId": zod.string().nullish(),
+  "confidence": zod.number().nullish().describe('Classification confidence 0..1 (null for legacy rows).'),
+  "confidenceLabel": zod.enum(['high', 'needs_review', 'uncertain']),
+  "sourceType": zod.string().nullish().describe('Raw capture source (manual, email, extension, ...).'),
+  "sourceUrl": zod.string().nullish(),
+  "suggestedLinks": zod.array(zod.object({
+  "entityType": zod.enum(['person', 'project']),
+  "entityId": zod.string().nullable().describe('Matched row id; null when the name has no match (created only on user accept).'),
+  "name": zod.string(),
+  "matched": zod.boolean(),
+  "reason": zod.string()
+})).describe('Match-only link suggestions; nothing is created silently.'),
+  "snoozedUntil": zod.string().nullish(),
+  "autoAccepted": zod.boolean().describe('True when Aura auto-organized the capture (high confidence, low risk).'),
   "attachmentCount": zod.number(),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
@@ -787,9 +814,22 @@ export const AcceptCaptureResponse = zod.object({
   "suggestedTags": zod.array(zod.string()),
   "suggestedActions": zod.array(zod.string()),
   "suggestedPersonName": zod.string().nullish().describe('Person name detected in the capture text (preview before accept).'),
-  "status": zod.enum(['pending', 'accepted', 'dismissed']),
+  "status": zod.enum(['pending', 'accepted', 'dismissed', 'snoozed']),
   "projectId": zod.string().nullish(),
   "notebookId": zod.string().nullish(),
+  "confidence": zod.number().nullish().describe('Classification confidence 0..1 (null for legacy rows).'),
+  "confidenceLabel": zod.enum(['high', 'needs_review', 'uncertain']),
+  "sourceType": zod.string().nullish().describe('Raw capture source (manual, email, extension, ...).'),
+  "sourceUrl": zod.string().nullish(),
+  "suggestedLinks": zod.array(zod.object({
+  "entityType": zod.enum(['person', 'project']),
+  "entityId": zod.string().nullable().describe('Matched row id; null when the name has no match (created only on user accept).'),
+  "name": zod.string(),
+  "matched": zod.boolean(),
+  "reason": zod.string()
+})).describe('Match-only link suggestions; nothing is created silently.'),
+  "snoozedUntil": zod.string().nullish(),
+  "autoAccepted": zod.boolean().describe('True when Aura auto-organized the capture (high confidence, low risk).'),
   "attachmentCount": zod.number(),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
@@ -834,6 +874,9 @@ export const AcceptCaptureResponse = zod.object({
   "sourceType": zod.enum(['teach', 'capture', 'ask', 'import']).optional(),
   "sourceId": zod.string().nullish(),
   "pinned": zod.boolean(),
+  "status": zod.enum(['active', 'superseded', 'expired', 'archived']),
+  "supersedesId": zod.string().nullish(),
+  "expiresAt": zod.string().nullish(),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 }).optional(),
@@ -862,6 +905,9 @@ export const ListMemoriesResponse = zod.object({
   "sourceType": zod.enum(['teach', 'capture', 'ask', 'import']).optional(),
   "sourceId": zod.string().nullish(),
   "pinned": zod.boolean(),
+  "status": zod.enum(['active', 'superseded', 'expired', 'archived']),
+  "supersedesId": zod.string().nullish(),
+  "expiresAt": zod.string().nullish(),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 }))
@@ -916,6 +962,9 @@ export const GetMemoryResponse = zod.object({
   "sourceType": zod.enum(['teach', 'capture', 'ask', 'import']).optional(),
   "sourceId": zod.string().nullish(),
   "pinned": zod.boolean(),
+  "status": zod.enum(['active', 'superseded', 'expired', 'archived']),
+  "supersedesId": zod.string().nullish(),
+  "expiresAt": zod.string().nullish(),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })
@@ -949,6 +998,9 @@ export const UpdateMemoryResponse = zod.object({
   "sourceType": zod.enum(['teach', 'capture', 'ask', 'import']).optional(),
   "sourceId": zod.string().nullish(),
   "pinned": zod.boolean(),
+  "status": zod.enum(['active', 'superseded', 'expired', 'archived']),
+  "supersedesId": zod.string().nullish(),
+  "expiresAt": zod.string().nullish(),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })
@@ -1057,9 +1109,22 @@ export const GetProjectResponse = zod.object({
   "suggestedTags": zod.array(zod.string()),
   "suggestedActions": zod.array(zod.string()),
   "suggestedPersonName": zod.string().nullish().describe('Person name detected in the capture text (preview before accept).'),
-  "status": zod.enum(['pending', 'accepted', 'dismissed']),
+  "status": zod.enum(['pending', 'accepted', 'dismissed', 'snoozed']),
   "projectId": zod.string().nullish(),
   "notebookId": zod.string().nullish(),
+  "confidence": zod.number().nullish().describe('Classification confidence 0..1 (null for legacy rows).'),
+  "confidenceLabel": zod.enum(['high', 'needs_review', 'uncertain']),
+  "sourceType": zod.string().nullish().describe('Raw capture source (manual, email, extension, ...).'),
+  "sourceUrl": zod.string().nullish(),
+  "suggestedLinks": zod.array(zod.object({
+  "entityType": zod.enum(['person', 'project']),
+  "entityId": zod.string().nullable().describe('Matched row id; null when the name has no match (created only on user accept).'),
+  "name": zod.string(),
+  "matched": zod.boolean(),
+  "reason": zod.string()
+})).describe('Match-only link suggestions; nothing is created silently.'),
+  "snoozedUntil": zod.string().nullish(),
+  "autoAccepted": zod.boolean().describe('True when Aura auto-organized the capture (high confidence, low risk).'),
   "attachmentCount": zod.number(),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
