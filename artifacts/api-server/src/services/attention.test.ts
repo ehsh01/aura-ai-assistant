@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  attentionDueReason,
   attentionUrgencyScore,
   dueAtFromDateString,
+  groupDeadlines,
   resolveSnoozeUntil,
+  validateAttentionPatch,
   type AttentionItemDto,
 } from "./attention";
 
@@ -23,7 +26,15 @@ function baseItem(overrides: Partial<AttentionItemDto> = {}): AttentionItemDto {
     evidenceText: "court date is March 12",
     personId: null,
     projectId: null,
+    taskId: null,
+    organizationId: null,
+    waitingItemId: null,
+    dateConfidence: "certain",
+    timeZone: null,
+    timeKnown: false,
+    confirmedAt: new Date("2026-03-01T00:00:00Z").toISOString(),
     confidence: 0.9,
+    metadata: {},
     href: "/ask",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -91,5 +102,138 @@ describe("attentionUrgencyScore", () => {
       now,
     );
     expect(unseen).toBeGreaterThan(seen);
+  });
+});
+
+// Local-time construction keeps day-boundary tests timezone-stable.
+function localIso(y: number, m: number, d: number, h = 12): string {
+  return new Date(y, m - 1, d, h).toISOString();
+}
+
+describe("attentionDueReason", () => {
+  const now = new Date(2026, 2, 15, 12, 0, 0); // Mar 15 2026, noon local
+
+  it("labels overdue items in days", () => {
+    const reason = attentionDueReason(baseItem({ dueAt: localIso(2026, 3, 12) }), now);
+    expect(reason.label).toBe("3 days overdue");
+    expect(reason.overdue).toBe(true);
+    expect(reason.highRisk).toBe(true);
+  });
+
+  it("labels a single overdue day", () => {
+    const reason = attentionDueReason(baseItem({ dueAt: localIso(2026, 3, 14) }), now);
+    expect(reason.label).toBe("1 day overdue");
+  });
+
+  it("labels due-today and due-tomorrow", () => {
+    expect(attentionDueReason(baseItem({ dueAt: localIso(2026, 3, 15, 17) }), now).label).toBe(
+      "Due today",
+    );
+    expect(attentionDueReason(baseItem({ dueAt: localIso(2026, 3, 15, 9) }), now).label).toBe(
+      "Due earlier today",
+    );
+    expect(attentionDueReason(baseItem({ dueAt: localIso(2026, 3, 16) }), now).label).toBe(
+      "Due tomorrow",
+    );
+  });
+
+  it("labels upcoming week and later dates", () => {
+    expect(attentionDueReason(baseItem({ dueAt: localIso(2026, 3, 19) }), now).label).toBe(
+      "Due in 4 days",
+    );
+    expect(
+      attentionDueReason(baseItem({ dueAt: localIso(2026, 4, 2) }), now).label,
+    ).toMatch(/^Due Apr 2$/);
+  });
+
+  it("flags unconfirmed uncertain dates and asks for confirmation", () => {
+    const reason = attentionDueReason(
+      baseItem({ dateConfidence: "uncertain", confirmedAt: null, dueAt: localIso(2026, 3, 16) }),
+      now,
+    );
+    expect(reason.unconfirmed).toBe(true);
+    expect(reason.label).toBe("Due tomorrow · confirm date");
+    // Due within 48h + unconfirmed = high risk.
+    expect(reason.highRisk).toBe(true);
+  });
+
+  it("treats confirmed uncertain-extracted dates as confirmed", () => {
+    const reason = attentionDueReason(
+      baseItem({
+        dateConfidence: "uncertain",
+        confirmedAt: localIso(2026, 3, 14),
+        dueAt: localIso(2026, 3, 16),
+      }),
+      now,
+    );
+    expect(reason.unconfirmed).toBe(false);
+    expect(reason.highRisk).toBe(false);
+  });
+});
+
+describe("validateAttentionPatch", () => {
+  it("accepts a valid patch", () => {
+    const result = validateAttentionPatch({
+      title: "City revision deadline",
+      dueAt: "2026-04-01",
+      kind: "deadline",
+      dateConfidence: "certain",
+      timeZone: "America/New_York",
+      personId: "person-1",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("rejects empty titles and bad dates", () => {
+    const result = validateAttentionPatch({ title: "   ", dueAt: "not-a-date" });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join("; ")).toMatch(/title/);
+    expect(result.errors.join("; ")).toMatch(/dueAt/);
+  });
+
+  it("rejects unknown kind and dateConfidence", () => {
+    const result = validateAttentionPatch({ kind: "party", dateConfidence: "maybe" });
+    expect(result.ok).toBe(false);
+    expect(result.errors.length).toBe(2);
+  });
+});
+
+describe("groupDeadlines", () => {
+  const now = new Date(2026, 2, 15, 12, 0, 0); // Mar 15 2026, noon local
+
+  it("groups overdue, today, this week, later", () => {
+    const groups = groupDeadlines(
+      [
+        baseItem({ id: "a", dueAt: localIso(2026, 3, 10) }),
+        baseItem({ id: "b", dueAt: localIso(2026, 3, 15, 18) }),
+        baseItem({ id: "c", dueAt: localIso(2026, 3, 18) }),
+        baseItem({ id: "d", dueAt: localIso(2026, 4, 5) }),
+      ],
+      now,
+    );
+    expect(groups.overdue.map((i) => i.id)).toEqual(["a"]);
+    expect(groups.today.map((i) => i.id)).toEqual(["b"]);
+    expect(groups.thisWeek.map((i) => i.id)).toEqual(["c"]);
+    expect(groups.later.map((i) => i.id)).toEqual(["d"]);
+  });
+
+  it("pulls unconfirmed and snoozed items out of the date groups", () => {
+    const groups = groupDeadlines(
+      [
+        baseItem({
+          id: "u",
+          dueAt: localIso(2026, 3, 10),
+          dateConfidence: "uncertain",
+          confirmedAt: null,
+        }),
+        baseItem({ id: "s", dueAt: localIso(2026, 3, 16), status: "snoozed" }),
+      ],
+      now,
+    );
+    expect(groups.unconfirmed.map((i) => i.id)).toEqual(["u"]);
+    expect(groups.snoozed.map((i) => i.id)).toEqual(["s"]);
+    expect(groups.overdue).toEqual([]);
+    expect(groups.thisWeek).toEqual([]);
   });
 });

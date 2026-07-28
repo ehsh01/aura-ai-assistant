@@ -1,4 +1,4 @@
-import { aiService } from "./ai";
+import { aiService, type ExtractDeadlineItem } from "./ai";
 import { logger } from "../lib/logger";
 import {
   dueAtFromDateString,
@@ -10,11 +10,74 @@ import {
   markSourceScannedForDeadlines,
   promoteCalendarEventsToAttention,
 } from "./attention-promote";
-import { EXTRACT_DEADLINE_PROMPT_VERSION } from "../prompts/extractDeadline.v1";
+import { EXTRACT_DEADLINE_PROMPT_VERSION } from "../prompts/extractDeadline.v2";
 import { resolvePersonByName } from "./people";
 import { listProjectsForUser } from "./projects";
 
-const AUTO_CREATE_CONFIDENCE = 0.75;
+/** Explicit dates auto-create confirmed items at this confidence. */
+export const CERTAIN_MIN_CONFIDENCE = 0.75;
+/** Vague/inferred dates are kept as unconfirmed items at this confidence. */
+export const UNCERTAIN_MIN_CONFIDENCE = 0.5;
+/** Drop dates already past by more than this (stale threads, re-syncs). */
+const PAST_GRACE_MS = 12 * 3_600_000;
+
+/** Cues that a note contains a date worth an LLM extraction call. */
+export const NOTE_DATE_CUE_RE =
+  /\b(deadline|due|by (mond|tuesd|wednesd|thursd|frid|saturd|sund)ay|appointment|inspection|hearing|filing|remind|scheduled|expires?|renew|court|meeting|tomorrow|next week|end of (the )?month|\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b)\b/i;
+
+export function hasDateCues(text: string | null | undefined): boolean {
+  return !!text && NOTE_DATE_CUE_RE.test(text);
+}
+
+export type MappedDeadline = {
+  dueAt: Date;
+  dateConfidence: "certain" | "uncertain";
+  timeKnown: boolean;
+  timeZone: string | null;
+};
+
+/**
+ * Two-tier gate for an extracted deadline (pure — unit tested):
+ * certain dates need CERTAIN_MIN_CONFIDENCE, uncertain dates are kept
+ * (unconfirmed) at UNCERTAIN_MIN_CONFIDENCE. Never returns past dates.
+ */
+export function mapExtractedDeadline(
+  item: ExtractDeadlineItem,
+  now: Date = new Date(),
+): MappedDeadline | null {
+  if (!item.hasCommitment || !item.dueAt) return null;
+  const dateConfidence = item.dateConfidence === "uncertain" ? "uncertain" : "certain";
+  const min =
+    dateConfidence === "certain" ? CERTAIN_MIN_CONFIDENCE : UNCERTAIN_MIN_CONFIDENCE;
+  if (item.confidence < min) return null;
+  const dueAt = dueAtFromDateString(item.dueAt);
+  if (!dueAt) return null;
+  if (dueAt.getTime() < now.getTime() - PAST_GRACE_MS) return null;
+  return {
+    dueAt,
+    dateConfidence,
+    timeKnown: item.timeKnown === true,
+    timeZone: item.timeZone ?? null,
+  };
+}
+
+/**
+ * Map a capture classification's suggested due date onto an attention item
+ * (pure — unit tested). Returns null when the date is unusable or stale.
+ */
+export function captureDueDatePromotion(
+  input: { suggestedDueDate: string | null | undefined; confidence: number },
+  now: Date = new Date(),
+): { dueAt: Date; dateConfidence: "certain" | "uncertain" } | null {
+  if (!input.suggestedDueDate) return null;
+  const dueAt = dueAtFromDateString(input.suggestedDueDate);
+  if (!dueAt) return null;
+  if (dueAt.getTime() < now.getTime() - PAST_GRACE_MS) return null;
+  return {
+    dueAt,
+    dateConfidence: input.confidence >= 0.8 ? "certain" : "uncertain",
+  };
+}
 
 function suggestProjectId(
   title: string,
@@ -69,17 +132,9 @@ export async function extractGmailDeadlinesForUser(
 
       await markSourceScannedForDeadlines(row.id);
 
-      if (
-        !item.hasCommitment ||
-        !item.dueAt ||
-        item.confidence < AUTO_CREATE_CONFIDENCE
-      ) {
-        continue;
-      }
-
-      const dueAt = dueAtFromDateString(item.dueAt);
-      if (!dueAt) continue;
-      if (dueAt.getTime() < Date.now() - 12 * 3_600_000) continue;
+      const mapped = mapExtractedDeadline(item);
+      if (!mapped) continue;
+      const dueAt = mapped.dueAt;
 
       const from = parseFromField(row.recordText);
       let personId: string | null = null;
@@ -107,6 +162,9 @@ export async function extractGmailDeadlinesForUser(
         personId,
         projectId: suggestProjectId(title, projects),
         confidence: item.confidence,
+        dateConfidence: mapped.dateConfidence,
+        timeZone: mapped.timeZone,
+        timeKnown: mapped.timeKnown,
         metadata: {
           extractedFrom: "gmail_message",
           promptVersion: EXTRACT_DEADLINE_PROMPT_VERSION,
@@ -142,4 +200,77 @@ export async function processAttentionScanJob(
     gmailCreated: mail.created,
     gmailScanned: mail.scanned,
   };
+}
+
+/** Enqueue a deadline scan for a note whose content has date cues. */
+export async function scheduleNoteDeadlineScan(
+  userId: string,
+  noteId: string,
+  content: string,
+): Promise<void> {
+  if (!hasDateCues(content)) return;
+  try {
+    const { enqueueJob, JOB_TYPE_ATTENTION_SCAN } = await import("./job-queue");
+    const { nudgeJobWorker } = await import("./job-worker");
+    await enqueueJob({
+      userId,
+      type: JOB_TYPE_ATTENTION_SCAN,
+      payload: { noteId },
+      id: `attn-note-${noteId}-${Date.now()}`,
+    });
+    nudgeJobWorker();
+  } catch (err) {
+    logger.warn({ err, noteId }, "Failed to schedule note deadline scan");
+  }
+}
+
+/** Extract deadlines from a single note (job entry point for { noteId } scans). */
+export async function scanNoteForDeadlines(
+  userId: string,
+  noteId: string,
+): Promise<{ scanned: number; created: number }> {
+  const { getNoteForUser } = await import("./notes");
+  const note = await getNoteForUser(userId, noteId);
+  if (!note) return { scanned: 0, created: 0 };
+  const text = `${note.title}\n${note.content}`;
+  if (!hasDateCues(text)) return { scanned: 1, created: 0 };
+
+  const extracted = await aiService.extractDeadline({
+    subject: note.title || "Note",
+    body: note.content,
+  });
+  const mapped = mapExtractedDeadline(extracted.item);
+  if (!mapped) return { scanned: 1, created: 0 };
+
+  let personId: string | null = null;
+  const personName = extracted.item.personName?.trim();
+  if (personName) {
+    try {
+      personId = (await resolvePersonByName(userId, personName)).id;
+    } catch {
+      personId = null;
+    }
+  }
+
+  await upsertAttentionItemForUser(userId, {
+    title:
+      (extracted.item.title ?? note.title ?? "Deadline").trim().slice(0, 500) || "Deadline",
+    summary: extracted.item.evidenceText,
+    dueAt: mapped.dueAt,
+    kind: extracted.item.kind ?? "deadline",
+    sourceEntityType: "note",
+    sourceEntityId: noteId,
+    evidenceText: extracted.item.evidenceText ?? note.content.slice(0, 500),
+    personId,
+    confidence: extracted.item.confidence,
+    dateConfidence: mapped.dateConfidence,
+    timeZone: mapped.timeZone,
+    timeKnown: mapped.timeKnown,
+    metadata: {
+      extractedFrom: "note",
+      promptVersion: EXTRACT_DEADLINE_PROMPT_VERSION,
+      degraded: extracted.degraded,
+    },
+  });
+  return { scanned: 1, created: 1 };
 }

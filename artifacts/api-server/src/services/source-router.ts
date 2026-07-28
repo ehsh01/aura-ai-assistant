@@ -1,4 +1,5 @@
 import {
+  DEADLINE_INTENT,
   FINANCE_BREAKDOWN_INTENT,
   FINANCE_INTENT,
   FAMILY_RELATION_INTENT,
@@ -111,6 +112,17 @@ export function routeSourcePlan(question: string): SourcePlan {
       constraints: {},
       answerMode: "grounded_llm",
       rationale: "Waiting-on / follow-up question",
+    };
+  }
+
+  if (DEADLINE_INTENT.test(q)) {
+    return {
+      domains: ["attention"],
+      required: ["attention"],
+      primary: "attention",
+      constraints: {},
+      answerMode: "deterministic_list",
+      rationale: "Deadline / what's-due question — deterministic attention_items list",
     };
   }
 

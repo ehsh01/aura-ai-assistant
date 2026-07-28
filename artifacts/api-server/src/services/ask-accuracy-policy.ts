@@ -10,6 +10,7 @@ export type AskDomain =
   | "notes"
   | "people"
   | "waiting"
+  | "attention"
   | "homey";
 
 export type SourceStatus = "ok" | "empty" | "stale" | "missing" | "auth_error" | "error";

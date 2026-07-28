@@ -127,6 +127,37 @@ export async function processCaptureExtraction(
     },
   });
 
+  // Promote a suggested due date onto the deadline radar (attention_items).
+  // Reuses the classification's own date — no second LLM call.
+  try {
+    const { captureDueDatePromotion } = await import("./attention-extract");
+    const { upsertAttentionItemForUser } = await import("./attention");
+    const promotion = captureDueDatePromotion({
+      suggestedDueDate: item.suggestedDueDate,
+      confidence,
+    });
+    if (promotion) {
+      await upsertAttentionItemForUser(userId, {
+        title: (item.cleanedTitle ?? "Deadline").trim().slice(0, 500) || "Deadline",
+        summary: item.evidenceText ?? capture.rawText.slice(0, 300),
+        dueAt: promotion.dueAt,
+        kind: "deadline",
+        sourceEntityType: "capture_item",
+        sourceEntityId: inboxId,
+        evidenceText: item.evidenceText ?? capture.rawText.slice(0, 500),
+        confidence,
+        dateConfidence: promotion.dateConfidence,
+        metadata: {
+          extractedFrom: "capture",
+          promptVersion: CLASSIFY_CAPTURE_PROMPT_VERSION,
+          captureId,
+        },
+      });
+    }
+  } catch {
+    // Deadline promotion must never break capture processing.
+  }
+
   if (item.requesterName?.trim()) {
     await resolvePersonByName(userId, item.requesterName.trim());
   }

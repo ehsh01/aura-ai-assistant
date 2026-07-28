@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Inbox, Plus, FolderKanban, FileText, Brain, Car, Settings } from "lucide-react";
+import { Inbox, Plus, FolderKanban, FileText, Brain, Car, Settings, CalendarClock } from "lucide-react";
 import { CaptureModal } from "@/components/CaptureModal";
 import { MobileBottomNav, MobileMoreSheet } from "@/components/MobileShell";
 import { OfflineQueueBanner } from "@/components/OfflineQueueBanner";
@@ -66,6 +66,12 @@ const staticNavItems: Array<{
         <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/>
       </svg>
     ),
+  },
+  {
+    id: "/deadlines",
+    label: "Deadlines",
+    section: "ask",
+    icon: <CalendarClock width={18} height={18} strokeWidth={1.8} />,
   },
   {
     id: "/inbox",
@@ -308,6 +314,7 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
   const moreActive =
     location === "/tasks" ||
     location === "/today" ||
+    location === "/deadlines" ||
     location === "/canvas" ||
     location === "/documents" ||
     location === "/memory" ||

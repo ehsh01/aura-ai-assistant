@@ -328,6 +328,8 @@ export async function createNoteForUser(
     text: noteRetrievalText(dto),
   });
   scheduleDigestRegen({ userId, entityType: "note", entityId: dto.id });
+  const { scheduleNoteDeadlineScan } = await import("./attention-extract");
+  void scheduleNoteDeadlineScan(userId, dto.id, `${dto.title}\n${dto.content}`);
   await syncPrimaryPersonLink(userId, "note", dto.id, dto.primaryPersonId);
   return dto;
 }
@@ -542,6 +544,10 @@ export async function updateNoteForUser(
       text: noteRetrievalText(dto),
     });
     scheduleDigestRegen({ userId, entityType: "note", entityId: dto.id });
+    if (input.title !== undefined || input.content !== undefined) {
+      const { scheduleNoteDeadlineScan } = await import("./attention-extract");
+      void scheduleNoteDeadlineScan(userId, dto.id, `${dto.title}\n${dto.content}`);
+    }
   }
   if (primaryPersonIdToWrite !== undefined) {
     await syncPrimaryPersonLink(userId, "note", dto.id, dto.primaryPersonId);

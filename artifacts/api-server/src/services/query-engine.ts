@@ -1,6 +1,7 @@
 import type { EvidenceDto } from "./evidence";
 import { aiService, type QueryFinanceAggregate } from "./ai";
 import {
+  DEADLINE_INTENT,
   FINANCE_INTENT,
   FINANCE_BREAKDOWN_INTENT,
   FAMILY_RELATION_INTENT,
@@ -13,6 +14,11 @@ import {
   primaryFinanceFigure,
   todayIso,
 } from "./query-utils";
+import {
+  attentionDueReason,
+  attentionUrgencyScore,
+  listAttentionForToday,
+} from "./attention";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
 import { ensureUserFinanceFresh } from "./finance-auto-sync";
 import {
@@ -1071,6 +1077,62 @@ export async function queryRecallForUser(
       suggestedNextAction: "Acknowledge on Connectors or Ask to control a device",
       promptVersion: QUERY_ANSWER_PROMPT_VERSION,
       degraded: false,
+    });
+  }
+
+  if (DEADLINE_INTENT.test(workingQuestion)) {
+    const now = new Date();
+    const attentionItems = await listAttentionForToday(userId, 40);
+    if (attentionItems.length === 0) {
+      return finish({
+        answer:
+          "No deadlines are on your radar right now. Aura tracks dates found in Gmail, captures, notes, and your calendar — scan from Deadlines to check for new ones.",
+        confidence: 0.85,
+        caveats: null,
+        evidence: [],
+        relatedRecords: [],
+        suggestedNextAction: "Open Deadlines",
+        promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+        degraded: false,
+        presentation: "compact",
+      });
+    }
+    const sorted = [...attentionItems]
+      .sort((a, b) => attentionUrgencyScore(b, now) - attentionUrgencyScore(a, now))
+      .slice(0, 8);
+    const unconfirmed = sorted.filter(
+      (item) => item.confirmedAt == null && item.dateConfidence === "uncertain",
+    ).length;
+    const lines = sorted.map(
+      (item) => `- ${item.title} — ${attentionDueReason(item, now).label}`,
+    );
+    return finish({
+      answer: `Deadlines on your radar:\n${lines.join("\n")}`,
+      confidence: 0.9,
+      caveats: unconfirmed > 0 ? `${unconfirmed} date(s) still need confirmation.` : null,
+      evidence: sorted.slice(0, 4).map((item) =>
+        makeEvidence({
+          claimType: "attention_due",
+          evidenceText: item.evidenceText
+            ? `${item.title} — source: ${item.evidenceText.slice(0, 180)}`
+            : `${item.title} — ${attentionDueReason(item, now).label}`,
+          entityType: "attention_item",
+          entityId: item.id,
+          metadata: {
+            retrievalMethod: "attention",
+            relatedEntityType: "attention_item",
+            relatedEntityId: item.id,
+            dueAt: item.dueAt,
+            dateConfidence: item.dateConfidence,
+            confirmedAt: item.confirmedAt,
+          },
+        }),
+      ),
+      relatedRecords: [],
+      suggestedNextAction: "Open Deadlines",
+      promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+      degraded: false,
+      presentation: "compact",
     });
   }
 

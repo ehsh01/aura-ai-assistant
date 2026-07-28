@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { ArrowRight, Bell, Flame, Hourglass, Inbox, Target, X } from "lucide-react";
+import { ArrowRight, Bell, Check, Flame, Hourglass, Inbox, Target, X } from "lucide-react";
 import type { BriefingItem, FocusNow, WaitingItem } from "@/lib/home-briefing";
 import type { AttentionItemRecord } from "@/lib/recall-api";
 import {
+  completeAttention,
+  confirmAttention,
   createWaitingFollowUp,
   dismissAttention,
   dismissWaitingOn,
@@ -48,6 +50,16 @@ function waitLabel(days: number): string {
 }
 
 function dueDetail(item: AttentionItemRecord): string {
+  const kind =
+    item.kind === "appointment"
+      ? "Appointment"
+      : item.kind === "follow_up"
+        ? "Follow-up"
+        : "Deadline";
+  if (item.dueReason) {
+    const label = item.dueReason.label;
+    return `${kind} · ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+  }
   const due = new Date(item.dueAt);
   const now = new Date();
   const dayMs = 86_400_000;
@@ -64,12 +76,6 @@ function dueDetail(item: AttentionItemRecord): string {
         : days === 1
           ? "due tomorrow"
           : `due in ${days}d`;
-  const kind =
-    item.kind === "appointment"
-      ? "Appointment"
-      : item.kind === "follow_up"
-        ? "Follow-up"
-        : "Deadline";
   const seen = item.status === "seen" || item.seenAt ? " · seen" : "";
   return `${kind} · ${when}${seen}`;
 }
@@ -138,7 +144,7 @@ export function buildTodayQueue(input: {
       kind: "attention",
       title: a.title,
       detail: dueDetail(a),
-      href: a.href || `/ask?q=${encodeURIComponent(a.title.slice(0, 80))}`,
+      href: `/deadlines?item=${encodeURIComponent(a.id)}`,
       attention: a,
     });
   }
@@ -291,6 +297,43 @@ export function TodayActionQueue({
     }
   };
 
+  const attnConfirm = async (item: AttentionItemRecord) => {
+    if (busyId) return;
+    setBusyId(item.id);
+    try {
+      await confirmAttention(item.id);
+      toast({ title: "Date confirmed", description: "We’ll remind you on this date." });
+      onAttentionChanged?.();
+    } catch (err) {
+      toast({
+        title: "Could not confirm",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const attnComplete = async (item: AttentionItemRecord) => {
+    if (busyId) return;
+    setBusyId(item.id);
+    setHiddenIds((prev) => new Set(prev).add(`attn:${item.id}`));
+    try {
+      await completeAttention(item.id);
+      toast({ title: "Marked done" });
+      onAttentionChanged?.();
+    } catch (err) {
+      toast({
+        title: "Could not complete",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   if (visible.length === 0) {
     return (
       <section className="nebula-glass rounded-2xl px-5 py-8 text-center">
@@ -369,6 +412,26 @@ export function TodayActionQueue({
                   >
                     <X size={15} strokeWidth={2.25} />
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => void attnComplete(item.attention!)}
+                    disabled={busyId === item.attention.id}
+                    title="Mark done"
+                    aria-label={`Mark ${item.title} done`}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-emerald-400/40 text-emerald-300 hover:bg-emerald-400/10 disabled:opacity-50"
+                  >
+                    <Check size={15} strokeWidth={2.25} />
+                  </button>
+                  {item.attention.dueReason?.unconfirmed && (
+                    <button
+                      type="button"
+                      onClick={() => void attnConfirm(item.attention!)}
+                      disabled={busyId === item.attention.id}
+                      className="rounded-full bg-amber-500/90 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-amber-400 disabled:opacity-50"
+                    >
+                      {busyId === item.attention.id ? "…" : "Confirm"}
+                    </button>
+                  )}
                   {item.attention.status !== "seen" && !item.attention.seenAt && (
                     <button
                       type="button"

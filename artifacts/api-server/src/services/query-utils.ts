@@ -27,6 +27,14 @@ export const FAMILY_RELATION_INTENT =
 export const WAITING_INTENT =
   /\b(waiting|follow[- ]?up|awaiting|who.*(owe|owed|pending)|what.*(pending|waiting))\b/i;
 
+/**
+ * Deadline / what's-due questions — answered deterministically from
+ * attention_items. Keep deadline-ish nouns required so family questions
+ * ("when is my wife's birthday") don't hijack this path.
+ */
+export const DEADLINE_INTENT =
+  /\b(deadlines?|what'?s due|what is due|due (today|tomorrow|this week|soon)|any deadlines|coming up|upcoming (deadlines?|appointments?|events?|inspections?)|when (is|are)( the| my)? [^?.]{0,50}?(deadline|due date|due|inspection|hearing|court|filing|permit|renewal|expir\w+|appointment)|appointments? (today|tomorrow|this week|coming up))\b/i;
+
 /** Capability question with no search topic; do not misreport an empty corpus. */
 export const NOTE_CAPABILITY_INTENT =
   /^\s*(?:can|could|would|will|are)\s+you\s+(?:able\s+to\s+)?(?:check|search|read|review|look\s+(?:at|in|through))\s+(?:(?:my|the)\s+)?notes?\s*[?.!]*\s*$/i;

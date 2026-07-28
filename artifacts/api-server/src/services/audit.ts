@@ -42,6 +42,13 @@ const ACTION_LABELS: Record<string, string> = {
   waiting_reply_unclear: "Reply needs review",
   waiting_follow_up_drafted: "Follow-up drafted",
   waiting_follow_up_sent: "Follow-up marked sent",
+  attention_created: "Deadline tracked",
+  attention_updated: "Deadline corrected",
+  attention_confirmed: "Deadline confirmed",
+  attention_snoozed: "Deadline snoozed",
+  attention_dismissed: "Deadline dismissed",
+  attention_completed: "Deadline completed",
+  attention_reopened: "Deadline reopened",
 };
 
 function labelFor(action: string): string {
@@ -70,6 +77,8 @@ function hrefFor(entityType: string | null, entityId: string | null): string | n
       return "/ask";
     case "waiting_item":
       return `/waiting/${encodeURIComponent(entityId)}`;
+    case "attention_item":
+      return `/deadlines?item=${encodeURIComponent(entityId)}`;
     default:
       return null;
   }

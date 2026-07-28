@@ -1,4 +1,5 @@
 import {
+  boolean,
   index,
   jsonb,
   pgTable,
@@ -32,6 +33,17 @@ export const attentionItems = pgTable(
     evidenceText: text("evidence_text"),
     personId: varchar("person_id", { length: 64 }),
     projectId: varchar("project_id", { length: 64 }),
+    /** certain = explicit date in source; uncertain = vague/inferred, needs confirmation. */
+    dateConfidence: varchar("date_confidence", { length: 16 }).notNull().default("certain"),
+    /** IANA timezone when the source stated one; null when unknown. */
+    timeZone: varchar("time_zone", { length: 64 }),
+    /** True only when the source stated an explicit clock time. */
+    timeKnown: boolean("time_known").notNull().default(false),
+    /** Set when a user (or trusted legacy backfill) confirmed the date. */
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    taskId: varchar("task_id", { length: 64 }),
+    organizationId: varchar("organization_id", { length: 64 }),
+    waitingItemId: varchar("waiting_item_id", { length: 64 }),
     confidence: real("confidence"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     /** Set once the "coming up" SMS heads-up has been sent — never re-sent. */

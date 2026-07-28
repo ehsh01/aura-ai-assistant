@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
 import { attentionItems, users } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { logger } from "../lib/logger";
@@ -103,6 +103,8 @@ export async function runSmsReminderSweep(): Promise<{ headsUp: number; dueNow: 
         and(
           eq(users.smsRemindersEnabled, true),
           inArray(attentionItems.status, ["open", "seen"]),
+          // Never text about unconfirmed (uncertain) dates.
+          isNotNull(attentionItems.confirmedAt),
           gte(attentionItems.dueAt, earliestDue),
           lte(attentionItems.dueAt, latestDue),
           or(isNull(attentionItems.smsHeadsUpSentAt), isNull(attentionItems.smsDueSentAt)),

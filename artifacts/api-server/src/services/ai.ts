@@ -283,6 +283,12 @@ export interface ExtractDeadlineItem {
   kind: ExtractDeadlineKind | null;
   personName: string | null;
   evidenceText: string | null;
+  /** True only when the source stated an explicit clock time. */
+  timeKnown: boolean | null;
+  /** IANA timezone when stated/unambiguous; null when unknown. */
+  timeZone: string | null;
+  /** certain = explicit date; uncertain = vague/inferred date needing confirmation. */
+  dateConfidence: "certain" | "uncertain" | null;
   confidence: number;
 }
 
@@ -679,6 +685,9 @@ class DisabledAiService implements AiService {
         kind: null,
         personName: null,
         evidenceText: null,
+        timeKnown: null,
+        timeZone: null,
+        dateConfidence: null,
         confidence: 0,
       },
     };
@@ -1251,7 +1260,7 @@ class OpenAiService implements AiService {
 
   async extractDeadline(request: ExtractDeadlineRequest): Promise<ExtractDeadlineResponse> {
     const { EXTRACT_DEADLINE_SYSTEM_PROMPT, EXTRACT_DEADLINE_PROMPT_VERSION } = await import(
-      "../prompts/extractDeadline.v1"
+      "../prompts/extractDeadline.v2"
     );
     const today = currentDateContext();
     const empty: ExtractDeadlineItem = {
@@ -1261,6 +1270,9 @@ class OpenAiService implements AiService {
       kind: null,
       personName: null,
       evidenceText: null,
+      timeKnown: null,
+      timeZone: null,
+      dateConfidence: null,
       confidence: 0,
     };
     try {
@@ -1283,7 +1295,7 @@ class OpenAiService implements AiService {
           },
         ],
         response_format: { type: "json_object" },
-        max_tokens: 350,
+        max_tokens: 450,
       });
       const raw = completion.choices[0]?.message.content ?? "{}";
       const parsed = JSON.parse(raw) as Partial<ExtractDeadlineItem>;
@@ -1309,6 +1321,16 @@ class OpenAiService implements AiService {
           if (dueAt && dueAt.slice(0, 10) < today.iso) dueAt = null;
         }
       }
+      const dateConfidence =
+        parsed.dateConfidence === "certain" || parsed.dateConfidence === "uncertain"
+          ? parsed.dateConfidence
+          : dueAt
+            ? "certain"
+            : null;
+      const timeZone =
+        typeof parsed.timeZone === "string" && /^[A-Za-z_]+\/[A-Za-z_]+$/.test(parsed.timeZone.trim())
+          ? parsed.timeZone.trim()
+          : null;
       return {
         degraded: false,
         degradedReason: null,
@@ -1319,6 +1341,9 @@ class OpenAiService implements AiService {
           kind,
           personName: typeof parsed.personName === "string" ? parsed.personName : null,
           evidenceText: typeof parsed.evidenceText === "string" ? parsed.evidenceText : null,
+          timeKnown: parsed.timeKnown === true,
+          timeZone,
+          dateConfidence,
           confidence,
         },
       };

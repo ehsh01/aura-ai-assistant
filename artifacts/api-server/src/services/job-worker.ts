@@ -73,6 +73,16 @@ const handlers: Record<string, JobHandler> = {
     await processDigestRegen(job.userId, entityType, entityId);
   },
   [JOB_TYPE_ATTENTION_SCAN]: async (job) => {
+    const noteId =
+      typeof job.payload.noteId === "string" && job.payload.noteId
+        ? job.payload.noteId
+        : null;
+    if (noteId) {
+      const { scanNoteForDeadlines } = await import("./attention-extract");
+      const result = await scanNoteForDeadlines(job.userId, noteId);
+      logger.info({ userId: job.userId, noteId, ...result }, "Note deadline scan complete");
+      return;
+    }
     const { processAttentionScanJob } = await import("./attention-extract");
     const result = await processAttentionScanJob(job.userId);
     logger.info({ userId: job.userId, ...result }, "Attention scan complete");

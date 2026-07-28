@@ -304,6 +304,13 @@ export async function dismissWaitingOn(waitingItemId: string): Promise<{
   });
 }
 
+export type AttentionDueReason = {
+  label: string;
+  overdue: boolean;
+  highRisk: boolean;
+  unconfirmed: boolean;
+};
+
 export type AttentionItemRecord = {
   id: string;
   title: string;
@@ -313,17 +320,83 @@ export type AttentionItemRecord = {
   status: "open" | "seen" | "snoozed" | "dismissed" | "completed";
   seenAt: string | null;
   snoozedUntil: string | null;
+  dismissedAt?: string | null;
+  completedAt?: string | null;
   evidenceText: string | null;
   personId: string | null;
   projectId: string | null;
+  taskId?: string | null;
+  organizationId?: string | null;
+  waitingItemId?: string | null;
+  dateConfidence?: "certain" | "uncertain";
+  timeZone?: string | null;
+  timeKnown?: boolean;
+  confirmedAt?: string | null;
   confidence: number | null;
+  metadata?: Record<string, unknown>;
   href: string;
   sourceEntityType: string;
   sourceEntityId: string;
+  dueReason?: AttentionDueReason;
+};
+
+export type DeadlinesOverview = {
+  overdue: AttentionItemRecord[];
+  today: AttentionItemRecord[];
+  thisWeek: AttentionItemRecord[];
+  later: AttentionItemRecord[];
+  unconfirmed: AttentionItemRecord[];
+  snoozed: AttentionItemRecord[];
+  recentTerminal: AttentionItemRecord[];
+};
+
+export type AttentionItemDetail = AttentionItemRecord & {
+  audit: { id: string; action: string; metadata: Record<string, unknown>; createdAt: string }[];
 };
 
 export async function listAttention(): Promise<{ items: AttentionItemRecord[] }> {
   return apiFetch("/attention");
+}
+
+export async function listDeadlines(): Promise<DeadlinesOverview> {
+  return apiFetch("/deadlines");
+}
+
+export async function getAttentionItem(id: string): Promise<AttentionItemDetail> {
+  return apiFetch(`/attention/${encodeURIComponent(id)}`);
+}
+
+export type AttentionPatchInput = {
+  title?: string | null;
+  summary?: string | null;
+  dueAt?: string | null;
+  timeZone?: string | null;
+  timeKnown?: boolean | null;
+  dateConfidence?: "certain" | "uncertain" | null;
+  kind?: "deadline" | "appointment" | "follow_up" | "other" | null;
+  personId?: string | null;
+  projectId?: string | null;
+  taskId?: string | null;
+  organizationId?: string | null;
+  waitingItemId?: string | null;
+};
+
+export async function patchAttention(
+  id: string,
+  body: AttentionPatchInput,
+): Promise<AttentionItemRecord> {
+  return apiFetch(`/attention/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function confirmAttention(id: string): Promise<AttentionItemRecord> {
+  return apiFetch(`/attention/${encodeURIComponent(id)}/confirm`, { method: "POST" });
+}
+
+export async function reopenAttention(id: string): Promise<AttentionItemRecord> {
+  return apiFetch(`/attention/${encodeURIComponent(id)}/reopen`, { method: "POST" });
 }
 
 export async function markAttentionSeen(id: string): Promise<AttentionItemRecord> {
