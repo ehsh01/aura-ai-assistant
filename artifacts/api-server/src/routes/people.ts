@@ -10,6 +10,7 @@ import {
   mergePeopleForUser,
   updatePersonForUser,
 } from "../services/people";
+import { getPersonContextForUser } from "../services/person-context";
 import {
   createFollowUpFromWaitingOn,
   dismissWaitingOnForUser,
@@ -123,6 +124,19 @@ router.get("/people/:personId/related", async (req, res, next) => {
       return;
     }
     res.json(related);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/people/:personId/context", async (req, res, next) => {
+  try {
+    const context = await getPersonContextForUser(req.user!.id, req.params.personId);
+    if (!context) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Person not found" });
+      return;
+    }
+    res.json(context);
   } catch (err) {
     next(err);
   }

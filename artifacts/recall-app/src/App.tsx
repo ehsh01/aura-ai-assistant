@@ -13,6 +13,7 @@ import { Tasks } from "@/pages/Tasks";
 import { Canvas } from "@/pages/Canvas";
 import { Inbox } from "@/pages/Inbox";
 import { People } from "@/pages/People";
+import { PersonDetail } from "@/pages/PersonDetail";
 import { Vehicles } from "@/pages/Vehicles";
 import { Organizations } from "@/pages/Organizations";
 import { Connectors } from "@/pages/Connectors";
@@ -100,6 +101,7 @@ function AuthedRoutes() {
         <Route path="/knowledge" component={RedirectToNotes} />
         <Route path="/memory" component={Memory} />
         <Route path="/people" component={People} />
+        <Route path="/people/:personId" component={PersonDetail} />
         <Route path="/vehicles" component={Vehicles} />
         <Route path="/organizations" component={Organizations} />
         <Route path="/activity" component={Activity} />

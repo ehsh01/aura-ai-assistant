@@ -222,9 +222,23 @@ export function WaitingDetail() {
                 )}
               </div>
               <p className="mt-1 text-sm text-white/50">
-                {item.ownerName}
+                {item.ownerPersonId ? (
+                  <Link href={`/people/${encodeURIComponent(item.ownerPersonId)}`} className="text-indigo-300 hover:underline">
+                    {item.ownerName}
+                  </Link>
+                ) : (
+                  item.ownerName
+                )}
                 {item.ownerOrg ? ` · ${item.ownerOrg}` : ""} · promised{" "}
                 {formatDate(item.promisedAt)} · next follow-up {formatDate(item.followUpAt)}
+                {item.projectId && (
+                  <>
+                    {" · "}
+                    <Link href={`/projects/${encodeURIComponent(item.projectId)}`} className="text-indigo-300 hover:underline">
+                      project
+                    </Link>
+                  </>
+                )}
               </p>
 
               {item.status === "candidate" && (

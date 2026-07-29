@@ -1,22 +1,30 @@
 import type { EvidenceDto } from "./evidence";
 import { aiService, type QueryFinanceAggregate } from "./ai";
 import {
+  BLOCKING_INTENT,
   BRIEFING_INTENT,
   DEADLINE_INTENT,
+  DECISIONS_INTENT,
   EVENING_INTENT,
   FINANCE_INTENT,
   FINANCE_BREAKDOWN_INTENT,
   FAMILY_RELATION_INTENT,
   NOTE_CAPABILITY_INTENT,
+  PERSON_DOSSIER_INTENT,
   PERSON_INTENT,
+  PROMISES_INTENT,
   WAITING_INTENT,
   financeMetricForQuestion,
   formatInstantForUser,
+  mentionedProject,
   nowLocalLabel,
   primaryFinanceFigure,
   recallTimezone,
   todayIso,
 } from "./query-utils";
+import { listProjectsForUser } from "./projects";
+import { getProjectContextForUser } from "./project-context";
+import { getPersonContextForUser } from "./person-context";
 import {
   attentionDueReason,
   attentionUrgencyScore,
@@ -1142,6 +1150,171 @@ export async function queryRecallForUser(
       degraded: false,
       presentation: "compact",
     });
+  }
+
+  if (BLOCKING_INTENT.test(workingQuestion)) {
+    const project = mentionedProject(workingQuestion, await listProjectsForUser(userId));
+    const context = project ? await getProjectContextForUser(userId, project.id) : null;
+    if (project && context) {
+      const highRisks = context.risks.filter((r) => r.severity === "high");
+      const lines = [
+        ...highRisks.slice(0, 4).map((r) => `- ${r.label} (${r.reason})`),
+        ...context.blockers.slice(0, 4).map((b) => `- Waiting on ${b.title} — ${b.detail ?? "open"}`),
+      ];
+      return finish({
+        answer:
+          lines.length === 0
+            ? `Nothing is blocking ${project.name} right now — ${context.summary}`
+            : `Blocking ${project.name}:\n${lines.join("\n")}`,
+        confidence: 0.9,
+        caveats: null,
+        evidence: [
+          ...context.deadlines.slice(0, 2).map((d) =>
+            makeEvidence({
+              claimType: "summary_based_on",
+              evidenceText: `${d.title} — ${d.detail ?? "deadline"}`,
+              entityType: "attention_item",
+              entityId: d.id,
+              metadata: { retrievalMethod: "project_context", relatedEntityType: "attention_item", relatedEntityId: d.id },
+            }),
+          ),
+          ...context.blockers.slice(0, 2).map((b) =>
+            makeEvidence({
+              claimType: "summary_based_on",
+              evidenceText: b.title,
+              entityType: "waiting_item",
+              entityId: b.id,
+              metadata: { retrievalMethod: "project_context", relatedEntityType: "waiting_item", relatedEntityId: b.id },
+            }),
+          ),
+        ],
+        relatedRecords: [],
+        suggestedNextAction: `Open Projects → ${project.name}`,
+        promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+        degraded: false,
+        presentation: "compact",
+      });
+    }
+    // No matching project name — fall through to the LLM answer.
+  }
+
+  if (DECISIONS_INTENT.test(workingQuestion)) {
+    const project = mentionedProject(workingQuestion, await listProjectsForUser(userId));
+    const context = project ? await getProjectContextForUser(userId, project.id) : null;
+    if (project && context) {
+      const withLinks = context.decisions.filter((d) => d.entityType && d.entityId);
+      return finish({
+        answer:
+          context.decisions.length === 0
+            ? `No recorded decisions for ${project.name} yet — Aura logs confirmations, completions, and dismissals here as they happen.`
+            : `Recent decisions for ${project.name}:\n${context.decisions
+                .slice(0, 6)
+                .map((d) => `- ${d.at.slice(0, 10)} — ${d.label}${d.detail ? `: ${d.detail}` : ""}`)
+                .join("\n")}`,
+        confidence: 0.9,
+        caveats: null,
+        evidence: withLinks.slice(0, 4).map((d) =>
+          makeEvidence({
+            claimType: "summary_based_on",
+            evidenceText: d.detail ? `${d.label} — ${d.detail}` : d.label,
+            entityType: d.entityType!,
+            entityId: d.entityId!,
+            metadata: {
+              retrievalMethod: "project_decisions",
+              relatedEntityType: d.entityType,
+              relatedEntityId: d.entityId,
+            },
+          }),
+        ),
+        relatedRecords: [],
+        suggestedNextAction: `Open Projects → ${project.name}`,
+        promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+        degraded: false,
+        presentation: "compact",
+      });
+    }
+  }
+
+  if (PROMISES_INTENT.test(workingQuestion) && namedPeople.length > 0) {
+    const context = await getPersonContextForUser(userId, namedPeople[0]!.id);
+    if (context) {
+      const items = context.youOweThem;
+      return finish({
+        answer:
+          items.length === 0
+            ? `You don't owe ${context.person.displayName} anything right now — no open tasks or commitments requested by them.`
+            : `What you promised ${context.person.displayName}:\n${items
+                .slice(0, 6)
+                .map((i) => `- ${i.title}${i.detail ? ` (${i.detail})` : ""}`)
+                .join("\n")}`,
+        confidence: 0.9,
+        caveats: null,
+        evidence: items.slice(0, 3).map((i) =>
+          makeEvidence({
+            claimType: "summary_based_on",
+            evidenceText: `${i.title}${i.detail ? ` — ${i.detail}` : ""}`,
+            entityType: "task",
+            entityId: i.id,
+            metadata: { retrievalMethod: "person_context", relatedEntityType: "task", relatedEntityId: i.id },
+          }),
+        ),
+        relatedRecords: [],
+        suggestedNextAction: `Open People → ${context.person.displayName}`,
+        promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+        degraded: false,
+        presentation: "compact",
+      });
+    }
+  }
+
+  if (PERSON_DOSSIER_INTENT.test(workingQuestion) && namedPeople.length > 0) {
+    const context = await getPersonContextForUser(userId, namedPeople[0]!.id);
+    if (context) {
+      const lines = [context.summary];
+      if (context.nextBestAction) {
+        lines.push(`Next: ${context.nextBestAction.title} — ${context.nextBestAction.reason}.`);
+      }
+      const lastMessage = context.recentMessages[0];
+      if (lastMessage) {
+        lines.push(`Last email: ${lastMessage.title} (${lastMessage.at.slice(0, 10)}).`);
+      }
+      return finish({
+        answer: lines.join("\n"),
+        confidence: 0.9,
+        caveats: null,
+        evidence: [
+          ...context.theyOweYou.slice(0, 2).map((w) =>
+            makeEvidence({
+              claimType: "summary_based_on",
+              evidenceText: `${w.title} — ${w.detail ?? "waiting"}`,
+              entityType: "waiting_item",
+              entityId: w.id,
+              metadata: { retrievalMethod: "person_context", relatedEntityType: "waiting_item", relatedEntityId: w.id },
+            }),
+          ),
+          ...(lastMessage
+            ? [
+                makeEvidence({
+                  claimType: "summary_based_on",
+                  evidenceText: `Email: ${lastMessage.title}`,
+                  entityType: "source_record",
+                  entityId: lastMessage.id,
+                  metadata: {
+                    retrievalMethod: "person_context",
+                    sourceUrl: lastMessage.sourceUrl,
+                    primaryLinkLabel: "Open email",
+                  },
+                }),
+              ]
+            : []),
+        ],
+        relatedRecords: [],
+        suggestedNextAction: `Open People → ${context.person.displayName}`,
+        promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+        degraded: false,
+        presentation: "compact",
+      });
+    }
   }
 
   if (BRIEFING_INTENT.test(workingQuestion)) {

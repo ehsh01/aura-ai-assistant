@@ -78,6 +78,12 @@ export function PersonContextCard({
           <Sparkles size={12} />
           Ask about {first}
         </Link>
+        <Link
+          href={`/people/${encodeURIComponent(personId)}`}
+          className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs text-white/60 no-underline hover:bg-white/5 hover:text-white/80"
+        >
+          Full context
+        </Link>
         {openTasks.length > 0 && (
           <Link
             href={tasksPath({ personId })}

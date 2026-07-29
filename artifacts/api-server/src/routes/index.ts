@@ -24,6 +24,7 @@ import userRulesRouter from "./user-rules";
 import attentionRouter from "./attention";
 import waitingItemsRouter from "./waiting-items";
 import notificationSettingsRouter from "./notification-settings";
+import linkSuggestionsRouter from "./link-suggestions";
 import { requireAuth } from "../middleware/auth";
 import { aiRateLimiter } from "../middleware/security";
 
@@ -48,6 +49,7 @@ router.use(userRulesRouter);
 router.use(attentionRouter);
 router.use(waitingItemsRouter);
 router.use(notificationSettingsRouter);
+router.use(linkSuggestionsRouter);
 router.use(connectorsRouter);
 router.use(documentsRouter);
 router.use(memoryRouter);

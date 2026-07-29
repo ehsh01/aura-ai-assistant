@@ -528,6 +528,119 @@ export async function getPersonTimeline(
   return apiFetch(`/people/${encodeURIComponent(personId)}/timeline`);
 }
 
+// ---- Phase 5: personal context ----
+
+export type ContextNextAction = {
+  kind: string;
+  id: string;
+  title: string;
+  reason: string;
+  href: string;
+  sourceLabel: string;
+};
+
+export type ContextItem = {
+  kind: "waiting" | "deadline" | "task" | "note";
+  id: string;
+  title: string;
+  detail: string | null;
+  at: string | null;
+  href: string;
+};
+
+export type ContextTimelineItem = {
+  at: string;
+  kind: "message" | "note" | "task" | "waiting" | "deadline";
+  title: string;
+  subtitle: string | null;
+  href: string;
+};
+
+export type LinkSuggestion = {
+  id: string;
+  entityType: "attention_item" | "waiting_item" | "task";
+  entityId: string;
+  title: string;
+  field: "personId" | "ownerPersonId" | "requesterPersonId" | "projectId";
+  suggestedKind: "person" | "project";
+  suggestedId: string;
+  suggestedName: string;
+  confidence: "high" | "medium";
+  reason: string;
+  href: string;
+};
+
+export type PersonContext = {
+  person: PersonRecord;
+  summary: string;
+  stats: {
+    openTasks: number;
+    waitingOpen: number;
+    deadlinesOpen: number;
+    notes: number;
+    lastMessageAt: string | null;
+  };
+  nextBestAction: ContextNextAction | null;
+  theyOweYou: ContextItem[];
+  youOweThem: ContextItem[];
+  deadlines: ContextItem[];
+  recentMessages: { id: string; title: string; from: string | null; at: string; sourceUrl: string | null }[];
+  notes: { id: string; title: string; preview: string | null; href: string }[];
+  timeline: ContextTimelineItem[];
+  linkSuggestions: LinkSuggestion[];
+};
+
+export async function fetchPersonContext(personId: string): Promise<PersonContext> {
+  return apiFetch(`/people/${encodeURIComponent(personId)}/context`);
+}
+
+export type ProjectRisk = { severity: "high" | "medium"; label: string; reason: string; href: string };
+export type ProjectLinkedPerson = { id: string | null; name: string; via: string[]; href: string | null };
+export type ProjectDecision = {
+  at: string;
+  label: string;
+  detail: string | null;
+  href: string | null;
+  entityType: string | null;
+  entityId: string | null;
+};
+
+export type ProjectContext = {
+  project: { id: string; name: string; status: string };
+  summary: string;
+  stats: { openTasks: number; deadlinesOpen: number; waitingOpen: number; notes: number; captures: number };
+  nextBestAction: ContextNextAction | null;
+  risks: ProjectRisk[];
+  blockers: ContextItem[];
+  deadlines: ContextItem[];
+  waitingItems: ContextItem[];
+  linkedPeople: ProjectLinkedPerson[];
+  decisions: ProjectDecision[];
+  linkSuggestions: LinkSuggestion[];
+};
+
+export async function fetchProjectContext(projectId: string): Promise<ProjectContext> {
+  return apiFetch(`/projects/${encodeURIComponent(projectId)}/context`);
+}
+
+export async function confirmLinkSuggestion(input: {
+  entityType: LinkSuggestion["entityType"];
+  entityId: string;
+  field: LinkSuggestion["field"];
+  value: string;
+}): Promise<{ ok: boolean }> {
+  return apiFetch("/link-suggestions/confirm", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function dismissLinkSuggestion(input: {
+  id: string;
+  entityType: string;
+  entityId: string;
+  suggestedName: string;
+}): Promise<{ ok: boolean }> {
+  return apiFetch("/link-suggestions/dismiss", { method: "POST", body: JSON.stringify(input) });
+}
+
 export async function getProjectTimeline(
   projectId: string,
 ): Promise<{ projectId: string; items: TimelineItem[] }> {

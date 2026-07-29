@@ -114,7 +114,7 @@ export function entityPath(entityType: string, entityId: string): string | null 
     case "note":
       return notesPath({ noteId: entityId });
     case "person":
-      return peoplePath({ personId: entityId });
+      return `/people/${encodeURIComponent(entityId)}`;
     case "document":
       return documentsPath({ documentId: entityId });
     case "knowledge":
@@ -137,6 +137,10 @@ export function entityPath(entityType: string, entityId: string): string | null 
       return inboxPath({ captureId: entityId });
     case "project":
       return projectsPath(entityId);
+    case "waiting_item":
+      return `/waiting/${encodeURIComponent(entityId)}`;
+    case "attention_item":
+      return `/deadlines?item=${encodeURIComponent(entityId)}`;
     default:
       return null;
   }

@@ -44,6 +44,29 @@ export const NOTE_CAPABILITY_INTENT =
  * the same briefing builders that power Today. Keep "focus/prioritize/plan"
  * anchored to day words so generic "focus on the project" requests don't match.
  */
+export const BLOCKING_INTENT =
+  /\b(what (?:is|'?s) blocking|blockers? (?:on|for|in)|what'?s (?:stuck|held up|holding up)|holding (?:up|back))\b/i;
+export const PROMISES_INTENT =
+  /\b(what (?:did|have) i promis(?:e|ed)|my (?:commitments|promises) to|what do i owe)\b/i;
+export const DECISIONS_INTENT =
+  /\b(recent decisions|decisions (?:for|on|about)|what (?:was|has been) decided)\b/i;
+export const PERSON_DOSSIER_INTENT = /\bwhat do i need to know about\b/i;
+
+/** Longest project name that appears as whole words in the question. */
+export function mentionedProject<T extends { id: string; name: string }>(
+  question: string,
+  projects: T[],
+): T | null {
+  const candidates = projects
+    .filter((p) => p.name.trim().length >= 4)
+    .sort((a, b) => b.name.length - a.name.length);
+  for (const p of candidates) {
+    const escaped = p.name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`\\b${escaped}\\b`, "i").test(question)) return p;
+  }
+  return null;
+}
+
 export const BRIEFING_INTENT =
   /\b(what should i (focus on|do|prioritize) today|morning briefing|daily briefing|my (day|briefing) (today|looks like)|what'?s (on|the plan) (for )?today|plan (for )?(my )?day|prioritize my day|what'?s today looking like|what do i have today)\b/i;
 

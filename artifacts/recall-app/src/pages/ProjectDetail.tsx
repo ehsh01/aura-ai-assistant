@@ -6,10 +6,12 @@ import { ProjectContextCard } from "@/components/ProjectContextCard";
 import { SubjectTimelineCard } from "@/components/SubjectTimelineCard";
 import type { RecallCaptureItem, RecallNote, RecallProject, RecallTask } from "@/lib/recall-context";
 import {
+  fetchProjectContext,
   linkProjectSource,
   listProjectSources,
   searchProjectSources,
   unlinkProjectSource,
+  type ProjectContext,
   type ProjectSourceRecord,
 } from "@/lib/recall-api";
 import { toast } from "@/hooks/use-toast";
@@ -24,6 +26,7 @@ type ProjectDetailData = {
 export function ProjectDetail() {
   const [, params] = useRoute("/projects/:projectId");
   const [detail, setDetail] = useState<ProjectDetailData | null>(null);
+  const [context, setContext] = useState<ProjectContext | null>(null);
   const [mail, setMail] = useState<ProjectSourceRecord[]>([]);
   const [transactions, setTransactions] = useState<ProjectSourceRecord[]>([]);
   const [searchType, setSearchType] = useState<"gmail_message" | "finance_transaction">(
@@ -53,6 +56,9 @@ export function ProjectDetail() {
   useEffect(() => {
     if (!projectId) return;
     void getProject(projectId).then((res) => setDetail(res as ProjectDetailData));
+    void fetchProjectContext(projectId)
+      .then(setContext)
+      .catch(() => setContext(null));
     void reloadSources();
   }, [projectId, reloadSources]);
 
@@ -95,6 +101,150 @@ export function ProjectDetail() {
                 <Metric label="Captures" value={detail.project.captureCount} />
                 <Metric label="Linked sources" value={mail.length + transactions.length} />
               </div>
+
+              {context && (
+                <section className="mt-8 space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                  <div>
+                    <h2 className="text-lg font-semibold">Project pulse</h2>
+                    <p className="mt-1 text-sm text-white/55">{context.summary}</p>
+                  </div>
+
+                  {context.nextBestAction && (
+                    <div className="rounded-xl border border-indigo-400/30 bg-indigo-500/10 p-4">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-indigo-300">
+                        Next best action
+                      </div>
+                      <Link
+                        href={context.nextBestAction.href}
+                        className="mt-1 block text-sm font-medium text-white hover:underline"
+                      >
+                        {context.nextBestAction.title}
+                      </Link>
+                      <p className="mt-0.5 text-xs text-white/50">
+                        {context.nextBestAction.reason} · source: {context.nextBestAction.sourceLabel}
+                      </p>
+                    </div>
+                  )}
+
+                  {context.risks.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-medium text-white/60">Risks</h3>
+                      <ul className="mt-1.5 space-y-1.5">
+                        {context.risks.map((r) => (
+                          <li key={r.label} className="flex items-baseline gap-2 text-sm">
+                            <span
+                              className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                                r.severity === "high"
+                                  ? "border-red-400/30 bg-red-500/15 text-red-300"
+                                  : "border-amber-400/30 bg-amber-500/15 text-amber-300"
+                              }`}
+                            >
+                              {r.severity}
+                            </span>
+                            <Link href={r.href} className="truncate text-white/80 hover:underline">
+                              {r.label}
+                            </Link>
+                            <span className="hidden text-xs text-white/40 sm:inline">{r.reason}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  <div className="grid gap-6 md:grid-cols-2">
+                    <div>
+                      <h3 className="text-sm font-medium text-white/60">
+                        Blockers &amp; follow-ups
+                      </h3>
+                      {context.blockers.length === 0 && context.waitingItems.length === 0 ? (
+                        <p className="mt-1.5 text-sm text-white/35">No open follow-ups.</p>
+                      ) : (
+                        <ul className="mt-1.5 space-y-1.5">
+                          {context.waitingItems.map((w) => (
+                            <li key={w.id} className="flex items-baseline justify-between gap-3 text-sm">
+                              <Link href={w.href} className="truncate text-white/80 hover:underline">
+                                {w.title}
+                              </Link>
+                              <span className="shrink-0 text-xs text-white/40">{w.detail}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-medium text-white/60">Deadlines</h3>
+                      {context.deadlines.length === 0 ? (
+                        <p className="mt-1.5 text-sm text-white/35">No open deadlines.</p>
+                      ) : (
+                        <ul className="mt-1.5 space-y-1.5">
+                          {context.deadlines.map((d) => (
+                            <li key={d.id} className="flex items-baseline justify-between gap-3 text-sm">
+                              <Link href={d.href} className="truncate text-white/80 hover:underline">
+                                {d.title}
+                              </Link>
+                              <span className="shrink-0 text-xs text-white/40">{d.detail}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+
+                  {context.linkedPeople.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-medium text-white/60">People</h3>
+                      <div className="mt-1.5 flex flex-wrap gap-2">
+                        {context.linkedPeople.map((p) =>
+                          p.href ? (
+                            <Link
+                              key={p.name}
+                              href={p.href}
+                              className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-white/75 hover:bg-white/10"
+                              title={p.via.join(", ")}
+                            >
+                              {p.name}
+                            </Link>
+                          ) : (
+                            <span
+                              key={p.name}
+                              className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/45"
+                              title={`${p.via.join(", ")} (no People record)`}
+                            >
+                              {p.name}
+                            </span>
+                          ),
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {context.decisions.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-medium text-white/60">Recent decisions</h3>
+                      <ul className="mt-1.5 space-y-1.5">
+                        {context.decisions.map((d, i) => (
+                          <li key={`${d.at}-${i}`} className="flex items-baseline gap-3 text-sm">
+                            <span className="w-20 shrink-0 text-xs text-white/40">
+                              {d.at.slice(0, 10)}
+                            </span>
+                            {d.href ? (
+                              <Link href={d.href} className="truncate text-white/80 hover:underline">
+                                {d.label}
+                                {d.detail ? `: ${d.detail}` : ""}
+                              </Link>
+                            ) : (
+                              <span className="truncate text-white/80">
+                                {d.label}
+                                {d.detail ? `: ${d.detail}` : ""}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </section>
+              )}
 
               <div className="mt-8">
                 <ProjectContextCard

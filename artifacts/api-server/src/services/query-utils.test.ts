@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregateFinance,
+  BLOCKING_INTENT,
+  DECISIONS_INTENT,
   FINANCE_BREAKDOWN_INTENT,
   FINANCE_INTENT,
   NOTE_CAPABILITY_INTENT,
+  PERSON_DOSSIER_INTENT,
+  PROMISES_INTENT,
   financeMetricForQuestion,
   formatInstantForUser,
   formatMoney,
+  mentionedProject,
   nowLocalLabel,
   parseDateRange,
   parseFinanceDateRange,
@@ -264,5 +269,44 @@ describe("aggregateFinance", () => {
     expect(agg.spent).toBe(950);
     expect(agg.expenseCount).toBe(2);
     expect(agg.transfersExcluded).toBe(false);
+  });
+});
+
+describe("Phase 5 context intents", () => {
+  it("BLOCKING_INTENT matches blocking questions only", () => {
+    expect(BLOCKING_INTENT.test("What is blocking the cabinet project?")).toBe(true);
+    expect(BLOCKING_INTENT.test("what's stuck on the remodel")).toBe(true);
+    expect(BLOCKING_INTENT.test("blockers for the move")).toBe(true);
+    expect(BLOCKING_INTENT.test("What deadlines do I have?")).toBe(false);
+  });
+
+  it("PROMISES_INTENT matches promise/owe questions only", () => {
+    expect(PROMISES_INTENT.test("What did I promise Carlos?")).toBe(true);
+    expect(PROMISES_INTENT.test("what do I owe the contractor")).toBe(true);
+    expect(PROMISES_INTENT.test("my commitments to Sandra")).toBe(true);
+    expect(PROMISES_INTENT.test("What am I waiting on?")).toBe(false);
+  });
+
+  it("DECISIONS_INTENT matches decision questions only", () => {
+    expect(DECISIONS_INTENT.test("Show recent decisions for this project")).toBe(true);
+    expect(DECISIONS_INTENT.test("what has been decided about the kitchen")).toBe(true);
+    expect(DECISIONS_INTENT.test("What should I decide today?")).toBe(false);
+  });
+
+  it("PERSON_DOSSIER_INTENT matches need-to-know questions only", () => {
+    expect(PERSON_DOSSIER_INTENT.test("What do I need to know about Carlos?")).toBe(true);
+    expect(PERSON_DOSSIER_INTENT.test("Who is Carlos?")).toBe(false);
+  });
+
+  it("mentionedProject resolves whole-word project names, longest first", () => {
+    const projects = [
+      { id: "p-1", name: "Cabinet remodel" },
+      { id: "p-2", name: "Cabinet" },
+      { id: "p-3", name: "Move" },
+    ];
+    expect(mentionedProject("What is blocking the cabinet remodel?", projects)?.id).toBe("p-1");
+    expect(mentionedProject("how is the Cabinet going", projects)?.id).toBe("p-2");
+    expect(mentionedProject("what's up", projects)).toBeNull();
+    expect(mentionedProject("cabinetwork details", projects)).toBeNull(); // word boundary
   });
 });

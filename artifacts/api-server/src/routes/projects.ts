@@ -21,6 +21,7 @@ import {
   unlinkSourceFromProject,
 } from "../services/project-sources";
 import { getSubjectTimelineForUser } from "../services/subject-timeline";
+import { getProjectContextForUser } from "../services/project-context";
 
 const router: IRouter = Router();
 
@@ -53,6 +54,19 @@ router.get("/projects/:projectId", async (req, res, next) => {
       return;
     }
     res.json(GetProjectResponse.parse(detail));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/projects/:projectId/context", async (req, res, next) => {
+  try {
+    const context = await getProjectContextForUser(req.user!.id, req.params.projectId);
+    if (!context) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Project not found" });
+      return;
+    }
+    res.json(context);
   } catch (err) {
     next(err);
   }

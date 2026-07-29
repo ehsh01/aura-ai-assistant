@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { auditLog, type AuditLogEntry } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newAuditId } from "../lib/recall-format";
@@ -54,10 +54,16 @@ const ACTION_LABELS: Record<string, string> = {
   attention_dismissed: "Deadline dismissed",
   attention_completed: "Deadline completed",
   attention_reopened: "Deadline reopened",
+  link_suggestion_confirmed: "Suggested link confirmed",
+  link_suggestion_dismissed: "Suggested link dismissed",
 };
 
-function labelFor(action: string): string {
+export function auditLabelFor(action: string): string {
   return ACTION_LABELS[action] ?? action.replace(/_/g, " ");
+}
+
+function labelFor(action: string): string {
+  return auditLabelFor(action);
 }
 
 function hrefFor(entityType: string | null, entityId: string | null): string | null {
@@ -73,7 +79,9 @@ function hrefFor(entityType: string | null, entityId: string | null): string | n
     case "connector":
       return "/connectors";
     case "person":
-      return `/people?person=${encodeURIComponent(entityId)}`;
+      return `/people/${encodeURIComponent(entityId)}`;
+    case "project":
+      return `/projects/${encodeURIComponent(entityId)}`;
     case "knowledge":
       return `/knowledge?item=${encodeURIComponent(entityId)}`;
     case "document":
@@ -140,5 +148,29 @@ export async function listAuditLogForUser(
     .orderBy(desc(auditLog.createdAt))
     .limit(limit);
 
+  return rows.map(toDto);
+}
+
+/** Audit history for a set of specific entities (e.g. a project + its children). */
+export async function listAuditForEntities(
+  userId: string,
+  refs: { entityType: string; entityId: string }[],
+  opts?: { limit?: number },
+): Promise<AuditEntryDto[]> {
+  if (refs.length === 0) return [];
+  const limit = Math.min(Math.max(opts?.limit ?? 30, 1), 100);
+  const byType = new Map<string, string[]>();
+  for (const ref of refs) {
+    byType.set(ref.entityType, [...(byType.get(ref.entityType) ?? []), ref.entityId]);
+  }
+  const clauses = [...byType.entries()].map(([entityType, ids]) =>
+    and(eq(auditLog.entityType, entityType), inArray(auditLog.entityId, ids)),
+  );
+  const rows = await getDb()
+    .select()
+    .from(auditLog)
+    .where(and(eq(auditLog.userId, userId), clauses.length === 1 ? clauses[0] : or(...clauses)))
+    .orderBy(desc(auditLog.createdAt))
+    .limit(limit);
   return rows.map(toDto);
 }

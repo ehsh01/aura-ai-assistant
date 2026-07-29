@@ -132,7 +132,7 @@ function daysBetween(fromIso: string, toIso: string): number {
   return Math.round((Date.parse(toIso) - Date.parse(fromIso)) / 86_400_000);
 }
 
-function sourceLabelFor(entityType: string): string {
+export function sourceLabelFor(entityType: string): string {
   switch (entityType) {
     case "gmail_message":
       return "Gmail";
