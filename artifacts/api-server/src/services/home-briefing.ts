@@ -23,11 +23,14 @@ import { listWaitingItemsForUser, type WaitingItemDto } from "./waiting-items";
 import {
   attentionDueReason,
   listAttentionForToday,
+  listDeadlinesForUser,
   type AttentionItemDto,
 } from "./attention";
+import { buildEveningCheckin, buildMorningBriefing, isoDateInTimezone, type MorningBriefing, type EveningCheckin } from "./briefing";
+import { getBriefingPrefsForUser } from "./notification-settings";
 import { buildProactiveInsights } from "./proactive-insights";
 import { listOpenHomeyAlertsForUser } from "./homey-alerts";
-import { todayIso } from "./query-utils";
+import { todayIso, recallTimezone } from "./query-utils";
 import { aiService } from "./ai";
 
 // ---------------------------------------------------------------------------
@@ -210,6 +213,7 @@ export interface HomeBriefingResponse {
   contextAreas: ContextArea[];
   finance: FinanceSnapshot | null;
   review: BriefingReview;
+  morning: MorningBriefing;
 }
 
 // ---------------------------------------------------------------------------
@@ -633,7 +637,7 @@ export async function buildHomeBriefing(
 ): Promise<HomeBriefingResponse> {
   const today = todayIso();
 
-  const [tasks, notes, captures, projects, finance, homeyAlerts, waitingAll, attentionDue] =
+  const [tasks, notes, captures, projects, finance, homeyAlerts, waitingAll, attentionDue, briefingPrefs] =
     await Promise.all([
       listTasksForUser(userId),
       listNoteMetadataForUser(userId),
@@ -641,14 +645,35 @@ export async function buildHomeBriefing(
       listProjectsForUser(userId),
       buildFinanceSnapshot(userId, today),
       listOpenHomeyAlertsForUser(userId, { limit: 6, hours: 48 }),
-      listWaitingItemsForUser(userId, { status: "candidate", limit: 50 }),
+      listWaitingItemsForUser(userId, { status: "all", limit: 100 }),
       listAttentionForToday(userId, 40),
+      getBriefingPrefsForUser(userId),
     ]);
 
   const review = buildReviewStrip({
     waiting: waitingAll,
     attention: attentionDue,
     inbox: captures,
+  });
+
+  // Morning briefing actions must not double-surface items already sitting in
+  // a review queue (candidates, unconfirmed deadlines, pending inbox).
+  const reviewQueueIds = new Set<string>([
+    ...waitingAll.filter((w) => w.status === "candidate").map((w) => w.id),
+    ...attentionDue.filter((a) => attentionDueReason(a).unconfirmed).map((a) => a.id),
+    ...captures.filter((c) => c.status === "pending").map((c) => c.id),
+  ]);
+  const userNow = new Date();
+  const morning = buildMorningBriefing({
+    date: isoDateInTimezone(userNow, briefingPrefs.timezone ?? recallTimezone()),
+    now: userNow,
+    attention: attentionDue,
+    waiting: waitingAll,
+    tasks,
+    captures,
+    financeNeedsSync: finance?.needsSync ?? false,
+    excludeIds: reviewQueueIds,
+    timezone: briefingPrefs.timezone,
   });
 
   const criticalFromTasks: BriefingItem[] = rankedTasks(tasks, today)
@@ -771,5 +796,40 @@ export async function buildHomeBriefing(
     contextAreas: buildContextAreas(notes, tasks, captures, projects),
     finance,
     review,
+    morning,
   };
+}
+
+/** Orchestration for GET /checkin — all queries reused from existing services. */
+export async function getEveningCheckinForUser(userId: string): Promise<EveningCheckin> {
+  const prefs = await getBriefingPrefsForUser(userId);
+  const tz = prefs.timezone ?? recallTimezone();
+  const now = new Date();
+  const date = isoDateInTimezone(now, tz);
+  const tomorrowDate = isoDateInTimezone(new Date(now.getTime() + 86_400_000), tz);
+
+  const [tasks, deadlines, waiting] = await Promise.all([
+    listTasksForUser(userId),
+    listDeadlinesForUser(userId),
+    listWaitingItemsForUser(userId, { status: "all", limit: 100 }),
+  ]);
+
+  const attentionOpen = [
+    ...deadlines.overdue,
+    ...deadlines.today,
+    ...deadlines.thisWeek,
+    ...deadlines.later,
+    ...deadlines.unconfirmed,
+    ...deadlines.snoozed,
+  ];
+
+  return buildEveningCheckin({
+    date,
+    tomorrowDate,
+    now,
+    tasks,
+    attentionOpen,
+    attentionTerminal: deadlines.recentTerminal,
+    waiting,
+  });
 }

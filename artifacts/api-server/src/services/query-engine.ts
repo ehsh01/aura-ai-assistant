@@ -1,7 +1,9 @@
 import type { EvidenceDto } from "./evidence";
 import { aiService, type QueryFinanceAggregate } from "./ai";
 import {
+  BRIEFING_INTENT,
   DEADLINE_INTENT,
+  EVENING_INTENT,
   FINANCE_INTENT,
   FINANCE_BREAKDOWN_INTENT,
   FAMILY_RELATION_INTENT,
@@ -12,6 +14,7 @@ import {
   formatInstantForUser,
   nowLocalLabel,
   primaryFinanceFigure,
+  recallTimezone,
   todayIso,
 } from "./query-utils";
 import {
@@ -19,6 +22,11 @@ import {
   attentionUrgencyScore,
   listAttentionForToday,
 } from "./attention";
+import { buildMorningBriefing, isoDateInTimezone } from "./briefing";
+import { getEveningCheckinForUser } from "./home-briefing";
+import { getBriefingPrefsForUser } from "./notification-settings";
+import { listWaitingItemsForUser } from "./waiting-items";
+import { listCaptureInboxForUser } from "./capture-items";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
 import { ensureUserFinanceFresh } from "./finance-auto-sync";
 import {
@@ -1130,6 +1138,162 @@ export async function queryRecallForUser(
       ),
       relatedRecords: [],
       suggestedNextAction: "Open Deadlines",
+      promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+      degraded: false,
+      presentation: "compact",
+    });
+  }
+
+  if (BRIEFING_INTENT.test(workingQuestion)) {
+    const now = new Date();
+    const [briefingPrefs, attentionItems, waitingItems, captures] = await Promise.all([
+      getBriefingPrefsForUser(userId),
+      listAttentionForToday(userId, 40),
+      listWaitingItemsForUser(userId, { status: "all", limit: 100 }),
+      listCaptureInboxForUser(userId),
+    ]);
+    // Same dedupe as Today: review-queue items are not re-surfaced as actions.
+    const reviewQueueIds = new Set<string>([
+      ...waitingItems.filter((w) => w.status === "candidate").map((w) => w.id),
+      ...attentionItems
+        .filter((a) => a.confirmedAt == null && a.dateConfidence === "uncertain")
+        .map((a) => a.id),
+      ...captures.filter((c) => c.status === "pending").map((c) => c.id),
+    ]);
+    const briefing = buildMorningBriefing({
+      date: isoDateInTimezone(now, briefingPrefs.timezone ?? recallTimezone()),
+      now,
+      attention: attentionItems,
+      waiting: waitingItems,
+      tasks,
+      captures,
+      excludeIds: reviewQueueIds,
+      timezone: briefingPrefs.timezone,
+    });
+    if (briefing.actions.length === 0 && briefing.calendarToday.length === 0) {
+      return finish({
+        answer: `${briefing.summary} Nothing needs a decision right now.`,
+        confidence: 0.85,
+        caveats: briefing.dataNotes.length ? briefing.dataNotes.join(" ") : null,
+        evidence: [],
+        relatedRecords: [],
+        suggestedNextAction: "Open Today",
+        promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+        degraded: false,
+        presentation: "compact",
+      });
+    }
+    const calendarLine = briefing.calendarToday.length
+      ? `\nMeetings today: ${briefing.calendarToday
+          .map((c) => `${c.startLabel ? `${c.startLabel} ` : ""}${c.title}`)
+          .join(", ")}`
+      : "";
+    const actionLines = briefing.actions.map(
+      (a) => `- ${a.title} — ${a.reason} (${a.sourceLabel})`,
+    );
+    const focusLine = briefing.focusWindow
+      ? `\nFocus window: ${briefing.focusWindow.label} — ${briefing.focusWindow.reason}.`
+      : "";
+    return finish({
+      answer: `${briefing.summary}${calendarLine}\nTop actions:\n${actionLines.join("\n")}${focusLine}`,
+      confidence: 0.9,
+      caveats: briefing.dataNotes.length ? briefing.dataNotes.join(" ") : null,
+      evidence: briefing.actions.slice(0, 4).map((a) => {
+        const entityType =
+          a.kind === "waiting"
+            ? "waiting_item"
+            : a.kind === "task"
+              ? "task"
+              : a.kind === "capture"
+                ? "capture_item"
+                : "attention_item";
+        return makeEvidence({
+          claimType: "briefing_action",
+          evidenceText: `${a.title} — ${a.reason} (${a.sourceLabel})`,
+          entityType,
+          entityId: a.id,
+          metadata: {
+            retrievalMethod: "morning_briefing",
+            relatedEntityType: entityType,
+            relatedEntityId: a.id,
+            href: a.href,
+          },
+        });
+      }),
+      relatedRecords: [],
+      suggestedNextAction: "Open Today",
+      promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+      degraded: false,
+      presentation: "compact",
+    });
+  }
+
+  if (EVENING_INTENT.test(workingQuestion)) {
+    const checkin = await getEveningCheckinForUser(userId);
+    const sections: string[] = [];
+    if (checkin.completedToday.length) {
+      sections.push(
+        `Done today (${checkin.completedToday.length}):\n${checkin.completedToday
+          .slice(0, 5)
+          .map((i) => `- ${i.title}`)
+          .join("\n")}`,
+      );
+    }
+    if (checkin.unfinished.length) {
+      sections.push(
+        `Still open:\n${checkin.unfinished
+          .slice(0, 5)
+          .map((i) => `- ${i.title}${i.note ? ` — ${i.note}` : ""}`)
+          .join("\n")}`,
+      );
+    }
+    if (checkin.tomorrow.length) {
+      sections.push(
+        `Tomorrow:\n${checkin.tomorrow
+          .slice(0, 5)
+          .map((i) => `- ${i.title}${i.note ? ` — ${i.note}` : ""}`)
+          .join("\n")}`,
+      );
+    }
+    if (checkin.waitingDue.length) {
+      sections.push(
+        `Follow-ups due:\n${checkin.waitingDue
+          .slice(0, 3)
+          .map((i) => `- ${i.title}${i.note ? ` — ${i.note}` : ""}`)
+          .join("\n")}`,
+      );
+    }
+    const evidenceItems = [...checkin.unfinished, ...checkin.tomorrow].slice(0, 4);
+    return finish({
+      answer: sections.length
+        ? sections.join("\n\n")
+        : "Nothing tracked for today yet — captures, tasks, and deadlines will show up here.",
+      confidence: 0.88,
+      caveats: checkin.approximateTaskCompletions
+        ? "Task completions are approximate — tasks don't record an exact completion time."
+        : null,
+      evidence: evidenceItems.map((i) => {
+        const entityType =
+          i.kind === "waiting"
+            ? "waiting_item"
+            : i.kind === "task"
+              ? "task"
+              : "attention_item";
+        return makeEvidence({
+          claimType: "evening_checkin",
+          evidenceText: `${i.title}${i.note ? ` — ${i.note}` : ""}`,
+          entityType,
+          entityId: i.id,
+          metadata: {
+            retrievalMethod: "evening_checkin",
+            relatedEntityType: entityType,
+            relatedEntityId: i.id,
+            href: i.href,
+          },
+        });
+      }),
+      relatedRecords: [],
+      suggestedNextAction: "Open Today",
       promptVersion: QUERY_ANSWER_PROMPT_VERSION,
       degraded: false,
       presentation: "compact",

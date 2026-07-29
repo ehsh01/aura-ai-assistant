@@ -41,6 +41,13 @@ export function Settings() {
   const [notifPhone, setNotifPhone] = useState("");
   const [notifEnabled, setNotifEnabled] = useState(false);
   const [notifLeadMinutes, setNotifLeadMinutes] = useState(30);
+  const [morningEnabled, setMorningEnabled] = useState(false);
+  const [morningTime, setMorningTime] = useState("07:30");
+  const [eveningEnabled, setEveningEnabled] = useState(false);
+  const [eveningTime, setEveningTime] = useState("17:30");
+  const [quietStart, setQuietStart] = useState("21:00");
+  const [quietEnd, setQuietEnd] = useState("08:00");
+  const [briefingTz, setBriefingTz] = useState("");
   const [savingNotif, setSavingNotif] = useState(false);
   const [testingNotif, setTestingNotif] = useState(false);
 
@@ -78,6 +85,13 @@ export function Settings() {
         setNotifPhone(s.phoneNumber ?? "");
         setNotifEnabled(s.smsRemindersEnabled);
         setNotifLeadMinutes(s.smsLeadMinutes);
+        setMorningEnabled(s.morningBriefingEnabled);
+        setMorningTime(s.morningBriefingTime);
+        setEveningEnabled(s.eveningCheckinEnabled);
+        setEveningTime(s.eveningCheckinTime);
+        setQuietStart(s.quietHoursStart);
+        setQuietEnd(s.quietHoursEnd);
+        setBriefingTz(s.timezone ?? "");
       })
       .catch(() => setNotif(null));
   }, []);
@@ -90,6 +104,13 @@ export function Settings() {
         phoneNumber: notifPhone.trim() || null,
         smsRemindersEnabled: notifEnabled,
         smsLeadMinutes: notifLeadMinutes,
+        morningBriefingEnabled: morningEnabled,
+        morningBriefingTime: morningTime,
+        eveningCheckinEnabled: eveningEnabled,
+        eveningCheckinTime: eveningTime,
+        quietHoursStart: quietStart,
+        quietHoursEnd: quietEnd,
+        timezone: briefingTz.trim() || null,
       });
       setNotif(updated);
       setNotifPhone(updated.phoneNumber ?? "");
@@ -375,6 +396,80 @@ export function Settings() {
               />
               Text me reminders
             </label>
+
+            <div className="border-t border-white/[0.06] pt-4">
+              <p className="text-sm font-medium text-white/80">Daily briefing texts</p>
+              <p className="mt-0.5 text-xs text-white/40">
+                One morning briefing and one evening check-in per day — counts only, never
+                message content.
+              </p>
+
+              <div className="mt-3 space-y-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-2 text-sm text-white/70">
+                    <input
+                      type="checkbox"
+                      checked={morningEnabled}
+                      onChange={(e) => setMorningEnabled(e.target.checked)}
+                      className="h-4 w-4 rounded border-white/20 bg-black/30 accent-indigo-500"
+                    />
+                    Morning briefing at
+                  </label>
+                  <input
+                    type="time"
+                    value={morningTime}
+                    onChange={(e) => setMorningTime(e.target.value)}
+                    className="rounded-xl border border-white/10 bg-black/30 px-3 py-1.5 text-sm outline-none focus:border-indigo-500/50"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-2 text-sm text-white/70">
+                    <input
+                      type="checkbox"
+                      checked={eveningEnabled}
+                      onChange={(e) => setEveningEnabled(e.target.checked)}
+                      className="h-4 w-4 rounded border-white/20 bg-black/30 accent-indigo-500"
+                    />
+                    Evening check-in at
+                  </label>
+                  <input
+                    type="time"
+                    value={eveningTime}
+                    onChange={(e) => setEveningTime(e.target.value)}
+                    className="rounded-xl border border-white/10 bg-black/30 px-3 py-1.5 text-sm outline-none focus:border-indigo-500/50"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-sm text-white/70">
+                  <span>Quiet hours (no texts) from</span>
+                  <input
+                    type="time"
+                    value={quietStart}
+                    onChange={(e) => setQuietStart(e.target.value)}
+                    className="rounded-xl border border-white/10 bg-black/30 px-3 py-1.5 text-sm outline-none focus:border-indigo-500/50"
+                  />
+                  <span>to</span>
+                  <input
+                    type="time"
+                    value={quietEnd}
+                    onChange={(e) => setQuietEnd(e.target.value)}
+                    className="rounded-xl border border-white/10 bg-black/30 px-3 py-1.5 text-sm outline-none focus:border-indigo-500/50"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-white/50">
+                    Your timezone (IANA name — leave blank to use the server default)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York"}
+                    value={briefingTz}
+                    onChange={(e) => setBriefingTz(e.target.value)}
+                    className="w-full max-w-xs rounded-xl border border-white/10 bg-black/30 px-4 py-2.5 text-sm outline-none focus:border-indigo-500/50"
+                  />
+                </div>
+              </div>
+            </div>
+
             <div className="flex flex-wrap gap-2 pt-1">
               <button
                 type="submit"

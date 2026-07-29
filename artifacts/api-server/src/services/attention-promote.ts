@@ -67,6 +67,9 @@ export async function promoteCalendarEventsToAttention(
       [startRaw ? `Start: ${startRaw}` : null, location ? `Location: ${location}` : null]
         .filter(Boolean)
         .join(" · ") || null;
+    // Google dateTime starts carry a clock ("2026-07-28T14:00:00-04:00");
+    // all-day starts are date-only ("2026-07-28").
+    const timeKnown = /T\d{2}:\d{2}/.test(startRaw);
 
     try {
       const item = await upsertAttentionItemForUser(userId, {
@@ -79,10 +82,12 @@ export async function promoteCalendarEventsToAttention(
         evidenceText: evidence,
         projectId: suggestProjectId(title, projects),
         confidence: 1,
+        timeKnown,
         metadata: {
           promotedFrom: "calendar_event",
           externalId: row.externalId,
           sourceUrl: row.sourceUrl ?? null,
+          location: location || null,
         },
       });
       items.push(item);

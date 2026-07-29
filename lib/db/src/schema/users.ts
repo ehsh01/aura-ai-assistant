@@ -12,6 +12,20 @@ export const users = pgTable("users", {
   smsRemindersEnabled: boolean("sms_reminders_enabled").notNull().default(false),
   /** Minutes before an attention item's dueAt to send a heads-up text. */
   smsLeadMinutes: integer("sms_lead_minutes").notNull().default(30),
+  /** IANA timezone (e.g. "America/New_York"); null falls back to server RECALL_TIMEZONE. */
+  timezone: varchar("timezone", { length: 64 }),
+  morningBriefingEnabled: boolean("morning_briefing_enabled").notNull().default(false),
+  /** Local "HH:MM" (24h) to send the morning briefing nudge. */
+  morningBriefingTime: varchar("morning_briefing_time", { length: 5 }).notNull().default("07:30"),
+  eveningCheckinEnabled: boolean("evening_checkin_enabled").notNull().default(false),
+  /** Local "HH:MM" (24h) to send the evening check-in nudge. */
+  eveningCheckinTime: varchar("evening_checkin_time", { length: 5 }).notNull().default("17:30"),
+  /** Local "HH:MM" quiet window — no briefing SMS between start and end. */
+  quietHoursStart: varchar("quiet_hours_start", { length: 5 }).notNull().default("21:00"),
+  quietHoursEnd: varchar("quiet_hours_end", { length: 5 }).notNull().default("08:00"),
+  /** User-local ISO dates of the last sends — idempotency markers. */
+  lastMorningBriefingOn: varchar("last_morning_briefing_on", { length: 10 }),
+  lastEveningCheckinOn: varchar("last_evening_checkin_on", { length: 10 }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

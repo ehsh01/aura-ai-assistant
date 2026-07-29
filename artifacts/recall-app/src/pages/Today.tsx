@@ -33,6 +33,8 @@ import {
   TodayActionQueue,
 } from "@/components/home/TodayActionQueue";
 import { NeedsReviewStrip } from "@/components/home/NeedsReviewStrip";
+import { MorningBriefingCard } from "@/components/home/MorningBriefingCard";
+import { EveningCheckinCard } from "@/components/home/EveningCheckinCard";
 import { DontForgetSection } from "@/components/home/DontForgetSection";
 import { BrainDumpInput } from "@/components/home/BrainDumpInput";
 import { NeuralBrainBackground } from "@/components/NeuralBrainBackground";
@@ -217,6 +219,17 @@ export function Today() {
     [focus, waiting, briefing.critical, briefing.reminders, attention],
   );
 
+  // Morning briefing actions skip anything the action queue already shows.
+  const queuedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const q of queue) {
+      ids.add(q.id);
+      if (q.attention) ids.add(q.attention.id);
+      if (q.waiting?.trackedId) ids.add(q.waiting.trackedId);
+    }
+    return ids;
+  }, [queue]);
+
   // Don't re-surface items already in the action queue.
   const dontForget = useMemo(() => {
     const queued = new Set(
@@ -287,6 +300,14 @@ export function Today() {
               <p className="mt-2 text-sm text-white/45">{countLabel}</p>
             </header>
 
+            {home?.morning && (
+              <MorningBriefingCard
+                briefing={home.morning}
+                queuedIds={queuedIds}
+                userName={userName}
+              />
+            )}
+
             {pressing.some((p) => p.kind === "homey") && (
               <section className="rounded-2xl border border-amber-400/20 bg-amber-500/5 px-4 py-3">
                 <p className="text-xs font-semibold uppercase tracking-wider text-amber-200/70">
@@ -322,6 +343,8 @@ export function Today() {
             />
 
             {dontForget.length > 0 && <DontForgetSection items={dontForget} />}
+
+            <EveningCheckinCard onChanged={refreshHome} />
           </div>
         </div>
       </div>

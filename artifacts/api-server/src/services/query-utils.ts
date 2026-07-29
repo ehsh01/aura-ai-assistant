@@ -39,6 +39,18 @@ export const DEADLINE_INTENT =
 export const NOTE_CAPABILITY_INTENT =
   /^\s*(?:can|could|would|will|are)\s+you\s+(?:able\s+to\s+)?(?:check|search|read|review|look\s+(?:at|in|through))\s+(?:(?:my|the)\s+)?notes?\s*[?.!]*\s*$/i;
 
+/**
+ * Morning-briefing / day-planning questions — answered deterministically from
+ * the same briefing builders that power Today. Keep "focus/prioritize/plan"
+ * anchored to day words so generic "focus on the project" requests don't match.
+ */
+export const BRIEFING_INTENT =
+  /\b(what should i (focus on|do|prioritize) today|morning briefing|daily briefing|my (day|briefing) (today|looks like)|what'?s (on|the plan) (for )?today|plan (for )?(my )?day|prioritize my day|what'?s today looking like|what do i have today)\b/i;
+
+/** Evening check-in / tomorrow-prep questions. */
+export const EVENING_INTENT =
+  /\b(what did i (not finish|miss|get done|complete|accomplish) today|what'?s left (today|tonight|undone)|evening check[- ]?in|wrap up (my )?day|what should i prepare for tomorrow|what'?s (on|coming up) (for )?tomorrow|tomorrow'?s (schedule|deadlines|meetings)|prepare for tomorrow)\b/i;
+
 export function recallTimezone(): string {
   return process.env.RECALL_TIMEZONE?.trim() || "America/New_York";
 }

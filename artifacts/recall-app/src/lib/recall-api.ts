@@ -984,6 +984,62 @@ export interface BriefingReview {
   items: ReviewQueueItem[];
 }
 
+export type BriefingActionKind = "deadline" | "appointment" | "waiting" | "task" | "capture";
+
+export interface BriefingAction {
+  kind: BriefingActionKind;
+  id: string;
+  title: string;
+  reason: string;
+  href: string;
+  sourceLabel: string;
+}
+
+export interface BriefingCalendarEntry {
+  id: string;
+  title: string;
+  startLabel: string | null;
+  location: string | null;
+  href: string;
+}
+
+export interface FocusWindow {
+  label: string;
+  startLabel: string;
+  endLabel: string;
+  reason: string;
+}
+
+export interface MorningBriefing {
+  date: string;
+  summary: string;
+  actions: BriefingAction[];
+  calendarToday: BriefingCalendarEntry[];
+  focusWindow: FocusWindow | null;
+  dataNotes: string[];
+}
+
+export interface EveningCheckinItem {
+  kind: "task" | "deadline" | "appointment" | "waiting";
+  id: string;
+  title: string;
+  href: string;
+  note?: string;
+}
+
+export interface EveningCheckin {
+  date: string;
+  completedToday: EveningCheckinItem[];
+  unfinished: EveningCheckinItem[];
+  tomorrow: EveningCheckinItem[];
+  waitingDue: EveningCheckinItem[];
+  approximateTaskCompletions: boolean;
+}
+
+export async function fetchCheckin(): Promise<EveningCheckin> {
+  return apiFetch("/checkin");
+}
+
 export interface HomeBriefingResponse {
   date: string;
   briefing: {
@@ -1054,6 +1110,7 @@ export interface HomeBriefingResponse {
     needsSync: boolean;
   } | null;
   review: BriefingReview;
+  morning: MorningBriefing;
 }
 
 export async function fetchHome(): Promise<HomeBriefingResponse> {
@@ -1361,6 +1418,13 @@ export type NotificationSettings = {
   phoneNumber: string | null;
   smsRemindersEnabled: boolean;
   smsLeadMinutes: number;
+  timezone: string | null;
+  morningBriefingEnabled: boolean;
+  morningBriefingTime: string;
+  eveningCheckinEnabled: boolean;
+  eveningCheckinTime: string;
+  quietHoursStart: string;
+  quietHoursEnd: string;
   /** False when the server has no Twilio credentials configured — texts won't actually send yet. */
   smsConfigured: boolean;
 };
@@ -1374,6 +1438,13 @@ export async function updateNotificationSettings(
     phoneNumber: string | null;
     smsRemindersEnabled: boolean;
     smsLeadMinutes: number;
+    timezone: string | null;
+    morningBriefingEnabled: boolean;
+    morningBriefingTime: string;
+    eveningCheckinEnabled: boolean;
+    eveningCheckinTime: string;
+    quietHoursStart: string;
+    quietHoursEnd: string;
   }>,
 ): Promise<NotificationSettings> {
   return apiFetch("/settings/notifications", {

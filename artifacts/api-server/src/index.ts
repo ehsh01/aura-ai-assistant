@@ -6,6 +6,7 @@ import { startAttachmentTextBackfill } from "./services/attachment-text-extract"
 import { startFinanceAutoSync } from "./services/finance-auto-sync";
 import { startJobWorker } from "./services/job-worker";
 import { startSmsReminderSweep } from "./services/sms-reminders";
+import { startBriefingSweep } from "./services/briefing-sweep";
 
 /**
  * RECALL_ROLE splits responsibilities across PM2 processes:
@@ -23,6 +24,7 @@ function startBackgroundServices(): void {
   startAttachmentTextBackfill();
   startJobWorker();
   startSmsReminderSweep();
+  startBriefingSweep();
 }
 
 assertSecretEncryptionConfigured(config.isProduction);
