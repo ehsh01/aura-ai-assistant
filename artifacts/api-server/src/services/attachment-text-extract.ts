@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { eq, inArray, isNull } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import OpenAI from "openai";
 import { noteAttachments, notes } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
@@ -8,6 +8,7 @@ import { config } from "../lib/config";
 import { logger } from "../lib/logger";
 import { warmEntityEmbedding } from "./embedding-cache";
 import { noteRetrievalText } from "./note-retrieval";
+import { allowBackgroundAi, recordAiUsage, usageTokens } from "./ai-usage";
 
 const MAX_EXTRACTED_CHARS = 12_000;
 const MIN_IMAGE_BYTES_FOR_OCR = 2_500;
@@ -52,14 +53,44 @@ async function extractPlainText(data: Buffer, mimeType: string): Promise<string>
   return truncate(raw);
 }
 
-async function extractImageText(data: Buffer, mimeType: string): Promise<string> {
+/**
+ * Image detail sent to the vision model. "low" bills a flat, small number of
+ * image tokens instead of scaling with resolution, which is the single biggest
+ * lever on OCR cost. Extracted text only feeds search indexing, so the accuracy
+ * trade is worth it by default; set OPENAI_OCR_DETAIL=high to restore fidelity.
+ */
+function ocrDetail(): "low" | "high" | "auto" {
+  const raw = process.env.OPENAI_OCR_DETAIL?.trim().toLowerCase();
+  return raw === "high" || raw === "auto" ? raw : "low";
+}
+
+/** OCR can run on a cheaper model than the main answer model. */
+function ocrModel(): string {
+  return (
+    process.env.OPENAI_OCR_MODEL?.trim() ||
+    process.env.OPENAI_MODEL?.trim() ||
+    "gpt-4o-mini"
+  );
+}
+
+function maxImageBytes(): number {
+  const raw = Number(process.env.OCR_MAX_IMAGE_BYTES ?? "");
+  return Number.isFinite(raw) && raw > 0 ? raw : MAX_IMAGE_BYTES_FOR_OCR;
+}
+
+async function extractImageText(
+  data: Buffer,
+  mimeType: string,
+  userId?: string | null,
+): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return "";
   if (data.length < MIN_IMAGE_BYTES_FOR_OCR) return "";
-  if (data.length > MAX_IMAGE_BYTES_FOR_OCR) return "";
+  if (data.length > maxImageBytes()) return "";
+  if (!(await allowBackgroundAi("attachment_ocr"))) return "";
 
   const client = new OpenAI({ apiKey });
-  const model = process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
+  const model = ocrModel();
   const b64 = data.toString("base64");
   const mime = mimeType.startsWith("image/") ? mimeType : "image/jpeg";
 
@@ -76,11 +107,20 @@ async function extractImageText(data: Buffer, mimeType: string): Promise<string>
           },
           {
             type: "image_url",
-            image_url: { url: `data:${mime};base64,${b64}` },
+            image_url: { url: `data:${mime};base64,${b64}`, detail: ocrDetail() },
           },
         ],
       },
     ],
+  });
+
+  const tokens = usageTokens(completion.usage);
+  await recordAiUsage({
+    userId,
+    feature: "attachment_ocr",
+    model,
+    background: true,
+    ...tokens,
   });
 
   return truncate(completion.choices[0]?.message?.content ?? "");
@@ -108,6 +148,7 @@ export async function extractTextFromAttachmentFile(opts: {
   mimeType: string;
   fileName: string;
   sizeBytes: number;
+  userId?: string | null;
 }): Promise<string> {
   const mime = (opts.mimeType || "").toLowerCase();
   const name = (opts.fileName || "").toLowerCase();
@@ -142,7 +183,7 @@ export async function extractTextFromAttachmentFile(opts: {
       return await extractDocxText(opts.absPath);
     }
     if (mime.startsWith("image/") || /\.(jpe?g|png|gif|webp|bmp)$/i.test(name)) {
-      return await extractImageText(data, mime || "image/jpeg");
+      return await extractImageText(data, mime || "image/jpeg", opts.userId);
     }
   } catch (err) {
     logger.warn(
@@ -182,6 +223,7 @@ export async function extractAndStoreAttachmentText(attachmentId: string): Promi
     mimeType: row.mimeType,
     fileName: row.fileName,
     sizeBytes: row.sizeBytes,
+    userId: row.userId,
   });
   await persistAttachmentExtractedText(attachmentId, text);
 
@@ -204,6 +246,17 @@ export async function extractAndStoreAttachmentText(attachmentId: string): Promi
   return text;
 }
 
+/**
+ * Deterministic job id for an attachment's OCR.
+ * Job ids are the queue's only dedupe key, so this is what prevents the same
+ * image from being charged more than once.
+ */
+export const OCR_JOB_PREFIX = "ocr-";
+
+export function ocrJobId(attachmentId: string): string {
+  return `${OCR_JOB_PREFIX}${attachmentId}`.slice(0, 64);
+}
+
 /** Queue extraction without blocking import/upload responses (durable Postgres jobs). */
 export function queueAttachmentTextExtraction(
   attachmentIds: string[],
@@ -213,7 +266,6 @@ export function queueAttachmentTextExtraction(
   void (async () => {
     const { enqueueJob, JOB_TYPE_ATTACHMENT_EXTRACT } = await import("./job-queue");
     const { nudgeJobWorker } = await import("./job-worker");
-    const { newExtractionJobId } = await import("../lib/recall-format");
 
     for (const attachmentId of attachmentIds) {
       try {
@@ -229,7 +281,10 @@ export function queueAttachmentTextExtraction(
         if (!userId) continue;
 
         await enqueueJob({
-          id: newExtractionJobId(),
+          // Stable per attachment. OCR is billed per call, and the 15s backfill
+          // re-selects rows that are still unprocessed, so a random id here let
+          // the same image be sent to the vision model over and over.
+          id: ocrJobId(attachmentId),
           userId,
           type: JOB_TYPE_ATTACHMENT_EXTRACT,
           payload: { attachmentId },
@@ -284,11 +339,21 @@ export async function processPendingAttachmentExtractions(
   if (backfillRunning) return 0;
   backfillRunning = true;
   try {
-    const rows = await getDb()
-      .select({ id: noteAttachments.id, userId: noteAttachments.userId })
-      .from(noteAttachments)
-      .where(isNull(noteAttachments.extractedAt))
-      .limit(limit);
+    // Skip attachments that already have an OCR job of any status. Without this
+    // the tick would keep re-selecting the same rows (the stable job id makes
+    // re-enqueue a no-op) and never reach the rest of the backlog.
+    const result = await getDb().execute(sql`
+      SELECT a.id, a.user_id AS "userId"
+      FROM note_attachments a
+      WHERE a.extracted_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM jobs j WHERE j.id = ${OCR_JOB_PREFIX} || a.id
+        )
+      LIMIT ${limit}
+    `);
+    type PendingRow = { id: string; userId: string };
+    const raw = result as unknown as { rows?: PendingRow[] } | PendingRow[];
+    const rows = Array.isArray(raw) ? raw : (raw.rows ?? []);
 
     if (rows.length === 0) return 0;
 

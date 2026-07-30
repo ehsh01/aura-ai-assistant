@@ -133,7 +133,10 @@ export async function routeIntentForText(text: string): Promise<IntentRouteDecis
     };
   }
 
-  const { degraded, result } = await aiService.classifyIntent({ text });
+  const { withAiFeature } = await import("./ai-usage");
+  const { degraded, result } = await withAiFeature({ feature: "intent_route" }, () =>
+    aiService.classifyIntent({ text }),
+  );
   // Re-validate defensively even though the AI service already parsed it.
   const parsed = classifyIntentResultSchema.safeParse(result);
   const safe: ClassifyIntentResult = parsed.success

@@ -13,6 +13,7 @@ import {
 import { EXTRACT_DEADLINE_PROMPT_VERSION } from "../prompts/extractDeadline.v2";
 import { resolvePersonByName } from "./people";
 import { listProjectsForUser } from "./projects";
+import { allowBackgroundAi, withAiFeature } from "./ai-usage";
 
 /** Explicit dates auto-create confirmed items at this confidence. */
 export const CERTAIN_MIN_CONFIDENCE = 0.75;
@@ -117,6 +118,9 @@ export async function extractGmailDeadlinesForUser(
   opts?: { limit?: number },
 ): Promise<{ scanned: number; created: number; items: AttentionItemDto[] }> {
   const limit = opts?.limit ?? 20;
+  if (!(await allowBackgroundAi("deadline_extract"))) {
+    return { scanned: 0, created: 0, items: [] };
+  }
   const rows = await listUnscannedGmailForDeadlines(userId, limit);
   const projects = await listProjectsForUser(userId);
   const items: AttentionItemDto[] = [];
@@ -124,10 +128,14 @@ export async function extractGmailDeadlinesForUser(
 
   for (const row of rows) {
     try {
-      const extracted = await aiService.extractDeadline({
-        subject: row.recordTitle ?? "(no subject)",
-        body: row.recordText ?? "",
-      });
+      const extracted = await withAiFeature(
+        { feature: "deadline_extract", userId },
+        () =>
+          aiService.extractDeadline({
+            subject: row.recordTitle ?? "(no subject)",
+            body: row.recordText ?? "",
+          }),
+      );
       const item = extracted.item;
 
       await markSourceScannedForDeadlines(row.id);
@@ -235,10 +243,12 @@ export async function scanNoteForDeadlines(
   const text = `${note.title}\n${note.content}`;
   if (!hasDateCues(text)) return { scanned: 1, created: 0 };
 
-  const extracted = await aiService.extractDeadline({
-    subject: note.title || "Note",
-    body: note.content,
-  });
+  const extracted = await withAiFeature({ feature: "deadline_extract", userId }, () =>
+    aiService.extractDeadline({
+      subject: note.title || "Note",
+      body: note.content,
+    }),
+  );
   const mapped = mapExtractedDeadline(extracted.item);
   if (!mapped) return { scanned: 1, created: 0 };
 

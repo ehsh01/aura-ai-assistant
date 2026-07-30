@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { captures, lifeMemories, notes } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { aiService } from "./ai";
+import { allowBackgroundAi, withAiFeature } from "./ai-usage";
 import { enqueueJob, JOB_TYPE_DIGEST_REGEN } from "./job-queue";
 
 const DIGEST_MAX = 560;
@@ -47,21 +48,24 @@ async function maybeAiDigest(title: string, body: string): Promise<string | null
   if (aiService.getStatus().degraded) return null;
   if (typeof aiService.chat !== "function") return null;
   if (body.trim().length < 800) return null;
+  if (!(await allowBackgroundAi("digest"))) return null;
   try {
-    const result = await aiService.chat({
-      messages: [
-        {
-          role: "system",
-          content:
-            "Summarize personal notes into a dense factual digest under 500 characters. " +
-            "Keep names, dates, amounts, IDs, VINs, and concrete facts. No fluff. Plain text only.",
-        },
-        {
-          role: "user",
-          content: `Title: ${title.slice(0, 200)}\n\n${body.slice(0, 6_000)}`,
-        },
-      ],
-    });
+    const result = await withAiFeature({ feature: "digest" }, () =>
+      aiService.chat({
+        messages: [
+          {
+            role: "system",
+            content:
+              "Summarize personal notes into a dense factual digest under 500 characters. " +
+              "Keep names, dates, amounts, IDs, VINs, and concrete facts. No fluff. Plain text only.",
+          },
+          {
+            role: "user",
+            content: `Title: ${title.slice(0, 200)}\n\n${body.slice(0, 6_000)}`,
+          },
+        ],
+      }),
+    );
     const text = (result.message?.content ?? "").replace(/\s+/g, " ").trim();
     return text ? text.slice(0, DIGEST_MAX) : null;
   } catch {

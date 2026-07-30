@@ -5,6 +5,12 @@ import type {
 } from "openai/resources/chat/completions";
 import { searchNotesForUser } from "./notes";
 import {
+  currentAiFeature,
+  isBackgroundFeature,
+  recordAiUsage,
+  usageTokens,
+} from "./ai-usage";
+import {
   QUERY_ANSWER_SYSTEM_PROMPT,
   QUERY_ANSWER_STREAM_SYSTEM_PROMPT,
 } from "../prompts/queryAnswer.v1";
@@ -892,13 +898,51 @@ const CHAT_TOOLS: ChatCompletionTool[] = [
   },
 ];
 
+/**
+ * Record token usage for every chat completion this client makes.
+ * Wrapping once here keeps accounting out of the ~15 individual call sites and
+ * guarantees a new one cannot be added without being billed to a feature.
+ */
+function instrumentUsage(client: OpenAI): OpenAI {
+  const completions = client.chat.completions;
+  const original = completions.create.bind(completions);
+
+  const wrapped = async (params: unknown, options?: unknown) => {
+    const result = await (original as (p: unknown, o?: unknown) => Promise<unknown>)(
+      params,
+      options,
+    );
+    try {
+      const req = params as { model?: string; stream?: boolean };
+      const res = result as { usage?: unknown };
+      // Streamed responses return an iterator with no usage block.
+      if (!req?.stream && res?.usage) {
+        const { feature, userId } = currentAiFeature();
+        void recordAiUsage({
+          userId,
+          feature,
+          model: req.model ?? "unknown",
+          background: isBackgroundFeature(feature),
+          ...usageTokens(res.usage),
+        });
+      }
+    } catch {
+      // Accounting must never break a successful completion.
+    }
+    return result;
+  };
+
+  (completions as unknown as { create: unknown }).create = wrapped;
+  return client;
+}
+
 class OpenAiService implements AiService {
   private client: OpenAI;
   private model: string;
   private embeddingModel: string;
 
   constructor(apiKey: string, model: string, embeddingModel: string) {
-    this.client = new OpenAI({ apiKey });
+    this.client = instrumentUsage(new OpenAI({ apiKey }));
     this.model = model;
     this.embeddingModel = embeddingModel;
   }

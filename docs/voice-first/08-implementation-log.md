@@ -232,3 +232,82 @@ requester_person_id` already existed and were simply never populated from Ask.
 Milestone 5: persist proposals server-side so corrections ("make that Friday")
 and cancellation have an auditable identity, and record the ambiguity picker's
 choice as a person alias so Aura stops re-asking.
+
+---
+
+## Cost investigation — OpenAI spend controls
+
+Triggered by ~$50 of OpenAI spend in a month against very light interactive use.
+
+### What was actually happening
+
+No background timer calls OpenAI. The job poller (2s), SMS and briefing sweeps
+(60s) and finance auto-sync (30m) make zero model calls, so an idle deployment
+costs nothing. Spend tracks **ingested data**, not app usage: each new Gmail
+message can trigger a deadline extraction and a waiting-on extraction, each
+note or capture over ~800 characters triggers a digest, and each image
+attachment triggers a vision call.
+
+**The defect:** `processPendingAttachmentExtractions` selects up to 4
+attachments with `extracted_at IS NULL` every 15 seconds and enqueued each with
+`newExtractionJobId()` — a fresh random id. `enqueueJob` de-duplicates on job id
+only (`onConflictDoNothing({ target: jobs.id })`), so nothing collapsed the
+repeats. A vision call takes seconds, so the same rows were still unprocessed on
+the next tick and were queued again. The same image could be billed many times
+over. The Gmail scans were already immune — they use a stable id bucketed to
+5 minutes.
+
+### Changes
+
+| File | Change |
+|------|--------|
+| `lib/db/migrations/0031_ai_usage.sql` | New `ai_usage` table (metadata only) |
+| `lib/db/src/schema/ai-usage.ts` | Drizzle schema + export |
+| `artifacts/api-server/src/services/ai-usage.ts` | New: pricing, recording, budget guard, kill switches, feature attribution |
+| `artifacts/api-server/src/services/attachment-text-extract.ts` | Stable `ocrJobId`; backfill skips rows that already have a job; OCR guard, usage recording, `detail`/model/size knobs |
+| `artifacts/api-server/src/services/ai.ts` | Client instrumented once so every completion records usage |
+| `artifacts/api-server/src/services/digests.ts` | Budget guard + feature tag |
+| `artifacts/api-server/src/services/attention-extract.ts` | Budget guard + feature tag |
+| `artifacts/api-server/src/services/waiting-extract.ts` | Budget guard + feature tag |
+| `artifacts/api-server/src/services/capture-pipeline.ts` | Feature tag |
+| `artifacts/api-server/src/services/intent-router.ts` | Feature tag |
+| `artifacts/api-server/src/services/query-engine.ts` | Ask wrapped in a feature scope |
+| `artifacts/api-server/src/routes/ai-usage.ts` | New `GET /api/ai/usage` |
+| `artifacts/api-server/.env.example` | Cost-control documentation |
+
+### Architectural decisions
+
+1. **Attribution via `AsyncLocalStorage`, not a threaded argument.** The AI
+   service makes completions from ~15 places; tagging at the semantic boundary
+   keeps accounting out of every call site and means a new call site cannot
+   silently escape it.
+2. **The budget caps background work only.** Going silent in the middle of a
+   user's question is worse than the marginal cost of answering it.
+3. **Unknown models price at the most expensive known rate,** so a model swap
+   cannot slip past the cap by looking free.
+4. **`detail: "low"` is the OCR default.** Extracted text only feeds search
+   indexing, and image tokens otherwise scale with resolution. `OPENAI_OCR_DETAIL=high`
+   restores fidelity.
+5. **The backfill skips attachments that already have a job row.** The stable id
+   alone would have stranded the sweep on permanently failed rows.
+
+### Tests run
+
+| Check | Result |
+|-------|--------|
+| API typecheck | Pass |
+| Frontend typecheck | Pass |
+| API vitest (2 workers) | **572 passed / 80 files** (was 545/78) |
+| Frontend vitest | 12 passed / 1 file |
+
+### Known limitations
+
+- Pricing is a hardcoded table for budgeting and reporting only; OpenAI's
+  invoice remains authoritative.
+- Streamed Ask answers report no `usage` block, so those calls are not recorded.
+  Capturing them needs `stream_options: { include_usage: true }`.
+- Embeddings, Whisper and TTS are not instrumented; they are cheap relative to
+  chat and vision, but they are therefore missing from the breakdown.
+- The budget is global and resets at midnight **UTC**, not in the user's
+  timezone, and is cached for up to 60s so it can overshoot slightly.
+- `ai_usage` starts empty, so it explains future spend, not the past $50.

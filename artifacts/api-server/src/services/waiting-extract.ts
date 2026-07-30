@@ -219,15 +219,19 @@ export async function extractWaitingFromRecord(
   const perspective = perspectiveForRecord(meta);
   const from = parseFromField(row.recordText);
   const to = perspective === "outbound" ? parseToField(row.recordText) : null;
-  const extracted = await aiService.extractWaitingCommitments({
-    subject: row.recordTitle ?? "(no subject)",
-    body: row.recordText ?? "",
-    fromName: from.name || (typeof meta.senderName === "string" ? meta.senderName : null),
-    fromEmail: from.email || (typeof meta.senderEmail === "string" ? meta.senderEmail : null),
-    perspective,
-    toName: to?.name ?? null,
-    toEmail: to?.email ?? null,
-  });
+  const { withAiFeature } = await import("./ai-usage");
+  const extracted = await withAiFeature({ feature: "waiting_extract", userId }, () =>
+    aiService.extractWaitingCommitments({
+      subject: row.recordTitle ?? "(no subject)",
+      body: row.recordText ?? "",
+      fromName: from.name || (typeof meta.senderName === "string" ? meta.senderName : null),
+      fromEmail:
+        from.email || (typeof meta.senderEmail === "string" ? meta.senderEmail : null),
+      perspective,
+      toName: to?.name ?? null,
+      toEmail: to?.email ?? null,
+    }),
+  );
 
   const minConfidence = opts?.minConfidence ?? AUTO_CREATE_CONFIDENCE;
   const items: WaitingItemDto[] = [];
@@ -352,6 +356,10 @@ export async function scanGmailForWaitingItems(
   opts?: { limit?: number },
 ): Promise<{ scanned: number; created: number; items: WaitingItemDto[] }> {
   const limit = opts?.limit ?? 15;
+  const { allowBackgroundAi } = await import("./ai-usage");
+  if (!(await allowBackgroundAi("waiting_extract"))) {
+    return { scanned: 0, created: 0, items: [] };
+  }
   const rows = await listUnscannedGmailForWaiting(userId, limit);
   const items: WaitingItemDto[] = [];
   let created = 0;

@@ -65,7 +65,10 @@ export async function processCaptureExtraction(
 
   await updateCaptureStatusForUser(userId, captureId, { processedStatus: "processing" });
 
-  const aiResult = await aiService.classifyCapture({ rawText: capture.rawText });
+  const { withAiFeature } = await import("./ai-usage");
+  const aiResult = await withAiFeature({ feature: "capture_classify", userId }, () =>
+    aiService.classifyCapture({ rawText: capture.rawText }),
+  );
   const item = aiResult.item;
   const confidence =
     typeof item.confidence === "number"

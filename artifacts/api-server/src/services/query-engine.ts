@@ -285,6 +285,17 @@ export async function queryRecallForUser(
   question: string,
   options?: { threadId?: string | null; stream?: QueryStreamHandlers | null },
 ): Promise<QueryAnswer> {
+  const { withAiFeature } = await import("./ai-usage");
+  return withAiFeature({ feature: "ask_query", userId }, () =>
+    runQueryForUser(userId, question, options),
+  );
+}
+
+async function runQueryForUser(
+  userId: string,
+  question: string,
+  options?: { threadId?: string | null; stream?: QueryStreamHandlers | null },
+): Promise<QueryAnswer> {
   const today = todayIso();
   const nowLabel = nowLocalLabel();
   const status = aiService.getStatus();
