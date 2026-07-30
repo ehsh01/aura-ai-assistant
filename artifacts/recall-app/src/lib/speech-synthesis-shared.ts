@@ -1,4 +1,6 @@
 const VOICE_PREF_KEY = "recall.voiceAnswers";
+/** Paid OpenAI TTS — off by default; browser speech is free and good enough. */
+const PREMIUM_TTS_PREF_KEY = "recall.premiumTts";
 
 export function isSpeechSynthesisSupported(): boolean {
   return (
@@ -25,6 +27,22 @@ export function getVoiceAnswersEnabled(): boolean {
 export function setVoiceAnswersEnabled(enabled: boolean): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(VOICE_PREF_KEY, enabled ? "1" : "0");
+}
+
+/**
+ * OpenAI TTS is opt-in. Voice Answers still work via the browser synthesizer
+ * when this is off — which is the default, so enabling voice does not spend
+ * money on every Ask answer.
+ */
+export function getPremiumTtsEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  const raw = window.localStorage.getItem(PREMIUM_TTS_PREF_KEY);
+  return raw === "1" || raw === "true";
+}
+
+export function setPremiumTtsEnabled(enabled: boolean): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(PREMIUM_TTS_PREF_KEY, enabled ? "1" : "0");
 }
 
 /** Prefer a natural English voice when the browser exposes several. */

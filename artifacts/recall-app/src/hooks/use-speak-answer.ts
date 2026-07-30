@@ -8,7 +8,8 @@ import {
 } from "@/lib/speech-synthesis";
 
 /**
- * Speaks Ask answers when voice is enabled. Prefers OpenAI TTS, falls back to browser.
+ * Speaks Ask answers when voice is enabled.
+ * Uses free browser speech by default; OpenAI TTS only when premium is on.
  */
 export function useSpeakAnswer(answer: string | null | undefined, ready: boolean) {
   const supported = isVoiceAnswersSupported();

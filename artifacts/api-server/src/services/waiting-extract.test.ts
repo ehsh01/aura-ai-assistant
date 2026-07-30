@@ -7,6 +7,7 @@ import {
   isAutomatedGmailRecord,
   isInboundGmailRecord,
   isOutboundGmailRecord,
+  localWaitingSkipReason,
   mapCommitmentDates,
   parseToField,
   perspectiveForRecord,
@@ -192,5 +193,47 @@ describe("mapCommitmentDates", () => {
       emailDate,
     );
     expect(out.promisedAt?.getTime()).toBe(emailDate.getTime());
+  });
+});
+
+describe("localWaitingSkipReason", () => {
+  it("skips automated senders without a model call", () => {
+    expect(
+      localWaitingSkipReason(
+        { senderEmail: "noreply@shop.com", mailbox: "me@x.com" },
+        "Order shipped",
+        "Your package is on the way",
+      ),
+    ).toBe("automated");
+  });
+
+  it("skips inbound mail without commitment cues and marks it done", () => {
+    expect(
+      localWaitingSkipReason(
+        { senderEmail: "friend@gmail.com", mailbox: "me@x.com" },
+        "Catching up",
+        "Thanks for the note yesterday. Hope everything is good.",
+      ),
+    ).toBe("no_waiting_cues");
+  });
+
+  it("lets inbound commitment language through", () => {
+    expect(
+      localWaitingSkipReason(
+        { senderEmail: "vendor@acme.com", mailbox: "me@x.com" },
+        "As-builts",
+        "I'll send the revised as-builts by Friday.",
+      ),
+    ).toBeNull();
+  });
+
+  it("lets outbound request language through", () => {
+    expect(
+      localWaitingSkipReason(
+        { senderEmail: "me@x.com", mailbox: "me@x.com" },
+        "Status?",
+        "Can you please confirm the inspection date?",
+      ),
+    ).toBeNull();
   });
 });

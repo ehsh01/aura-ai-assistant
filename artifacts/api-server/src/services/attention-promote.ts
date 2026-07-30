@@ -103,15 +103,23 @@ export async function promoteCalendarEventsToAttention(
   return { createdOrUpdated, items };
 }
 
-/** Mark a source_record as scanned for deadline extraction (metadata flag). */
+/**
+ * Mark a source_record as scanned for deadline extraction.
+ * Optional `reason` records why (e.g. "no_date_cues") so the same newsletter
+ * is not reconsidered on every sync, and cost reports can attribute skips.
+ */
 export async function markSourceScannedForDeadlines(
   sourceRecordId: string,
+  reason: string = "model",
 ): Promise<void> {
   await getDb().execute(sql`
     UPDATE source_records
     SET
       record_metadata = COALESCE(record_metadata, '{}'::jsonb)
-        || jsonb_build_object('deadlineScanAt', ${new Date().toISOString()}),
+        || jsonb_build_object(
+          'deadlineScanAt', ${new Date().toISOString()},
+          'deadlineScanReason', ${reason}
+        ),
       updated_at = now()
     WHERE id = ${sourceRecordId}
   `);

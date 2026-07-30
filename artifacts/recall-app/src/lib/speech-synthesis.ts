@@ -1,4 +1,5 @@
 import {
+  getPremiumTtsEnabled,
   isSpeechSynthesisSupported,
   pickPreferredVoice,
   setVoiceAnswersEnabled as setVoicePref,
@@ -6,10 +7,12 @@ import {
 } from "./speech-synthesis-shared";
 
 export {
+  getPremiumTtsEnabled,
   getVoiceAnswersEnabled,
   isSpeechSynthesisSupported,
   isVoiceAnswersSupported,
   pickPreferredVoice,
+  setPremiumTtsEnabled,
   textForSpeech,
 } from "./speech-synthesis-shared";
 
@@ -50,6 +53,8 @@ export type SpeakOptions = {
   rate?: number;
   pitch?: number;
   voice?: string;
+  /** Force OpenAI TTS even when the premium preference is off. */
+  premium?: boolean;
   onEnd?: () => void;
   onError?: () => void;
 };
@@ -118,7 +123,8 @@ function speakBrowser(cleaned: string, options: SpeakOptions, generation: number
 }
 
 /**
- * Speak with OpenAI TTS when available; fall back to browser speech synthesis.
+ * Speak an Ask answer. Browser speech is the default (free). OpenAI TTS only
+ * runs when the user has enabled premium voice or the caller opts in.
  */
 export async function speakText(text: string, options: SpeakOptions = {}): Promise<boolean> {
   const cleaned = textForSpeech(text);
@@ -126,6 +132,11 @@ export async function speakText(text: string, options: SpeakOptions = {}): Promi
 
   stopSpeaking();
   const generation = speakGeneration;
+  const usePremium = options.premium === true || getPremiumTtsEnabled();
+
+  if (!usePremium) {
+    return speakBrowser(cleaned, options, generation);
+  }
 
   try {
     const blob = await fetchOpenAiTts(cleaned, options.voice);

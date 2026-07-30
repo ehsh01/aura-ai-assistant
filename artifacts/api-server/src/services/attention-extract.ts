@@ -14,6 +14,7 @@ import { EXTRACT_DEADLINE_PROMPT_VERSION } from "../prompts/extractDeadline.v2";
 import { resolvePersonByName } from "./people";
 import { listProjectsForUser } from "./projects";
 import { allowBackgroundAi, withAiFeature } from "./ai-usage";
+import { isAutomatedGmailRecord } from "./waiting-extract";
 
 /** Explicit dates auto-create confirmed items at this confidence. */
 export const CERTAIN_MIN_CONFIDENCE = 0.75;
@@ -28,6 +29,21 @@ export const NOTE_DATE_CUE_RE =
 
 export function hasDateCues(text: string | null | undefined): boolean {
   return !!text && NOTE_DATE_CUE_RE.test(text);
+}
+
+/**
+ * Deterministic pre-filter before any deadline LLM call.
+ * Returns a skip reason, or null when the message is worth sending to the model.
+ */
+export function localDeadlineSkipReason(
+  meta: Record<string, unknown>,
+  title: string | null | undefined,
+  body: string | null | undefined,
+): "automated" | "no_date_cues" | null {
+  if (isAutomatedGmailRecord(meta, body ?? "")) return "automated";
+  const blob = `${title ?? ""}\n${(body ?? "").slice(0, 3000)}`;
+  if (!hasDateCues(blob)) return "no_date_cues";
+  return null;
 }
 
 export type MappedDeadline = {
@@ -112,22 +128,42 @@ function parseFromField(recordText: string | null): { name: string; email: strin
 
 /**
  * Scan recent unscanned Gmail messages for high-confidence dated commitments.
+ * Local filters run first so newsletters and cue-less mail never hit the model;
+ * those rows are still marked scanned so the next sync does not reconsider them.
  */
 export async function extractGmailDeadlinesForUser(
   userId: string,
   opts?: { limit?: number },
-): Promise<{ scanned: number; created: number; items: AttentionItemDto[] }> {
+): Promise<{
+  scanned: number;
+  created: number;
+  skippedLocal: number;
+  items: AttentionItemDto[];
+}> {
   const limit = opts?.limit ?? 20;
   if (!(await allowBackgroundAi("deadline_extract"))) {
-    return { scanned: 0, created: 0, items: [] };
+    return { scanned: 0, created: 0, skippedLocal: 0, items: [] };
   }
-  const rows = await listUnscannedGmailForDeadlines(userId, limit);
+  // Pull a wider window than `limit` so local skips do not starve real candidates.
+  const rows = await listUnscannedGmailForDeadlines(userId, Math.min(limit * 4, 80));
   const projects = await listProjectsForUser(userId);
   const items: AttentionItemDto[] = [];
   let created = 0;
+  let skippedLocal = 0;
+  let modelSubmitted = 0;
 
   for (const row of rows) {
+    if (modelSubmitted >= limit) break;
     try {
+      const meta = (row.recordMetadata ?? {}) as Record<string, unknown>;
+      const skip = localDeadlineSkipReason(meta, row.recordTitle, row.recordText);
+      if (skip) {
+        await markSourceScannedForDeadlines(row.id, skip);
+        skippedLocal += 1;
+        continue;
+      }
+
+      modelSubmitted += 1;
       const extracted = await withAiFeature(
         { feature: "deadline_extract", userId },
         () =>
@@ -138,7 +174,7 @@ export async function extractGmailDeadlinesForUser(
       );
       const item = extracted.item;
 
-      await markSourceScannedForDeadlines(row.id);
+      await markSourceScannedForDeadlines(row.id, "model");
 
       const mapped = mapExtractedDeadline(item);
       if (!mapped) continue;
@@ -187,26 +223,37 @@ export async function extractGmailDeadlinesForUser(
     } catch (err) {
       logger.warn({ err, sourceRecordId: row.id }, "Gmail deadline extract failed for record");
       try {
-        await markSourceScannedForDeadlines(row.id);
+        await markSourceScannedForDeadlines(row.id, "error");
       } catch {
         /* ignore */
       }
     }
   }
 
-  return { scanned: rows.length, created, items };
+  return {
+    scanned: modelSubmitted + skippedLocal,
+    created,
+    skippedLocal,
+    items,
+  };
 }
 
 /** Calendar promote + Gmail extract in one job. */
 export async function processAttentionScanJob(
   userId: string,
-): Promise<{ calendar: number; gmailCreated: number; gmailScanned: number }> {
+): Promise<{
+  calendar: number;
+  gmailCreated: number;
+  gmailScanned: number;
+  gmailSkippedLocal: number;
+}> {
   const cal = await promoteCalendarEventsToAttention(userId);
   const mail = await extractGmailDeadlinesForUser(userId);
   return {
     calendar: cal.createdOrUpdated,
     gmailCreated: mail.created,
     gmailScanned: mail.scanned,
+    gmailSkippedLocal: mail.skippedLocal,
   };
 }
 

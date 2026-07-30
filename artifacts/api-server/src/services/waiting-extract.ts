@@ -36,6 +36,25 @@ export function hasOutboundRequestCues(text: string): boolean {
   return OUTBOUND_REQUEST_RE.test(text);
 }
 
+/**
+ * Deterministic pre-filter before any waiting LLM call.
+ * Returns a skip reason, or null when the message is worth sending to the model.
+ */
+export function localWaitingSkipReason(
+  meta: Record<string, unknown>,
+  title: string | null | undefined,
+  body: string | null | undefined,
+): "automated" | "no_waiting_cues" | null {
+  if (isAutomatedGmailRecord(meta, body ?? "")) return "automated";
+  const blob = `${title ?? ""}\n${(body ?? "").slice(0, 3000)}`;
+  const inbound = isInboundGmailRecord(meta);
+  const outbound = isOutboundGmailRecord(meta);
+  const hasCue =
+    (inbound && hasWaitingCues(blob)) || (outbound && hasOutboundRequestCues(blob));
+  if (!hasCue) return "no_waiting_cues";
+  return null;
+}
+
 /** Local parts that virtually never send human replies or real commitments. */
 export const AUTOMATED_SENDER_RE =
   /^(no-?reply|donotreply|do-?not-?reply|mailer-daemon|postmaster|bounce[s]?|newsletters?|marketing|promo(tion)?s?|notifications?|alerts?|updates?|digest|e-?blast|campaigns?|offers?|deals?|receipts?|orders?|billing)@/i;
@@ -85,12 +104,16 @@ export function isWaitingScanned(meta: Record<string, unknown>): boolean {
 
 export async function markSourceScannedForWaiting(
   sourceRecordId: string,
+  reason: string = "model",
 ): Promise<void> {
   await getDb().execute(sql`
     UPDATE source_records
     SET
       record_metadata = COALESCE(record_metadata, '{}'::jsonb)
-        || jsonb_build_object('waitingScanAt', ${new Date().toISOString()}),
+        || jsonb_build_object(
+          'waitingScanAt', ${new Date().toISOString()},
+          'waitingScanReason', ${reason}
+        ),
       updated_at = now()
     WHERE id = ${sourceRecordId}
   `);
@@ -113,16 +136,8 @@ export async function listUnscannedGmailForWaiting(
     .limit(Math.min(limit * 4, 80));
 
   return rows
-    .filter((r) => {
-      const meta = (r.recordMetadata ?? {}) as Record<string, unknown>;
-      if (isWaitingScanned(meta)) return false;
-      if (isAutomatedGmailRecord(meta, r.recordText ?? "")) return false;
-      const blob = `${r.recordTitle ?? ""}\n${(r.recordText ?? "").slice(0, 3000)}`;
-      if (isInboundGmailRecord(meta)) return hasWaitingCues(blob);
-      if (isOutboundGmailRecord(meta)) return hasOutboundRequestCues(blob);
-      return false;
-    })
-    .slice(0, limit);
+    .filter((r) => !isWaitingScanned((r.recordMetadata ?? {}) as Record<string, unknown>))
+    .slice(0, Math.min(limit * 4, 80));
 }
 
 function parseFromField(recordText: string | null): { name: string; email: string } {
@@ -354,33 +369,55 @@ async function commitmentToWaitingItem(
 export async function scanGmailForWaitingItems(
   userId: string,
   opts?: { limit?: number },
-): Promise<{ scanned: number; created: number; items: WaitingItemDto[] }> {
+): Promise<{
+  scanned: number;
+  created: number;
+  skippedLocal: number;
+  items: WaitingItemDto[];
+}> {
   const limit = opts?.limit ?? 15;
   const { allowBackgroundAi } = await import("./ai-usage");
   if (!(await allowBackgroundAi("waiting_extract"))) {
-    return { scanned: 0, created: 0, items: [] };
+    return { scanned: 0, created: 0, skippedLocal: 0, items: [] };
   }
   const rows = await listUnscannedGmailForWaiting(userId, limit);
   const items: WaitingItemDto[] = [];
   let created = 0;
+  let skippedLocal = 0;
+  let modelSubmitted = 0;
 
   for (const row of rows) {
+    if (modelSubmitted >= limit) break;
     try {
+      const meta = (row.recordMetadata ?? {}) as Record<string, unknown>;
+      const skip = localWaitingSkipReason(meta, row.recordTitle, row.recordText);
+      if (skip) {
+        await markSourceScannedForWaiting(row.id, skip);
+        skippedLocal += 1;
+        continue;
+      }
+
+      modelSubmitted += 1;
       const result = await extractWaitingFromRecord(userId, row);
-      await markSourceScannedForWaiting(row.id);
+      await markSourceScannedForWaiting(row.id, "model");
       items.push(...result.items);
       created += result.created;
     } catch (err) {
       logger.warn({ err, sourceRecordId: row.id }, "Waiting extract failed for record");
       try {
-        await markSourceScannedForWaiting(row.id);
+        await markSourceScannedForWaiting(row.id, "error");
       } catch {
         /* ignore */
       }
     }
   }
 
-  return { scanned: rows.length, created, items };
+  return {
+    scanned: modelSubmitted + skippedLocal,
+    created,
+    skippedLocal,
+    items,
+  };
 }
 
 /** Manual "track this source" — bypasses the cue pre-filter and scan flag. */
@@ -407,7 +444,15 @@ export async function extractWaitingForSource(
 /** Post-sync waiting job: extract new commitments from inbound Gmail. */
 export async function processWaitingScanJob(
   userId: string,
-): Promise<{ gmailCreated: number; gmailScanned: number }> {
+): Promise<{
+  gmailCreated: number;
+  gmailScanned: number;
+  gmailSkippedLocal: number;
+}> {
   const mail = await scanGmailForWaitingItems(userId);
-  return { gmailCreated: mail.created, gmailScanned: mail.scanned };
+  return {
+    gmailCreated: mail.created,
+    gmailScanned: mail.scanned,
+    gmailSkippedLocal: mail.skippedLocal,
+  };
 }

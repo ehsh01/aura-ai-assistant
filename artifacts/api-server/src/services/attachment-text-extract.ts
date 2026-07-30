@@ -217,6 +217,9 @@ export async function extractAndStoreAttachmentText(attachmentId: string): Promi
   const row = rows[0];
   if (!row) return "";
 
+  // Another worker may have finished while this job was queued. Never bill twice.
+  if (row.extractedAt) return row.extractedText ?? "";
+
   const absPath = path.join(config.attachmentsDir, row.storagePath);
   const text = await extractTextFromAttachmentFile({
     absPath,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   captureDueDatePromotion,
   hasDateCues,
+  localDeadlineSkipReason,
   mapExtractedDeadline,
 } from "./attention-extract";
 import type { ExtractDeadlineItem } from "./ai";
@@ -121,5 +122,37 @@ describe("hasDateCues", () => {
     expect(hasDateCues("The weather was nice and we had lunch together")).toBe(false);
     expect(hasDateCues(null)).toBe(false);
     expect(hasDateCues("")).toBe(false);
+  });
+});
+
+describe("localDeadlineSkipReason", () => {
+  it("skips newsletters and automated senders without a model call", () => {
+    expect(
+      localDeadlineSkipReason(
+        { senderEmail: "newsletter@e.iheart.com" },
+        "Daily Digest",
+        "Your weekly roundup",
+      ),
+    ).toBe("automated");
+  });
+
+  it("skips cue-less mail and marks it so the next sync does not reconsider it", () => {
+    expect(
+      localDeadlineSkipReason(
+        { senderEmail: "friend@gmail.com" },
+        "Lunch plans",
+        "Want to grab coffee sometime?",
+      ),
+    ).toBe("no_date_cues");
+  });
+
+  it("lets messages with real date cues through to the model", () => {
+    expect(
+      localDeadlineSkipReason(
+        { senderEmail: "vendor@city.gov" },
+        "Inspection",
+        "The permit inspection is scheduled for next week on Tuesday.",
+      ),
+    ).toBeNull();
   });
 });

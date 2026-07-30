@@ -19,11 +19,18 @@ function isOpenAiTtsVoice(value: string): value is OpenAiTtsVoice {
  * Synthesize speech with OpenAI TTS.
  * Defaults: model tts-1 (fast/cheap), voice nova.
  * Override with OPENAI_TTS_MODEL / OPENAI_TTS_VOICE.
+ * Disabled entirely when RECALL_OPENAI_TTS_ENABLED=false.
  */
 export async function synthesizeSpeech(
   text: string,
   voice?: string,
 ): Promise<{ buffer: Buffer; contentType: string }> {
+  if (process.env.RECALL_OPENAI_TTS_ENABLED === "false") {
+    const err = new Error("OpenAI TTS is disabled") as Error & { status?: number };
+    err.status = 503;
+    throw err;
+  }
+
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     const err = new Error("OPENAI_API_KEY is not configured") as Error & { status?: number };
