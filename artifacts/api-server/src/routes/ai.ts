@@ -25,7 +25,6 @@ import { getExtractionJobStatus, ingestCaptureForUser } from "../services/captur
 import { routeIntentForText } from "../services/intent-router";
 import { writeAuditLog } from "../services/audit";
 import {
-  planActionsForText,
   confirmProposedAction,
   type ProposedActionType,
 } from "../services/action-orchestrator";
@@ -36,6 +35,19 @@ import {
   listAskThreadsForUser,
 } from "../services/ask-threads";
 import { recordAskFeedbackForUser } from "../services/ask-feedback";
+import multer from "multer";
+import {
+  getTranscriptionProvider,
+  MAX_VOICE_AUDIO_BYTES,
+  receiveVoiceCapture,
+  TranscriptionUnavailableError,
+  TranscriptionValidationError,
+} from "../services/voice-first";
+
+const voiceAudioUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_VOICE_AUDIO_BYTES, files: 1 },
+});
 
 function mergeSearchHitsIntoContext(
   context: AiContext | undefined,
@@ -390,13 +402,80 @@ router.post("/ai/submit", async (req, res, next) => {
 router.post("/ai/plan", async (req, res, next) => {
   try {
     const body = AiSubmitBody.parse(req.body);
-    const plan = await planActionsForText(req.user!.id, body.text, {
-      threadId: body.threadId ?? null,
+    const plan = await receiveVoiceCapture({
+      userId: req.user!.id,
+      text: body.text,
+      source: "ask",
+      sessionId: body.threadId ?? null,
     });
+    // Clients expect the PlanResult shape; temporal extras are additive.
     res.json(plan);
   } catch (err) {
     next(err);
   }
+});
+
+/** Server-side STT for PWA / browsers where Web Speech is unavailable. */
+router.post("/ai/transcribe", (req, res, next) => {
+  voiceAudioUpload.single("audio")(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+        res.status(400).json({
+          error: "AUDIO_TOO_LARGE",
+          message: `Recording exceeds the ${Math.round(MAX_VOICE_AUDIO_BYTES / (1024 * 1024))}MB limit`,
+        });
+        return;
+      }
+      next(err);
+      return;
+    }
+    void (async () => {
+      try {
+        const file = req.file;
+        if (!file?.buffer?.length) {
+          res.status(400).json({ error: "MISSING_AUDIO", message: "Audio file is required" });
+          return;
+        }
+        const locale =
+          typeof req.body?.locale === "string" ? req.body.locale.slice(0, 16) : undefined;
+        const result = await getTranscriptionProvider().transcribe({
+          audio: file.buffer,
+          mimeType: file.mimetype || "audio/webm",
+          filename: file.originalname || "utterance.webm",
+          locale,
+        });
+        await writeAuditLog({
+          userId: req.user!.id,
+          action: "voice_transcribed",
+          entityType: "query",
+          metadata: {
+            provider: result.provider,
+            model: result.model,
+            durationMs: result.durationMs,
+            byteLength: file.size,
+            // Never log transcript text.
+            textLength: result.text.length,
+          },
+        });
+        res.json({
+          text: result.text,
+          provider: result.provider,
+          model: result.model,
+          durationMs: result.durationMs,
+        });
+      } catch (e) {
+        if (e instanceof TranscriptionUnavailableError) {
+          res.status(503).json({ error: "TRANSCRIBE_UNAVAILABLE", message: e.message });
+          return;
+        }
+        if (e instanceof TranscriptionValidationError) {
+          res.status(400).json({ error: "TRANSCRIBE_INVALID", message: e.message });
+          return;
+        }
+        next(e);
+      }
+    })();
+  });
 });
 
 const ACTION_TYPES = [

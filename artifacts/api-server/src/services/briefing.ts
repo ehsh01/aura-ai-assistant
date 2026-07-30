@@ -440,7 +440,7 @@ export function buildEveningCheckin(input: {
   tasks: RecallTaskDto[];
   /** Open/seen attention rows (any due date). */
   attentionOpen: AttentionItemDto[];
-  /** Recently completed/dismissed attention rows (for completedToday). */
+  /** Recently completed attention rows (for completedToday). Dismissed stay out. */
   attentionTerminal: AttentionItemDto[];
   waiting: WaitingItemDto[];
 }): EveningCheckin {

@@ -52,8 +52,9 @@ export function speechErrorMessage(error: SpeechInputError): { title: string; de
       };
     case "pwa-blocked":
       return {
-        title: "Voice doesn't work in the home screen app",
-        description: "Open recall-app.net in Safari (not the installed app) to use the microphone.",
+        title: "Voice needs a moment",
+        description:
+          "This device will record your voice and transcribe it on the server. Tap the mic, speak, then tap again to stop.",
       };
     case "permission-denied":
       return {

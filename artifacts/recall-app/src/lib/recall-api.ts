@@ -1362,6 +1362,34 @@ export async function planAskInput(
   });
 }
 
+/** Upload a recorded utterance for server-side transcription (PWA / Whisper path). */
+export async function transcribeUtterance(
+  blob: Blob,
+  options?: { locale?: string; filename?: string },
+): Promise<{ text: string; provider: string; model: string; durationMs: number }> {
+  const form = new FormData();
+  const filename = options?.filename ?? "utterance.webm";
+  form.append("audio", blob, filename);
+  if (options?.locale) form.append("locale", options.locale);
+
+  const res = await fetch(`${API_BASE}/ai/transcribe`, {
+    method: "POST",
+    body: form,
+    credentials: "include",
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { message?: string };
+    throw new Error(err.message ?? `Transcription failed (${res.status})`);
+  }
+  return res.json() as Promise<{
+    text: string;
+    provider: string;
+    model: string;
+    durationMs: number;
+  }>;
+}
+
 /** Execute one user-confirmed proposed action via the existing domain services. */
 export async function confirmAskAction(input: {
   type: AskActionType;

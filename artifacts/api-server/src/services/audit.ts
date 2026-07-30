@@ -56,6 +56,8 @@ const ACTION_LABELS: Record<string, string> = {
   attention_reopened: "Deadline reopened",
   link_suggestion_confirmed: "Suggested link confirmed",
   link_suggestion_dismissed: "Suggested link dismissed",
+  voice_capture_planned: "Voice capture planned",
+  voice_transcribed: "Voice utterance transcribed",
 };
 
 export function auditLabelFor(action: string): string {

@@ -60,7 +60,7 @@ const GROUPS: { key: GroupKey; label: string; hint?: string }[] = [
   { key: "thisWeek", label: "This week" },
   { key: "later", label: "Later" },
   { key: "snoozed", label: "Snoozed" },
-  { key: "recentTerminal", label: "Recently closed" },
+  { key: "recentTerminal", label: "Recently completed" },
 ];
 
 function toDateInput(iso: string | null | undefined): string {
@@ -387,7 +387,12 @@ export function Deadlines() {
                             />
                             <ActionButton
                               busy={busy === "dismiss"}
-                              onClick={() => run("dismiss", () => dismissAttention(item.id))}
+                              onClick={() =>
+                                run("dismiss", async () => {
+                                  await dismissAttention(item.id);
+                                  navigate("/deadlines");
+                                })
+                              }
                               label="Dismiss"
                             />
                           </>

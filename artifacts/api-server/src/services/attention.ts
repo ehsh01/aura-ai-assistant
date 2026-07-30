@@ -762,13 +762,14 @@ export async function listDeadlinesForUser(userId: string): Promise<DeadlinesOve
     )
     .orderBy(asc(attentionItems.dueAt))
     .limit(200);
+  // Completed only — dismissed items stay out of the Deadlines list entirely.
   const terminal = await getDb()
     .select()
     .from(attentionItems)
     .where(
       and(
         eq(attentionItems.userId, userId),
-        inArray(attentionItems.status, ["dismissed", "completed"]),
+        eq(attentionItems.status, "completed"),
       ),
     )
     .orderBy(desc(attentionItems.updatedAt))

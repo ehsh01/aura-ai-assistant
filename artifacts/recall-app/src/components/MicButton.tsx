@@ -1,5 +1,5 @@
 import React, { useCallback } from "react";
-import { Mic } from "lucide-react";
+import { Mic, Loader2 } from "lucide-react";
 import { useSpeechInput } from "@/hooks/use-speech-input";
 import { toast } from "@/hooks/use-toast";
 import { speechErrorMessage, type SpeechInputError } from "@/lib/speech-support";
@@ -30,13 +30,11 @@ export function MicButton({
     showSpeechError(error);
   }, []);
 
-  const { listening, supported, blockReason, toggle } = useSpeechInput(onTranscript, { onError });
+  const { listening, transcribing, supported, mode, toggle } = useSpeechInput(onTranscript, {
+    onError,
+  });
 
   const handleClick = async () => {
-    if (blockReason) {
-      showSpeechError(blockReason);
-      return;
-    }
     if (!supported) {
       showSpeechError("unsupported");
       return;
@@ -47,27 +45,63 @@ export function MicButton({
       showSpeechError(result.error);
       return;
     }
-    if ("stopped" in result) return;
+    if ("stopped" in result) {
+      if (mode === "server") {
+        toast({ title: "Transcribing…", description: "Turning your recording into text." });
+      }
+      return;
+    }
 
     toast({
-      title: "Listening…",
-      description: "Speak now, then wait a moment for Recall to respond.",
+      title: mode === "server" ? "Recording…" : "Listening…",
+      description:
+        mode === "server"
+          ? "Tap the mic again when you’re done speaking."
+          : "Speak now, then wait a moment for Recall to respond.",
     });
   };
+
+  const label = transcribing
+    ? "Transcribing…"
+    : listening
+      ? listeningLabel ?? (mode === "server" ? "Tap to stop" : "Listening…")
+      : children;
 
   return (
     <button
       type="button"
       onClick={() => void handleClick()}
-      title={listening ? "Stop listening" : title}
-      aria-label={listening ? "Stop listening" : title}
+      disabled={transcribing}
+      title={
+        transcribing
+          ? "Transcribing…"
+          : listening
+            ? mode === "server"
+              ? "Stop recording"
+              : "Stop listening"
+            : title
+      }
+      aria-label={
+        transcribing
+          ? "Transcribing"
+          : listening
+            ? mode === "server"
+              ? "Stop recording"
+              : "Stop listening"
+            : title
+      }
       aria-pressed={listening}
-      className={`${className} ${listening ? "text-red-400 bg-red-500/20 animate-pulse" : ""}`}
+      aria-busy={transcribing || undefined}
+      className={`${className} ${listening ? "text-red-400 bg-red-500/20 animate-pulse" : ""} ${
+        transcribing ? "opacity-70" : ""
+      }`}
     >
-      <Mic size={iconSize} className={listening ? "scale-110" : undefined} />
-      {children != null && (
-        <span>{listening ? listeningLabel ?? "Listening…" : children}</span>
+      {transcribing ? (
+        <Loader2 size={iconSize} className="animate-spin" />
+      ) : (
+        <Mic size={iconSize} className={listening ? "scale-110" : undefined} />
       )}
+      {label != null && typeof label !== "boolean" && <span>{label}</span>}
     </button>
   );
 }
