@@ -123,3 +123,112 @@ None.
 ### Recommended next step
 
 Push/deploy this PWA mic path for real-device validation, then Milestone 4–5: entity resolution on confirm + durable proposals + vertical-slice golden test for the John/MRI/Smith reminder.
+
+---
+
+## Milestone 3 follow-up + Milestone 4 (2026-07-30)
+
+### Goal
+
+Remove the second tap from the PWA mic, then resolve spoken person/project
+references against the user's own records and carry them through confirm.
+
+### Real-device result (iPhone PWA)
+
+Mic, upload, Whisper, and transcript insertion all worked. User feedback: it was
+push-to-talk, not live. Confirmed as intended for batch STT; addressed below by
+ending the utterance on a trailing pause.
+
+### Changes made
+
+**Auto-stop (Milestone 3 follow-up)**
+
+- `SilenceTracker`: clock-injected decision logic; ends an utterance after 1.8s
+  of trailing quiet, once at least 300ms of speech has been heard.
+- Guards added: 60s hard cap (a forgotten recording can no longer grow past the
+  5 MB upload limit) and an 8s no-speech timeout that skips the upload entirely.
+- WebAudio `AnalyserNode` sampled every 100ms feeds the tracker; absent WebAudio
+  the recorder silently falls back to manual stop only.
+- Manual tap and auto-stop race safely: `stopServer` claims the recorder ref
+  before awaiting, so only one path uploads.
+
+**Entity resolution (Milestone 4)**
+
+- `resolveEntityMention`: tiered matching (alias > exact > word-prefix >
+  contains). **Ties are reported as `ambiguous`, never guessed** — the gap in
+  `matchPersonId`, which returned the first hit and could link the wrong John.
+- Spoken filler is stripped for projects ("the Smith project" → `Smith`).
+- `PlanResult.mentions` exposes classifier-extracted names; `receiveVoiceCapture`
+  resolves them and sets `draft.personId` / `draft.projectId` only when
+  unambiguous, appending "Linked to …" to the action reason.
+- `ownedLinks` re-verifies both ids against the caller's own records on confirm.
+  Client-supplied ids are untrusted; a foreign id is dropped, not rejected, so a
+  bad link never blocks creating the item.
+- Ambiguity surfaces in `AskReviewCards` as a one-tap candidate picker.
+
+### Files changed / added
+
+| File | Action |
+|------|--------|
+| `artifacts/recall-app/src/lib/utterance-recorder.ts` | Modified (SilenceTracker, RMS, auto-stop) |
+| `artifacts/recall-app/src/lib/utterance-recorder.test.ts` | Added |
+| `artifacts/recall-app/src/hooks/use-speech-input.ts` | Modified (auto-stop wiring, stop race) |
+| `artifacts/recall-app/src/components/MicButton.tsx` | Modified (copy) |
+| `artifacts/recall-app/vitest.config.ts` | Added |
+| `artifacts/recall-app/package.json` | Modified (vitest, test scripts) |
+| `.github/workflows/ci.yml` | Modified (frontend unit test step) |
+| `artifacts/api-server/src/services/voice-first/resolve-entities.ts` | Added |
+| `artifacts/api-server/src/services/voice-first/resolve-entities.test.ts` | Added |
+| `artifacts/api-server/src/services/voice-first/pipeline.test.ts` | Added (golden slice) |
+| `artifacts/api-server/src/services/voice-first/pipeline.ts` | Modified (link resolution) |
+| `artifacts/api-server/src/services/voice-first/index.ts` | Modified (exports) |
+| `artifacts/api-server/src/services/voice-first/providers/openai-whisper.ts` | Modified (video/* container labels) |
+| `artifacts/api-server/src/services/action-orchestrator.ts` | Modified (mentions, ownedLinks, link passthrough) |
+| `artifacts/api-server/src/services/action-orchestrator.test.ts` | Modified (ownership tests) |
+| `artifacts/api-server/src/routes/ai.ts` | Modified (confirm accepts personId/projectId) |
+| `artifacts/recall-app/src/lib/recall-api.ts` | Modified (link types) |
+| `artifacts/recall-app/src/components/ask/AskReviewCards.tsx` | Modified (clarification picker) |
+| `artifacts/recall-app/src/pages/Dashboard.tsx` | Modified (passes links) |
+
+### Migrations
+
+None. `attention_items.person_id/project_id` and `tasks.project_id/
+requester_person_id` already existed and were simply never populated from Ask.
+
+### Architectural decisions
+
+1. **New infrastructure, flagged:** vitest added to `recall-app` (matching the
+   api-server version) plus a CI step. Client logic was previously untestable.
+2. **Ambiguity is a first-class state,** not a low-confidence resolve. A wrong
+   silent link is worse than one extra question.
+3. **Ownership re-checked at confirm,** because resolution happening server-side
+   does not make the round-tripped id trustworthy.
+
+### Tests run
+
+| Check | Result |
+|-------|--------|
+| API typecheck | Pass |
+| Frontend typecheck | Pass |
+| API vitest (2 workers) | **545 passed / 78 files** (was 512/76) |
+| Frontend vitest | **12 passed / 1 file** (new) |
+| Frontend build | Pass |
+
+### Known limitations
+
+- Auto-stop thresholds are unit-tested but not tuned against real noisy rooms;
+  1.8s may still clip slow speakers.
+- Auto-stop needs WebAudio; without it the mic stays push-to-talk.
+- Still batch STT: no live partial transcript, no barge-in. True streaming needs
+  a WebSocket provider (Milestone 6 decision).
+- Resolution reads only `personName` / `suggestedProject` from the existing
+  classifier; multiple people in one utterance are not handled.
+- Ambiguity picker choice is not persisted as an alias, so the same phrasing
+  asks again next time.
+- Durable `action_proposals` table still deferred; confirm remains client-held.
+
+### Recommended next step
+
+Milestone 5: persist proposals server-side so corrections ("make that Friday")
+and cancellation have an auditable identity, and record the ambiguity picker's
+choice as a person alias so Aura stops re-asking.

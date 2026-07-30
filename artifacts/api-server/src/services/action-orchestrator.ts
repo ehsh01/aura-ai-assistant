@@ -54,6 +54,10 @@ export interface ProposedActionDraft {
   domain: string | null;
   /** Attention kind for reminders. */
   kind: AttentionKind | null;
+  /** Resolved person link. Null unless a mention matched exactly one record. */
+  personId?: string | null;
+  /** Resolved project link. Null unless a mention matched exactly one record. */
+  projectId?: string | null;
 }
 
 export interface ProposedAction {
@@ -199,6 +203,8 @@ export interface PlanResult {
   actions: ProposedAction[];
   /** Raw capture id (source preservation) for capture/mixed inputs. */
   rawCaptureId: string | null;
+  /** Entity names the classifier read out of the text, before any resolution. */
+  mentions?: { personName: string | null; projectName: string | null };
 }
 
 function publicRouting(decision: IntentRouteDecision): PlanRouting {
@@ -272,7 +278,17 @@ export async function planActionsForText(
     },
   });
 
-  return { mode: "review", routing: publicRouting(decision), answer, actions, rawCaptureId: raw.id };
+  return {
+    mode: "review",
+    routing: publicRouting(decision),
+    answer,
+    actions,
+    rawCaptureId: raw.id,
+    mentions: {
+      personName: classification.personName ?? null,
+      projectName: classification.suggestedProject ?? null,
+    },
+  };
 }
 
 export interface ConfirmActionInput {
@@ -346,12 +362,39 @@ async function linkEvidence(
   await markCaptureProcessedSafely(userId, rawCaptureId);
 }
 
+/**
+ * Confirms person/project ids actually belong to the caller.
+ *
+ * The ids arrive from the client, so they are untrusted regardless of how the
+ * server originally resolved them. An id the user does not own is dropped
+ * rather than rejected, so a bad link never blocks creating the item itself.
+ */
+async function ownedLinks(
+  userId: string,
+  draft: ProposedActionDraft,
+): Promise<{ personId: string | null; projectId: string | null }> {
+  const personId = draft.personId?.trim() || null;
+  const projectId = draft.projectId?.trim() || null;
+  if (!personId && !projectId) return { personId: null, projectId: null };
+
+  const [people, projects] = await Promise.all([
+    personId ? (await import("./people")).listPeopleForUser(userId) : Promise.resolve([]),
+    projectId ? (await import("./projects")).listProjectsForUser(userId) : Promise.resolve([]),
+  ]);
+
+  return {
+    personId: people.some((p) => p.id === personId) ? personId : null,
+    projectId: projects.some((p) => p.id === projectId) ? projectId : null,
+  };
+}
+
 /** Execute one confirmed proposed action via the existing domain service. */
 export async function confirmProposedAction(
   userId: string,
   input: ConfirmActionInput,
 ): Promise<ConfirmActionResult> {
   const { draft, rawCaptureId, type } = input;
+  const links = await ownedLinks(userId, draft);
   let result: ConfirmActionResult;
 
   switch (type) {
@@ -362,6 +405,8 @@ export async function confirmProposedAction(
         priority: taskPriority(draft.priority),
         tags: draft.tags,
         sourceCaptureId: rawCaptureId ?? null,
+        projectId: links.projectId,
+        requesterPersonId: links.personId,
         aiGenerated: true,
         userConfirmed: true,
       });
@@ -384,6 +429,8 @@ export async function confirmProposedAction(
         sourceEntityId: rawCaptureId ?? `ask-${Date.now()}`,
         evidenceText: draft.content.slice(0, 300),
         confidence: draft.priority === "urgent" ? 0.9 : 0.8,
+        personId: links.personId,
+        projectId: links.projectId,
         metadata: { via: "ask" },
       });
       await markCaptureProcessedSafely(userId, rawCaptureId);
@@ -444,7 +491,13 @@ export async function confirmProposedAction(
     action: "ask_action_confirmed",
     entityType: result.entityType,
     entityId: result.entityId,
-    metadata: { type, rawCaptureId: rawCaptureId ?? null, usedDefaultDueAt: result.usedDefaultDueAt ?? false },
+    metadata: {
+      type,
+      rawCaptureId: rawCaptureId ?? null,
+      usedDefaultDueAt: result.usedDefaultDueAt ?? false,
+      personId: links.personId,
+      projectId: links.projectId,
+    },
   });
 
   return result;

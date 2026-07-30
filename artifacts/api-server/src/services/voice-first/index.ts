@@ -1,5 +1,6 @@
 export * from "./types";
 export * from "./temporal";
+export * from "./resolve-entities";
 export * from "./pipeline";
 export type { TranscriptionProvider, TranscriptionResult, TranscriptionRequest } from "./providers/transcription";
 export {

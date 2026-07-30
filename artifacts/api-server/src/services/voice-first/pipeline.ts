@@ -7,11 +7,14 @@ import { getBriefingPrefsForUser } from "../notification-settings";
 import { recallTimezone } from "../query-utils";
 import { writeAuditLog } from "../audit";
 import { resolveTemporalExpression } from "./temporal";
+import { resolveVoiceEntities, type VoiceEntityLinks } from "./resolve-entities";
 import type { VoiceCaptureInput } from "./types";
 
 export type VoicePlanResult = PlanResult & {
   temporal: ReturnType<typeof resolveTemporalExpression>;
   timezone: string;
+  /** Person/project mentions resolved against the user's own records. */
+  links: VoiceEntityLinks;
 };
 
 /**
@@ -45,6 +48,27 @@ export async function receiveVoiceCapture(input: VoiceCaptureInput): Promise<Voi
     }
   }
 
+  const links = await resolveVoiceEntities(input.userId, {
+    personName: plan.mentions?.personName ?? null,
+    projectName: plan.mentions?.projectName ?? null,
+  });
+
+  // Only unambiguous matches become links. Ambiguous mentions stay unlinked so
+  // the user is asked rather than attached to the wrong John.
+  const personId = links.person?.status === "resolved" ? links.person.id : null;
+  const projectId = links.project?.status === "resolved" ? links.project.id : null;
+  if (personId || projectId) {
+    for (const action of plan.actions) {
+      action.draft.personId = personId;
+      action.draft.projectId = projectId;
+      const linked = [links.person, links.project]
+        .filter((l) => l?.status === "resolved")
+        .map((l) => l!.name)
+        .join(" and ");
+      if (linked) action.reason = `${action.reason} Linked to ${linked}.`;
+    }
+  }
+
   await writeAuditLog({
     userId: input.userId,
     action: "voice_capture_planned",
@@ -59,8 +83,10 @@ export async function receiveVoiceCapture(input: VoiceCaptureInput): Promise<Voi
       // Never log raw transcript content.
       textLength: text.length,
       idempotencyKey: input.idempotencyKey ?? null,
+      personStatus: links.person?.status ?? null,
+      projectStatus: links.project?.status ?? null,
     },
   });
 
-  return { ...plan, temporal, timezone };
+  return { ...plan, temporal, timezone, links };
 }

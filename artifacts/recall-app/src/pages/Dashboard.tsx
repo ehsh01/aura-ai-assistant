@@ -13,6 +13,7 @@ import {
   sendAskFeedback,
   setStoredAskThreadId,
   type AskMessageRecord,
+  type AskEntityLinks,
   type AskProposedAction,
   type AskThreadRecord,
   type EvidenceRecord,
@@ -88,6 +89,7 @@ export function Dashboard() {
   const [answerImages, setAnswerImages] = useState<AskAnswerImage[]>([]);
   const [reviewActions, setReviewActions] = useState<AskProposedAction[]>([]);
   const [reviewCaptureId, setReviewCaptureId] = useState<string | null>(null);
+  const [reviewLinks, setReviewLinks] = useState<AskEntityLinks | undefined>(undefined);
   const [answerMeta, setAnswerMeta] = useState<AnswerMeta | null>(null);
   const [assistantMessageId, setAssistantMessageId] = useState<string | null>(null);
   const [feedbackSent, setFeedbackSent] = useState<"up" | "down" | null>(null);
@@ -199,6 +201,7 @@ export function Dashboard() {
     setAnswerImages([]);
     setReviewActions([]);
     setReviewCaptureId(null);
+    setReviewLinks(undefined);
     setAnswerMeta(null);
     setAssistantMessageId(null);
     setFeedbackSent(null);
@@ -224,6 +227,7 @@ export function Dashboard() {
       setAnswerImages(images);
       setReviewActions(res.mode === "review" ? res.actions : []);
       setReviewCaptureId(res.rawCaptureId);
+      setReviewLinks(res.links);
       setAssistantMessageId(res.answer?.assistantMessageId ?? null);
       setFeedbackSent(null);
       setAnswerMeta(
@@ -590,6 +594,7 @@ export function Dashboard() {
                     actions={reviewActions}
                     rawCaptureId={reviewCaptureId}
                     threadId={threadId}
+                    links={reviewLinks}
                     onConfirmed={() => {
                       void reloadTasks().catch(() => {});
                       void listCaptureInbox()

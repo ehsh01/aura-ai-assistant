@@ -126,31 +126,14 @@ export function useSpeechInput(onFinal: (text: string) => void, options: UseSpee
     }
   }, []);
 
-  const startServer = useCallback(async (): Promise<StartResult> => {
-    if (!canUseMediaRecorder()) return { ok: false, error: "unsupported" };
-    recorderRef.current?.cancel();
-    const recorder = new UtteranceRecorder();
-    recorderRef.current = recorder;
-    const started = await recorder.start();
-    if (!started.ok) {
-      const map: Record<string, SpeechInputError> = {
-        unsupported: "unsupported",
-        "permission-denied": "permission-denied",
-        "audio-capture": "audio-capture",
-        unknown: "unknown",
-      };
-      return { ok: false, error: map[started.error] ?? "unknown" };
-    }
-    setListening(true);
-    return { ok: true };
-  }, []);
-
   const stopServer = useCallback(async () => {
+    // Claim the recorder first: a manual tap and an auto-stop can race, and
+    // only one of them may upload.
     const recorder = recorderRef.current;
+    recorderRef.current = null;
     setListening(false);
     if (!recorder) return;
     const result = await recorder.stop();
-    recorderRef.current = null;
     if ("error" in result) {
       if (result.error === "too-short") onErrorRef.current?.("no-speech");
       else onErrorRef.current?.(result.error === "permission-denied" ? "permission-denied" : "unknown");
@@ -173,6 +156,40 @@ export function useSpeechInput(onFinal: (text: string) => void, options: UseSpee
       setBusyTranscribing(false);
     }
   }, [setBusyTranscribing]);
+
+  const abortServer = useCallback((error: SpeechInputError) => {
+    const recorder = recorderRef.current;
+    recorderRef.current = null;
+    setListening(false);
+    recorder?.cancel();
+    onErrorRef.current?.(error);
+  }, []);
+
+  const startServer = useCallback(async (): Promise<StartResult> => {
+    if (!canUseMediaRecorder()) return { ok: false, error: "unsupported" };
+    recorderRef.current?.cancel();
+    const recorder = new UtteranceRecorder();
+    recorderRef.current = recorder;
+    const started = await recorder.start({
+      onAutoStop: (reason) => {
+        // Silence never reached the mic, so there is nothing worth uploading.
+        if (reason === "no-speech") abortServer("no-speech");
+        else void stopServer();
+      },
+    });
+    if (!started.ok) {
+      recorderRef.current = null;
+      const map: Record<string, SpeechInputError> = {
+        unsupported: "unsupported",
+        "permission-denied": "permission-denied",
+        "audio-capture": "audio-capture",
+        unknown: "unknown",
+      };
+      return { ok: false, error: map[started.error] ?? "unknown" };
+    }
+    setListening(true);
+    return { ok: true };
+  }, [abortServer, stopServer]);
 
   const stop = useCallback(() => {
     if (mode === "server") {

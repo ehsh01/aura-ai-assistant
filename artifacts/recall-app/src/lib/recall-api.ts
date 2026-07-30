@@ -1309,6 +1309,26 @@ export type AskProposedActionDraft = {
   tags: string[];
   domain: string | null;
   kind: "deadline" | "appointment" | "follow_up" | "other" | null;
+  /** Set only when a mention resolved to exactly one of the user's records. */
+  personId?: string | null;
+  projectId?: string | null;
+};
+
+export type AskEntityResolution = {
+  kind: "person" | "project";
+  mention: string;
+  status: "resolved" | "ambiguous" | "unmatched";
+  id: string | null;
+  name: string | null;
+  confidence: number;
+  candidates: { id: string; name: string; tier: string; confidence: number }[];
+  question: string | null;
+};
+
+export type AskEntityLinks = {
+  person: AskEntityResolution | null;
+  project: AskEntityResolution | null;
+  clarification: string | null;
 };
 
 export type AskProposedAction = {
@@ -1337,6 +1357,8 @@ export type AskPlanResult = {
   answer: QueryRecallResult | null;
   actions: AskProposedAction[];
   rawCaptureId: string | null;
+  /** Present on the /ai/plan (Voice First) path. */
+  links?: AskEntityLinks;
 };
 
 export type AskActionResult = {

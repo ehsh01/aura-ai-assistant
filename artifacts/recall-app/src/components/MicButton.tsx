@@ -56,7 +56,7 @@ export function MicButton({
       title: mode === "server" ? "Recording…" : "Listening…",
       description:
         mode === "server"
-          ? "Tap the mic again when you’re done speaking."
+          ? "Just stop talking when you’re done, or tap the mic to end it now."
           : "Speak now, then wait a moment for Recall to respond.",
     });
   };
@@ -64,7 +64,7 @@ export function MicButton({
   const label = transcribing
     ? "Transcribing…"
     : listening
-      ? listeningLabel ?? (mode === "server" ? "Tap to stop" : "Listening…")
+      ? listeningLabel ?? "Listening…"
       : children;
 
   return (

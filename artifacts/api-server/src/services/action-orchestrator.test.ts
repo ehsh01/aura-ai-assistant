@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   upsertAttentionItemForUser: vi.fn(),
   createTaskForUser: vi.fn(),
   writeAuditLog: vi.fn(),
+  listPeopleForUser: vi.fn(),
+  listProjectsForUser: vi.fn(),
 }));
 
 // confirmProposedAction touches several domain services; mock at the module
@@ -34,6 +36,8 @@ vi.mock("./capture-pipeline", () => ({
   ingestCaptureForUser: vi.fn(),
 }));
 vi.mock("./audit", () => ({ writeAuditLog: mocks.writeAuditLog }));
+vi.mock("./people", () => ({ listPeopleForUser: mocks.listPeopleForUser }));
+vi.mock("./projects", () => ({ listProjectsForUser: mocks.listProjectsForUser }));
 
 import {
   draftProposedActions,
@@ -272,5 +276,60 @@ describe("confirmProposedAction — capture status transition (regression)", () 
         rawCaptureId: "raw-1",
       }),
     ).resolves.toMatchObject({ entityType: "task" });
+  });
+});
+
+describe("confirmProposedAction — person/project links are user-scoped", () => {
+  beforeEach(() => {
+    Object.values(mocks).forEach((m) => m.mockReset());
+    mocks.upsertAttentionItemForUser.mockResolvedValue({ id: "attn-1" });
+    mocks.createTaskForUser.mockResolvedValue({ id: "task-1" });
+    mocks.getCaptureForUser.mockResolvedValue({ id: "raw-1", processedStatus: "processed" });
+    mocks.listPeopleForUser.mockResolvedValue([{ id: "p-mine", displayName: "John Carter" }]);
+    mocks.listProjectsForUser.mockResolvedValue([{ id: "prj-mine", name: "Smith" }]);
+  });
+
+  it("attaches links the user owns to a reminder", async () => {
+    await confirmProposedAction("user-1", {
+      type: "create_reminder",
+      draft: draft({ personId: "p-mine", projectId: "prj-mine" }),
+    });
+    const call = mocks.upsertAttentionItemForUser.mock.calls[0]?.[1];
+    expect(call.personId).toBe("p-mine");
+    expect(call.projectId).toBe("prj-mine");
+  });
+
+  it("attaches links the user owns to a task", async () => {
+    await confirmProposedAction("user-1", {
+      type: "create_task",
+      draft: draft({ personId: "p-mine", projectId: "prj-mine" }),
+    });
+    const call = mocks.createTaskForUser.mock.calls[0]?.[1];
+    expect(call.requesterPersonId).toBe("p-mine");
+    expect(call.projectId).toBe("prj-mine");
+  });
+
+  it("drops an id belonging to someone else instead of trusting the client", async () => {
+    await confirmProposedAction("user-1", {
+      type: "create_reminder",
+      draft: draft({ personId: "p-someone-else", projectId: "prj-someone-else" }),
+    });
+    const call = mocks.upsertAttentionItemForUser.mock.calls[0]?.[1];
+    expect(call.personId).toBeNull();
+    expect(call.projectId).toBeNull();
+  });
+
+  it("still creates the item when a link is rejected", async () => {
+    const result = await confirmProposedAction("user-1", {
+      type: "create_reminder",
+      draft: draft({ personId: "p-someone-else" }),
+    });
+    expect(result.entityType).toBe("attention_item");
+  });
+
+  it("skips the ownership lookup entirely when there are no links", async () => {
+    await confirmProposedAction("user-1", { type: "create_reminder", draft: draft() });
+    expect(mocks.listPeopleForUser).not.toHaveBeenCalled();
+    expect(mocks.listProjectsForUser).not.toHaveBeenCalled();
   });
 });

@@ -496,6 +496,9 @@ const AiConfirmActionBody = z.object({
     tags: z.array(z.string().max(64)).max(24).default([]),
     domain: z.string().max(64).nullable().default(null),
     kind: z.enum(["deadline", "appointment", "follow_up", "other"]).nullable().default(null),
+    // Ownership is re-verified server-side; these are untrusted client input.
+    personId: z.string().min(1).max(64).nullable().default(null),
+    projectId: z.string().min(1).max(64).nullable().default(null),
   }),
   rawCaptureId: z.string().min(1).max(64).nullable().default(null),
   threadId: z.string().min(1).max(64).nullable().default(null),

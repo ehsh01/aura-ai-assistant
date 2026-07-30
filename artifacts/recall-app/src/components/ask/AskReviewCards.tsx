@@ -14,6 +14,8 @@ import {
   type AskActionType,
   type AskProposedAction,
   type AskProposedActionDraft,
+  type AskEntityLinks,
+  type AskEntityResolution,
 } from "@/lib/recall-api";
 
 type CardStatus = "idle" | "editing" | "saving" | "saved" | "dismissed" | "error";
@@ -108,11 +110,14 @@ function ReviewCard({
   action,
   rawCaptureId,
   threadId,
+  linkOverride,
   onConfirmed,
 }: {
   action: AskProposedAction;
   rawCaptureId: string | null;
   threadId: string | null;
+  /** Links chosen by the user when Aura could not tell two records apart. */
+  linkOverride?: { personId: string | null; projectId: string | null };
   onConfirmed?: (result: { entityType: string }) => void;
 }) {
   const [status, setStatus] = useState<CardStatus>("idle");
@@ -133,7 +138,16 @@ function ReviewCard({
     setStatus("saving");
     setError(null);
     try {
-      const result = await confirmAskAction({ type, draft, rawCaptureId, threadId });
+      const result = await confirmAskAction({
+        type,
+        draft: {
+          ...draft,
+          personId: linkOverride?.personId ?? draft.personId ?? null,
+          projectId: linkOverride?.projectId ?? draft.projectId ?? null,
+        },
+        rawCaptureId,
+        threadId,
+      });
       setStatus("saved");
       setSavedAs(result.entityType === "attention_item" ? "reminder" : result.entityType);
       onConfirmed?.({ entityType: result.entityType });
@@ -268,27 +282,74 @@ function ReviewCard({
   );
 }
 
+/** Asks which record was meant when a mention matched more than one. */
+function ClarifyLink({
+  resolution,
+  chosenId,
+  onChoose,
+}: {
+  resolution: AskEntityResolution;
+  chosenId: string | null;
+  onChoose: (id: string) => void;
+}) {
+  if (resolution.status !== "ambiguous" || !resolution.question) return null;
+  return (
+    <div className="rounded-2xl border border-amber-400/20 bg-amber-500/[0.07] px-4 py-3">
+      <p className="text-sm text-amber-100/90">{resolution.question}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {resolution.candidates.map((candidate) => (
+          <button
+            key={candidate.id}
+            type="button"
+            onClick={() => onChoose(candidate.id)}
+            aria-pressed={chosenId === candidate.id}
+            className={`rounded-xl px-3 py-1.5 text-xs transition-colors ${
+              chosenId === candidate.id
+                ? "bg-amber-400 font-medium text-zinc-900"
+                : "border border-white/10 text-white/70 hover:bg-white/5"
+            }`}
+          >
+            {candidate.name}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** Inline review cards for a captured Ask input (task/reminder/memory/note). */
 export function AskReviewCards({
   actions,
   rawCaptureId,
   threadId,
+  links,
   onConfirmed,
 }: {
   actions: AskProposedAction[];
   rawCaptureId: string | null;
   threadId: string | null;
+  links?: AskEntityLinks;
   onConfirmed?: (result: { entityType: string }) => void;
 }) {
+  const [personId, setPersonId] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(null);
+
   if (actions.length === 0) return null;
   return (
     <div className="mx-auto w-full max-w-lg space-y-3 text-left">
+      {links?.person && (
+        <ClarifyLink resolution={links.person} chosenId={personId} onChoose={setPersonId} />
+      )}
+      {links?.project && (
+        <ClarifyLink resolution={links.project} chosenId={projectId} onChoose={setProjectId} />
+      )}
       {actions.map((action) => (
         <ReviewCard
           key={action.id}
           action={action}
           rawCaptureId={rawCaptureId}
           threadId={threadId}
+          linkOverride={{ personId, projectId }}
           onConfirmed={onConfirmed}
         />
       ))}
