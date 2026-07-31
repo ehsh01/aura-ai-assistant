@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import OpenAI from "openai";
 import { noteAttachments, notes } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
@@ -19,6 +20,10 @@ const BACKFILL_INITIAL_DELAY_MS = 45_000;
 
 let backfillTimer: NodeJS.Timeout | null = null;
 let backfillRunning = false;
+
+export function attachmentContentHash(data: Buffer): string {
+  return createHash("sha256").update(data).digest("hex");
+}
 
 function truncate(text: string, max = MAX_EXTRACTED_CHARS): string {
   const cleaned = text.replace(/\u0000/g, "").replace(/\s+/g, " ").trim();
@@ -221,13 +226,49 @@ export async function extractAndStoreAttachmentText(attachmentId: string): Promi
   if (row.extractedAt) return row.extractedText ?? "";
 
   const absPath = path.join(config.attachmentsDir, row.storagePath);
-  const text = await extractTextFromAttachmentFile({
-    absPath,
-    mimeType: row.mimeType,
-    fileName: row.fileName,
-    sizeBytes: row.sizeBytes,
-    userId: row.userId,
-  });
+  let contentHash: string | null = null;
+  try {
+    contentHash = attachmentContentHash(await readFile(absPath));
+    await getDb()
+      .update(noteAttachments)
+      .set({ contentHash })
+      .where(eq(noteAttachments.id, attachmentId));
+  } catch {
+    // A missing/unreadable file follows the existing extraction failure path.
+  }
+
+  let text: string | null = null;
+  if (contentHash) {
+    try {
+      const [reusable] = await getDb()
+        .select({ extractedText: noteAttachments.extractedText })
+        .from(noteAttachments)
+        .where(
+          and(
+            eq(noteAttachments.userId, row.userId),
+            eq(noteAttachments.contentHash, contentHash),
+            ne(noteAttachments.id, attachmentId),
+            isNotNull(noteAttachments.extractedText),
+          ),
+        )
+        .limit(1);
+      if (reusable?.extractedText != null) {
+        text = reusable.extractedText;
+      }
+    } catch {
+      // Reuse is an optimization; extraction still works if this lookup fails.
+    }
+  }
+
+  if (text == null) {
+    text = await extractTextFromAttachmentFile({
+      absPath,
+      mimeType: row.mimeType,
+      fileName: row.fileName,
+      sizeBytes: row.sizeBytes,
+      userId: row.userId,
+    });
+  }
   await persistAttachmentExtractedText(attachmentId, text);
 
   const [note] = await getDb()

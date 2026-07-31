@@ -439,6 +439,7 @@ router.post("/ai/transcribe", (req, res, next) => {
         const locale =
           typeof req.body?.locale === "string" ? req.body.locale.slice(0, 16) : undefined;
         const result = await getTranscriptionProvider().transcribe({
+          userId: req.user!.id,
           audio: file.buffer,
           mimeType: file.mimetype || "audio/webm",
           filename: file.originalname || "utterance.webm",
@@ -502,6 +503,7 @@ const AiConfirmActionBody = z.object({
   }),
   rawCaptureId: z.string().min(1).max(64).nullable().default(null),
   threadId: z.string().min(1).max(64).nullable().default(null),
+  proposalId: z.string().min(1).max(64).nullable().default(null),
 });
 
 // Execute one user-confirmed proposed action via existing domain services.
@@ -513,8 +515,56 @@ router.post("/ai/actions/confirm", async (req, res, next) => {
       draft: body.draft,
       rawCaptureId: body.rawCaptureId,
       threadId: body.threadId,
+      proposalId: body.proposalId,
     });
     res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const AiCancelActionBody = z.object({
+  proposalId: z.string().min(1).max(64),
+});
+
+router.post("/ai/actions/cancel", async (req, res, next) => {
+  try {
+    const body = AiCancelActionBody.parse(req.body);
+    const { cancelProposalForUser } = await import("../services/action-proposals");
+    const cancelled = await cancelProposalForUser(req.user!.id, body.proposalId);
+    if (!cancelled) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Proposal not found or not cancellable" });
+      return;
+    }
+    res.json({ ok: true, proposal: cancelled });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const AiCorrectActionBody = z.object({
+  proposalId: z.string().min(1).max(64),
+  correction: z.string().min(1).max(2000),
+});
+
+router.post("/ai/actions/correct", async (req, res, next) => {
+  try {
+    const body = AiCorrectActionBody.parse(req.body);
+    const { correctProposalForUser } = await import("../services/action-proposals");
+    const { getBriefingPrefsForUser } = await import("../services/notification-settings");
+    const prefs = await getBriefingPrefsForUser(req.user!.id).catch(() => null);
+    const timezone = prefs?.timezone ?? process.env.RECALL_TIMEZONE ?? "America/New_York";
+    const result = await correctProposalForUser(
+      req.user!.id,
+      body.proposalId,
+      body.correction,
+      timezone,
+    );
+    if (!result.ok) {
+      res.status(400).json({ error: "CORRECTION_FAILED", message: result.error });
+      return;
+    }
+    res.json(result);
   } catch (err) {
     next(err);
   }

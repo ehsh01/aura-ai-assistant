@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import {
   confirmAskAction,
+  cancelAskAction,
   type AskActionType,
   type AskProposedAction,
   type AskProposedActionDraft,
@@ -147,6 +148,8 @@ function ReviewCard({
         },
         rawCaptureId,
         threadId,
+        // Durable proposals use aprop-*; ephemeral plan cards still confirm by draft.
+        proposalId: action.id.startsWith("aprop-") ? action.id : null,
       });
       setStatus("saved");
       setSavedAs(result.entityType === "attention_item" ? "reminder" : result.entityType);
@@ -271,7 +274,14 @@ function ReviewCard({
         <button
           type="button"
           disabled={status === "saving"}
-          onClick={() => setStatus("dismissed")}
+          onClick={() => {
+            setStatus("dismissed");
+            if (action.id.startsWith("aprop-")) {
+              void cancelAskAction(action.id).catch(() => {
+                /* best-effort server cancel */
+              });
+            }
+          }}
           className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-sm text-white/50 hover:bg-white/5 disabled:opacity-50"
         >
           <X size={14} />

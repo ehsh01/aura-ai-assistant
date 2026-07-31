@@ -87,6 +87,7 @@ import {
 } from "./ask-accuracy-policy";
 import { verifyFinanceAmountsInAnswer } from "./ask-verifier";
 import { isRelationLiteral } from "./ask-accuracy-policy";
+import { allowUserAi } from "./ai-usage";
 
 function buildFinanceBreakdownAnswer(
   finance: QueryFinanceAggregate,
@@ -296,6 +297,57 @@ async function runQueryForUser(
   question: string,
   options?: { threadId?: string | null; stream?: QueryStreamHandlers | null },
 ): Promise<QueryAnswer> {
+  if (!(await allowUserAi("ask_query", userId))) {
+    const answer =
+      "Your daily AI budget has been reached. Ask will be available again after midnight UTC.";
+    const thread = await ensureAskThreadForUser(userId, options?.threadId, question);
+    await appendAskMessage({
+      userId,
+      threadId: thread.id,
+      role: "user",
+      content: question,
+    });
+    const result: QueryAnswer = {
+      answer,
+      confidence: 1,
+      caveats: "No AI model was called.",
+      evidence: [],
+      relatedRecords: [],
+      images: [],
+      suggestedNextAction: null,
+      promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+      degraded: true,
+      threadId: thread.id,
+      sourcesConsulted: [],
+      presentation: "compact",
+      privacy: {
+        model: null,
+        dataLeftDevice: false,
+        categoriesSent: [],
+      },
+    };
+    const assistantMessage = await appendAskMessage({
+      userId,
+      threadId: thread.id,
+      role: "assistant",
+      content: answer,
+      metadata: buildAskAnswerMetadata(result),
+    });
+    result.assistantMessageId = assistantMessage.id;
+    if (options?.stream) {
+      options.stream.onMeta({
+        threadId: thread.id,
+        evidence: [],
+        relatedRecords: [],
+        images: [],
+        privacy: result.privacy,
+        sourcesConsulted: [],
+      });
+      options.stream.onToken(answer);
+    }
+    return result;
+  }
+
   const today = todayIso();
   const nowLabel = nowLocalLabel();
   const status = aiService.getStatus();

@@ -1,7 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { TranscriptionProvider, TranscriptionRequest, TranscriptionResult } from "./providers/transcription";
-import { TranscriptionValidationError } from "./providers/transcription";
-import { MAX_VOICE_AUDIO_BYTES } from "./providers/openai-whisper";
+import {
+  TranscriptionUnavailableError,
+  TranscriptionValidationError,
+} from "./providers/transcription";
+import {
+  MAX_VOICE_AUDIO_BYTES,
+  OpenAiWhisperTranscriptionProvider,
+} from "./providers/openai-whisper";
+
+const originalServerStt = process.env.RECALL_SERVER_STT_ENABLED;
+afterEach(() => {
+  if (originalServerStt === undefined) delete process.env.RECALL_SERVER_STT_ENABLED;
+  else process.env.RECALL_SERVER_STT_ENABLED = originalServerStt;
+});
 
 /** Fake provider for contract tests — no paid API calls. */
 class FakeTranscriptionProvider implements TranscriptionProvider {
@@ -42,5 +54,18 @@ describe("TranscriptionProvider contract (fake)", () => {
     await expect(
       provider.transcribe({ audio: Buffer.alloc(0), mimeType: "audio/webm" }),
     ).rejects.toBeInstanceOf(TranscriptionValidationError);
+  });
+});
+
+describe("OpenAI Whisper kill switch", () => {
+  it("returns unavailable only when server STT is explicitly disabled", async () => {
+    process.env.RECALL_SERVER_STT_ENABLED = "false";
+    const provider = new OpenAiWhisperTranscriptionProvider();
+    await expect(
+      provider.transcribe({
+        audio: Buffer.from("fake-audio"),
+        mimeType: "audio/webm",
+      }),
+    ).rejects.toBeInstanceOf(TranscriptionUnavailableError);
   });
 });

@@ -4,14 +4,14 @@
  * Two jobs:
  *  1. Record what every model call cost, attributed to a feature, so spend is
  *     explainable instead of a single opaque number on the OpenAI dashboard.
- *  2. Stop *background* work once a daily cap is hit. User-initiated requests
- *     are never blocked by the cap — going silent mid-question is worse than
- *     the marginal cost of answering it.
+ *  2. Stop background work at the global daily cap and softly degrade new Ask
+ *     queries at the per-user cap. In-flight streams are never interrupted.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { and, gte, sql } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { aiUsage } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
+import { isEnabled } from "../lib/feature-flags";
 import { logger } from "../lib/logger";
 
 /** Product areas that spend money. Keep stable; used for reporting. */
@@ -165,21 +165,49 @@ export async function spendTodayUsd(now: Date = new Date()): Promise<number> {
   }
 }
 
+/** Total spend in USD since midnight UTC for one user. */
+export async function spendTodayUsdForUser(
+  userId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  try {
+    const rows = await getDb()
+      .select({ micros: sql<string>`COALESCE(SUM(${aiUsage.costMicros}), 0)` })
+      .from(aiUsage)
+      .where(
+        and(
+          eq(aiUsage.userId, userId),
+          gte(aiUsage.createdAt, startOfTodayUtc(now)),
+        ),
+      );
+    return Number(rows[0]?.micros ?? 0) / 1_000_000;
+  } catch (err) {
+    logger.warn({ err, userId }, "Failed to read user's AI spend");
+    return 0;
+  }
+}
+
 /** Daily cap in USD for background work. 0 or unset disables the cap. */
 export function dailyBudgetUsd(): number {
   const raw = Number(process.env.AI_DAILY_BUDGET_USD ?? "0");
   return Number.isFinite(raw) && raw > 0 ? raw : 0;
 }
 
+/** Per-user daily cap in USD for Ask. 0 or unset disables the cap. */
+export function dailyBudgetUsdPerUser(): number {
+  const raw = Number(process.env.AI_DAILY_BUDGET_USD_PER_USER ?? "0");
+  return Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
+
 function featureEnabled(feature: AiFeature): boolean {
-  if (process.env.RECALL_BACKGROUND_AI_ENABLED === "false") return false;
-  if (feature === "attachment_ocr" && process.env.RECALL_ATTACHMENT_OCR_ENABLED === "false") {
+  if (!isEnabled("RECALL_BACKGROUND_AI_ENABLED")) return false;
+  if (feature === "attachment_ocr" && !isEnabled("RECALL_ATTACHMENT_OCR_ENABLED")) {
     return false;
   }
-  if (feature === "digest" && process.env.RECALL_AI_DIGESTS_ENABLED === "false") return false;
+  if (feature === "digest" && !isEnabled("RECALL_AI_DIGESTS_ENABLED")) return false;
   if (
     (feature === "deadline_extract" || feature === "waiting_extract") &&
-    process.env.RECALL_EMAIL_AI_SCAN_ENABLED === "false"
+    !isEnabled("RECALL_EMAIL_AI_SCAN_ENABLED")
   ) {
     return false;
   }
@@ -192,9 +220,11 @@ function featureEnabled(feature: AiFeature): boolean {
  */
 const BUDGET_CACHE_MS = 60_000;
 let budgetCache: { at: number; spend: number } | null = null;
+const userBudgetCache = new Map<string, { at: number; spend: number }>();
 
 export function resetBudgetCacheForTests(): void {
   budgetCache = null;
+  userBudgetCache.clear();
 }
 
 /**
@@ -217,6 +247,30 @@ export async function allowBackgroundAi(feature: AiFeature): Promise<boolean> {
   logger.warn(
     { feature, spend: budgetCache.spend, budget },
     "Daily AI budget reached — skipping background work",
+  );
+  return false;
+}
+
+/**
+ * Soft user-facing budget guard. It is intentionally checked before Ask starts
+ * so an in-flight streamed response is never interrupted.
+ */
+export async function allowUserAi(feature: AiFeature, userId: string): Promise<boolean> {
+  if (feature !== "ask_query") return true;
+  const budget = dailyBudgetUsdPerUser();
+  if (budget <= 0) return true;
+
+  const now = Date.now();
+  let cached = userBudgetCache.get(userId);
+  if (!cached || now - cached.at > BUDGET_CACHE_MS) {
+    cached = { at: now, spend: await spendTodayUsdForUser(userId) };
+    userBudgetCache.set(userId, cached);
+  }
+  if (cached.spend < budget) return true;
+
+  logger.warn(
+    { feature, userId, spend: cached.spend, budget },
+    "Per-user daily AI budget reached",
   );
   return false;
 }

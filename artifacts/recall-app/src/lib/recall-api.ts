@@ -1418,6 +1418,7 @@ export async function confirmAskAction(input: {
   draft: AskProposedActionDraft;
   rawCaptureId?: string | null;
   threadId?: string | null;
+  proposalId?: string | null;
 }): Promise<AskActionResult> {
   return apiFetch("/ai/actions/confirm", {
     method: "POST",
@@ -1426,7 +1427,30 @@ export async function confirmAskAction(input: {
       draft: input.draft,
       rawCaptureId: input.rawCaptureId ?? null,
       threadId: input.threadId ?? null,
+      proposalId: input.proposalId ?? null,
     }),
+  });
+}
+
+export async function cancelAskAction(proposalId: string): Promise<{ ok: boolean }> {
+  return apiFetch("/ai/actions/cancel", {
+    method: "POST",
+    body: JSON.stringify({ proposalId }),
+  });
+}
+
+export async function correctAskAction(input: {
+  proposalId: string;
+  correction: string;
+}): Promise<{
+  ok: true;
+  cancelled: boolean;
+  proposal: AskProposedAction & { status?: string; version?: number };
+  action?: AskProposedAction;
+}> {
+  return apiFetch("/ai/actions/correct", {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 

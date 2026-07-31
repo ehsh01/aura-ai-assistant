@@ -1182,6 +1182,15 @@ class OpenAiService implements AiService {
       model: this.embeddingModel,
       input: texts,
     });
+    const { feature, userId } = currentAiFeature();
+    void recordAiUsage({
+      userId,
+      feature,
+      model: this.embeddingModel,
+      background: isBackgroundFeature(feature),
+      promptTokens: Number(res.usage?.prompt_tokens ?? 0),
+      completionTokens: 0,
+    });
     return res.data.map((row) => row.embedding);
   }
 

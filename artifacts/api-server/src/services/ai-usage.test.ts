@@ -14,8 +14,10 @@ vi.mock("../lib/db", () => ({
 
 import {
   allowBackgroundAi,
+  allowUserAi,
   costMicrosFor,
   currentAiFeature,
+  dailyBudgetUsdPerUser,
   isBackgroundFeature,
   priceFor,
   recordAiUsage,
@@ -35,6 +37,7 @@ function stubSpend(micros: number): void {
 
 const ENV_KEYS = [
   "AI_DAILY_BUDGET_USD",
+  "AI_DAILY_BUDGET_USD_PER_USER",
   "RECALL_BACKGROUND_AI_ENABLED",
   "RECALL_ATTACHMENT_OCR_ENABLED",
   "RECALL_AI_DIGESTS_ENABLED",
@@ -193,6 +196,28 @@ describe("background budget guard", () => {
     });
     // A reporting outage must not silently disable the product.
     await expect(allowBackgroundAi("digest")).resolves.toBe(true);
+  });
+});
+
+describe("per-user Ask budget guard", () => {
+  it("parses a positive per-user budget and disables invalid values", () => {
+    process.env.AI_DAILY_BUDGET_USD_PER_USER = "1.25";
+    expect(dailyBudgetUsdPerUser()).toBe(1.25);
+    process.env.AI_DAILY_BUDGET_USD_PER_USER = "invalid";
+    expect(dailyBudgetUsdPerUser()).toBe(0);
+  });
+
+  it("blocks Ask when the user's spend reaches their cap", async () => {
+    process.env.AI_DAILY_BUDGET_USD_PER_USER = "1";
+    stubSpend(1_000_000);
+    await expect(allowUserAi("ask_query", "u1")).resolves.toBe(false);
+  });
+
+  it("does not apply the Ask cap to other features", async () => {
+    process.env.AI_DAILY_BUDGET_USD_PER_USER = "1";
+    stubSpend(10_000_000);
+    await expect(allowUserAi("transcribe", "u1")).resolves.toBe(true);
+    expect(mocks.select).not.toHaveBeenCalled();
   });
 });
 

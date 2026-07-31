@@ -2,7 +2,18 @@ import { describe, expect, it } from "vitest";
 import { writeFile, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { extractTextFromAttachmentFile } from "./attachment-text-extract";
+import {
+  attachmentContentHash,
+  extractTextFromAttachmentFile,
+} from "./attachment-text-extract";
+
+describe("attachmentContentHash", () => {
+  it("returns a stable SHA-256 digest of the file bytes", () => {
+    expect(attachmentContentHash(Buffer.from("hello"))).toBe(
+      "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    );
+  });
+});
 
 describe("extractTextFromAttachmentFile", () => {
   it("extracts plain text files", async () => {

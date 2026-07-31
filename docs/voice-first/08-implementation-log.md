@@ -311,3 +311,33 @@ over. The Gmail scans were already immune — they use a stable id bucketed to
 - The budget is global and resets at midnight **UTC**, not in the user's
   timezone, and is cached for up to 60s so it can overshoot slightly.
 - `ai_usage` starts empty, so it explains future spend, not the past $50.
+
+---
+
+## Milestones 5–6 + remaining cost hardening (2026-07-31)
+
+### What shipped
+
+**Voice First M5 — durable proposals**
+- `action_proposals` table (migration 0032)
+- Plan persists proposals; confirm claims by `proposalId` (idempotent)
+- Cancel + correct endpoints (`/ai/actions/cancel`, `/ai/actions/correct`)
+- Weekday temporal (“make that Friday”); cancel phrases
+- UI passes `aprop-*` ids and cancels on dismiss
+
+**Voice First M6 — docs + flags**
+- `03`–`07` docs under `docs/voice-first/`
+- Feature-flag helper + env kill switches documented
+- Rollout/eval/security docs
+
+**Cost hardening (remainder)**
+- OCR content-hash reuse across attachments (same user)
+- Embedding advisory lock + usage attribution
+- Per-user Ask soft budget (`AI_DAILY_BUDGET_USD_PER_USER`)
+- Server STT kill switch without removing iOS PWA fallback by default
+
+### Intentionally not done
+
+- Full Ask answer caching (stale risk)
+- Making server STT opt-in by default (would break iPhone PWA mic)
+- Soft/hard monthly budgets + external alert dashboards

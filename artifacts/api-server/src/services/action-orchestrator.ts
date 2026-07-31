@@ -257,12 +257,25 @@ export async function planActionsForText(
   });
 
   const classification = (await aiService.classifyCapture({ rawText: text })).item;
-  const actions = draftProposedActions(text, decision.result, classification);
+  let actions = draftProposedActions(text, decision.result, classification);
 
   // Mixed input: also answer the embedded question inline.
   const answer = decision.result.containsQuestion
     ? await queryRecallForUser(userId, text, { threadId })
     : null;
+
+  // Persist proposals so confirm/correct/cancel are server-authoritative.
+  try {
+    const { persistProposedActions } = await import("./action-proposals");
+    actions = await persistProposedActions({
+      userId,
+      threadId,
+      captureId: raw.id,
+      actions,
+    });
+  } catch {
+    // Table may not exist yet on a rolling deploy; ephemeral ids still work.
+  }
 
   await writeAuditLog({
     userId,
@@ -296,6 +309,8 @@ export interface ConfirmActionInput {
   draft: ProposedActionDraft;
   rawCaptureId?: string | null;
   threadId?: string | null;
+  /** When set, confirm is claimed against the durable proposal row (idempotent). */
+  proposalId?: string | null;
 }
 
 export interface ConfirmActionResult {
@@ -390,6 +405,71 @@ async function ownedLinks(
 
 /** Execute one confirmed proposed action via the existing domain service. */
 export async function confirmProposedAction(
+  userId: string,
+  input: ConfirmActionInput,
+): Promise<ConfirmActionResult> {
+  let type = input.type;
+  let draft = input.draft;
+  let rawCaptureId = input.rawCaptureId;
+  const proposalId = input.proposalId?.trim() || null;
+
+  if (proposalId) {
+    const {
+      claimProposalForConfirm,
+      getProposalForUser,
+      markProposalExecuted,
+      markProposalFailed,
+    } = await import("./action-proposals");
+
+    // Idempotent replay: already executed → return the prior entity ids.
+    const existing = await getProposalForUser(userId, proposalId);
+    if (
+      existing?.status === "executed" &&
+      existing.executedEntityType &&
+      existing.executedEntityId
+    ) {
+      return {
+        entityType: existing.executedEntityType,
+        entityId: existing.executedEntityId,
+      };
+    }
+
+    const claimed = await claimProposalForConfirm(userId, proposalId);
+    if (!claimed) {
+      const err = new Error("Proposal is no longer available to confirm") as Error & {
+        status?: number;
+      };
+      err.status = 409;
+      throw err;
+    }
+    type = claimed.type;
+    draft = claimed.draft;
+    rawCaptureId = claimed.captureId ?? rawCaptureId;
+
+    try {
+      const result = await executeConfirmedAction(userId, {
+        type,
+        draft,
+        rawCaptureId,
+        threadId: input.threadId,
+      });
+      await markProposalExecuted(userId, proposalId, result);
+      return result;
+    } catch (err) {
+      await markProposalFailed(userId, proposalId);
+      throw err;
+    }
+  }
+
+  return executeConfirmedAction(userId, {
+    type,
+    draft,
+    rawCaptureId,
+    threadId: input.threadId,
+  });
+}
+
+async function executeConfirmedAction(
   userId: string,
   input: ConfirmActionInput,
 ): Promise<ConfirmActionResult> {

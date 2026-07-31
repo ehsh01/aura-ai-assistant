@@ -3,6 +3,8 @@
  * Audio is never logged — only byte length and latency.
  */
 import OpenAI, { toFile } from "openai";
+import { isEnabled } from "../../../lib/feature-flags";
+import { recordAiUsage } from "../../ai-usage";
 import {
   TranscriptionUnavailableError,
   TranscriptionValidationError,
@@ -44,6 +46,9 @@ export class OpenAiWhisperTranscriptionProvider implements TranscriptionProvider
   readonly name = "openai-whisper";
 
   async transcribe(input: TranscriptionRequest): Promise<TranscriptionResult> {
+    if (!isEnabled("RECALL_SERVER_STT_ENABLED")) {
+      throw new TranscriptionUnavailableError("Server speech transcription is disabled");
+    }
     const apiKey = process.env.OPENAI_API_KEY?.trim();
     if (!apiKey) throw new TranscriptionUnavailableError();
 
@@ -91,6 +96,11 @@ export class OpenAiWhisperTranscriptionProvider implements TranscriptionProvider
     if (!text) {
       throw new TranscriptionValidationError("No speech detected in the recording");
     }
+    await recordAiUsage({
+      userId: input.userId,
+      feature: "transcribe",
+      model,
+    });
 
     return {
       text,

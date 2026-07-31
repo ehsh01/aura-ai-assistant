@@ -9,6 +9,28 @@ const EVENING_RE = /\b(tomorrow\s+)?evening\b|\btonight\b|\bin\s+the\s+evening\b
 const TOMORROW_RE = /\btomorrow\b/i;
 const TODAY_RE = /\btoday\b/i;
 const CLOCK_RE = /\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?\b/i;
+const WEEKDAY_RE =
+  /\b(this\s+|next\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i;
+
+const WEEKDAY_INDEX: Record<string, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+};
+
+/** Next occurrence of weekday (0=Sun) on or after `fromIsoDate`. */
+export function nextWeekdayOnOrAfter(fromIsoDate: string, weekday: number): string {
+  const [y, m, d] = fromIsoDate.split("-").map(Number);
+  const utc = new Date(Date.UTC(y!, m! - 1, d!));
+  const current = utc.getUTCDay();
+  let delta = (weekday - current + 7) % 7;
+  // "this Friday" when today is Friday → today; "next Friday" always +7 if same day.
+  return addCalendarDays(fromIsoDate, delta);
+}
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
@@ -111,13 +133,26 @@ export function resolveTemporalExpression(
   const tz = opts.timeZone || "UTC";
   const today = isoDateInTimezone(opts.now, tz);
   let date = today;
-  let dayHint: "today" | "tomorrow" | null = null;
+  let dayHint: "today" | "tomorrow" | "weekday" | null = null;
 
   if (TOMORROW_RE.test(text)) {
     date = addCalendarDays(today, 1);
     dayHint = "tomorrow";
   } else if (TODAY_RE.test(text)) {
     dayHint = "today";
+  } else {
+    const wd = text.match(WEEKDAY_RE);
+    if (wd) {
+      const name = (wd[2] ?? "").toLowerCase();
+      const idx = WEEKDAY_INDEX[name];
+      if (idx != null) {
+        const wantNext = /\bnext\s+/i.test(wd[0] ?? "");
+        let target = nextWeekdayOnOrAfter(today, idx);
+        if (wantNext && target === today) target = addCalendarDays(today, 7);
+        date = target;
+        dayHint = "weekday";
+      }
+    }
   }
 
   const clock = parseClock(text);

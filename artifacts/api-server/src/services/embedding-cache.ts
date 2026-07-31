@@ -4,6 +4,7 @@ import { entityEmbeddings } from "@workspace/db/schema";
 import { getDb, isDatabaseConfigured } from "../lib/db";
 import { newEmbeddingId } from "../lib/recall-format";
 import { aiService } from "./ai";
+import { withAiFeature } from "./ai-usage";
 
 type CacheEntry = {
   hash: string;
@@ -292,25 +293,134 @@ export async function embedItemsCached(
   }
 
   if (pending.length > 0) {
-    const CHUNK = 64;
-    const toPersist: { item: EmbeddableItem; hash: string; vector: number[] }[] = [];
-    for (let i = 0; i < pending.length; i += CHUNK) {
-      const slice = pending.slice(i, i + CHUNK);
-      metrics.itemApiCalls += 1;
-      const embeds = await aiService.embedTexts!(
-        slice.map((m) => m.item.text.slice(0, 2_000)),
-      );
-      for (let j = 0; j < slice.length; j++) {
-        const row = slice[j]!;
-        const vector = embeds[j];
-        if (!vector) continue;
-        cache.set(row.key, { hash: row.hash, vector, updatedAt: Date.now() });
-        vectors.set(`${row.item.entityType}:${row.item.entityId}`, vector);
-        toPersist.push({ item: row.item, hash: row.hash, vector });
+    const embedMissing = async (
+      missing: Pending[],
+    ): Promise<{ item: EmbeddableItem; hash: string; vector: number[] }[]> => {
+      const CHUNK = 64;
+      const generated: { item: EmbeddableItem; hash: string; vector: number[] }[] = [];
+      for (let i = 0; i < missing.length; i += CHUNK) {
+        const slice = missing.slice(i, i + CHUNK);
+        metrics.itemApiCalls += 1;
+        const embeds = await withAiFeature({ feature: "embedding", userId }, () =>
+          aiService.embedTexts!(slice.map((m) => m.item.text.slice(0, 2_000))),
+        );
+        for (let j = 0; j < slice.length; j++) {
+          const row = slice[j]!;
+          const vector = embeds[j];
+          if (!vector) continue;
+          cache.set(row.key, { hash: row.hash, vector, updatedAt: Date.now() });
+          vectors.set(`${row.item.entityType}:${row.item.entityId}`, vector);
+          generated.push({ item: row.item, hash: row.hash, vector });
+        }
       }
+      evictIfNeeded();
+      return generated;
+    };
+
+    if (isDatabaseConfigured()) {
+      let embedStarted = false;
+      try {
+        const generated = await getDb().transaction(async (tx) => {
+          // Acquire locks in a stable order to avoid deadlocks between batches.
+          const locked = [...pending].sort((a, b) =>
+            `${a.item.entityType}:${a.item.entityId}`.localeCompare(
+              `${b.item.entityType}:${b.item.entityId}`,
+            ),
+          );
+          for (const p of locked) {
+            const identity = `${userId}:${p.item.entityType}:${p.item.entityId}:${model}`;
+            await tx.execute(
+              sql`SELECT pg_advisory_xact_lock(hashtextextended(${identity}, 0))`,
+            );
+          }
+
+          // A different PM2 worker may have populated these while we waited.
+          const entityIds = [...new Set(pending.map((p) => p.item.entityId))];
+          const rows = await tx
+            .select()
+            .from(entityEmbeddings)
+            .where(
+              and(
+                eq(entityEmbeddings.userId, userId),
+                eq(entityEmbeddings.model, model),
+                inArray(entityEmbeddings.entityId, entityIds),
+              ),
+            );
+          const byKey = new Map(
+            rows.map((r) => [`${r.entityType}:${r.entityId}`, r] as const),
+          );
+          const stillMissing: Pending[] = [];
+          for (const p of pending) {
+            const row = byKey.get(`${p.item.entityType}:${p.item.entityId}`);
+            if (
+              row?.contentHash === p.hash &&
+              Array.isArray(row.vector) &&
+              row.vector.length > 0
+            ) {
+              cache.set(p.key, {
+                hash: p.hash,
+                vector: row.vector,
+                updatedAt: Date.now(),
+              });
+              vectors.set(`${p.item.entityType}:${p.item.entityId}`, row.vector);
+            } else {
+              stillMissing.push(p);
+            }
+          }
+
+          embedStarted = stillMissing.length > 0;
+          const created = await embedMissing(stillMissing);
+          const now = new Date();
+          for (const row of created) {
+            await tx
+              .insert(entityEmbeddings)
+              .values({
+                id: newEmbeddingId(),
+                userId,
+                entityType: row.item.entityType,
+                entityId: row.item.entityId,
+                contentHash: row.hash,
+                model,
+                dims: row.vector.length,
+                vector: row.vector,
+                createdAt: now,
+                updatedAt: now,
+              })
+              .onConflictDoUpdate({
+                target: [
+                  entityEmbeddings.userId,
+                  entityEmbeddings.entityType,
+                  entityEmbeddings.entityId,
+                  entityEmbeddings.model,
+                ],
+                set: {
+                  contentHash: row.hash,
+                  dims: row.vector.length,
+                  vector: row.vector,
+                  updatedAt: now,
+                },
+              });
+          }
+          return created;
+        });
+        for (const row of generated) {
+          void syncPgvectorColumn(
+            userId,
+            model,
+            row.item.entityType,
+            row.item.entityId,
+            row.vector,
+          );
+        }
+      } catch (err) {
+        if (embedStarted) throw err;
+        // Advisory locks are a cost optimization. Fail open if unavailable.
+        const generated = await embedMissing(pending);
+        await persistToDb(userId, model, generated);
+      }
+    } else {
+      await embedMissing(pending);
     }
-    evictIfNeeded();
-    void persistToDb(userId, model, toPersist);
   }
 
   return vectors;
@@ -341,7 +451,9 @@ export async function embedQuery(text: string): Promise<number[] | null> {
   }
   metrics.queryMisses += 1;
   metrics.queryApiCalls += 1;
-  const [vec] = await aiService.embedTexts([sliced]);
+  const [vec] = await withAiFeature({ feature: "embedding" }, () =>
+    aiService.embedTexts!([sliced]),
+  );
   if (!vec) return null;
   queryCache.set(key, { hash, vector: vec, updatedAt: Date.now() });
   evictQueryCacheIfNeeded();

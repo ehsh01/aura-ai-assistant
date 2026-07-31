@@ -2,6 +2,8 @@
  * Transcription provider boundary — domain logic must not import OpenAI here.
  */
 export type TranscriptionRequest = {
+  /** User attribution for cost accounting. */
+  userId?: string;
   /** Raw audio bytes. */
   audio: Buffer;
   /** MIME type from the client (e.g. audio/webm). */
