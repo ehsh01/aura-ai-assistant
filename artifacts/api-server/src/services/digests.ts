@@ -44,13 +44,17 @@ export function heuristicFactBullets(body: string): string[] {
   return bullets.slice(0, BULLET_MAX);
 }
 
-async function maybeAiDigest(title: string, body: string): Promise<string | null> {
+async function maybeAiDigest(
+  title: string,
+  body: string,
+  userId?: string,
+): Promise<string | null> {
   if (aiService.getStatus().degraded) return null;
   if (typeof aiService.chat !== "function") return null;
   if (body.trim().length < 800) return null;
   if (!(await allowBackgroundAi("digest"))) return null;
   try {
-    const result = await withAiFeature({ feature: "digest" }, () =>
+    const result = await withAiFeature({ feature: "digest", userId }, () =>
       aiService.chat({
         messages: [
           {
@@ -133,7 +137,7 @@ export async function regenerateNoteDigest(userId: string, noteId: string): Prom
   const hash = digestContentHash([row.title, row.content]);
   if (row.contentHash === hash && row.summary?.trim()) return;
 
-  const ai = await maybeAiDigest(row.title, row.content);
+  const ai = await maybeAiDigest(row.title, row.content, userId);
   const summary = ai ?? heuristicDigest(row.title, row.content);
   const factBullets = heuristicFactBullets(row.content);
 
@@ -168,7 +172,7 @@ export async function regenerateMemoryDigest(
     }
     return;
   }
-  const ai = await maybeAiDigest(row.title, row.content);
+  const ai = await maybeAiDigest(row.title, row.content, userId);
   const summary = ai ?? heuristicDigest(row.title, row.content);
   await getDb()
     .update(lifeMemories)
@@ -188,7 +192,7 @@ export async function regenerateCaptureDigest(
   const row = rows[0];
   if (!row) return;
   const title = row.title || "Capture";
-  const ai = await maybeAiDigest(title, row.rawText);
+  const ai = await maybeAiDigest(title, row.rawText, userId);
   const digest = ai ?? heuristicDigest(title, row.rawText, 400);
   await getDb()
     .update(captures)
@@ -208,7 +212,7 @@ async function regenerateDocumentDigest(userId: string, documentId: string): Pro
   if (row.summary?.trim()) return;
   const body = row.extractedText ?? "";
   if (!body.trim()) return;
-  const ai = await maybeAiDigest(row.fileName, body);
+  const ai = await maybeAiDigest(row.fileName, body, userId);
   const summary = ai ?? heuristicDigest(row.fileName, body);
   await getDb()
     .update(documents)

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Link } from "wouter";
 import { Activity, MessageSquare, Settings as SettingsIcon, Shield, Users } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
+import { AiUsageSection } from "@/components/settings/AiUsageSection";
 import { useAuth } from "@/context/AuthContext";
 import {
   adminSetDisabled,
@@ -211,6 +212,8 @@ export function Settings() {
           </div>
           <span className="text-xs text-white/30">View →</span>
         </Link>
+
+        <AiUsageSection isAdmin={user?.isAdmin === true} />
 
         <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 md:p-6">
           <h2 className="text-lg font-medium text-white">Change password</h2>

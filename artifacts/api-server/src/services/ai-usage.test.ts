@@ -22,6 +22,7 @@ import {
   priceFor,
   recordAiUsage,
   resetBudgetCacheForTests,
+  usageSummary,
   usageTokens,
   withAiFeature,
 } from "./ai-usage";
@@ -33,6 +34,56 @@ function stubSpend(micros: number): void {
       where: () => Promise.resolve([{ micros: String(micros) }]),
     }),
   });
+}
+
+type SqlRow = Record<string, string>;
+
+/**
+ * Stub the three queries usageSummary() runs, in order: feature rows, daily
+ * rows, then today's spend. Returns the `where` conditions so a test can check
+ * that user scoping actually reached the database.
+ */
+function stubUsageSummary(opts: {
+  rows: SqlRow[];
+  daily: SqlRow[];
+  todayMicros: number;
+}): unknown[] {
+  const conditions: unknown[] = [];
+  let call = 0;
+  mocks.select.mockImplementation(() => {
+    const result =
+      call === 0 ? opts.rows
+      : call === 1 ? opts.daily
+      : [{ micros: String(opts.todayMicros) }];
+    call += 1;
+    const settle = <T,>(onOk: (v: SqlRow[]) => T, onErr?: (e: unknown) => T) =>
+      Promise.resolve(result).then(onOk, onErr);
+    const builder = {
+      from: () => builder,
+      where: (cond: unknown) => {
+        conditions.push(cond);
+        return builder;
+      },
+      groupBy: () => builder,
+      orderBy: () => Promise.resolve(result),
+      then: settle,
+    };
+    return builder;
+  });
+  return conditions;
+}
+
+/**
+ * Whether a bound value appears anywhere in a drizzle SQL condition. Walks the
+ * object graph because the table references in it are circular, so the
+ * condition cannot simply be serialized.
+ */
+function bindsValue(node: unknown, needle: string, seen = new WeakSet()): boolean {
+  if (node === needle) return true;
+  if (typeof node !== "object" || node === null) return false;
+  if (seen.has(node)) return false;
+  seen.add(node);
+  return Object.values(node).some((child) => bindsValue(child, needle, seen));
 }
 
 const ENV_KEYS = [
@@ -218,6 +269,76 @@ describe("per-user Ask budget guard", () => {
     stubSpend(10_000_000);
     await expect(allowUserAi("transcribe", "u1")).resolves.toBe(true);
     expect(mocks.select).not.toHaveBeenCalled();
+  });
+});
+
+describe("usageSummary", () => {
+  const rows: SqlRow[] = [
+    {
+      feature: "attachment_ocr",
+      model: "gpt-4.1-mini",
+      calls: "12",
+      totalTokens: "48000",
+      micros: "1920000",
+    },
+    {
+      feature: "ask_query",
+      model: "gpt-4.1-mini",
+      calls: "3",
+      totalTokens: "9000",
+      micros: "80000",
+    },
+  ];
+  const daily: SqlRow[] = [
+    { day: "2026-07-31", calls: "10", micros: "1500000" },
+    { day: "2026-07-30", calls: "5", micros: "500000" },
+  ];
+
+  it("converts micro-dollars to USD for features and days", async () => {
+    stubUsageSummary({ rows, daily, todayMicros: 1_500_000 });
+    const summary = await usageSummary(30);
+
+    expect(summary.rows[0]).toEqual({
+      feature: "attachment_ocr",
+      model: "gpt-4.1-mini",
+      calls: 12,
+      totalTokens: 48_000,
+      costUsd: 1.92,
+    });
+    expect(summary.daily).toEqual([
+      { date: "2026-07-31", calls: 10, costUsd: 1.5 },
+      { date: "2026-07-30", calls: 5, costUsd: 0.5 },
+    ]);
+  });
+
+  it("totals spend across every feature row", async () => {
+    stubUsageSummary({ rows, daily, todayMicros: 0 });
+    const summary = await usageSummary(30);
+    expect(summary.totalUsd).toBeCloseTo(2.0, 5);
+  });
+
+  it("reports install-wide numbers when no user is given", async () => {
+    stubUsageSummary({ rows: [], daily: [], todayMicros: 0 });
+    await expect(usageSummary(30)).resolves.toMatchObject({ everyone: true });
+  });
+
+  it("scopes every query to the user when one is given", async () => {
+    const conditions = stubUsageSummary({ rows: [], daily: [], todayMicros: 0 });
+    const summary = await usageSummary(30, "user-abc");
+
+    expect(summary.everyone).toBe(false);
+    // One user's spend must never be reported under another's name, so the id
+    // has to reach all three queries, not just the summary flag.
+    expect(conditions).toHaveLength(3);
+    for (const cond of conditions) {
+      expect(bindsValue(cond, "user-abc")).toBe(true);
+    }
+  });
+
+  it("clamps a zero or negative window to at least one day", async () => {
+    stubUsageSummary({ rows: [], daily: [], todayMicros: 0 });
+    const summary = await usageSummary(0);
+    expect(Date.now() - Date.parse(summary.since)).toBeGreaterThanOrEqual(86_400_000);
   });
 });
 

@@ -283,27 +283,62 @@ export type UsageSummaryRow = {
   costUsd: number;
 };
 
-/** Spend grouped by feature and model over the last N days. */
-export async function usageSummary(days = 30): Promise<{
+export type UsageSummaryDay = {
+  /** UTC calendar day, YYYY-MM-DD. */
+  date: string;
+  calls: number;
+  costUsd: number;
+};
+
+export type UsageSummary = {
   since: string;
+  /** True when the numbers cover every user, not just the requester. */
+  everyone: boolean;
   totalUsd: number;
   todayUsd: number;
   budgetUsd: number;
   rows: UsageSummaryRow[];
-}> {
+  daily: UsageSummaryDay[];
+};
+
+/**
+ * Spend over the last N days, broken down per day and per feature/model.
+ * Pass a `userId` to scope it to one person; omit it for the whole install.
+ */
+export async function usageSummary(
+  days = 30,
+  userId?: string,
+): Promise<UsageSummary> {
   const since = new Date(Date.now() - Math.max(1, days) * 86_400_000);
-  const rows = await getDb()
-    .select({
-      feature: aiUsage.feature,
-      model: aiUsage.model,
-      calls: sql<string>`COUNT(*)`,
-      totalTokens: sql<string>`COALESCE(SUM(${aiUsage.totalTokens}), 0)`,
-      micros: sql<string>`COALESCE(SUM(${aiUsage.costMicros}), 0)`,
-    })
-    .from(aiUsage)
-    .where(and(gte(aiUsage.createdAt, since)))
-    .groupBy(aiUsage.feature, aiUsage.model)
-    .orderBy(sql`COALESCE(SUM(${aiUsage.costMicros}), 0) DESC`);
+  const scope = userId
+    ? and(gte(aiUsage.createdAt, since), eq(aiUsage.userId, userId))
+    : gte(aiUsage.createdAt, since);
+
+  const db = getDb();
+  const [rows, daily] = await Promise.all([
+    db
+      .select({
+        feature: aiUsage.feature,
+        model: aiUsage.model,
+        calls: sql<string>`COUNT(*)`,
+        totalTokens: sql<string>`COALESCE(SUM(${aiUsage.totalTokens}), 0)`,
+        micros: sql<string>`COALESCE(SUM(${aiUsage.costMicros}), 0)`,
+      })
+      .from(aiUsage)
+      .where(scope)
+      .groupBy(aiUsage.feature, aiUsage.model)
+      .orderBy(sql`COALESCE(SUM(${aiUsage.costMicros}), 0) DESC`),
+    db
+      .select({
+        day: sql<string>`TO_CHAR(${aiUsage.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`,
+        calls: sql<string>`COUNT(*)`,
+        micros: sql<string>`COALESCE(SUM(${aiUsage.costMicros}), 0)`,
+      })
+      .from(aiUsage)
+      .where(scope)
+      .groupBy(sql`TO_CHAR(${aiUsage.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`)
+      .orderBy(sql`TO_CHAR(${aiUsage.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD') DESC`),
+  ]);
 
   const mapped = rows.map((r) => ({
     feature: r.feature,
@@ -315,9 +350,15 @@ export async function usageSummary(days = 30): Promise<{
 
   return {
     since: since.toISOString(),
+    everyone: !userId,
     totalUsd: mapped.reduce((sum, r) => sum + r.costUsd, 0),
-    todayUsd: await spendTodayUsd(),
+    todayUsd: userId ? await spendTodayUsdForUser(userId) : await spendTodayUsd(),
     budgetUsd: dailyBudgetUsd(),
     rows: mapped,
+    daily: daily.map((d) => ({
+      date: d.day,
+      calls: Number(d.calls),
+      costUsd: Number(d.micros) / 1_000_000,
+    })),
   };
 }

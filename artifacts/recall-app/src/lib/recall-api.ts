@@ -1644,6 +1644,42 @@ export async function sendTestSmsReminder(): Promise<{ ok: boolean }> {
   return apiFetch("/settings/notifications/test", { method: "POST" });
 }
 
+export type AiUsageRow = {
+  feature: string;
+  model: string;
+  calls: number;
+  totalTokens: number;
+  costUsd: number;
+};
+
+export type AiUsageDay = {
+  /** UTC calendar day, YYYY-MM-DD. */
+  date: string;
+  calls: number;
+  costUsd: number;
+};
+
+export type AiUsageSummary = {
+  since: string;
+  /** True when the totals cover every account rather than just yours. */
+  everyone: boolean;
+  totalUsd: number;
+  todayUsd: number;
+  /** Daily cap in USD for background work; 0 means no cap is configured. */
+  budgetUsd: number;
+  rows: AiUsageRow[];
+  daily: AiUsageDay[];
+};
+
+/** Estimated OpenAI spend. `everyone` is ignored by the server for non-admins. */
+export async function getAiUsage(
+  days = 30,
+  everyone = false,
+): Promise<AiUsageSummary> {
+  const scope = everyone ? "&scope=all" : "";
+  return apiFetch(`/ai/usage?days=${days}${scope}`);
+}
+
 export type AskThreadRecord = {
   id: string;
   title: string;
