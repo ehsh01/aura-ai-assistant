@@ -17,7 +17,10 @@ import { listNoteMetadataForUser, type RecallNoteMetadataDto } from "./notes";
 import { listProjectsForUser, type RecallProjectDto } from "./projects";
 import { listTasksForUser, type RecallTaskDto } from "./tasks";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
-import { ensureUserFinanceFresh } from "./finance-auto-sync";
+import {
+  ensureUserFinanceFresh,
+  ON_DEMAND_SYNC_TIMEOUT_MS,
+} from "./finance-auto-sync";
 import { listWaitingOnForUser } from "./waiting-on";
 import { listWaitingItemsForUser, type WaitingItemDto } from "./waiting-items";
 import {
@@ -609,8 +612,13 @@ function fallbackSummary(attentionCount: number, parts: string[]): string {
 
 /** This-month finance snapshot from already-synced source_records. */
 async function buildFinanceSnapshot(userId: string, today: string): Promise<FinanceSnapshot | null> {
-  // Refresh from MyFamilyBudget before reading (await so Home shows fresh totals).
-  await ensureUserFinanceFresh(userId, { awaitSync: true });
+  // Refresh from MyFamilyBudget before reading (await so Home shows fresh
+  // totals), but never let a slow sync hold Today open — it fell back to the
+  // last snapshot only after the client had already given up.
+  await ensureUserFinanceFresh(userId, {
+    awaitSync: true,
+    timeoutMs: ON_DEMAND_SYNC_TIMEOUT_MS,
+  });
   const synced = await loadSyncedFinanceAggregate(userId, "this month", today);
   if (!synced) return null;
   const top = synced.finance.topPayees[0] ?? null;

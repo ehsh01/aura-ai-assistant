@@ -36,7 +36,10 @@ import {
   acknowledgeHomeyAlertForUser,
   listOpenHomeyAlertsForUser,
 } from "../services/homey-alerts";
-import { ensureUserFinanceFresh } from "../services/finance-auto-sync";
+import {
+  ensureUserFinanceFresh,
+  ON_DEMAND_SYNC_TIMEOUT_MS,
+} from "../services/finance-auto-sync";
 import {
   financeSummaryFromSynced,
   loadSyncedFinanceAggregate,
@@ -434,9 +437,13 @@ router.post("/connectors/:connectorId/sync", async (req, res, next) => {
 /** Refresh finance from MyFamilyBudget (called when the app opens). */
 router.post("/finance/refresh", async (req, res, next) => {
   try {
+    // The app shell calls this on every mount. Forcing a sync each time (and
+    // waiting for all of it) let refreshes stack until the process ran out of
+    // heap, so keep the normal cooldown and stop waiting after the timeout —
+    // the sync itself continues in the background either way.
     const result = await ensureUserFinanceFresh(req.user!.id, {
-      maxAgeMs: 0,
       awaitSync: true,
+      timeoutMs: ON_DEMAND_SYNC_TIMEOUT_MS,
     });
     res.json({ ok: true, ...result });
   } catch (err) {
@@ -456,7 +463,10 @@ router.get("/finance/summary", async (req, res, next) => {
       res.status(404).json({ error: "NOT_FOUND", message: "Finance connector not found" });
       return;
     }
-    await ensureUserFinanceFresh(req.user!.id, { awaitSync: true });
+    await ensureUserFinanceFresh(req.user!.id, {
+      awaitSync: true,
+      timeoutMs: ON_DEMAND_SYNC_TIMEOUT_MS,
+    });
     const synced = await loadSyncedFinanceAggregate(
       req.user!.id,
       "this month",

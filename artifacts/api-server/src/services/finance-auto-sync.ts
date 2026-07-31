@@ -8,6 +8,12 @@ import { logger } from "../lib/logger";
 const STALE_MS = 6 * 60 * 60 * 1000; // 6 hours
 /** App-open / Ask: skip only if synced within this window (avoid double-hit). */
 const OPEN_COOLDOWN_MS = 45 * 1000;
+/**
+ * Longest a request may block on a finance sync before answering from the last
+ * snapshot. Without a bound, every caller waits for the full MyFamilyBudget
+ * pull; requests then stack up for minutes and the process runs out of heap.
+ */
+export const ON_DEMAND_SYNC_TIMEOUT_MS = 8_000;
 const TICK_MS = 30 * 60 * 1000; // every 30 minutes
 const MAX_PER_TICK = 3;
 

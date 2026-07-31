@@ -48,9 +48,11 @@ module.exports = {
       exec_mode: "fork",
       instances: 1,
       autorestart: true,
-      max_memory_restart: "1024M",
-      // Cap V8 heap below max_memory_restart so GC pressure surfaces before OOM.
-      node_args: "--max-old-space-size=768",
+      // Must stay BELOW the RSS the heap cap implies (heap + ~100M runtime), or
+      // V8 aborts with a fatal OOM before pm2 ever reaches this threshold and
+      // in-flight requests die as 502s. Restarting on RSS is the graceful path.
+      max_memory_restart: "560M",
+      node_args: "--max-old-space-size=448",
       env: {
         ...fileEnvNoPort,
         NODE_ENV: "production",
@@ -73,8 +75,9 @@ module.exports = {
       exec_mode: "fork",
       instances: 1,
       autorestart: true,
-      max_memory_restart: "768M",
-      node_args: "--max-old-space-size=512",
+      // Same ordering as the API: restart on RSS before V8's heap cap aborts.
+      max_memory_restart: "560M",
+      node_args: "--max-old-space-size=448",
       env: {
         ...fileEnvNoPort,
         NODE_ENV: "production",
