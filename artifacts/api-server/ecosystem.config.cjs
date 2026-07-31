@@ -51,8 +51,10 @@ module.exports = {
       // Must stay BELOW the RSS the heap cap implies (heap + ~100M runtime), or
       // V8 aborts with a fatal OOM before pm2 ever reaches this threshold and
       // in-flight requests die as 502s. Restarting on RSS is the graceful path.
-      max_memory_restart: "560M",
-      node_args: "--max-old-space-size=448",
+      // Steady-state RSS is ~550M, so leave real headroom above it or the
+      // process restarts every few seconds instead.
+      max_memory_restart: "840M",
+      node_args: "--max-old-space-size=768",
       env: {
         ...fileEnvNoPort,
         NODE_ENV: "production",
@@ -76,8 +78,10 @@ module.exports = {
       instances: 1,
       autorestart: true,
       // Same ordering as the API: restart on RSS before V8's heap cap aborts.
-      max_memory_restart: "560M",
-      node_args: "--max-old-space-size=448",
+      // OCR and embedding batches keep this near 600M, so the ceiling has to
+      // sit above that to avoid a restart loop.
+      max_memory_restart: "760M",
+      node_args: "--max-old-space-size=640",
       env: {
         ...fileEnvNoPort,
         NODE_ENV: "production",
