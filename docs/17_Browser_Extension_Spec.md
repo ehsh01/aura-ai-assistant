@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-The browser extension allows low-friction capture from web-based tools such as Outlook Web, Teams Web, ticketing systems, and general web pages.
+The browser extension captures context from **Outlook Web** and **Teams Web** into Recall. It is a privacy-restricted collector for accounts that cannot grant Microsoft Graph permissions, plus a manual Capture fallback on those same hosts.
 
 ## 2. Guiding Principle
 
@@ -53,18 +53,25 @@ The extension should capture:
 
 Initial collectors:
 
-- generic collector
-- Outlook Web collector
-- Teams Web collector
-- ticketing collector
+- Outlook Web collector (manual + optional automatic)
+- Teams Web collector (manual + optional automatic)
 
-Collectors should follow a shared interface.
+Collectors follow a shared extract → fingerprint → submit pipeline. Ticketing and generic web collectors are out of scope while the extension is host-restricted to Outlook and Teams.
 
 ## 6. Privacy
 
-The extension should not silently scrape pages.
+The extension must not monitor arbitrary browsing and must not take screenshots.
 
-Capture should be user-initiated.
+**Manual capture** is user-initiated on approved Outlook Web and Teams Web hosts.
+
+**Automatic capture** is optional and **defaults to off**. When the user enables it:
+
+- content scripts run only on Outlook Web and Teams Web
+- capture is limited to content that becomes visible after the user opens an email or Teams conversation
+- the extension must not open messages, mark items read, alter Microsoft UI, or scrape inboxes in bulk
+- captures are sent as Recall review items; AI extraction stays on the server
+
+Silent bulk scraping of mailboxes or chats is not allowed.
 
 ## 7. Retry Queue
 

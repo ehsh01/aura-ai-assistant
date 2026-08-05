@@ -1,0 +1,10 @@
+{
+  "name": "@workspace/recall-extension",
+  "private": true,
+  "version": "0.4.0",
+  "type": "module",
+  "scripts": {
+    "test": "node ../api-server/node_modules/vitest/vitest.mjs run"
+  },
+  "devDependencies": {}
+}

@@ -146,7 +146,7 @@ export function PersonDetail() {
 
   return (
     <AppLayout>
-      <div className="mx-auto max-w-3xl space-y-4 p-4 sm:p-6">
+      <div className="h-full overflow-y-auto mx-auto max-w-3xl space-y-4 p-4 sm:p-6">
         <header>
           <Link href="/people" className="text-xs text-zinc-500 hover:text-zinc-300">← People</Link>
           <h1 className="mt-1 text-xl font-semibold text-zinc-100">{person.displayName}</h1>

@@ -91,7 +91,7 @@ export function WaitingList() {
 
   return (
     <AppLayout>
-      <div className="mx-auto w-full max-w-3xl px-4 pb-24 pt-6">
+      <div className="h-full overflow-y-auto mx-auto w-full max-w-3xl px-4 pb-24 pt-6">
         <header className="flex items-center gap-3">
           <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-sky-400/30 bg-sky-500/10 text-sky-300">
             <Hourglass size={18} />

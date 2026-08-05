@@ -1,12 +1,50 @@
 {
   "manifest_version": 3,
   "name": "Recall Capture",
-  "version": "0.3.0",
-  "description": "Capture browser context into Recall (collector only — Recall performs AI extraction).",
-  "permissions": ["activeTab", "storage", "scripting"],
+  "version": "0.4.0",
+  "description": "Privacy-restricted capture from Outlook Web and Teams Web into Recall. Optional automatic capture creates review items only — no screenshots.",
+  "permissions": ["storage", "alarms", "activeTab"],
+  "host_permissions": [
+    "https://outlook.office.com/*",
+    "https://outlook.office365.com/*",
+    "https://outlook.live.com/*",
+    "https://teams.microsoft.com/*",
+    "https://teams.live.com/*",
+    "https://recall-app.net/*",
+    "http://localhost:5173/*",
+    "http://localhost:5008/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://outlook.office.com/*",
+        "https://outlook.office365.com/*",
+        "https://outlook.live.com/*",
+        "https://teams.microsoft.com/*",
+        "https://teams.live.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
   "action": {
     "default_title": "Capture to Recall",
     "default_popup": "popup.html"
   },
-  "host_permissions": ["https://recall-app.net/*", "http://localhost:5173/*", "http://localhost:5008/*"]
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/*.js"],
+      "matches": [
+        "https://outlook.office.com/*",
+        "https://outlook.office365.com/*",
+        "https://outlook.live.com/*",
+        "https://teams.microsoft.com/*",
+        "https://teams.live.com/*"
+      ]
+    }
+  ]
 }

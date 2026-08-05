@@ -9,7 +9,9 @@ import { OrganizationsPanel } from "@/components/OrganizationsPanel";
 export function Organizations() {
   return (
     <AppLayout>
-      <OrganizationsPanel />
+      <div className="h-full overflow-y-auto">
+        <OrganizationsPanel />
+      </div>
     </AppLayout>
   );
 }

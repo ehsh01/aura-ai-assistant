@@ -182,7 +182,9 @@ export function Settings() {
 
   return (
     <AppLayout>
-      <div className="mx-auto max-w-3xl space-y-8 px-4 py-8 md:px-6">
+      {/* AppLayout's <main> is overflow-hidden, so each page owns its scroll area. */}
+      <div className="h-full overflow-y-auto px-4 py-8 md:px-6">
+        <div className="mx-auto max-w-3xl space-y-8">
         <header className="space-y-1">
           <div className="flex items-center gap-2 text-indigo-300">
             <SettingsIcon size={18} />
@@ -651,6 +653,7 @@ export function Settings() {
             )}
           </section>
         )}
+        </div>
       </div>
     </AppLayout>
   );
