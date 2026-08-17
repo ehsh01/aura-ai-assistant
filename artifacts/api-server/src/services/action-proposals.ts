@@ -149,6 +149,18 @@ export async function getProposalForUser(
   return rows[0] ? toDto(rows[0]) : null;
 }
 
+export async function listLatestOpenProposalForUser(
+  userId: string,
+): Promise<ProposalDto | null> {
+  const rows = await getDb()
+    .select()
+    .from(actionProposals)
+    .where(and(eq(actionProposals.userId, userId), eq(actionProposals.status, "proposed")))
+    .orderBy(desc(actionProposals.createdAt))
+    .limit(1);
+  return rows[0] ? toDto(rows[0]) : null;
+}
+
 export async function listOpenProposalsForThread(
   userId: string,
   threadId: string,

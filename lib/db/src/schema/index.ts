@@ -34,3 +34,4 @@ export * from "./user-rules";
 export * from "./attention-items";
 export * from "./ai-usage";
 export * from "./action-proposals";
+export * from "./person-identities";

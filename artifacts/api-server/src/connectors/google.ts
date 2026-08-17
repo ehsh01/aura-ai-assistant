@@ -6,6 +6,7 @@ export const GOOGLE_OAUTH_SCOPES = [
   "profile",
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/contacts.readonly",
   "https://www.googleapis.com/auth/drive.readonly",
 ] as const;
@@ -100,6 +101,66 @@ export async function exchangeGoogleCode(code: string): Promise<{
     email: profile.email,
     name: profile.name ?? null,
   };
+}
+
+export async function createGoogleCalendarEvent(
+  accessToken: string,
+  input: {
+    title: string;
+    description?: string | null;
+    start: string;
+    end?: string | null;
+  },
+): Promise<{ id: string; htmlLink: string | null }> {
+  const startRaw = input.start.trim();
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(startRaw);
+  const start = isDateOnly
+    ? { date: startRaw }
+    : { dateTime: startRaw };
+  let end: { date?: string; dateTime?: string };
+  if (input.end?.trim()) {
+    const endRaw = input.end.trim();
+    end = /^\d{4}-\d{2}-\d{2}$/.test(endRaw) ? { date: endRaw } : { dateTime: endRaw };
+  } else if (isDateOnly) {
+    const next = new Date(`${startRaw}T00:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    end = { date: next.toISOString().slice(0, 10) };
+  } else {
+    const startMs = Date.parse(startRaw);
+    end = { dateTime: new Date(startMs + 60 * 60_000).toISOString() };
+  }
+
+  const res = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      summary: input.title.slice(0, 500),
+      description: input.description?.slice(0, 4000) ?? undefined,
+      start,
+      end,
+    }),
+  });
+  if (res.status === 403) {
+    const err = new Error(
+      "Google Calendar write is not authorized yet — reconnect Google in Connectors",
+    ) as Error & { status?: number };
+    err.status = 403;
+    throw err;
+  }
+  if (!res.ok) {
+    const body = await res.text();
+    const err = new Error(`Google Calendar create failed: ${res.status} ${body.slice(0, 180)}`) as Error & {
+      status?: number;
+    };
+    err.status = 502;
+    throw err;
+  }
+  const data = (await res.json()) as { id?: string; htmlLink?: string };
+  if (!data.id) throw new Error("Google Calendar did not return an event id");
+  return { id: data.id, htmlLink: data.htmlLink ?? null };
 }
 
 export async function refreshGoogleAccessToken(refreshToken: string): Promise<{

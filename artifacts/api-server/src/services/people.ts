@@ -98,6 +98,17 @@ export async function createPersonForUser(
     entityId: dto.id,
     text: personEmbeddingText(dto),
   });
+  void import("./person-identities")
+    .then((m) =>
+      m.syncPersonIdentitiesFromProfile({
+        userId,
+        personId: dto.id,
+        email: dto.email,
+        phone: dto.phone,
+        displayName: dto.displayName,
+      }),
+    )
+    .catch(() => undefined);
   return dto;
 }
 
@@ -158,6 +169,16 @@ export async function updatePersonForUser(
           oldValue: oldVal != null ? String(oldVal) : null,
           newValue: newVal != null ? String(newVal) : null,
         });
+        void import("./correction-rules")
+          .then((m) =>
+            m.maybeApplyCorrectionRule(userId, {
+              entityType: "person",
+              fieldName: field,
+              oldValue: oldVal != null ? String(oldVal) : null,
+              newValue: newVal != null ? String(newVal) : null,
+            }),
+          )
+          .catch(() => undefined);
       }
     }
   }
@@ -200,6 +221,17 @@ export async function updatePersonForUser(
     entityId: dto.id,
     text: personEmbeddingText(dto),
   });
+  void import("./person-identities")
+    .then((m) =>
+      m.syncPersonIdentitiesFromProfile({
+        userId,
+        personId: dto.id,
+        email: dto.email,
+        phone: dto.phone,
+        displayName: dto.displayName,
+      }),
+    )
+    .catch(() => undefined);
   return dto;
 }
 

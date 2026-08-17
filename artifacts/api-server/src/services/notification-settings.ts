@@ -5,6 +5,7 @@ import { getDb } from "../lib/db";
 export type NotificationSettingsDto = {
   phoneNumber: string | null;
   smsRemindersEnabled: boolean;
+  smsInboundEnabled: boolean;
   smsLeadMinutes: number;
   timezone: string | null;
   morningBriefingEnabled: boolean;
@@ -93,6 +94,7 @@ const BRIEFING_DEFAULTS = {
 function toDto(row: {
   phoneNumber: string | null;
   smsRemindersEnabled: boolean;
+  smsInboundEnabled?: boolean;
   smsLeadMinutes: number;
   timezone: string | null;
   morningBriefingEnabled: boolean;
@@ -105,6 +107,7 @@ function toDto(row: {
   return {
     phoneNumber: row.phoneNumber,
     smsRemindersEnabled: row.smsRemindersEnabled,
+    smsInboundEnabled: row.smsInboundEnabled ?? false,
     smsLeadMinutes: row.smsLeadMinutes,
     timezone: row.timezone,
     morningBriefingEnabled: row.morningBriefingEnabled,
@@ -119,6 +122,7 @@ function toDto(row: {
 const SETTINGS_SELECT = {
   phoneNumber: users.phoneNumber,
   smsRemindersEnabled: users.smsRemindersEnabled,
+  smsInboundEnabled: users.smsInboundEnabled,
   smsLeadMinutes: users.smsLeadMinutes,
   timezone: users.timezone,
   morningBriefingEnabled: users.morningBriefingEnabled,
@@ -141,6 +145,7 @@ export async function getNotificationSettingsForUser(
     row ?? {
       phoneNumber: null,
       smsRemindersEnabled: false,
+      smsInboundEnabled: false,
       smsLeadMinutes: 30,
       ...BRIEFING_DEFAULTS,
     },
@@ -205,6 +210,7 @@ export async function updateNotificationSettingsForUser(
   input: {
     phoneNumber?: string | null;
     smsRemindersEnabled?: boolean;
+    smsInboundEnabled?: boolean;
     smsLeadMinutes?: number;
     timezone?: string | null;
     morningBriefingEnabled?: boolean;
@@ -228,6 +234,9 @@ export async function updateNotificationSettingsForUser(
   }
   if (input.smsRemindersEnabled !== undefined) {
     patch.smsRemindersEnabled = input.smsRemindersEnabled;
+  }
+  if (input.smsInboundEnabled !== undefined) {
+    patch.smsInboundEnabled = input.smsInboundEnabled;
   }
   if (input.smsLeadMinutes !== undefined) {
     patch.smsLeadMinutes = clampLeadMinutes(input.smsLeadMinutes);

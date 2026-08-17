@@ -26,6 +26,13 @@ export const users = pgTable("users", {
   /** User-local ISO dates of the last sends — idempotency markers. */
   lastMorningBriefingOn: varchar("last_morning_briefing_on", { length: 10 }),
   lastEveningCheckinOn: varchar("last_evening_checkin_on", { length: 10 }),
+  /** When true, Twilio inbound SMS is accepted from this user's phoneNumber. Default off. */
+  smsInboundEnabled: boolean("sms_inbound_enabled").notNull().default(false),
+  lastHomeSeenAt: timestamp("last_home_seen_at", { withTimezone: true }),
+  workingPersonId: varchar("working_person_id", { length: 64 }),
+  workingProjectId: varchar("working_project_id", { length: 64 }),
+  lastSmsProposalId: varchar("last_sms_proposal_id", { length: 64 }),
+  lastSmsThreadId: varchar("last_sms_thread_id", { length: 64 }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

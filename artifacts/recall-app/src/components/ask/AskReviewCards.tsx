@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   AlarmClock,
+  CalendarClock,
   Check,
   FileText,
   Inbox,
@@ -54,6 +55,12 @@ const TYPE_META: Record<
     badge: "bg-slate-500/15 text-slate-200",
     icon: Inbox,
     saveLabel: "Send to Inbox",
+  },
+  create_calendar_event: {
+    accent: "border-l-emerald-400",
+    badge: "bg-emerald-500/15 text-emerald-200",
+    icon: CalendarClock,
+    saveLabel: "Add to calendar",
   },
 };
 

@@ -131,3 +131,7 @@ export function newExtractionJobId(): string {
 export function newActionProposalId(): string {
   return `aprop-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+export function newPersonIdentityId(): string {
+  return `pid-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}

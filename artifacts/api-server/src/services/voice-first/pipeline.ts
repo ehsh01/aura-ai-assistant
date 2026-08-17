@@ -34,6 +34,7 @@ export async function receiveVoiceCapture(input: VoiceCaptureInput): Promise<Voi
 
   const plan = await planActionsForText(input.userId, text, {
     threadId: input.sessionId ?? null,
+    idempotencyKey: input.idempotencyKey ?? null,
   });
 
   // Enrich reminder drafts that lack a due date when we resolved one temporally.
@@ -55,8 +56,19 @@ export async function receiveVoiceCapture(input: VoiceCaptureInput): Promise<Voi
 
   // Only unambiguous matches become links. Ambiguous mentions stay unlinked so
   // the user is asked rather than attached to the wrong John.
-  const personId = links.person?.status === "resolved" ? links.person.id : null;
-  const projectId = links.project?.status === "resolved" ? links.project.id : null;
+  let personId = links.person?.status === "resolved" ? links.person.id : null;
+  let projectId = links.project?.status === "resolved" ? links.project.id : null;
+  // Sticky working context fills gaps only when the user did not name anyone.
+  if (!plan.mentions?.personName || !plan.mentions?.projectName) {
+    try {
+      const { getWorkingContextForUser } = await import("../working-context");
+      const ctx = await getWorkingContextForUser(input.userId);
+      if (!personId && !plan.mentions?.personName && ctx.personId) personId = ctx.personId;
+      if (!projectId && !plan.mentions?.projectName && ctx.projectId) projectId = ctx.projectId;
+    } catch {
+      // Working-context columns may not exist yet on a rolling deploy.
+    }
+  }
   if (personId || projectId) {
     for (const action of plan.actions) {
       action.draft.personId = personId;

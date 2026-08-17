@@ -48,6 +48,8 @@ export const lifeMemories = pgTable(
     sourceType: varchar("source_type", { length: 16 }).notNull().default("teach"),
     sourceId: varchar("source_id", { length: 64 }),
     pinned: boolean("pinned").notNull().default(false),
+    /** personal | household | work — default personal. */
+    vault: varchar("vault", { length: 32 }).notNull().default("personal"),
     status: varchar("status", { length: 32 }).notNull().default("active"),
     /** When this row is a correction: id of the prior memory it replaces. */
     supersedesId: varchar("supersedes_id", { length: 64 }),

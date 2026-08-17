@@ -35,6 +35,8 @@ export const notes = pgTable("notes", {
   contentFormat: varchar("content_format", { length: 16 }).notNull().default("plain"),
   tags: jsonb("tags").$type<string[]>().notNull().default([]),
   pinned: boolean("pinned").notNull().default(false),
+  /** personal | household | work — default personal so existing notes stay private. */
+  vault: varchar("vault", { length: 32 }).notNull().default("personal"),
   /** Denormalized note + attachment OCR text for FTS (maintained by DB triggers). */
   searchDocument: text("search_document").notNull().default(""),
   searchTsv: tsvector("search_tsv"),

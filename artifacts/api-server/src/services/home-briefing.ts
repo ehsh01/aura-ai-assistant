@@ -217,6 +217,31 @@ export interface HomeBriefingResponse {
   finance: FinanceSnapshot | null;
   review: BriefingReview;
   morning: MorningBriefing;
+  workingContext?: {
+    personId: string | null;
+    personName: string | null;
+    projectId: string | null;
+    projectName: string | null;
+    updatedAt: string | null;
+  };
+  whatChanged?: {
+    id: string;
+    kind: string;
+    title: string;
+    detail: string;
+    href: string;
+  }[];
+  meetingPrep?: {
+    eventId: string;
+    title: string;
+    startLabel: string | null;
+    personName: string | null;
+    personHref: string | null;
+    waitingCount: number;
+    recentContext: string | null;
+    href: string;
+  }[];
+  openQuestions?: { id: string; title: string; detail: string; href: string }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -789,7 +814,7 @@ export async function buildHomeBriefing(
     classic: classicInsights,
   });
 
-  return {
+  const extra: HomeBriefingResponse = {
     date: new Date().toLocaleDateString("en-US", {
       weekday: "long",
       month: "long",
@@ -806,6 +831,91 @@ export async function buildHomeBriefing(
     review,
     morning,
   };
+
+  try {
+    const { getWorkingContextForUser, getLastHomeSeenAt, markHomeSeen } = await import(
+      "./working-context"
+    );
+    const { buildWhatChanged } = await import("./what-changed");
+    const { buildMeetingPrep } = await import("./meeting-prep");
+    const { suggestDocumentFiling } = await import("./document-filing");
+    const { listPeopleForUser } = await import("./people");
+
+    const [workingContext, lastSeen, people] = await Promise.all([
+      getWorkingContextForUser(userId),
+      getLastHomeSeenAt(userId),
+      listPeopleForUser(userId, { limit: 80 }),
+    ]);
+    const since = lastSeen ?? new Date(Date.now() - 24 * 60 * 60_000);
+    const whatChanged = buildWhatChanged({
+      since,
+      waiting: waitingAll.map((w) => ({
+        id: w.id,
+        deliverable: w.deliverable,
+        ownerName: w.ownerName,
+        href: w.href,
+        updatedAt: w.updatedAt,
+        createdAt: w.createdAt,
+      })),
+      attention: attentionDue.map((a) => ({
+        id: a.id,
+        title: a.title,
+        href: a.href,
+        updatedAt: a.updatedAt,
+        createdAt: a.createdAt,
+        kind: a.kind,
+      })),
+      inbox: captures.map((c) => ({
+        id: c.id,
+        cleanedTitle: c.cleanedTitle,
+        createdAt: c.createdAt,
+        href: inboxPath(c.id),
+      })),
+      homey: homeyAlerts.map((a) => ({
+        id: a.id,
+        title: a.title,
+        createdAt: a.createdAt,
+      })),
+    });
+    const meetingPrep = buildMeetingPrep({
+      calendarToday: morning.calendarToday,
+      people: people.map((p) => ({ id: p.id, displayName: p.displayName })),
+      waiting: waitingAll.map((w) => ({
+        ownerName: w.ownerName,
+        ownerPersonId: w.ownerPersonId,
+        deliverable: w.deliverable,
+      })),
+    });
+    const openQuestions: { id: string; title: string; detail: string; href: string }[] = [];
+    for (const item of review.items.slice(0, 4)) {
+      openQuestions.push({
+        id: `review:${item.id}`,
+        title: item.title,
+        detail: item.detail,
+        href: item.href,
+      });
+    }
+    for (const cap of captures.filter((c) => c.status === "pending").slice(0, 6)) {
+      const filing = suggestDocumentFiling(`${cap.cleanedTitle} ${cap.rawText ?? ""}`);
+      if (!filing) continue;
+      openQuestions.push({
+        id: `file:${cap.id}`,
+        title: filing.label,
+        detail: `${filing.reason}: ${cap.cleanedTitle}`,
+        href: inboxPath(cap.id),
+      });
+    }
+
+    extra.workingContext = workingContext;
+    extra.whatChanged = whatChanged;
+    extra.meetingPrep = meetingPrep;
+    extra.openQuestions = openQuestions.slice(0, 6);
+    void markHomeSeen(userId).catch(() => undefined);
+  } catch {
+    // New columns / tables must never break Today.
+  }
+
+  return extra;
 }
 
 /** Orchestration for GET /checkin — all queries reused from existing services. */

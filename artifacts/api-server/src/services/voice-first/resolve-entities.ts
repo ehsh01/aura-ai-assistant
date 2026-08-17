@@ -202,11 +202,19 @@ export async function resolveVoiceEntities(
   const { listPersonNameAliases } = await import("../user-corrections");
   const { listProjectsForUser } = await import("../projects");
 
-  const [people, aliases, projects] = await Promise.all([
+  const [people, aliases, identities, projects] = await Promise.all([
     personName ? listPeopleForUser(userId) : Promise.resolve([]),
     personName ? listPersonNameAliases(userId) : Promise.resolve(new Map<string, string>()),
+    personName
+      ? import("../person-identities")
+          .then((m) => m.listIdentityAliases(userId))
+          .catch(() => new Map<string, string>())
+      : Promise.resolve(new Map<string, string>()),
     projectName ? listProjectsForUser(userId) : Promise.resolve([]),
   ]);
+  for (const [key, personId] of identities) {
+    if (!aliases.has(key)) aliases.set(key, personId);
+  }
 
   const person = personName
     ? resolveEntityMention(

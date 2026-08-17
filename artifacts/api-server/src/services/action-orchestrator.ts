@@ -41,7 +41,8 @@ export type ProposedActionType =
   | "create_reminder"
   | "save_memory"
   | "create_note"
-  | "send_to_inbox";
+  | "send_to_inbox"
+  | "create_calendar_event";
 
 export interface ProposedActionDraft {
   title: string;
@@ -76,7 +77,11 @@ const ACTION_LABELS: Record<ProposedActionType, string> = {
   save_memory: "Save as memory",
   create_note: "Save note",
   send_to_inbox: "Send to Inbox",
+  create_calendar_event: "Add to calendar",
 };
+
+const CALENDAR_WRITE_RE =
+  /\b(add (this|it|that) to (my )?calendar|put (this|it|that) on (my )?calendar|create (a )?calendar event)\b/i;
 
 function firstLine(text: string): string {
   const line = text.trim().split(/\r?\n/, 1)[0] ?? text.trim();
@@ -181,6 +186,17 @@ export function draftProposedActions(
     });
   }
 
+  if (CALENDAR_WRITE_RE.test(text) && primaryType !== "create_calendar_event") {
+    actions.push({
+      id: `action-${actions.length}`,
+      type: "create_calendar_event",
+      label: ACTION_LABELS.create_calendar_event,
+      draft: { ...baseDraft, kind: "appointment" },
+      confidence: intent.confidence,
+      reason: "You asked to put this on the calendar",
+    });
+  }
+
   return actions;
 }
 
@@ -224,7 +240,7 @@ function publicRouting(decision: IntentRouteDecision): PlanRouting {
 export async function planActionsForText(
   userId: string,
   text: string,
-  opts?: { threadId?: string | null },
+  opts?: { threadId?: string | null; idempotencyKey?: string | null },
 ): Promise<PlanResult> {
   const threadId = opts?.threadId ?? null;
   const decision = await routeIntentForText(text);
@@ -272,6 +288,7 @@ export async function planActionsForText(
       threadId,
       captureId: raw.id,
       actions,
+      idempotencyKey: opts?.idempotencyKey ?? null,
     });
   } catch {
     // Table may not exist yet on a rolling deploy; ephemeral ids still work.
@@ -537,6 +554,30 @@ async function executeConfirmedAction(
       });
       await linkEvidence(userId, "note", note.id, draft, rawCaptureId);
       result = { entityType: "note", entityId: note.id };
+      break;
+    }
+    case "create_calendar_event": {
+      const start = draft.dueAt ?? new Date().toISOString();
+      const created = await (await import("./connectors")).createCalendarEventForUser(userId, {
+        title: draft.title,
+        description: draft.content,
+        start,
+      });
+      const item = await upsertAttentionItemForUser(userId, {
+        title: draft.title,
+        summary: draft.content.slice(0, 300),
+        dueAt: dueAtFromDateString(start) ?? new Date(),
+        kind: "appointment",
+        sourceEntityType: "calendar_event",
+        sourceEntityId: `gcal:${created.id}`,
+        evidenceText: draft.content.slice(0, 300),
+        confidence: 0.9,
+        personId: links.personId,
+        projectId: links.projectId,
+        metadata: { via: "calendar_write", htmlLink: created.htmlLink },
+      });
+      await markCaptureProcessedSafely(userId, rawCaptureId);
+      result = { entityType: "calendar_event", entityId: item.id };
       break;
     }
     case "send_to_inbox": {

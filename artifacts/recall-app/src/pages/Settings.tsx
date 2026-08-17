@@ -41,6 +41,7 @@ export function Settings() {
   const [notif, setNotif] = useState<NotificationSettings | null>(null);
   const [notifPhone, setNotifPhone] = useState("");
   const [notifEnabled, setNotifEnabled] = useState(false);
+  const [smsInboundEnabled, setSmsInboundEnabled] = useState(false);
   const [notifLeadMinutes, setNotifLeadMinutes] = useState(30);
   const [morningEnabled, setMorningEnabled] = useState(false);
   const [morningTime, setMorningTime] = useState("07:30");
@@ -85,6 +86,7 @@ export function Settings() {
         setNotif(s);
         setNotifPhone(s.phoneNumber ?? "");
         setNotifEnabled(s.smsRemindersEnabled);
+        setSmsInboundEnabled(Boolean(s.smsInboundEnabled));
         setNotifLeadMinutes(s.smsLeadMinutes);
         setMorningEnabled(s.morningBriefingEnabled);
         setMorningTime(s.morningBriefingTime);
@@ -104,6 +106,7 @@ export function Settings() {
       const updated = await updateNotificationSettings({
         phoneNumber: notifPhone.trim() || null,
         smsRemindersEnabled: notifEnabled,
+        smsInboundEnabled,
         smsLeadMinutes: notifLeadMinutes,
         morningBriefingEnabled: morningEnabled,
         morningBriefingTime: morningTime,
@@ -400,6 +403,15 @@ export function Settings() {
                 className="h-4 w-4 rounded border-white/20 bg-black/30 accent-indigo-500"
               />
               Text me reminders
+            </label>
+            <label className="flex items-center gap-2 text-sm text-white/70">
+              <input
+                type="checkbox"
+                checked={smsInboundEnabled}
+                onChange={(e) => setSmsInboundEnabled(e.target.checked)}
+                className="h-4 w-4 rounded border-white/20 bg-black/30 accent-indigo-500"
+              />
+              Let me text Aura back (reply YES, DONE, SNOOZE, or a question)
             </label>
 
             <div className="border-t border-white/[0.06] pt-4">

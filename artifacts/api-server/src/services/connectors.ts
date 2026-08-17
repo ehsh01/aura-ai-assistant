@@ -10,6 +10,7 @@ import {
   type FinanceTransaction,
 } from "../connectors/finance-api";
 import {
+  createGoogleCalendarEvent,
   fetchGoogleBundle,
   googleConnector,
   refreshGoogleAccessToken,
@@ -651,6 +652,24 @@ function liveCacheSet(key: string, value: unknown): void {
     const oldest = liveSearchCache.keys().next().value;
     if (oldest) liveSearchCache.delete(oldest);
   }
+}
+
+/** Create a Google Calendar event on the user's primary calendar. Read sync is unchanged. */
+export async function createCalendarEventForUser(
+  userId: string,
+  input: { title: string; description?: string | null; start: string; end?: string | null },
+): Promise<{ id: string; htmlLink: string | null }> {
+  const rows = await loadEnabledGoogleConnectors(userId);
+  const conn = rows[0];
+  if (!conn) {
+    const err = new Error("Connect Google in Connectors before adding calendar events") as Error & {
+      status?: number;
+    };
+    err.status = 400;
+    throw err;
+  }
+  const { accessToken } = await ensureGoogleAccessToken(conn);
+  return createGoogleCalendarEvent(accessToken, input);
 }
 
 /** All enabled Google connector rows for a user. */

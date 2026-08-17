@@ -18,6 +18,8 @@ export const documents = pgTable(
     extractedText: text("extracted_text"),
     summary: text("summary"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    /** personal | household | work — default personal. */
+    vault: varchar("vault", { length: 32 }).notNull().default("personal"),
     uploadedAt: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

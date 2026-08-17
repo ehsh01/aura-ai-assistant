@@ -37,6 +37,13 @@ import { MorningBriefingCard } from "@/components/home/MorningBriefingCard";
 import { EveningCheckinCard } from "@/components/home/EveningCheckinCard";
 import { DontForgetSection } from "@/components/home/DontForgetSection";
 import { BrainDumpInput } from "@/components/home/BrainDumpInput";
+import {
+  MeetingPrepSection,
+  OpenQuestionsStrip,
+  TeachCard,
+  WhatChangedSection,
+  WorkingContextChip,
+} from "@/components/home/HomeIntelligence";
 import { NeuralBrainBackground } from "@/components/NeuralBrainBackground";
 
 function toWaitingItems(items: WaitingOnRecord[]): WaitingItem[] {
@@ -308,6 +315,25 @@ export function Today() {
               />
             )}
 
+            <WorkingContextChip
+              context={home?.workingContext}
+              people={people}
+              projects={projects}
+              onChanged={refreshHome}
+            />
+
+            {home?.whatChanged && home.whatChanged.length > 0 && (
+              <WhatChangedSection items={home.whatChanged} />
+            )}
+
+            {home?.meetingPrep && home.meetingPrep.length > 0 && (
+              <MeetingPrepSection items={home.meetingPrep} />
+            )}
+
+            {home?.openQuestions && home.openQuestions.length > 0 && (
+              <OpenQuestionsStrip items={home.openQuestions} />
+            )}
+
             {pressing.some((p) => p.kind === "homey") && (
               <section className="rounded-2xl border border-amber-400/20 bg-amber-500/5 px-4 py-3">
                 <p className="text-xs font-semibold uppercase tracking-wider text-amber-200/70">
@@ -343,6 +369,12 @@ export function Today() {
             />
 
             {dontForget.length > 0 && <DontForgetSection items={dontForget} />}
+
+            <TeachCard
+              personId={home?.workingContext?.personId}
+              projectId={home?.workingContext?.projectId}
+              onSaved={refreshHome}
+            />
 
             <EveningCheckinCard onChanged={refreshHome} />
           </div>

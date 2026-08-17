@@ -156,6 +156,15 @@ describe("draftProposedActions — multi-intent fan-out", () => {
     );
     expect(actions.map((a) => a.type)).toEqual(["save_memory"]);
   });
+
+  it("adds a calendar write card only when the user asked to put it on the calendar", () => {
+    const actions = draftProposedActions(
+      "Inspection Friday — put this on my calendar",
+      intent({ primaryIntent: "reminder" }),
+      classification({ suggestedType: "reminder" }),
+    );
+    expect(actions.map((a) => a.type)).toContain("create_calendar_event");
+  });
 });
 
 describe("defaultReminderDue — dateless reminders still get a real time", () => {

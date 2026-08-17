@@ -26,6 +26,7 @@ router.get("/settings/notifications", async (req, res, next) => {
 const UpdateBody = z.object({
   phoneNumber: z.string().max(32).nullable().optional(),
   smsRemindersEnabled: z.boolean().optional(),
+  smsInboundEnabled: z.boolean().optional(),
   smsLeadMinutes: z.number().int().optional(),
   timezone: z.string().max(64).nullable().optional(),
   morningBriefingEnabled: z.boolean().optional(),

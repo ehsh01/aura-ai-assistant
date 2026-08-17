@@ -10,6 +10,7 @@ import {
   listAskThreads,
   listPeople,
   planAskInput,
+  queryRecallStream,
   sendAskFeedback,
   setStoredAskThreadId,
   type AskMessageRecord,
@@ -32,6 +33,14 @@ import { stopSpeaking } from "@/lib/speech-synthesis";
 import { AskAnswerImages } from "@/components/AskAnswerImages";
 import type { AskAnswerImage } from "@/lib/recall-api";
 import { toast } from "@/hooks/use-toast";
+
+function isPureQuestion(text: string): boolean {
+  const t = text.trim();
+  if (/\b(remind me|add a task|remember that|follow up|put .+ on .+ calendar|snooze)\b/i.test(t)) {
+    return false;
+  }
+  return /^(what|who|when|where|why|how|which|show|list|did|is|are|was|were|do i|am i)\b/i.test(t) || /\?\s*$/.test(t);
+}
 
 function imagesFromMetadata(metadata: Record<string, unknown> | undefined): AskAnswerImage[] {
   if (!metadata || !Array.isArray(metadata.images)) return [];
@@ -217,6 +226,62 @@ export function Dashboard() {
       },
     ]);
     try {
+      if (isPureQuestion(q)) {
+        const assistantId = `${tempId}-a`;
+        setLiveMessages((prev) => [
+          ...prev,
+          {
+            id: assistantId,
+            threadId: activeThreadId ?? "local",
+            role: "assistant",
+            content: "",
+            metadata: {},
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+        try {
+          const streamed = await queryRecallStream(q, {
+            threadId: activeThreadId,
+            onToken: (delta) => {
+              setLiveMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, content: `${m.content}${delta}` } : m,
+                ),
+              );
+            },
+          });
+          const images = streamed.images ?? [];
+          setAnswerImages(images);
+          setAssistantMessageId(streamed.assistantMessageId ?? null);
+          setAnswerMeta({
+            confidence: streamed.confidence,
+            caveats: streamed.caveats,
+            evidence: streamed.evidence,
+            relatedRecords: streamed.relatedRecords,
+            images,
+            suggestedNextAction: streamed.suggestedNextAction,
+            privacy: streamed.privacy,
+            sourcesConsulted: streamed.sourcesConsulted ?? [],
+            presentation: streamed.presentation ?? "compact",
+          });
+          if (streamed.threadId) {
+            setThreadId(streamed.threadId);
+            setStoredAskThreadId(streamed.threadId);
+          }
+          setLiveMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: streamed.answer, metadata: { images } }
+                : m,
+            ),
+          );
+          void refreshThreads();
+          return;
+        } catch {
+          // Fall through to the plan path if streaming is unavailable.
+        }
+      }
+
       const res = await planAskInput(q, { threadId: activeThreadId });
       const resolvedThreadId = res.answer?.threadId ?? activeThreadId ?? "local";
       if (res.answer?.threadId) {

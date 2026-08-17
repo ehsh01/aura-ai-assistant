@@ -8,7 +8,8 @@ export type VoiceCaptureSource =
   | "voice_server_stt"
   | "ask"
   | "share"
-  | "extension";
+  | "extension"
+  | "sms";
 
 export type VoicePipelineStatus =
   | "received"

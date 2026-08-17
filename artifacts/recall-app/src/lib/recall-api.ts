@@ -1224,6 +1224,25 @@ export interface HomeBriefingResponse {
   } | null;
   review: BriefingReview;
   morning: MorningBriefing;
+  workingContext?: {
+    personId: string | null;
+    personName: string | null;
+    projectId: string | null;
+    projectName: string | null;
+    updatedAt: string | null;
+  };
+  whatChanged?: { id: string; kind: string; title: string; detail: string; href: string }[];
+  meetingPrep?: {
+    eventId: string;
+    title: string;
+    startLabel: string | null;
+    personName: string | null;
+    personHref: string | null;
+    waitingCount: number;
+    recentContext: string | null;
+    href: string;
+  }[];
+  openQuestions?: { id: string; title: string; detail: string; href: string }[];
 }
 
 export async function fetchHome(): Promise<HomeBriefingResponse> {
@@ -1299,7 +1318,8 @@ export type AskActionType =
   | "create_reminder"
   | "save_memory"
   | "create_note"
-  | "send_to_inbox";
+  | "send_to_inbox"
+  | "create_calendar_event";
 
 export type AskProposedActionDraft = {
   title: string;
@@ -1604,6 +1624,7 @@ export async function deleteUserRule(ruleId: string): Promise<void> {
 export type NotificationSettings = {
   phoneNumber: string | null;
   smsRemindersEnabled: boolean;
+  smsInboundEnabled?: boolean;
   smsLeadMinutes: number;
   timezone: string | null;
   morningBriefingEnabled: boolean;
@@ -1624,6 +1645,7 @@ export async function updateNotificationSettings(
   input: Partial<{
     phoneNumber: string | null;
     smsRemindersEnabled: boolean;
+    smsInboundEnabled: boolean;
     smsLeadMinutes: number;
     timezone: string | null;
     morningBriefingEnabled: boolean;
@@ -1638,6 +1660,25 @@ export async function updateNotificationSettings(
     method: "PUT",
     body: JSON.stringify(input),
   });
+}
+
+export type WorkingContext = {
+  personId: string | null;
+  personName: string | null;
+  projectId: string | null;
+  projectName: string | null;
+  updatedAt: string | null;
+};
+
+export async function getWorkingContext(): Promise<WorkingContext> {
+  return apiFetch("/context");
+}
+
+export async function setWorkingContext(input: {
+  personId?: string | null;
+  projectId?: string | null;
+}): Promise<WorkingContext> {
+  return apiFetch("/context", { method: "PUT", body: JSON.stringify(input) });
 }
 
 export async function sendTestSmsReminder(): Promise<{ ok: boolean }> {

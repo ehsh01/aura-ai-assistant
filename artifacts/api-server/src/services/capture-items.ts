@@ -394,6 +394,18 @@ export async function updateCaptureForUser(
       oldValue: existing.status,
       newValue: input.status,
     });
+    if (input.status === "dismissed") {
+      void import("./correction-rules")
+        .then((m) =>
+          m.maybeApplyCorrectionRule(userId, {
+            entityType: "capture_item",
+            fieldName: "status",
+            oldValue: existing.suggestedType ?? existing.status,
+            newValue: "dismissed",
+          }),
+        )
+        .catch(() => undefined);
+    }
   }
 
   // Snooze defaults to +24h when no explicit time is given; leaving snooze
