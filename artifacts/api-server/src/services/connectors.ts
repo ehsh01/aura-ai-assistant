@@ -47,6 +47,22 @@ import { warmEntityEmbedding } from "./embedding-cache";
 import { heuristicDigest, withSourceDigest } from "./digests";
 import { openConnectorSettings, sealConnectorSettings } from "../lib/secret-box";
 import { matchHomeyName, type HomeyAskPlan } from "./nl-homey-query";
+import type { FlipperForceAskPlan } from "./nl-flipperforce-query";
+import {
+  fetchFlipperForceActivity,
+  fetchFlipperForceAccount,
+  fetchFlipperForceBundle,
+  fetchFlipperForceProjects,
+  fetchProjectFinancials,
+  flipperforceConnector,
+  formatProjectLine,
+  formatUsd,
+  matchFlipperForceProject,
+  projectAppUrl,
+  resolveFlipperForceApiKey,
+  testFlipperForceConnection,
+  FlipperForceAuthError,
+} from "../connectors/flipperforce";
 
 const CONNECTOR_IMPLS: Record<string, RecallConnector> = {
   manual: manualConnector,
@@ -56,6 +72,7 @@ const CONNECTOR_IMPLS: Record<string, RecallConnector> = {
   microsoft: microsoftConnector,
   ticket_email: ticketEmailConnector,
   homey: homeyConnector,
+  flipperforce: flipperforceConnector,
 };
 
 export type ConnectorDto = {
@@ -95,6 +112,13 @@ export async function listConnectorsForUser(userId: string): Promise<ConnectorDt
     .where(eq(connectors.userId, userId))
     .orderBy(desc(connectors.updatedAt));
   return rows.map(toDto);
+}
+
+function flipperForceApiKeyFromConnector(conn: Connector): string | null {
+  const settings = openConnectorSettings(
+    (conn.settings ?? {}) as Record<string, unknown>,
+  );
+  return resolveFlipperForceApiKey(settings);
 }
 
 export async function createConnectorForUser(
@@ -139,6 +163,110 @@ export async function getConnectorForUser(
     .where(and(eq(connectors.id, connectorId), eq(connectors.userId, userId)))
     .limit(1);
   return rows[0] ? toDto(rows[0]) : null;
+}
+
+export async function upsertFlipperForceConnectorForUser(
+  userId: string,
+  apiKey: string,
+): Promise<ConnectorDto> {
+  const account = await testFlipperForceConnection(apiKey);
+  const workspace = account.workspaces[0] ?? null;
+  const now = new Date();
+  const settings = sealConnectorSettings({
+    apiKey,
+    email: account.email,
+    workspaceUuid: workspace?.uuid ?? null,
+    workspaceName: workspace?.name ?? null,
+  });
+
+  const existing = await getDb()
+    .select()
+    .from(connectors)
+    .where(and(eq(connectors.userId, userId), eq(connectors.type, "flipperforce")))
+    .limit(1);
+
+  if (existing[0]) {
+    const [row] = await getDb()
+      .update(connectors)
+      .set({
+        name: "FlipperForce",
+        enabled: true,
+        syncStatus: "connected",
+        authType: "api_key",
+        baseUrl: "https://tools.flipperforce.com/api/v1",
+        settings,
+        updatedAt: now,
+      })
+      .where(eq(connectors.id, existing[0].id))
+      .returning();
+    return toDto(row!);
+  }
+
+  const [row] = await getDb()
+    .insert(connectors)
+    .values({
+      id: newConnectorId(),
+      userId,
+      name: "FlipperForce",
+      type: "flipperforce",
+      description: "Read-only FlipperForce projects, activity, and rehab reports.",
+      baseUrl: "https://tools.flipperforce.com/api/v1",
+      authType: "api_key",
+      enabled: true,
+      syncStatus: "connected",
+      settings,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning();
+  return toDto(row!);
+}
+
+export async function deleteConnectorForUser(
+  userId: string,
+  connectorId: string,
+): Promise<boolean> {
+  const deleted = await getDb()
+    .delete(connectors)
+    .where(and(eq(connectors.id, connectorId), eq(connectors.userId, userId)))
+    .returning({ id: connectors.id });
+  return Boolean(deleted[0]);
+}
+
+export async function testFlipperForceConnectorForUser(
+  userId: string,
+  connectorId: string,
+): Promise<{ ok: boolean; email: string | null; workspaceCount: number }> {
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(and(eq(connectors.id, connectorId), eq(connectors.userId, userId)))
+    .limit(1);
+  const conn = rows[0];
+  if (!conn || conn.type !== "flipperforce") {
+    throw new Error("FlipperForce connector not found");
+  }
+  const apiKey = flipperForceApiKeyFromConnector(conn);
+  if (!apiKey) throw new FlipperForceAuthError("No FlipperForce API key stored");
+  const account = await testFlipperForceConnection(apiKey);
+  await getDb()
+    .update(connectors)
+    .set({
+      syncStatus: "connected",
+      updatedAt: new Date(),
+      settings: sealConnectorSettings({
+        ...openConnectorSettings((conn.settings ?? {}) as Record<string, unknown>),
+        email: account.email,
+        workspaceUuid: account.workspaces[0]?.uuid ?? null,
+        workspaceName: account.workspaces[0]?.name ?? null,
+      }),
+    })
+    .where(eq(connectors.id, conn.id));
+  return {
+    ok: true,
+    email: account.email,
+    workspaceCount: account.workspaces.length,
+  };
 }
 
 /** Resolve a fresh Google access token for a connector row. */
@@ -534,6 +662,161 @@ export async function executeHomeyAskForUser(
   }
 }
 
+async function loadFlipperForceConnector(userId: string): Promise<Connector | null> {
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(
+      and(
+        eq(connectors.userId, userId),
+        eq(connectors.type, "flipperforce"),
+        eq(connectors.enabled, true),
+      ),
+    )
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/** Live FlipperForce Ask: projects, activity, rehab P&L (read-only). */
+export async function executeFlipperForceAskForUser(
+  userId: string,
+  plan: FlipperForceAskPlan,
+): Promise<{
+  ok: boolean;
+  answer: string;
+  evidenceText?: string;
+  sourceUrl?: string | null;
+}> {
+  if (!plan) {
+    return { ok: false, answer: "I could not understand that FlipperForce request." };
+  }
+
+  const conn = await loadFlipperForceConnector(userId);
+  if (!conn) {
+    return {
+      ok: false,
+      answer:
+        "FlipperForce is not connected. Open Connectors, paste your API key from FlipperForce Integrations, and save.",
+    };
+  }
+
+  const apiKey = flipperForceApiKeyFromConnector(conn);
+  if (!apiKey) {
+    return {
+      ok: false,
+      answer: "FlipperForce has no API key stored. Re-save the key on Connectors.",
+    };
+  }
+
+  try {
+    const projects = await fetchFlipperForceProjects(apiKey);
+
+    if (plan.intent === "inventory") {
+      if (!projects.length) {
+        return {
+          ok: true,
+          answer: "No FlipperForce projects were returned for this account.",
+          evidenceText: "flipperforce project list empty",
+        };
+      }
+      const lines = projects.slice(0, 25).map((p) => `- ${formatProjectLine(p)}`);
+      return {
+        ok: true,
+        answer: `You have ${projects.length} FlipperForce project${projects.length === 1 ? "" : "s"}:\n${lines.join("\n")}${
+          projects.length > 25 ? `\n…and ${projects.length - 25} more` : ""
+        }`,
+        evidenceText: `flipperforce inventory count=${projects.length}`,
+      };
+    }
+
+    if (plan.intent === "activity") {
+      const settings = openConnectorSettings((conn.settings ?? {}) as Record<string, unknown>);
+      const account = await fetchFlipperForceAccount(apiKey);
+      const workspaceUuid =
+        (typeof settings.workspaceUuid === "string" ? settings.workspaceUuid : null) ||
+        account.workspaces[0]?.uuid ||
+        null;
+      if (!workspaceUuid) {
+        return {
+          ok: false,
+          answer: "FlipperForce did not return a workspace, so activity cannot be listed yet.",
+        };
+      }
+      let activity = await fetchFlipperForceActivity(apiKey, workspaceUuid, { perPage: 30 });
+      const matched = matchFlipperForceProject(plan.hint, projects);
+      if (matched) {
+        activity = activity.filter(
+          (a) =>
+            a.projectUuid === matched.uuid ||
+            (a.projectName &&
+              a.projectName.toLowerCase().includes(matched.name.toLowerCase())),
+        );
+      }
+      if (!activity.length) {
+        return {
+          ok: true,
+          answer: matched
+            ? `No recent FlipperForce activity for ${formatProjectLine(matched)}.`
+            : "No recent FlipperForce activity in this workspace.",
+          evidenceText: "flipperforce activity empty",
+        };
+      }
+      const lines = activity.slice(0, 12).map((a) => {
+        const when = a.performedAt ? a.performedAt.slice(0, 10) : "undated";
+        const proj = a.projectName ? ` · ${a.projectName}` : "";
+        return `- ${when}${proj}: ${a.message}`;
+      });
+      return {
+        ok: true,
+        answer: `Recent FlipperForce activity${matched ? ` for ${matched.name}` : ""}:\n${lines.join("\n")}`,
+        evidenceText: `flipperforce activity count=${activity.length}`,
+        sourceUrl: matched ? projectAppUrl(matched.uuid) : null,
+      };
+    }
+
+    const matched = matchFlipperForceProject(plan.hint, projects);
+    if (!matched) {
+      const sample = projects.slice(0, 8).map((p) => p.name).join(", ");
+      return {
+        ok: false,
+        answer: sample
+          ? `I could not match that FlipperForce project. Connected projects include: ${sample}.`
+          : "No FlipperForce projects found. Sync the connector first.",
+      };
+    }
+
+    if (plan.intent === "report") {
+      const financials = await fetchProjectFinancials(apiKey, matched);
+      return {
+        ok: true,
+        answer: `${formatProjectLine(matched)}: expenses ${formatUsd(financials.expenses.total)}, income ${formatUsd(financials.income.total)}, net ${formatUsd(financials.net)}. Totals come from FlipperForce (tax included in expense total).`,
+        evidenceText: `flipperforce P&L project=${matched.uuid} expenses=${financials.expenses.total} income=${financials.income.total} net=${financials.net}`,
+        sourceUrl: projectAppUrl(matched.uuid),
+      };
+    }
+
+    return {
+      ok: true,
+      answer: `${formatProjectLine(matched)}. Open in FlipperForce for photos, tasks, and full history.`,
+      evidenceText: `flipperforce project ${matched.uuid} ${matched.fullAddress ?? matched.name}`,
+      sourceUrl: projectAppUrl(matched.uuid),
+    };
+  } catch (err) {
+    if (err instanceof FlipperForceAuthError) {
+      await getDb()
+        .update(connectors)
+        .set({ syncStatus: "authentication_failed", updatedAt: new Date() })
+        .where(eq(connectors.id, conn.id));
+      return {
+        ok: false,
+        answer: "FlipperForce rejected the API key. Paste a new key on Connectors.",
+      };
+    }
+    const message = err instanceof Error ? err.message : "FlipperForce request failed";
+    return { ok: false, answer: `FlipperForce request failed: ${message}` };
+  }
+}
+
 function formatHomeyValues(values: Record<string, unknown>): string {
   const entries = Object.entries(values).slice(0, 8);
   if (!entries.length) return "no live state cached — try Sync on the Homey connector";
@@ -580,6 +863,12 @@ async function fetchTicketEmailRecordsForConnector(conn: Connector): Promise<unk
   const limit =
     typeof settings.limit === "number" ? settings.limit : Number(settings.limit) || 40;
   return fetchTicketEmailsViaImap({ host, user, password, port, secure, mailbox, limit });
+}
+
+async function fetchFlipperForceRecordsForConnector(conn: Connector): Promise<unknown[]> {
+  const apiKey = flipperForceApiKeyFromConnector(conn);
+  if (!apiKey) throw new FlipperForceAuthError("No FlipperForce API key stored");
+  return fetchFlipperForceBundle(apiKey);
 }
 
 export type LiveGmailHit = {
@@ -1182,6 +1471,9 @@ export async function syncConnectorForUser(
     if (conn.type === "ticket_email") {
       rawRecords = await fetchTicketEmailRecordsForConnector(conn);
     }
+    if (conn.type === "flipperforce") {
+      rawRecords = await fetchFlipperForceRecordsForConnector(conn);
+    }
 
     const normalized = await impl.normalize(rawRecords);
     recordsFetched = normalized.length;
@@ -1223,6 +1515,11 @@ export async function syncConnectorForUser(
       void warmRecentSourceEmbeddings(userId, connectorId, {
         recordType: "homey_device",
         fallbackTitle: "Homey device",
+      }).catch(() => undefined);
+    } else if (conn.type === "flipperforce") {
+      void warmRecentSourceEmbeddings(userId, connectorId, {
+        recordType: "flipperforce_project",
+        fallbackTitle: "FlipperForce project",
       }).catch(() => undefined);
     } else if (conn.type === "google" || conn.type === "microsoft") {
       // Warm freshly synced mail/calendar/drive/contact records across types.
@@ -1280,9 +1577,13 @@ export async function syncConnectorForUser(
       .where(eq(syncRuns.id, syncRunId));
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : "Sync failed";
+    const authFailed = err instanceof FlipperForceAuthError;
     await getDb()
       .update(connectors)
-      .set({ syncStatus: "sync_failed", updatedAt: new Date() })
+      .set({
+        syncStatus: authFailed ? "authentication_failed" : "sync_failed",
+        updatedAt: new Date(),
+      })
       .where(eq(connectors.id, connectorId));
     await getDb()
       .update(syncRuns)

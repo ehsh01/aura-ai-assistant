@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import { AppLayout } from "@/components/AppLayout";
 import {
   createConnector,
+  deleteConnector,
+  testFlipperForceConnector,
   getFinanceSummary,
   getHomeyWebhookInfo,
   listConnectors,
@@ -35,7 +37,7 @@ const STATUS_STYLES: Record<string, string> = {
   connected: "text-emerald-300 bg-emerald-500/10",
   partial_success: "text-amber-300 bg-amber-500/10",
   sync_failed: "text-red-300 bg-red-500/10",
-  disconnected: "text-white/50 bg-white/5",
+  authentication_failed: "text-red-300 bg-red-500/10",
 };
 
 function formatUsd(value: number): string {
@@ -57,6 +59,9 @@ export function Connectors() {
   const [ticketUser, setTicketUser] = useState("");
   const [ticketPassword, setTicketPassword] = useState("");
   const [creatingTicket, setCreatingTicket] = useState(false);
+  const [flipperApiKey, setFlipperApiKey] = useState("");
+  const [savingFlipper, setSavingFlipper] = useState(false);
+  const [testingFlipper, setTestingFlipper] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [summary, setSummary] = useState<{ connectorId: string; data: FinanceSummary } | null>(null);
@@ -180,6 +185,32 @@ export function Connectors() {
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
     void load();
   }, []);
+
+  const addFlipperForceConnector = async () => {
+    setSavingFlipper(true);
+    try {
+      await createConnector({
+        name: "FlipperForce",
+        type: "flipperforce",
+        description: "Read-only FlipperForce projects and reports.",
+        settings: { apiKey: flipperApiKey.trim() },
+      });
+      setFlipperApiKey("");
+      toast({
+        title: "FlipperForce connected",
+        description: "Key saved on the server (encrypted). Click Sync to index projects.",
+      });
+      await load();
+    } catch (err) {
+      toast({
+        title: "Could not save FlipperForce key",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setSavingFlipper(false);
+    }
+  };
 
   const addTicketEmailConnector = async () => {
     setCreatingTicket(true);
@@ -309,6 +340,7 @@ export function Connectors() {
   const hasGoogle = connectors.some((c) => c.type === "google");
   const hasMicrosoft = connectors.some((c) => c.type === "microsoft");
   const homeyConnector = connectors.find((c) => c.type === "homey") ?? null;
+  const flipperConnector = connectors.find((c) => c.type === "flipperforce") ?? null;
 
   const showHomeyWebhook = async (connectorId: string) => {
     try {
@@ -464,6 +496,90 @@ export function Connectors() {
                     </p>
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+            <h2 className="text-lg font-semibold">FlipperForce</h2>
+            <p className="mt-2 text-sm text-white/55">
+              Read-only access so Ask can search projects, activity, and rehab reports. Paste the
+              Public API key from FlipperForce Integrations. The key is sent over HTTPS and stored
+              encrypted on the server — it is never shown again.
+            </p>
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+              <input
+                type="password"
+                autoComplete="off"
+                value={flipperApiKey}
+                onChange={(e) => setFlipperApiKey(e.target.value)}
+                placeholder={
+                  flipperConnector ? "•••• connected — paste a new key to rotate" : "FlipperForce API key"
+                }
+                className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm"
+              />
+              <button
+                type="button"
+                onClick={() => void addFlipperForceConnector()}
+                disabled={savingFlipper || !flipperApiKey.trim()}
+                className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {savingFlipper
+                  ? "Saving…"
+                  : flipperConnector
+                    ? "Replace key"
+                    : "Save API key"}
+              </button>
+            </div>
+            {flipperConnector && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setTestingFlipper(true);
+                    try {
+                      const result = await testFlipperForceConnector(flipperConnector.id);
+                      toast({
+                        title: "FlipperForce key works",
+                        description: result.email
+                          ? `${result.email} · ${result.workspaceCount} workspace(s)`
+                          : `${result.workspaceCount} workspace(s)`,
+                      });
+                      await load();
+                    } catch (err) {
+                      toast({
+                        title: "FlipperForce test failed",
+                        description: err instanceof Error ? err.message : undefined,
+                        variant: "destructive",
+                      });
+                    } finally {
+                      setTestingFlipper(false);
+                    }
+                  }}
+                  disabled={testingFlipper}
+                  className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/80 hover:bg-white/5 disabled:opacity-50"
+                >
+                  {testingFlipper ? "Testing…" : "Test connection"}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await deleteConnector(flipperConnector.id);
+                      toast({ title: "FlipperForce disconnected" });
+                      await load();
+                    } catch (err) {
+                      toast({
+                        title: "Could not disconnect",
+                        description: err instanceof Error ? err.message : undefined,
+                        variant: "destructive",
+                      });
+                    }
+                  }}
+                  className="rounded-lg border border-red-400/20 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/10"
+                >
+                  Disconnect
+                </button>
               </div>
             )}
           </div>

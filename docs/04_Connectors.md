@@ -303,3 +303,11 @@ Athom Web API OAuth for live device status/control (Ask) plus Flow → webhook a
 - Authenticated webhook `POST /api/webhooks/homey/:connectorId` → `homey_alert`
 - Today / Urgency ranks emergencies first; quiet hours filter `info`
 - Sample Flows: [`Homey_Flow_Cookbook.md`](./Homey_Flow_Cookbook.md)
+
+## 14. FlipperForce (API key, read-only)
+
+Public API key from [FlipperForce Integrations](https://tools.flipperforce.com/integrations).
+
+- Paste the key on Connectors (password field). Stored as `settings.apiKey` via `sealConnectorSettings`. List DTO never returns settings.
+- Sync stores project summaries (`flipperforce_project`) only — not a second expense ledger.
+- Ask live-queries projects, activity log, and per-project expense/income totals. No writes.

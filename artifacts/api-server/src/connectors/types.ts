@@ -8,7 +8,8 @@ export type ConnectorType =
   | "ticket_email"
   | "google"
   | "microsoft"
-  | "homey";
+  | "homey"
+  | "flipperforce";
 
 export type NormalizedSourceRecord = {
   externalId: string;

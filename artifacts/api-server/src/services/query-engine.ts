@@ -50,6 +50,7 @@ import {
 } from "./nl-gmail-query";
 import { isDriveSearchIntent, planDriveSearch } from "./nl-drive-query";
 import { isHomeyAskIntent, planHomeyAsk } from "./nl-homey-query";
+import { isFlipperForceAskIntent, planFlipperForceAsk } from "./nl-flipperforce-query";
 import { extractMailboxHint, retrieveRelevantRecords } from "./retrieval";
 import { promptTextForRetrievedRecord } from "./prompt-context";
 import { listWaitingOnForUser } from "./waiting-on";
@@ -74,7 +75,7 @@ import {
   type AskAnswerImage,
 } from "./ask-images";
 import { listImageAttachmentsForNotes } from "./note-attachments";
-import { executeHomeyAskForUser } from "./connectors";
+import { executeHomeyAskForUser, executeFlipperForceAskForUser } from "./connectors";
 import { listOpenHomeyAlertsForUser } from "./homey-alerts";
 import { formatUserRulesForPrompt } from "./user-rules";
 import { listRecentAskFeedbackHints } from "./ask-feedback";
@@ -1565,6 +1566,36 @@ async function runQueryForUser(
       suggestedNextAction: result.needsConfirmation
         ? "Reply “confirm” to apply"
         : "Ask about another device",
+      promptVersion: QUERY_ANSWER_PROMPT_VERSION,
+      degraded: false,
+    });
+  }
+
+  const flipperPlan = planFlipperForceAsk(question);
+  if (flipperPlan && isFlipperForceAskIntent(question)) {
+    const result = await executeFlipperForceAskForUser(userId, flipperPlan);
+    const ffEvidence: EvidenceDto[] = [];
+    if (result.evidenceText) {
+      ffEvidence.push(
+        makeEvidence({
+          claimType: "summary_based_on",
+          evidenceText: result.evidenceText,
+          metadata: {
+            retrievalMethod: "live_flipperforce",
+            url: result.sourceUrl ?? null,
+          },
+        }),
+      );
+    }
+    return finish({
+      answer: result.answer,
+      confidence: result.ok ? 0.9 : 0.4,
+      caveats: result.ok
+        ? null
+        : "Connect FlipperForce on Connectors if this looks wrong. Household spending still comes from MyFamilyBudget.",
+      evidence: ffEvidence,
+      relatedRecords: [],
+      suggestedNextAction: result.ok ? "Ask about another property" : "Open Connectors",
       promptVersion: QUERY_ANSWER_PROMPT_VERSION,
       degraded: false,
     });

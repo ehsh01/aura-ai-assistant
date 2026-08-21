@@ -137,6 +137,8 @@ function sourceTypeAliases(recordType: string): string {
       return "homey smart home flow automation scene";
     case "homey_alert":
       return "homey smart home alert notification emergency door leak smoke";
+    case "flipperforce_project":
+      return "flipperforce rehab property flip wholesale project address";
     default:
       return "source record";
   }

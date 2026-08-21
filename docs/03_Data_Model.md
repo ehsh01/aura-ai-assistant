@@ -274,6 +274,10 @@ Connector types:
 - outlook_web_capture
 - teams_web_capture
 - ticket_email
+- google
+- microsoft
+- homey
+- flipperforce
 - manual
 - document_upload
 

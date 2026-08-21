@@ -82,7 +82,15 @@ describe("ask accuracy golden — production regressions", () => {
       authError: false,
       hasGrounding: false,
     });
+    expect(v.kind).not.toBe("high");
     expect(v.confidence).toBeLessThan(0.8);
+  });
+
+  it("routes FlipperForce questions separately from household spend", () => {
+    const ff = routeSourcePlan("list my FlipperForce projects");
+    expect(ff.primary).toBe("flipperforce");
+    const spend = routeSourcePlan("how much did I spend yesterday?");
+    expect(spend.primary).toBe("finance");
   });
 
   it("todayIso is stable shape", () => {

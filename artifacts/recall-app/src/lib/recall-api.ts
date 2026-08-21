@@ -1853,6 +1853,21 @@ export async function createConnector(input: {
   });
 }
 
+export async function deleteConnector(connectorId: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/connectors/${encodeURIComponent(connectorId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function testFlipperForceConnector(
+  connectorId: string,
+): Promise<{ ok: boolean; email: string | null; workspaceCount: number }> {
+  return apiFetch(`/connectors/${encodeURIComponent(connectorId)}/test`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
 export async function syncConnector(
   connectorId: string,
   body?: { csvText?: string },

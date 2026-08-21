@@ -11,7 +11,8 @@ export type AskDomain =
   | "people"
   | "waiting"
   | "attention"
-  | "homey";
+  | "homey"
+  | "flipperforce";
 
 export type SourceStatus = "ok" | "empty" | "stale" | "missing" | "auth_error" | "error";
 

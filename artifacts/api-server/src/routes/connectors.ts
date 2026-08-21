@@ -20,6 +20,9 @@ import {
 } from "../connectors/microsoft";
 import {
   createConnectorForUser,
+  deleteConnectorForUser,
+  upsertFlipperForceConnectorForUser,
+  testFlipperForceConnectorForUser,
   createGoogleConnectorForUser,
   createHomeyConnectorForUser,
   createMicrosoftConnectorForUser,
@@ -58,6 +61,7 @@ const CreateConnectorBody = z.object({
     "google",
     "microsoft",
     "homey",
+    "flipperforce",
   ]),
   description: z.string().max(2000).nullish(),
   baseUrl: z.string().url().nullish(),
@@ -401,6 +405,34 @@ router.post("/connectors", async (req, res, next) => {
         return;
       }
     }
+    if (body.type === "flipperforce") {
+      const apiKey =
+        typeof body.settings?.apiKey === "string" ? body.settings.apiKey.trim() : "";
+      if (!apiKey) {
+        res.status(400).json({
+          error: "VALIDATION_ERROR",
+          message: "flipperforce requires settings.apiKey",
+        });
+        return;
+      }
+      try {
+        const connector = await upsertFlipperForceConnectorForUser(req.user!.id, apiKey);
+        res.status(201).json(connector);
+      } catch (err) {
+        const status =
+          err && typeof err === "object" && "status" in err && typeof err.status === "number"
+            ? err.status
+            : 502;
+        res.status(status === 401 ? 401 : 502).json({
+          error: status === 401 ? "AUTH_FAILED" : "UPSTREAM_ERROR",
+          message:
+            err instanceof Error
+              ? err.message
+              : "Could not verify FlipperForce API key",
+        });
+      }
+      return;
+    }
     const connector = await createConnectorForUser(req.user!.id, {
       ...body,
       authType: body.type === "ticket_email" ? body.authType ?? "imap" : body.authType,
@@ -419,6 +451,40 @@ router.get("/connectors/:connectorId", async (req, res, next) => {
       return;
     }
     res.json(connector);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/connectors/:connectorId/test", async (req, res, next) => {
+  try {
+    const connector = await getConnectorForUser(req.user!.id, req.params.connectorId);
+    if (!connector || connector.type !== "flipperforce") {
+      res.status(404).json({ error: "NOT_FOUND", message: "FlipperForce connector not found" });
+      return;
+    }
+    const result = await testFlipperForceConnectorForUser(req.user!.id, req.params.connectorId);
+    res.json(result);
+  } catch (err) {
+    const status =
+      err && typeof err === "object" && "status" in err && typeof err.status === "number"
+        ? err.status
+        : 502;
+    res.status(status === 401 ? 401 : 502).json({
+      error: status === 401 ? "AUTH_FAILED" : "UPSTREAM_ERROR",
+      message: err instanceof Error ? err.message : "FlipperForce test failed",
+    });
+  }
+});
+
+router.delete("/connectors/:connectorId", async (req, res, next) => {
+  try {
+    const ok = await deleteConnectorForUser(req.user!.id, req.params.connectorId);
+    if (!ok) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Connector not found" });
+      return;
+    }
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

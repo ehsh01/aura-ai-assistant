@@ -9,6 +9,7 @@ import {
 import { isEmailSearchIntent } from "./nl-gmail-query";
 import { isDriveSearchIntent } from "./nl-drive-query";
 import { isHomeyAskIntent } from "./nl-homey-query";
+import { isFlipperForceAskIntent } from "./nl-flipperforce-query";
 import { extractPayeeHint } from "./finance-sync";
 import type { AskDomain } from "./ask-accuracy-policy";
 
@@ -17,6 +18,7 @@ export type AnswerMode =
   | "deterministic_list"
   | "deterministic_email"
   | "deterministic_homey"
+  | "deterministic_flipperforce"
   | "grounded_llm"
   | "clarify";
 
@@ -53,6 +55,17 @@ export function routeSourcePlan(question: string): SourcePlan {
       constraints: {},
       answerMode: "deterministic_homey",
       rationale: "Homey / smart-home question",
+    };
+  }
+
+  if (isFlipperForceAskIntent(q)) {
+    return {
+      domains: ["flipperforce"],
+      required: ["flipperforce"],
+      primary: "flipperforce",
+      constraints: {},
+      answerMode: "deterministic_flipperforce",
+      rationale: "FlipperForce / rehab property question",
     };
   }
 

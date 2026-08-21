@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { assertSecretEncryptionConfigured } from "./secret-box";
+import { assertSecretEncryptionConfigured, openSecret, sealConnectorSettings, sealSecret } from "./secret-box";
 
 const originalKey = process.env.SECRETS_ENCRYPTION_KEY;
 
@@ -27,5 +27,18 @@ describe("production secret encryption guard", () => {
   it("accepts a configured production key", () => {
     process.env.SECRETS_ENCRYPTION_KEY = "a".repeat(64);
     expect(() => assertSecretEncryptionConfigured(true)).not.toThrow();
+  });
+});
+
+describe("connector apiKey sealing", () => {
+  it("encrypts apiKey and round-trips", () => {
+    process.env.SECRETS_ENCRYPTION_KEY = "b".repeat(64);
+    const sealed = sealConnectorSettings({ apiKey: "ff-secret", email: "a@b.com" });
+    expect(typeof sealed.apiKey).toBe("string");
+    expect(String(sealed.apiKey)).not.toBe("ff-secret");
+    expect(String(sealed.apiKey).startsWith("v1.")).toBe(true);
+    expect(sealed.email).toBe("a@b.com");
+    expect(openSecret(String(sealed.apiKey))).toBe("ff-secret");
+    expect(sealSecret("ff-secret").startsWith("v1.")).toBe(true);
   });
 });
