@@ -91,6 +91,7 @@ function AuthedRoutes() {
       <Switch>
         {/* Today is the default landing; Ask Aura lives at /ask as the full-screen workspace. */}
         <Route path="/" component={Today} />
+        <Route path="/today/:category" component={Today} />
         <Route path="/today" component={Today} />
         <Route path="/ask" component={Dashboard} />
         <Route path="/notes" component={Notes} />

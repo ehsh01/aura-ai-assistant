@@ -1,392 +1,585 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
+import { ArrowRight, Check, Clock3, RotateCcw, X } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
-import { listCaptureInbox, listProjects } from "@workspace/api-client-react";
+import { EvidenceDrawer } from "@/components/EvidenceDrawer";
+import { MicButton } from "@/components/MicButton";
 import {
-  listAttention,
-  listHomeyAlerts,
-  listPeople,
-  listWaitingOn,
-  type AttentionItemRecord,
-  type HomeBriefingResponse,
-  type PersonRecord,
-  type WaitingOnRecord,
+  fetchTodayDashboard,
+  type TodayCategoryKey,
+  type TodayDashboardCategory,
+  type TodayDashboardEvidence,
+  type TodayDashboardItem,
+  type TodayDashboardResponse,
 } from "@/lib/recall-api";
-import { loadHome } from "@/lib/home-cache";
-import { pressingFeed, type HomeyUrgencyAlert } from "@/lib/urgency";
 import { ingestCaptureReliable } from "@/lib/capture-queue";
-import { useAuth } from "@/context/AuthContext";
-import { useRecallData } from "@/context/RecallDataContext";
-import { firstName } from "@/lib/user-display";
+import { readSearchParam } from "@/lib/recall-nav";
 import { toast } from "@/hooks/use-toast";
-import { type RecallCaptureItem, type RecallProject } from "@/lib/recall-context";
-import { askPath, notesPath, readSearchParam } from "@/lib/recall-nav";
-import {
-  buildDailyBriefing,
-  buildDontForget,
-  buildFocusNow,
-  type WaitingItem,
-} from "@/lib/home-briefing";
-import { filterDismissedWaiting } from "@/lib/waiting-dismissals";
-import {
-  buildTodayQueue,
-  TodayActionQueue,
-} from "@/components/home/TodayActionQueue";
-import { NeedsReviewStrip } from "@/components/home/NeedsReviewStrip";
-import { MorningBriefingCard } from "@/components/home/MorningBriefingCard";
-import { EveningCheckinCard } from "@/components/home/EveningCheckinCard";
-import { DontForgetSection } from "@/components/home/DontForgetSection";
-import { BrainDumpInput } from "@/components/home/BrainDumpInput";
-import {
-  MeetingPrepSection,
-  OpenQuestionsStrip,
-  TeachCard,
-  WhatChangedSection,
-  WorkingContextChip,
-} from "@/components/home/HomeIntelligence";
-import { NeuralBrainBackground } from "@/components/NeuralBrainBackground";
 
-function toWaitingItems(items: WaitingOnRecord[]): WaitingItem[] {
-  return items.map((w) => ({
-    id: w.id,
-    person: w.person,
-    personId: w.personId,
-    item: w.item,
-    days: w.days,
-    href: w.href,
-    followUp: w.followUp,
-    sourceType: w.sourceType,
-    ...(w.dueReason ? { dueReason: w.dueReason } : {}),
-    trackedId: w.id.startsWith("durable:") ? w.id.slice("durable:".length) : null,
-  }));
+const CATEGORY_KEYS = new Set<TodayCategoryKey>([
+  "email",
+  "payments",
+  "important",
+  "due-soon",
+  "cracks",
+  "waiting",
+  "focus",
+  "finance",
+]);
+
+const EMPTY_CATEGORIES: TodayDashboardCategory[] = [
+  ["email", "Gmail", "Email", "needs a reply"],
+  ["payments", "Finance", "Payments & subscriptions", "due in about 14 days"],
+  ["important", "Attention", "Important", "must do now"],
+  ["due-soon", "Tasks", "Due soon", "today + 7 days"],
+  ["cracks", "Stale", "Falling through the cracks", "silent 5+ days"],
+  ["waiting", "People", "Waiting on", "open waits"],
+  ["focus", "Suggested", "Focus", "do these next · cap 3"],
+  ["finance", "Synced", "Finance snapshot", "connect a finance ledger"],
+].map(([key, eyebrow, title, summary]) => ({
+  key: key as TodayCategoryKey,
+  eyebrow,
+  title,
+  summary,
+  count: 0,
+  items: [],
+  emptyTitle: "Nothing to show yet",
+  emptyAction: null,
+  emptyHref: null,
+  ...(key === "finance"
+    ? { heroAmount: 0, heroCurrency: "USD" as const, period: "this month", flags: [] }
+    : {}),
+}));
+
+type SelectedEvidence = {
+  title: string;
+  evidence: TodayDashboardEvidence;
+};
+
+function clientDate(): string {
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  }).format(new Date());
 }
 
-function firstLineTitle(text: string, fallback = "Quick capture"): string {
-  const line = text.trim().split(/\r?\n/).find(Boolean) ?? fallback;
-  return line.length > 80 ? `${line.slice(0, 77)}…` : line;
+function formatMoney(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(Math.abs(value));
 }
 
-/** Merge ?capture= (internal deep link) with PWA share-target params into one prefill. */
-function readCapturePrefillParams(): string | null {
-  const parts = ["capture", "title", "text", "url"]
-    .map((key) => readSearchParam(key)?.trim())
-    .filter((part): part is string => Boolean(part));
-  return parts.length ? parts.join("\n") : null;
+function categoryFromLocation(location: string): TodayCategoryKey | null {
+  const raw = location.match(/^\/today\/([^/?#]+)/)?.[1];
+  return raw && CATEGORY_KEYS.has(raw as TodayCategoryKey)
+    ? (raw as TodayCategoryKey)
+    : null;
 }
 
-/** One queue of things you can act on — nothing else. */
-export function Today() {
-  const { user } = useAuth();
-  const { notes, tasks, addNote, addTask } = useRecallData();
-  const [, navigate] = useLocation();
-  const userName = firstName(user?.name);
-  const [captures, setCaptures] = useState<RecallCaptureItem[]>([]);
-  const [projects, setProjects] = useState<RecallProject[]>([]);
-  const [people, setPeople] = useState<PersonRecord[]>([]);
-  const [home, setHome] = useState<HomeBriefingResponse | null>(null);
-  const [waiting, setWaiting] = useState<WaitingItem[]>([]);
-  const [attention, setAttention] = useState<AttentionItemRecord[]>([]);
-  const [homeyAlerts, setHomeyAlerts] = useState<HomeyUrgencyAlert[]>([]);
-  const [capturePrefill, setCapturePrefill] = useState<string | null>(() =>
-    readCapturePrefillParams(),
+function TileHero({ category }: { category: TodayDashboardCategory }) {
+  if (category.key === "finance") {
+    return (
+      <span className="text-[31px] font-semibold tracking-[-0.05em] text-white/94 tabular-nums">
+        {formatMoney(category.heroAmount ?? 0)}
+      </span>
+    );
+  }
+  return (
+    <span className="text-[39px] font-semibold tracking-[-0.045em] text-white/94 tabular-nums">
+      {category.count}
+    </span>
   );
+}
 
-  const refreshCaptures = () =>
-    void listCaptureInbox()
-      .then((res) => setCaptures(res.items as RecallCaptureItem[]))
-      .catch(() => {});
+function TodayTile({
+  category,
+  selected,
+  compact,
+  onClick,
+}: {
+  category: TodayDashboardCategory;
+  selected: boolean;
+  compact: boolean;
+  onClick: () => void;
+}) {
+  const dramatic = category.key === "cracks";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
+      className={`group flex min-w-0 flex-col rounded-[15px] border text-left transition-[border-color,background,transform] duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 ${
+        compact ? "min-h-[128px] p-[10px]" : "min-h-[245px] p-4"
+      } ${
+        selected && dramatic
+          ? "border-amber-400/35 bg-[linear-gradient(145deg,rgba(76,47,27,0.64),rgba(31,24,24,0.82))]"
+          : selected
+            ? "border-white/20 bg-white/[0.085]"
+            : dramatic
+              ? "border-amber-400/18 bg-[linear-gradient(145deg,rgba(62,40,26,0.54),rgba(26,23,24,0.76))] hover:border-amber-300/30"
+              : "border-white/[0.095] bg-[linear-gradient(145deg,rgba(37,42,56,0.68),rgba(25,27,34,0.78))] hover:border-white/20 hover:bg-white/[0.065]"
+      }`}
+    >
+      {!compact && (
+        <span className="inline-flex w-fit rounded-full border border-white/[0.055] bg-white/[0.055] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.04em] text-white/38">
+          {category.eyebrow}
+        </span>
+      )}
+      <h2
+        className={`font-semibold leading-[1.2] tracking-[-0.015em] text-white/88 ${
+          compact ? "text-[11px]" : "mt-2 text-[15px]"
+        }`}
+      >
+        {category.title}
+      </h2>
+      <div className="mt-auto">
+        <TileHero category={category} />
+        <p
+          className={`truncate text-white/32 ${
+            compact ? "mt-0 text-[8px]" : "mt-1 text-[10px]"
+          }`}
+        >
+          {category.summary}
+        </p>
+      </div>
+    </button>
+  );
+}
 
-  const refreshWaiting = useCallback(() => {
-    void listWaitingOn()
-      .then((res) => setWaiting(filterDismissedWaiting(toWaitingItems(res.items))))
-      .catch(() => {
-        // Keep last good server list — never rebuild from local notes (ignores dismissals).
-      });
-  }, []);
+function DashboardRow({
+  item,
+  categoryKey,
+  onEvidence,
+  onFocusAction,
+}: {
+  item: TodayDashboardItem;
+  categoryKey: TodayCategoryKey;
+  onEvidence: () => void;
+  onFocusAction: (action: "accept" | "defer" | "dismiss") => void;
+}) {
+  const external = item.href.startsWith("http");
+  return (
+    <article className="rounded-xl border border-white/[0.085] bg-white/[0.035] px-3 py-2.5">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <Link
+            href={item.href}
+            target={external ? "_blank" : undefined}
+            rel={external ? "noreferrer" : undefined}
+            className="block truncate text-[12px] font-semibold text-white/88 no-underline hover:text-white"
+          >
+            {item.title}
+          </Link>
+          <p className="mt-0.5 truncate text-[9px] text-white/34">{item.context}</p>
+        </div>
+        {item.daysSilent != null && (
+          <span className="flex-shrink-0 text-[10px] font-semibold text-amber-200/85 tabular-nums">
+            {item.daysSilent}d
+          </span>
+        )}
+      </div>
+      <div className="mt-2 flex items-center gap-2">
+        <span className="rounded-full border border-white/[0.06] bg-white/[0.06] px-2 py-0.5 text-[8px] font-semibold uppercase tracking-[0.04em] text-white/38">
+          {item.source}
+        </span>
+        {item.inclusion && (
+          <span
+            className={`rounded-full px-2 py-0.5 text-[8px] font-medium ${
+              item.inclusion === "included"
+                ? "bg-emerald-400/10 text-emerald-200/65"
+                : "bg-white/[0.045] text-white/30"
+            }`}
+          >
+            {item.inclusion}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onEvidence}
+          className="ml-auto text-[9px] font-semibold text-indigo-200/80 hover:text-indigo-100"
+        >
+          Show Evidence
+        </button>
+      </div>
+      {categoryKey === "focus" && (
+        <div className="mt-2.5 flex items-center gap-1.5 border-t border-white/[0.055] pt-2">
+          <button
+            type="button"
+            onClick={() => onFocusAction("accept")}
+            className="inline-flex items-center gap-1 rounded-md bg-white/[0.085] px-2 py-1 text-[8px] font-medium text-white/70 hover:bg-white/[0.13]"
+          >
+            <Check size={9} />
+            Accept
+          </button>
+          <button
+            type="button"
+            onClick={() => onFocusAction("defer")}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[8px] font-medium text-white/38 hover:bg-white/[0.07] hover:text-white/60"
+          >
+            <Clock3 size={9} />
+            Defer
+          </button>
+          <button
+            type="button"
+            onClick={() => onFocusAction("dismiss")}
+            className="rounded-md px-2 py-1 text-[8px] font-medium text-white/38 hover:bg-white/[0.07] hover:text-white/60"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+    </article>
+  );
+}
 
-  const refreshAttention = useCallback(() => {
-    void listAttention()
-      .then((res) => setAttention(res.items ?? []))
-      .catch(() => {
-        /* keep last good list */
-      });
-  }, []);
+function EmptyCategory({ category }: { category: TodayDashboardCategory }) {
+  return (
+    <div className="flex min-h-[180px] flex-col items-center justify-center rounded-xl border border-dashed border-white/[0.085] bg-white/[0.018] px-6 text-center">
+      <p className="text-[12px] font-medium text-white/60">{category.emptyTitle}</p>
+      {category.emptyAction && category.emptyHref && (
+        <Link
+          href={category.emptyHref}
+          className="mt-3 inline-flex items-center gap-1.5 text-[10px] font-semibold text-indigo-200/75 no-underline hover:text-indigo-100"
+        >
+          {category.emptyAction}
+          <ArrowRight size={11} />
+        </Link>
+      )}
+    </div>
+  );
+}
 
-  const refreshHome = useCallback(() => {
-    // Shared cache: one /home fetch also feeds the nav review badges.
-    void loadHome({ force: true })
-      .then((next) => {
-        setHome(next);
-        if (Array.isArray(next.waiting)) {
-          setWaiting(filterDismissedWaiting(next.waiting));
-        }
-      })
-      .catch(() => {
-        // Keep prior home snapshot; a failed refresh must not wipe dismiss-aware waiting.
-      });
-    refreshWaiting();
-    refreshAttention();
-  }, [refreshWaiting, refreshAttention]);
+function FinanceRows({
+  category,
+  onEvidence,
+}: {
+  category: TodayDashboardCategory;
+  onEvidence: (item: TodayDashboardItem) => void;
+}) {
+  const included = category.items.filter((item) => item.inclusion === "included");
+  const excluded = category.items.filter((item) => item.inclusion === "excluded");
+  if (category.items.length === 0) return <EmptyCategory category={category} />;
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-emerald-200/45">
+          Included in {category.period ?? "this period"} · {included.length}
+        </p>
+        <div className="space-y-1.5">
+          {included.map((item) => (
+            <DashboardRow
+              key={item.id}
+              item={item}
+              categoryKey="finance"
+              onEvidence={() => onEvidence(item)}
+              onFocusAction={() => undefined}
+            />
+          ))}
+        </div>
+      </div>
+      {excluded.length > 0 && (
+        <div>
+          <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-white/25">
+            Excluded from spend · {excluded.length}
+          </p>
+          <div className="space-y-1.5">
+            {excluded.map((item) => (
+              <DashboardRow
+                key={item.id}
+                item={item}
+                categoryKey="finance"
+                onEvidence={() => onEvidence(item)}
+                onFocusAction={() => undefined}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function Today() {
+  const [location, navigate] = useLocation();
+  const [dashboard, setDashboard] = useState<TodayDashboardResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [capture, setCapture] = useState(() => readSearchParam("capture")?.trim() ?? "");
+  const [sending, setSending] = useState(false);
+  const [selectedEvidence, setSelectedEvidence] = useState<SelectedEvidence | null>(null);
+  const [hiddenFocusIds, setHiddenFocusIds] = useState<Set<string>>(() => new Set());
+  const selectedKey = categoryFromLocation(location);
+
+  const loadDashboard = () => {
+    setLoading(true);
+    setLoadError(false);
+    void fetchTodayDashboard()
+      .then(setDashboard)
+      .catch(() => setLoadError(true))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(loadDashboard, []);
 
   useEffect(() => {
-    refreshHome();
-    refreshCaptures();
-    void listProjects()
-      .then((res) => setProjects(res.projects as RecallProject[]))
-      .catch(() => {});
-    void listPeople()
-      .then((res) => setPeople(res.people))
-      .catch(() => setPeople([]));
-    void listHomeyAlerts()
-      .then((res) =>
-        setHomeyAlerts(
-          res.alerts.map((a) => ({
-            id: a.id,
-            title: a.title,
-            severity: a.severity,
-            deviceName: a.deviceName,
-          })),
-        ),
-      )
-      .catch(() => setHomeyAlerts([]));
-  }, [refreshHome]);
-
-  useEffect(() => {
-    const raw = readCapturePrefillParams();
-    if (!raw?.trim()) return;
-    setCapturePrefill(raw);
+    if (!readSearchParam("capture")) return;
     const url = new URL(window.location.href);
-    for (const key of ["capture", "title", "text", "url"]) {
-      url.searchParams.delete(key);
-    }
+    url.searchParams.delete("capture");
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }, []);
 
-  const handleSaveNote = (text: string) => {
-    const body = text.trim();
-    if (!body) return;
-    const note = addNote({ title: firstLineTitle(body), content: body, tags: ["capture"] });
-    toast({ title: "Note saved", description: "Opening it so you can review or edit." });
-    navigate(notesPath({ noteId: note.id }));
-  };
+  const categories = useMemo(
+    () =>
+      (dashboard?.categories ?? EMPTY_CATEGORIES).map((category) => {
+        if (category.key !== "focus") return category;
+        const items = category.items.filter((item) => !hiddenFocusIds.has(item.id));
+        return { ...category, items, count: items.length };
+      }),
+    [dashboard?.categories, hiddenFocusIds],
+  );
+  const selectedCategory =
+    categories.find((category) => category.key === selectedKey) ?? null;
 
-  const handleSaveTask = (text: string) => {
-    const body = text.trim();
-    if (!body) return;
-    addTask(firstLineTitle(body));
-    toast({ title: "Task added", description: "Added to your tasks." });
-    refreshHome();
-  };
-
-  const handleSendInbox = async (text: string) => {
-    const body = text.trim();
-    if (!body) return;
+  const submitCapture = async () => {
+    const text = capture.trim();
+    if (!text || sending) return;
+    setSending(true);
     try {
       const result = await ingestCaptureReliable({
-        rawText: body,
+        rawText: text,
         sourceType: "manual",
-        title: firstLineTitle(body),
+        title: text.split(/\r?\n/)[0]?.slice(0, 80) || "Quick capture",
       });
-      if (result.queued) {
-        toast({
-          title: "Saved offline",
-          description: "Will sync to AI Inbox when you're back online.",
-        });
-      } else {
-        toast({
-          title: "Sent to AI Inbox",
-          description: "Recall is analyzing it — check the inbox in a moment.",
-        });
-        refreshCaptures();
-        refreshHome();
-      }
+      setCapture("");
+      toast({
+        title: result.queued ? "Saved offline" : "Sent to Inbox",
+        description: result.queued
+          ? "Recall will sync it when you are back online."
+          : "Capture stays lightweight; review it in Inbox.",
+      });
     } catch {
-      toast({ title: "Could not send to inbox", variant: "destructive" });
+      toast({ title: "Could not capture", variant: "destructive" });
+    } finally {
+      setSending(false);
     }
   };
 
-  const briefing =
-    home?.briefing ??
-    buildDailyBriefing(userName, tasks, notes, captures, projects, homeyAlerts);
-  const focus = home?.focus ?? buildFocusNow(tasks, projects);
-  const pressing = useMemo(
-    () => pressingFeed(tasks, notes, captures, 6, homeyAlerts),
-    [tasks, notes, captures, homeyAlerts],
-  );
-
-  const queue = useMemo(
-    () =>
-      buildTodayQueue({
-        focus,
-        waiting: filterDismissedWaiting(waiting),
-        critical: briefing.critical,
-        reminders: briefing.reminders,
-        attention,
-      }),
-    [focus, waiting, briefing.critical, briefing.reminders, attention],
-  );
-
-  // Morning briefing actions skip anything the action queue already shows.
-  const queuedIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const q of queue) {
-      ids.add(q.id);
-      if (q.attention) ids.add(q.attention.id);
-      if (q.waiting?.trackedId) ids.add(q.waiting.trackedId);
+  const handleFocusAction = (
+    item: TodayDashboardItem,
+    action: "accept" | "defer" | "dismiss",
+  ) => {
+    if (action === "accept") {
+      navigate(item.href);
+      return;
     }
-    return ids;
-  }, [queue]);
-
-  // Don't re-surface items already in the action queue.
-  const dontForget = useMemo(() => {
-    const queued = new Set(
-      queue.flatMap((q) => [q.title.toLowerCase(), q.href]),
-    );
-    return (home?.dontForget ?? buildDontForget(notes, captures))
-      .filter(
-        (item) =>
-          !queued.has(item.label.toLowerCase()) && !queued.has(item.href),
-      )
-      .slice(0, 5);
-  }, [home?.dontForget, notes, captures, queue]);
-
-  const brainGraph = useMemo(
-    () => ({
-      tasks: tasks.map((t) => ({
-        id: t.id,
-        title: t.title,
-        completed: t.completed,
-        requesterPersonId: t.requesterPersonId,
-        projectId: t.projectId,
-      })),
-      notes: notes.map((n) => ({
-        id: n.id,
-        title: n.title,
-        primaryPersonId: n.primaryPersonId,
-        projectId: n.projectId,
-        updatedAt: n.updatedAt,
-        createdAt: n.createdAt,
-      })),
-      people: people.map((p) => ({ id: p.id, displayName: p.displayName })),
-      projects: projects.map((p) => ({ id: p.id, name: p.name })),
-      captures: captures.map((c) => ({
-        id: c.id,
-        cleanedTitle: c.cleanedTitle,
-        status: c.status,
-      })),
-    }),
-    [tasks, notes, people, projects, captures],
-  );
-
-  const countLabel =
-    queue.length === 0
-      ? "Nothing queued"
-      : queue.length === 1
-        ? "1 thing to handle"
-        : `${queue.length} things to handle`;
+    setHiddenFocusIds((previous) => new Set(previous).add(item.id));
+    toast({
+      title: action === "defer" ? "Deferred for this view" : "Suggestion dismissed",
+      description:
+        action === "defer"
+          ? "The underlying task is unchanged."
+          : "The underlying task stays in Recall.",
+    });
+  };
 
   return (
-    <AppLayout>
-      <div className="nebula-bg relative h-full text-zinc-100">
-        <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
-          <NeuralBrainBackground
-            graph={brainGraph}
-            opacity={0.22}
-            density={0.75}
-            speed={0.6}
-            intensity={0.7}
-          />
-          <div className="orb-1 nebula-orb opacity-20" />
-          <div className="orb-3 nebula-orb opacity-10" />
-        </div>
+    <AppLayout todayDashboard>
+      <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[#090d17] text-white">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_32%_0%,rgba(44,58,99,0.17),transparent_48%),radial-gradient(circle_at_90%_10%,rgba(93,65,82,0.10),transparent_38%)]" />
+        <div className="relative z-10 flex min-h-0 flex-1 flex-col px-[18px] pb-4 pt-[17px] lg:px-[26px]">
+          <header className="flex min-h-[58px] flex-shrink-0 items-start justify-between gap-5">
+            <div>
+              <h1 className="text-[23px] font-semibold leading-none tracking-[-0.035em] text-white/92">
+                {dashboard?.date ?? clientDate()}
+              </h1>
+              <p className="mt-1.5 text-[10px] text-white/34">
+                What deserves attention today.
+              </p>
+            </div>
 
-        <div className="relative z-10 h-full overflow-y-auto dashboard-hide-scrollbar">
-          <div className="mx-auto w-full max-w-2xl space-y-6 px-4 pb-44 pt-6 md:px-8 md:pt-10">
-            <header>
-              <h1 className="text-3xl font-semibold text-white">Today</h1>
-              <p className="mt-2 text-sm text-white/45">{countLabel}</p>
-            </header>
-
-            {home?.morning && (
-              <MorningBriefingCard
-                briefing={home.morning}
-                queuedIds={queuedIds}
-                userName={userName}
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submitCapture();
+              }}
+              className="mt-1 hidden h-[32px] w-[300px] max-w-[38vw] items-center rounded-[10px] border border-white/[0.095] bg-white/[0.055] pl-3 pr-1.5 backdrop-blur-xl md:flex"
+            >
+              <input
+                value={capture}
+                onChange={(event) => setCapture(event.target.value)}
+                placeholder="Capture anything"
+                aria-label="Capture anything"
+                className="min-w-0 flex-1 border-0 bg-transparent text-[10px] text-white/75 outline-none placeholder:text-white/28"
               />
-            )}
+              <MicButton
+                onTranscript={(text) =>
+                  setCapture((previous) => (previous ? `${previous} ${text}` : text))
+                }
+                iconSize={12}
+                title="Voice capture"
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-white/28 hover:bg-white/[0.07] hover:text-white/65"
+              />
+              {capture.trim() && (
+                <button
+                  type="submit"
+                  disabled={sending}
+                  className="flex h-7 w-7 items-center justify-center rounded-lg text-white/40 hover:bg-white/[0.07] hover:text-white/75 disabled:opacity-40"
+                  aria-label="Send capture to Inbox"
+                >
+                  <ArrowRight size={12} />
+                </button>
+              )}
+            </form>
+          </header>
 
-            <WorkingContextChip
-              context={home?.workingContext}
-              people={people}
-              projects={projects}
-              onChanged={refreshHome}
-            />
+          {loadError && (
+            <div className="mb-2 flex items-center justify-between rounded-lg border border-amber-300/10 bg-amber-200/[0.035] px-3 py-2 text-[9px] text-amber-100/55">
+              <span>Live category data is unavailable. The eight views remain ready.</span>
+              <button
+                type="button"
+                onClick={loadDashboard}
+                className="inline-flex items-center gap-1 text-amber-100/70 hover:text-amber-50"
+              >
+                <RotateCcw size={9} />
+                Retry
+              </button>
+            </div>
+          )}
 
-            {home?.whatChanged && home.whatChanged.length > 0 && (
-              <WhatChangedSection items={home.whatChanged} />
-            )}
+          {loading && !dashboard ? (
+            <div className="grid min-h-0 flex-1 grid-cols-2 gap-3 lg:grid-cols-4">
+              {EMPTY_CATEGORIES.map((category) => (
+                <div
+                  key={category.key}
+                  className="min-h-[245px] animate-pulse rounded-[15px] border border-white/[0.07] bg-white/[0.035]"
+                />
+              ))}
+            </div>
+          ) : selectedCategory ? (
+            <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[280px_minmax(0,1fr)]">
+              <div className="grid min-h-0 grid-cols-2 gap-2">
+                {categories.map((category) => (
+                  <TodayTile
+                    key={category.key}
+                    category={category}
+                    compact
+                    selected={category.key === selectedCategory.key}
+                    onClick={() => navigate(`/today/${category.key}`)}
+                  />
+                ))}
+              </div>
 
-            {home?.meetingPrep && home.meetingPrep.length > 0 && (
-              <MeetingPrepSection items={home.meetingPrep} />
-            )}
+              <section className="flex min-h-0 flex-col rounded-[15px] border border-white/[0.095] bg-white/[0.045] p-4 backdrop-blur-xl">
+                <header className="flex flex-shrink-0 items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[8px] font-semibold uppercase tracking-[0.08em] text-white/28">
+                      {selectedCategory.eyebrow}
+                    </p>
+                    <h2 className="mt-1 text-[20px] font-semibold tracking-[-0.03em] text-white/92">
+                      {selectedCategory.title}
+                    </h2>
+                    <p className="mt-2 text-[10px] text-white/36">
+                      {selectedCategory.key === "cracks"
+                        ? "Open items silent five or more days. Sorted by days silent."
+                        : selectedCategory.key === "finance"
+                          ? `Period spend for ${selectedCategory.period ?? "this month"}. Transfers and credit-card payments stay excluded.`
+                          : selectedCategory.summary}
+                    </p>
+                    {selectedCategory.flags && selectedCategory.flags.length > 0 && (
+                      <div className="mt-2 flex gap-1.5">
+                        {selectedCategory.flags.map((flag) => (
+                          <span
+                            key={flag}
+                            className="rounded-full border border-emerald-300/10 bg-emerald-300/[0.055] px-2 py-0.5 text-[8px] text-emerald-100/55"
+                          >
+                            {flag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <div className="text-right">
+                      <TileHero category={selectedCategory} />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => navigate("/today")}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg text-white/28 hover:bg-white/[0.07] hover:text-white/65"
+                      aria-label="Close category"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                </header>
 
-            {home?.openQuestions && home.openQuestions.length > 0 && (
-              <OpenQuestionsStrip items={home.openQuestions} />
-            )}
-
-            {pressing.some((p) => p.kind === "homey") && (
-              <section className="rounded-2xl border border-amber-400/20 bg-amber-500/5 px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-wider text-amber-200/70">
-                  Home alerts
-                </p>
-                <ul className="mt-2 space-y-1.5">
-                  {pressing
-                    .filter((p) => p.kind === "homey")
-                    .map((item) => (
-                      <li key={item.key} className="text-sm text-zinc-200">
-                        <Link
-                          href="/connectors"
-                          className="text-zinc-200 no-underline hover:text-amber-100"
-                        >
-                          <span className="text-amber-300/80">{item.reason}</span>
-                          {" · "}
-                          {item.title}
-                        </Link>
-                      </li>
-                    ))}
-                </ul>
+                <div className="recall-scrollbar mt-3 min-h-0 flex-1 overflow-y-auto pr-0.5">
+                  {selectedCategory.key === "finance" ? (
+                    <FinanceRows
+                      category={selectedCategory}
+                      onEvidence={(item) =>
+                        setSelectedEvidence({ title: item.title, evidence: item.evidence })
+                      }
+                    />
+                  ) : selectedCategory.items.length === 0 ? (
+                    <EmptyCategory category={selectedCategory} />
+                  ) : (
+                    <div className="space-y-1.5">
+                      {selectedCategory.items.map((item) => (
+                        <DashboardRow
+                          key={item.id}
+                          item={item}
+                          categoryKey={selectedCategory.key}
+                          onEvidence={() =>
+                            setSelectedEvidence({
+                              title: item.title,
+                              evidence: item.evidence,
+                            })
+                          }
+                          onFocusAction={(action) => handleFocusAction(item, action)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
               </section>
-            )}
-
-            {home?.review && home.review.total > 0 && (
-              <NeedsReviewStrip review={home.review} onChanged={refreshHome} />
-            )}
-
-            <TodayActionQueue
-              items={queue}
-              onWaitingChanged={refreshHome}
-              onAttentionChanged={refreshAttention}
-            />
-
-            {dontForget.length > 0 && <DontForgetSection items={dontForget} />}
-
-            <TeachCard
-              personId={home?.workingContext?.personId}
-              projectId={home?.workingContext?.projectId}
-              onSaved={refreshHome}
-            />
-
-            <EveningCheckinCard onChanged={refreshHome} />
-          </div>
+            </div>
+          ) : (
+            <div className="grid min-h-0 flex-1 grid-cols-2 gap-3 lg:grid-cols-4">
+              {categories.map((category) => (
+                <TodayTile
+                  key={category.key}
+                  category={category}
+                  compact={false}
+                  selected={false}
+                  onClick={() => navigate(`/today/${category.key}`)}
+                />
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
-      <BrainDumpInput
-        initialText={capturePrefill}
-        onAsk={(text) => navigate(askPath({ q: text }))}
-        onSaveNote={handleSaveNote}
-        onSaveTask={handleSaveTask}
-        onSendInbox={(text) => void handleSendInbox(text)}
+      <EvidenceDrawer
+        open={selectedEvidence != null}
+        onClose={() => setSelectedEvidence(null)}
+        entityType={selectedEvidence?.evidence.entityType ?? ""}
+        entityId={selectedEvidence?.evidence.entityId ?? ""}
+        title={selectedEvidence?.title}
+        fallback={
+          selectedEvidence
+            ? {
+                text: selectedEvidence.evidence.text,
+                system: selectedEvidence.evidence.system,
+                occurredAt: selectedEvidence.evidence.occurredAt,
+                url: selectedEvidence.evidence.url,
+              }
+            : undefined
+        }
       />
     </AppLayout>
   );

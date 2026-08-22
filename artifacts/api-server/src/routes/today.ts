@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { requireAuth } from "../middleware/auth";
 import { buildTodayForUser } from "../services/today";
+import { buildTodayDashboardForUser } from "../services/today-dashboard";
 import { buildHomeBriefing, getEveningCheckinForUser } from "../services/home-briefing";
 import { getWeeklyDigestForUser } from "../services/weekly-digest";
 
@@ -10,6 +11,15 @@ router.use(requireAuth);
 router.get("/today", async (req, res, next) => {
   try {
     const data = await buildTodayForUser(req.user!.id);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/today/dashboard", async (req, res, next) => {
+  try {
+    const data = await buildTodayDashboardForUser(req.user!.id);
     res.json(data);
   } catch (err) {
     next(err);

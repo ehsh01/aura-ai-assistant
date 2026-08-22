@@ -5,6 +5,7 @@ import { CaptureModal } from "@/components/CaptureModal";
 import { MobileBottomNav, MobileMoreSheet } from "@/components/MobileShell";
 import { OfflineQueueBanner } from "@/components/OfflineQueueBanner";
 import { RecallLogo } from "@/components/RecallLogo";
+import { TodayDesktopSidebar } from "@/components/TodayDesktopSidebar";
 import { useAuth } from "@/context/AuthContext";
 import { useRecallData } from "@/context/RecallDataContext";
 import { subscribeCaptureQueue } from "@/lib/capture-queue";
@@ -16,6 +17,8 @@ interface AppLayoutProps {
   children: React.ReactNode;
   /** Home oracle mode: hide sidebar until left-edge hover. */
   immersive?: boolean;
+  /** Compact desktop navigation used by the Today command center. */
+  todayDashboard?: boolean;
 }
 
 type NavEntry = {
@@ -205,7 +208,11 @@ function SidebarNavButton({
   );
 }
 
-export function AppLayout({ children, immersive = false }: AppLayoutProps) {
+export function AppLayout({
+  children,
+  immersive = false,
+  todayDashboard = false,
+}: AppLayoutProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [captureOpen, setCaptureOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -373,6 +380,9 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
         />
       )}
 
+      {todayDashboard ? (
+        <TodayDesktopSidebar onMore={() => setMoreOpen(true)} />
+      ) : (
       <aside
         className={`hidden md:flex flex-col border-r border-white/[0.06] transition-all duration-300 ease-out flex-shrink-0 ${
           immersive ? "fixed inset-y-0 left-0 z-[55] shadow-2xl shadow-black/50" : ""
@@ -506,6 +516,7 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
           </button>
         </div>
       </aside>
+      )}
 
       <main className="flex-1 overflow-hidden flex flex-col min-w-0 pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:pb-0">
         {!immersive && <OfflineQueueBanner />}
@@ -515,7 +526,7 @@ export function AppLayout({ children, immersive = false }: AppLayoutProps) {
         type="button"
         onClick={() => setCaptureOpen(true)}
         className={`fixed bottom-6 right-6 z-40 items-center gap-2 rounded-full bg-indigo-500 px-5 py-3 text-sm font-semibold text-white shadow-2xl shadow-indigo-500/25 hover:bg-indigo-400 ${
-          immersive ? "hidden" : "hidden md:flex"
+          immersive || todayDashboard ? "hidden" : "hidden md:flex"
         }`}
       >
         <Plus size={18} />
