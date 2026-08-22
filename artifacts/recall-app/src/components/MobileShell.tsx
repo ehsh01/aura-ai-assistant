@@ -219,7 +219,7 @@ export function MobileMoreSheet({
           </Link>
           <Link href="/ask" onClick={close} className={linkClass(location === "/ask")}>
             <Sparkles size={18} />
-            <span className="flex-1 text-sm font-medium">Ask Aura</span>
+            <span className="flex-1 text-sm font-medium">Ask</span>
           </Link>
           <Link href="/deadlines" onClick={close} className={linkClass(location === "/deadlines")}>
             <CalendarClock size={18} />

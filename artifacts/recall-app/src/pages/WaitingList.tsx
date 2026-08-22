@@ -114,7 +114,7 @@ export function WaitingList() {
                   Review first ({groups.candidates.length})
                 </h2>
                 <p className="mt-1 text-xs text-white/40">
-                  Aura thinks these might be follow-ups. Nothing is tracked until you confirm.
+                  Recall thinks these might be follow-ups. Nothing is tracked until you confirm.
                 </p>
                 <ol className="mt-3 space-y-2">
                   {groups.candidates.map((item) => (
@@ -187,7 +187,7 @@ export function WaitingList() {
               </h2>
               {groups.open.length === 0 ? (
                 <p className="mt-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-6 text-center text-sm text-white/40">
-                  Nothing tracked right now. Aura will suggest follow-ups from your email,
+                  Nothing tracked right now. Recall will suggest follow-ups from your email,
                   notes, and captures as they show up.
                 </p>
               ) : (

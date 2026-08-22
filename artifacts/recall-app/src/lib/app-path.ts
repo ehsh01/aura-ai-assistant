@@ -24,7 +24,7 @@ export const APP_PATHS = [
 ] as const;
 
 /** Detail routes with dynamic segments, allowed alongside APP_PATHS. */
-const APP_PATH_PREFIXES = ["/projects/", "/waiting/"] as const;
+const APP_PATH_PREFIXES = ["/projects/", "/waiting/", "/today/"] as const;
 
 export type AppPath = (typeof APP_PATHS)[number];
 

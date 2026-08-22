@@ -162,7 +162,7 @@ export function PersonDetail() {
               Edit profile
             </Link>
             <Link href={`/ask?q=${encodeURIComponent(`What do I need to know about ${person.displayName}?`)}`} className="text-sky-400 hover:underline">
-              Ask Aura about {person.firstName ?? person.displayName}
+              Ask Recall about {person.firstName ?? person.displayName}
             </Link>
           </div>
         </header>

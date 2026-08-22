@@ -411,7 +411,7 @@ export function Settings() {
                 onChange={(e) => setSmsInboundEnabled(e.target.checked)}
                 className="h-4 w-4 rounded border-white/20 bg-black/30 accent-indigo-500"
               />
-              Let me text Aura back (reply YES, DONE, SNOOZE, or a question)
+              Let me text Recall back (reply YES, DONE, SNOOZE, or a question)
             </label>
 
             <div className="border-t border-white/[0.06] pt-4">

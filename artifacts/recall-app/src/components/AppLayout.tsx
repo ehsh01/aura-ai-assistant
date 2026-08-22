@@ -60,7 +60,7 @@ const staticNavItems: Array<{
   },
   {
     id: "/ask",
-    label: "Ask Aura",
+    label: "Ask",
     section: "ask",
     icon: <Sparkles width={18} height={18} strokeWidth={1.8} />,
   },
@@ -426,7 +426,7 @@ export function AppLayout({
                 type="search"
                 value={sidebarQuery}
                 onChange={(e) => setSidebarQuery(e.target.value)}
-                placeholder="Ask Aura anything…"
+                placeholder="Ask Recall anything…"
                 className="text-xs text-white/70 flex-1 bg-transparent border-none outline-none placeholder:text-white/30 min-w-0"
               />
               <kbd className="hidden lg:inline text-[10px] text-white/20 border border-white/10 rounded px-1 flex-shrink-0">⌘K</kbd>
