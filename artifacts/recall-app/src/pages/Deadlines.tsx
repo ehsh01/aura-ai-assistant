@@ -263,7 +263,7 @@ export function Deadlines() {
               <p className="text-sm uppercase tracking-[0.3em] text-indigo-300/70">Command center</p>
               <h1 className="mt-2 text-3xl font-semibold">Deadlines</h1>
               <p className="mt-2 text-white/50">
-                Dates Aura found in your email, captures, and notes. Every one traces back to its
+                Dates Recall found in your email, captures, and notes. Every one traces back to its
                 source — correct anything.
               </p>
             </div>
@@ -279,7 +279,7 @@ export function Deadlines() {
                 {totalActive === 0 && (
                   <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
                     <p className="text-sm text-white/60">
-                      No deadlines tracked yet. Scan Gmail, or capture a note with a date and Aura
+                      No deadlines tracked yet. Scan Gmail, or capture a note with a date and Recall
                       will pick it up.
                     </p>
                   </section>

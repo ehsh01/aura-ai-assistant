@@ -243,7 +243,7 @@ export function WaitingDetail() {
 
               {item.status === "candidate" && (
                 <div className="mt-4 rounded-2xl border border-violet-400/30 bg-violet-500/10 px-4 py-3">
-                  <p className="text-sm font-medium text-violet-200">Aura isn't sure yet</p>
+                  <p className="text-sm font-medium text-violet-200">Recall isn't sure yet</p>
                   <p className="mt-0.5 text-sm text-white/60">
                     {item.candidateReason ??
                       "Possible follow-up — confirm to start tracking it."}

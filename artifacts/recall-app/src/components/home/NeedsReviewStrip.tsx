@@ -47,7 +47,7 @@ async function dismissItem(item: ReviewQueueItem): Promise<void> {
   }
 }
 
-/** Compact roll-up of every place Aura is waiting on a user confirmation. */
+/** Compact roll-up of every place Recall is waiting on a user confirmation. */
 export function NeedsReviewStrip({ review, onChanged }: Props) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => new Set());
@@ -95,7 +95,7 @@ export function NeedsReviewStrip({ review, onChanged }: Props) {
   return (
     <section aria-label="Needs your confirmation" className="space-y-2">
       <p className="px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-300/80">
-        Aura needs your confirmation ({review.total})
+        Recall needs your confirmation ({review.total})
       </p>
       <ol className="space-y-2">
         {visible.map((item) => {

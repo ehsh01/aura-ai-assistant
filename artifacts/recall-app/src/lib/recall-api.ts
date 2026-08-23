@@ -1245,6 +1245,65 @@ export interface HomeBriefingResponse {
   openQuestions?: { id: string; title: string; detail: string; href: string }[];
 }
 
+export type TodayCategoryKey =
+  | "email"
+  | "payments"
+  | "important"
+  | "due-soon"
+  | "cracks"
+  | "waiting"
+  | "focus"
+  | "finance";
+
+export type TodayDashboardEvidence = {
+  entityType: string;
+  entityId: string;
+  text: string;
+  system: string;
+  occurredAt: string | null;
+  url: string | null;
+};
+
+export type TodayDashboardItem = {
+  id: string;
+  title: string;
+  context: string;
+  source: string;
+  href: string;
+  evidence: TodayDashboardEvidence;
+  daysSilent?: number;
+  dueAt?: string | null;
+  reason?: string | null;
+  amount?: number | null;
+  inclusion?: "included" | "excluded" | null;
+};
+
+export type TodayDashboardCategory = {
+  key: TodayCategoryKey;
+  eyebrow: string;
+  title: string;
+  count: number;
+  summary: string;
+  items: TodayDashboardItem[];
+  emptyTitle: string;
+  emptyAction: string | null;
+  emptyHref: string | null;
+  heroAmount?: number;
+  heroCurrency?: "USD";
+  period?: string;
+  flags?: string[];
+};
+
+export type TodayDashboardResponse = {
+  date: string;
+  generatedAt: string;
+  categories: TodayDashboardCategory[];
+};
+
+export async function fetchTodayDashboard(): Promise<TodayDashboardResponse> {
+  return apiFetch("/today/dashboard");
+}
+
 export async function fetchHome(): Promise<HomeBriefingResponse> {
   return apiFetch("/home");
 }

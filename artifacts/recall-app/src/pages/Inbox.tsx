@@ -388,7 +388,7 @@ export function Inbox() {
                     </div>
                     {links.length > 0 && (
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                        <span className="text-white/35">Aura suggests:</span>
+                        <span className="text-white/35">Recall suggests:</span>
                         {links.map((link) =>
                           link.matched && link.entityId ? (
                             <Link

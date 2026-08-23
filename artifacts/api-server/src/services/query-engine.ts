@@ -1166,7 +1166,7 @@ async function runQueryForUser(
     if (attentionItems.length === 0) {
       return finish({
         answer:
-          "No deadlines are on your radar right now. Aura tracks dates found in Gmail, captures, notes, and your calendar — scan from Deadlines to check for new ones.",
+          "No deadlines are on your radar right now. Recall tracks dates found in Gmail, captures, notes, and your calendar — scan from Deadlines to check for new ones.",
         confidence: 0.85,
         caveats: null,
         evidence: [],
@@ -1270,7 +1270,7 @@ async function runQueryForUser(
       return finish({
         answer:
           context.decisions.length === 0
-            ? `No recorded decisions for ${project.name} yet — Aura logs confirmations, completions, and dismissals here as they happen.`
+            ? `No recorded decisions for ${project.name} yet — Recall logs confirmations, completions, and dismissals here as they happen.`
             : `Recent decisions for ${project.name}:\n${context.decisions
                 .slice(0, 6)
                 .map((d) => `- ${d.at.slice(0, 10)} — ${d.label}${d.detail ? `: ${d.detail}` : ""}`)
