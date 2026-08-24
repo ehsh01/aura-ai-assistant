@@ -1,0 +1,110 @@
+name: Deploy Deal Flow Sibling
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Only run when the deploy key is configured, so forks or contributors
+    # without secret access can dispatch the workflow safely.
+    env:
+      HAS_KEY: ${{ secrets.DEPLOY_SSH_KEY != '' }}
+    steps:
+      - name: Check deploy key
+        id: guard
+        run: |
+          if [ "$HAS_KEY" != "true" ]; then
+            echo "DEPLOY_SSH_KEY not set; skipping deploy." >&2
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy Deal Flow to DigitalOcean droplet
+        if: steps.guard.outputs.skip != 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 159.223.130.69
+          username: root
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            DEALFLOW_DIR="$(
+              pm2 jlist 2>/dev/null |
+                node -e '
+                  let input = "";
+                  process.stdin.on("data", (chunk) => { input += chunk; });
+                  process.stdin.on("end", () => {
+                    const apps = JSON.parse(input);
+                    const app = apps.find((item) =>
+                      item.name === "dealflow-api" || item.pm2_env?.name === "dealflow-api"
+                    );
+                    if (app?.pm2_env?.pm_cwd) {
+                      process.stdout.write(app.pm2_env.pm_cwd);
+                    }
+                  });
+                ' 2>/dev/null || true
+            )"
+            if [[ -z "$DEALFLOW_DIR" || ! -d "$DEALFLOW_DIR" ]]; then
+              DEALFLOW_DIR=/root/Deal-Flow-Manager
+            fi
+
+            cd -- "$DEALFLOW_DIR"
+            git checkout main
+            git pull --ff-only origin main
+
+            read_env_value() {
+              local key="$1"
+              local value
+              value="$(
+                awk -v key="$key" '
+                  /^[[:space:]]*#/ { next }
+                  {
+                    line = $0
+                    sub(/^[[:space:]]*/, "", line)
+                    sub(/^export[[:space:]]+/, "", line)
+                    if (index(line, key "=") == 1) {
+                      sub(/^[^=]*=/, "", line)
+                      print line
+                      exit
+                    }
+                  }
+                ' .env
+              )"
+              value="${value%$'\r'}"
+              if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+                value="${value:1:${#value}-2}"
+              elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+                value="${value:1:${#value}-2}"
+              fi
+              printf '%s' "$value"
+            }
+
+            if [[ -f .env ]] && command -v psql >/dev/null 2>&1; then
+              DATABASE_CONNECTION="$(read_env_value DIGITALOCEAN_DATABASE_URL)"
+              if [[ -z "$DATABASE_CONNECTION" ]]; then
+                DATABASE_CONNECTION="$(read_env_value DATABASE_URL)"
+              fi
+
+              if [[ -n "$DATABASE_CONNECTION" ]]; then
+                DATABASE_NAME="$(
+                  psql "$DATABASE_CONNECTION" -X -tAc 'select current_database()'
+                )"
+                DATABASE_NAME="${DATABASE_NAME//[[:space:]]/}"
+                if [[ "$DATABASE_NAME" != "dealflowdb" ]]; then
+                  echo "Refusing migration: configured database is not dealflowdb." >&2
+                  exit 1
+                fi
+                psql "$DATABASE_CONNECTION" -X -v ON_ERROR_STOP=1 \
+                  -f migrations/0007_add_zoho_crm_connections.sql
+              fi
+            fi
+
+            if command -v deploy >/dev/null 2>&1; then
+              deploy dealflow
+            else
+              npm ci
+              npm run build
+              pm2 restart dealflow-api --update-env
+              pm2 save
+            fi
