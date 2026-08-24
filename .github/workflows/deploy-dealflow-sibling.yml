@@ -2,6 +2,11 @@ name: Deploy Deal Flow Sibling
 
 on:
   workflow_dispatch:
+  # A main-branch workflow edit triggers one deployment when dispatch is unavailable.
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/deploy-dealflow-sibling.yml
 
 jobs:
   deploy:
