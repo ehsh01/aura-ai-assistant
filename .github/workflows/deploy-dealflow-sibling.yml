@@ -87,7 +87,7 @@ jobs:
 
             shopt -s nullglob
             MIGRATION_FILES=()
-            for MIGRATION_NUMBER in {0007..0011}; do
+            for MIGRATION_NUMBER in {0007..0012}; do
               MATCHING_MIGRATIONS=(migrations/"${MIGRATION_NUMBER}"*.sql)
               MIGRATION_FILES+=("${MATCHING_MIGRATIONS[@]}")
             done
