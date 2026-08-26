@@ -2,7 +2,7 @@ name: Deploy Deal Flow Sibling
 
 on:
   workflow_dispatch:
-  # A main-branch workflow edit triggers one deployment when dispatch is unavailable.
+  # Every main-branch edit to this file intentionally triggers one Deal Flow deployment.
   push:
     branches: [main]
     paths:
@@ -85,24 +85,41 @@ jobs:
               printf '%s' "$value"
             }
 
-            if [[ -f .env ]] && command -v psql >/dev/null 2>&1; then
-              DATABASE_CONNECTION="$(read_env_value DIGITALOCEAN_DATABASE_URL)"
-              if [[ -z "$DATABASE_CONNECTION" ]]; then
-                DATABASE_CONNECTION="$(read_env_value DATABASE_URL)"
+            shopt -s nullglob
+            MIGRATION_FILES=()
+            for MIGRATION_NUMBER in {0007..0011}; do
+              MATCHING_MIGRATIONS=(migrations/"${MIGRATION_NUMBER}"*.sql)
+              MIGRATION_FILES+=("${MATCHING_MIGRATIONS[@]}")
+            done
+
+            if (( ${#MIGRATION_FILES[@]} > 0 )); then
+              if ! command -v psql >/dev/null 2>&1; then
+                echo "Refusing migration: psql is not installed." >&2
+                exit 1
               fi
 
-              if [[ -n "$DATABASE_CONNECTION" ]]; then
-                DATABASE_NAME="$(
-                  psql "$DATABASE_CONNECTION" -X -tAc 'select current_database()'
-                )"
-                DATABASE_NAME="${DATABASE_NAME//[[:space:]]/}"
-                if [[ "$DATABASE_NAME" != "dealflowdb" ]]; then
-                  echo "Refusing migration: configured database is not dealflowdb." >&2
-                  exit 1
-                fi
-                psql "$DATABASE_CONNECTION" -X -v ON_ERROR_STOP=1 \
-                  -f migrations/0007_add_zoho_crm_connections.sql
+              DATABASE_CONNECTION="${DIGITALOCEAN_DATABASE_URL:-}"
+              if [[ -z "$DATABASE_CONNECTION" && -f .env ]]; then
+                DATABASE_CONNECTION="$(read_env_value DIGITALOCEAN_DATABASE_URL)"
               fi
+              if [[ -z "$DATABASE_CONNECTION" ]]; then
+                echo "Refusing migration: DIGITALOCEAN_DATABASE_URL is not configured." >&2
+                exit 1
+              fi
+
+              DATABASE_NAME="$(
+                psql "$DATABASE_CONNECTION" -X -tAc 'select current_database()'
+              )"
+              DATABASE_NAME="${DATABASE_NAME//[[:space:]]/}"
+              if [[ "$DATABASE_NAME" != "dealflowdb" ]]; then
+                echo "Refusing migration: DIGITALOCEAN_DATABASE_URL does not target dealflowdb." >&2
+                exit 1
+              fi
+
+              for MIGRATION_FILE in "${MIGRATION_FILES[@]}"; do
+                echo "Applying $MIGRATION_FILE to dealflowdb."
+                psql "$DATABASE_CONNECTION" -X -v ON_ERROR_STOP=1 -f "$MIGRATION_FILE"
+              done
             fi
 
             if command -v deploy >/dev/null 2>&1; then
