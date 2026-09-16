@@ -142,6 +142,10 @@ export type EvernoteFetchResult = {
   errors: string[];
 };
 
+export function isEvernoteSandboxEnabled(): boolean {
+  return process.env.EVERNOTE_SANDBOX?.trim().toLowerCase() === "true";
+}
+
 function evernoteConfig() {
   const consumerKey = process.env.EVERNOTE_CONSUMER_KEY?.trim();
   const consumerSecret = process.env.EVERNOTE_CONSUMER_SECRET?.trim();
@@ -159,8 +163,7 @@ function evernoteConfig() {
     consumerKey,
     consumerSecret,
     callbackUrl,
-    // Evernote credentials are separately activated for sandbox and production.
-    sandbox: process.env.EVERNOTE_SANDBOX?.trim().toLowerCase() !== "false",
+    sandbox: isEvernoteSandboxEnabled(),
   };
 }
 
@@ -171,7 +174,7 @@ function newEvernoteClient(token?: string): EvernoteClientInstance {
     : {
         consumerKey: undefined,
         consumerSecret: undefined,
-        sandbox: process.env.EVERNOTE_SANDBOX?.trim().toLowerCase() !== "false",
+        sandbox: isEvernoteSandboxEnabled(),
       };
   if (!token && !oauthConfigured) {
     throw new Error(

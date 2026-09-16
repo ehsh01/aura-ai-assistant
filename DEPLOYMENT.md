@@ -238,13 +238,13 @@ are activated separately.
 1. Register an Evernote Cloud API consumer key and select read-only/basic access.
 2. Configure this callback URL:
    - Production: `https://recall-app.net/api/connectors/evernote/oauth/callback`
-3. Start against Evernote sandbox:
+3. Configure the production OAuth client on the Recall API:
 
 ```bash
 EVERNOTE_CONSUMER_KEY=...
 EVERNOTE_CONSUMER_SECRET=...
 EVERNOTE_OAUTH_REDIRECT_URI=https://recall-app.net/api/connectors/evernote/oauth/callback
-EVERNOTE_SANDBOX=true
+EVERNOTE_SANDBOX=false
 SECRETS_ENCRYPTION_KEY=... # OAuth tokens are encrypted at rest
 ```
 
@@ -253,8 +253,7 @@ configure `EVERNOTE_DEVELOPER_TOKEN` instead. Recall verifies it server-side
 and seals it into connector settings; the API and UI never return the token.
 OAuth remains the preferred production path.
 
-4. After Evernote activates the same integration for production, set
-   `EVERNOTE_SANDBOX=false` and restart both Recall processes with updated env.
+4. Restart both Recall processes with updated env.
 5. On `/connectors`, click **Connect Evernote**, authorize access, then click
    **Sync Now**. Sync only reads note metadata/content. Recall does not create,
    edit, or delete Evernote data.

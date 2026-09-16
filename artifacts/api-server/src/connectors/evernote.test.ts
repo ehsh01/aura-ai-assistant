@@ -7,6 +7,7 @@ import {
   fetchEvernoteBundle,
   isEvernoteDeveloperTokenConfigured,
   isEvernoteOAuthConfigured,
+  isEvernoteSandboxEnabled,
   withEvernoteRateLimitRetry,
   type EvernoteNoteStore,
 } from "./evernote";
@@ -16,6 +17,7 @@ afterEach(() => {
   delete process.env.EVERNOTE_CONSUMER_SECRET;
   delete process.env.EVERNOTE_DEVELOPER_TOKEN;
   delete process.env.EVERNOTE_OAUTH_REDIRECT_URI;
+  delete process.env.EVERNOTE_SANDBOX;
 });
 
 describe("evernote connector", () => {
@@ -24,6 +26,12 @@ describe("evernote connector", () => {
     expect(isEvernoteOAuthConfigured()).toBe(false);
     process.env.EVERNOTE_CONSUMER_SECRET = "secret";
     expect(isEvernoteOAuthConfigured()).toBe(true);
+  });
+
+  it("defaults OAuth to Evernote production", () => {
+    expect(isEvernoteSandboxEnabled()).toBe(false);
+    process.env.EVERNOTE_SANDBOX = "true";
+    expect(isEvernoteSandboxEnabled()).toBe(true);
   });
 
   it("recognizes an optional server-side developer token", () => {
