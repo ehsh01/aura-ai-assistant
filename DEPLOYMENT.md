@@ -238,17 +238,21 @@ Evernote consumer key or secret.
 # Defaults shown; only the callback must stay exact.
 EVERNOTE_MCP_URL=https://mcp.evernote.com/mcp
 EVERNOTE_OAUTH_REDIRECT_URI=https://recall-app.net/api/connectors/evernote/oauth/callback
-EVERNOTE_MCP_PACE_MS=250
+EVERNOTE_MCP_PACE_MS=1000
+EVERNOTE_MCP_MAX_429_RETRIES=2
 SECRETS_ENCRYPTION_KEY=... # seals access/refresh tokens and DCR client secret
 APP_PUBLIC_URL=https://recall-app.net
 ```
 
 1. Restart both Recall processes with updated env.
-2. On `/connectors`, click **Connect Evernote (MCP)**.
+2. Confirm Ernesto's Evernote account has a paid plan, then click **Connect
+   Evernote (MCP)**.
 3. Ernesto completes Evernote's browser OAuth consent. Recall dynamically
    registers the client and seals registration/tokens in connector settings.
-4. Click **Sync Now**. Sync calls only `search_notes`, `get_note`,
-   `search_notebooks`, and `search_tags`, paced and outside Ask.
+4. Click **Sync Now**. Sync exposes only `search_notes`, `semantic_search`,
+   `get_note`, `search_notebooks`, and `search_tags`; backfill uses the listing
+   and note-read tools sequentially. Calls default to one per second and retry
+   429s at most twice using a bounded Retry-After delay.
 
 The existing OAuth1/EDAM and personal developer-token implementations remain
 disabled optional fallbacks:
@@ -282,9 +286,9 @@ LLM on local Postgres top-k retrieval only; it never calls Evernote MCP.
 Disabling the connector through `PATCH /api/connectors/:id` pauses Sync Now and
 excludes that connector from Ask.
 
-**Smoke blocker:** no static Evernote credentials are needed for MCP. Ernesto
-must still complete the browser OAuth consent before the live Connect → Sync
-Now → Ask flow can be verified.
+**Smoke blockers:** no static Evernote credentials are needed for MCP. Ernesto
+must have an eligible paid Evernote plan and complete the accounts.evernote.com
+browser consent before the live Connect → Sync Now → Ask flow can be verified.
 
 ## Database backups
 

@@ -597,8 +597,8 @@ export function Connectors() {
                 : "Connect Evernote (MCP)"}
             </button>
             <p className="mt-3 text-xs text-white/45">
-              Browser authorization by Ernesto is still required. Access and refresh tokens,
-              plus any DCR client secret, are sealed server-side.
+              A paid Evernote plan and browser authorization by Ernesto are required. Access and
+              refresh tokens, plus any DCR client secret, are sealed server-side.
             </p>
             {(evernoteEdamFallbackConfigured ||
               evernoteDeveloperTokenConfigured) && (

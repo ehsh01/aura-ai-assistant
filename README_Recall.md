@@ -60,6 +60,7 @@ The Evernote connector is read-only external truth. The default Connect flow
 uses Evernote MCP Streamable HTTP with OAuth2 Dynamic Client Registration.
 Sync Now incrementally stores changed notes in `source_records`; Ask retrieves
 local Postgres evidence and never calls MCP at query time.
+The live MCP connection requires an eligible paid Evernote plan.
 
 Required API environment:
 

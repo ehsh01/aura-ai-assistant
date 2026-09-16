@@ -12,6 +12,7 @@ import {
 afterEach(() => {
   delete process.env.SECRETS_ENCRYPTION_KEY;
   delete process.env.EVERNOTE_MCP_PACE_MS;
+  delete process.env.EVERNOTE_MCP_MAX_429_RETRIES;
 });
 
 describe("Evernote MCP auth persistence", () => {
@@ -198,5 +199,33 @@ describe("Evernote MCP read sync", () => {
       ]),
     );
     expect(result.deletedExternalIds).toEqual([]);
+  });
+
+  it("retries bounded MCP 429 responses", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    let notebookCalls = 0;
+    const client = {
+      async callTool(input: { name: string }): Promise<unknown> {
+        if (input.name === "search_notebooks") {
+          notebookCalls += 1;
+          if (notebookCalls === 1) {
+            throw { status: 429, retryAfterMs: 0 };
+          }
+          return { structuredContent: { notebooks: [] } };
+        }
+        if (input.name === "search_tags") {
+          return { structuredContent: { tags: [] } };
+        }
+        if (input.name === "search_notes") {
+          return {
+            structuredContent: { totalResultCount: 0, notes: [] },
+          };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+    const result = await fetchEvernoteViaMcp(client, new Map());
+    expect(notebookCalls).toBe(2);
+    expect(result.recordsFetched).toBe(0);
   });
 });

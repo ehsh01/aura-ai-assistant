@@ -20,6 +20,7 @@ import {
 export const EVERNOTE_MCP_URL = "https://mcp.evernote.com/mcp";
 const READ_TOOLS = new Set([
   "search_notes",
+  "semantic_search",
   "get_note",
   "search_notebooks",
   "search_tags",
@@ -352,21 +353,72 @@ async function callReadTool(
   if (!READ_TOOLS.has(name)) {
     throw new Error(`Evernote MCP write/non-sync tool blocked: ${name}`);
   }
-  const raw = asRecord(await client.callTool({ name, arguments: args }));
-  if (raw.isError === true) {
-    throw new Error(`Evernote MCP ${name} failed`);
-  }
-  if (raw.structuredContent !== undefined) {
-    return asRecord(raw.structuredContent);
-  }
-  const text = asArray(raw.content)
-    .map((part) => asRecord(part))
-    .find((part) => part.type === "text" && typeof part.text === "string")?.text;
-  if (typeof text !== "string") return raw;
-  try {
-    return asRecord(JSON.parse(text));
-  } catch {
-    return { text };
+  const configuredRetries = Number(
+    process.env.EVERNOTE_MCP_MAX_429_RETRIES ?? 2,
+  );
+  const maxRetries = Number.isFinite(configuredRetries)
+    ? Math.min(Math.max(Math.floor(configuredRetries), 0), 4)
+    : 2;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const raw = asRecord(await client.callTool({ name, arguments: args }));
+      const text = asArray(raw.content)
+        .map((part) => asRecord(part))
+        .find(
+          (part) => part.type === "text" && typeof part.text === "string",
+        )?.text;
+      if (raw.isError === true) {
+        const error = new Error(
+          typeof text === "string"
+            ? text.slice(0, 300)
+            : `Evernote MCP ${name} failed`,
+        ) as Error & { status?: number; retryAfterMs?: number };
+        if (/\b429\b|rate.?limit/i.test(error.message)) {
+          error.status = 429;
+          error.retryAfterMs = 1_000;
+        }
+        throw error;
+      }
+      if (raw.structuredContent !== undefined) {
+        return asRecord(raw.structuredContent);
+      }
+      if (typeof text !== "string") return raw;
+      try {
+        return asRecord(JSON.parse(text));
+      } catch {
+        return { text };
+      }
+    } catch (error) {
+      const row = asRecord(error);
+      const data = asRecord(row.data);
+      const status = asNumber(
+        row.status ?? row.statusCode ?? data.status ?? data.statusCode,
+      );
+      const message = error instanceof Error ? error.message : "";
+      const rateLimited =
+        status === 429 || /\b429\b|rate.?limit/i.test(message);
+      if (!rateLimited || attempt >= maxRetries) throw error;
+      const retryValue =
+        asNumber(
+          row.retryAfterMs ??
+            row.retry_after_ms ??
+            data.retryAfterMs ??
+            data.retry_after_ms,
+        ) ??
+        ((asNumber(
+          row.retryAfter ??
+            row.retry_after ??
+            data.retryAfter ??
+            data.retry_after,
+        ) ??
+          Number(message.match(/retry after\s+(\d+)/i)?.[1] ?? 1)) *
+          1_000);
+      const boundedDelay = Math.min(
+        Math.max(retryValue, 0),
+        60_000,
+      );
+      await new Promise((resolve) => setTimeout(resolve, boundedDelay));
+    }
   }
 }
 
@@ -509,9 +561,9 @@ function noteToRaw(
 }
 
 function paceMs(): number {
-  const configured = Number(process.env.EVERNOTE_MCP_PACE_MS ?? 250);
-  if (!Number.isFinite(configured)) return 250;
-  return Math.min(Math.max(Math.floor(configured), 0), 2_000);
+  const configured = Number(process.env.EVERNOTE_MCP_PACE_MS ?? 1_000);
+  if (!Number.isFinite(configured)) return 1_000;
+  return Math.min(Math.max(Math.floor(configured), 0), 10_000);
 }
 
 async function pace(): Promise<void> {

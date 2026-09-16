@@ -318,8 +318,9 @@ Public API key from [FlipperForce Integrations](https://tools.flipperforce.com/i
   OAuth2 Dynamic Client Registration requires no static consumer key/secret.
 - Access/refresh tokens and any DCR client secret are sealed in connector
   settings; list DTOs never return settings.
-- Sync uses paced read-only `search_notes`, `get_note`, `search_notebooks`, and
-  `search_tags` calls and stores `evernote_note` records keyed by note GUID.
+- Sync allowlists read-only `search_notes`, `semantic_search`, `get_note`,
+  `search_notebooks`, and `search_tags`; backfill calls are sequentially paced
+  with bounded 429 retries and store `evernote_note` records keyed by note GUID.
 - Record metadata uses `notebookGuid`, `notebookName`, `tagGuids`, `tagNames`,
   `contentHash`, `usn`, `evernoteUpdated`, and `hasAttachments`. Attachment
   bodies remain phase 2.
@@ -337,3 +338,4 @@ Public API key from [FlipperForce Integrations](https://tools.flipperforce.com/i
   per-sync embedding, and UTC-daily embedding kill switches/caps are available.
 - Evernote MCP is never an Ask-time tool. Ask uses local Postgres FTS/cached
   embeddings and one answer LLM over top-k evidence.
+- Live OAuth consent requires an eligible paid Evernote plan.
