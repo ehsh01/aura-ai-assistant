@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  evernoteMcpFetch,
   fetchEvernoteViaMcp,
   mcpOAuthStateFromSettings,
   mcpSettingsFromOAuthState,
@@ -13,6 +14,7 @@ afterEach(() => {
   delete process.env.SECRETS_ENCRYPTION_KEY;
   delete process.env.EVERNOTE_MCP_PACE_MS;
   delete process.env.EVERNOTE_MCP_MAX_429_RETRIES;
+  vi.unstubAllGlobals();
 });
 
 describe("Evernote MCP auth persistence", () => {
@@ -51,6 +53,27 @@ describe("Evernote MCP auth persistence", () => {
     expect(restored.accessToken).toBe("access-secret");
     expect(restored.refreshToken).toBe("refresh-secret");
     expect(restored.codeVerifier).toBe("pkce-secret");
+  });
+});
+
+describe("Evernote MCP HTTP pacing", () => {
+  it("retries HTTP 429 using Retry-After before the SDK consumes headers", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        return calls === 1
+          ? new Response("limited", {
+              status: 429,
+              headers: { "Retry-After": "0" },
+            })
+          : new Response("ok", { status: 200 });
+      }),
+    );
+    const response = await evernoteMcpFetch("https://mcp.evernote.com/mcp");
+    expect(response.status).toBe(200);
+    expect(calls).toBe(2);
   });
 });
 
@@ -211,10 +234,11 @@ describe("Evernote MCP read sync", () => {
           if (notebookCalls === 1) {
             return {
               isError: true,
+              structuredContent: { status: 429, retryAfter: 0 },
               content: [
                 {
                   type: "text",
-                  text: "429 rate limit; retry after 0 seconds",
+                  text: "Evernote request throttled",
                 },
               ],
             };

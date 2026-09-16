@@ -6,6 +6,7 @@ import {
   type OAuthClientMetadata,
   type OAuthClientProvider,
   type OAuthDiscoveryState,
+  type FetchLike,
   type StoredOAuthClientInformation,
   type StoredOAuthTokens,
 } from "@modelcontextprotocol/client";
@@ -68,6 +69,37 @@ function asNumber(value: unknown): number | null {
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
+
+function max429Retries(): number {
+  const configured = Number(
+    process.env.EVERNOTE_MCP_MAX_429_RETRIES ?? 2,
+  );
+  return Number.isFinite(configured)
+    ? Math.min(Math.max(Math.floor(configured), 0), 4)
+    : 2;
+}
+
+function retryAfterHeaderMs(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1_000);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
+
+export const evernoteMcpFetch: FetchLike = async (input, init) => {
+  const retries = max429Retries();
+  for (let attempt = 0; ; attempt++) {
+    const request = input instanceof Request ? input.clone() : input;
+    const response = await fetch(request, init);
+    if (response.status !== 429 || attempt >= retries) return response;
+    const delay = Math.min(
+      retryAfterHeaderMs(response.headers.get("retry-after")) ?? 1_000,
+      60_000,
+    );
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+};
 
 function firstArray(root: JsonRecord, keys: string[]): unknown[] {
   for (const key of keys) {
@@ -299,6 +331,7 @@ export async function beginEvernoteMcpOAuth(
     serverUrl: mcpServerUrl(),
     scope: "read",
     forceReauthorization: true,
+    fetchFn: evernoteMcpFetch,
   });
   if (result !== "REDIRECT") {
     throw new Error("Evernote MCP OAuth unexpectedly completed without consent");
@@ -334,6 +367,7 @@ export async function finishEvernoteMcpOAuth(
     authorizationCode,
     iss: callbackParams.get("iss") ?? undefined,
     scope: "read",
+    fetchFn: evernoteMcpFetch,
   });
   return mcpSettingsFromOAuthState(state);
 }
@@ -353,12 +387,7 @@ async function callReadTool(
   if (!READ_TOOLS.has(name)) {
     throw new Error(`Evernote MCP write/non-sync tool blocked: ${name}`);
   }
-  const configuredRetries = Number(
-    process.env.EVERNOTE_MCP_MAX_429_RETRIES ?? 2,
-  );
-  const maxRetries = Number.isFinite(configuredRetries)
-    ? Math.min(Math.max(Math.floor(configuredRetries), 0), 4)
-    : 2;
+  const maxRetries = max429Retries();
   for (let attempt = 0; ; attempt++) {
     try {
       const raw = asRecord(await client.callTool({ name, arguments: args }));
@@ -368,13 +397,30 @@ async function callReadTool(
           (part) => part.type === "text" && typeof part.text === "string",
         )?.text;
       if (raw.isError === true) {
+        const structuredError = asRecord(raw.structuredContent);
         const error = new Error(
           typeof text === "string"
             ? text.slice(0, 300)
             : `Evernote MCP ${name} failed`,
         ) as Error & { status?: number; retryAfterMs?: number };
-        if (/\b429\b|rate.?limit/i.test(error.message)) {
+        const structuredStatus = asNumber(
+          structuredError.status ?? structuredError.statusCode,
+        );
+        if (
+          structuredStatus === 429 ||
+          /\b429\b|rate.?limit/i.test(error.message)
+        ) {
           error.status = 429;
+          const retryMs = asNumber(
+            structuredError.retryAfterMs ??
+              structuredError.retry_after_ms,
+          );
+          const retrySeconds = asNumber(
+            structuredError.retryAfter ??
+              structuredError.retry_after,
+          );
+          error.retryAfterMs =
+            retryMs ?? (retrySeconds != null ? retrySeconds * 1_000 : undefined);
         }
         throw error;
       }
@@ -747,6 +793,7 @@ export async function withEvernoteMcpClient<T>(
   );
   const transport = new StreamableHTTPClientTransport(mcpServerUrl(), {
     authProvider: provider,
+    fetch: evernoteMcpFetch,
   });
   const client = new Client({ name: "Recall", version: "1.0.0" });
   try {
