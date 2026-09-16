@@ -209,7 +209,15 @@ describe("Evernote MCP read sync", () => {
         if (input.name === "search_notebooks") {
           notebookCalls += 1;
           if (notebookCalls === 1) {
-            throw { status: 429, retryAfterMs: 0 };
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: "429 rate limit; retry after 0 seconds",
+                },
+              ],
+            };
           }
           return { structuredContent: { notebooks: [] } };
         }

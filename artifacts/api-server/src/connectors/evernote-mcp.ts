@@ -375,7 +375,6 @@ async function callReadTool(
         ) as Error & { status?: number; retryAfterMs?: number };
         if (/\b429\b|rate.?limit/i.test(error.message)) {
           error.status = 429;
-          error.retryAfterMs = 1_000;
         }
         throw error;
       }
@@ -398,6 +397,38 @@ async function callReadTool(
       const rateLimited =
         status === 429 || /\b429\b|rate.?limit/i.test(message);
       if (!rateLimited || attempt >= maxRetries) throw error;
+      const headersValue = row.headers ?? data.headers;
+      const headerRetryAfter =
+        headersValue instanceof Headers
+          ? headersValue.get("retry-after")
+          : asString(
+              asRecord(headersValue)["retry-after"] ??
+                asRecord(headersValue)["Retry-After"],
+            );
+      const headerSeconds = headerRetryAfter
+        ? Number(headerRetryAfter)
+        : Number.NaN;
+      const headerDate = headerRetryAfter
+        ? Date.parse(headerRetryAfter)
+        : Number.NaN;
+      const headerDelay = Number.isFinite(headerSeconds)
+        ? headerSeconds * 1_000
+        : Number.isFinite(headerDate)
+          ? Math.max(0, headerDate - Date.now())
+          : null;
+      const messageMatch = message.match(
+        /retry after\s+(\d+)\s*(ms|milliseconds?|s|sec|seconds?|m|min|minutes?)?/i,
+      );
+      const messageAmount = Number(messageMatch?.[1] ?? Number.NaN);
+      const messageUnit = (messageMatch?.[2] ?? "seconds").toLowerCase();
+      const messageDelay = Number.isFinite(messageAmount)
+        ? messageAmount *
+          (messageUnit.startsWith("m") && !messageUnit.startsWith("ms")
+            ? 60_000
+            : messageUnit.startsWith("ms")
+              ? 1
+              : 1_000)
+        : null;
       const retryValue =
         asNumber(
           row.retryAfterMs ??
@@ -405,13 +436,14 @@ async function callReadTool(
             data.retryAfterMs ??
             data.retry_after_ms,
         ) ??
+        (headerDelay ?? messageDelay) ??
         ((asNumber(
           row.retryAfter ??
             row.retry_after ??
             data.retryAfter ??
             data.retry_after,
         ) ??
-          Number(message.match(/retry after\s+(\d+)/i)?.[1] ?? 1)) *
+          1) *
           1_000);
       const boundedDelay = Math.min(
         Math.max(retryValue, 0),
@@ -642,6 +674,7 @@ export async function fetchEvernoteViaMcp(
       listingComplete = true;
     } else if (explicitTotal == null && page.length < 100) {
       listingComplete = true;
+      await pace();
       break;
     }
     await pace();

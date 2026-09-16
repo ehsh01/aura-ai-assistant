@@ -78,13 +78,6 @@ import {
   type EvernoteFetchResult,
   type EvernoteKnownNote,
 } from "../connectors/evernote";
-import {
-  beginEvernoteMcpOAuth,
-  fetchEvernoteViaMcp,
-  finishEvernoteMcpOAuth,
-  testEvernoteMcpConnection,
-  withEvernoteMcpClient,
-} from "../connectors/evernote-mcp";
 import { embedItemsCached } from "./embedding-cache";
 import { embeddingTextForContextRecord } from "./embedding-text";
 
@@ -1038,6 +1031,9 @@ async function fetchEvernoteRecordsForConnector(
   }
 
   if (authTransport === "mcp") {
+    const { fetchEvernoteViaMcp, withEvernoteMcpClient } = await import(
+      "../connectors/evernote-mcp"
+    );
     const persistMcpState = async (next: Record<string, unknown>) => {
       await getDb()
         .update(connectors)
@@ -2361,6 +2357,9 @@ export async function beginEvernoteMcpOAuthForUser(
   userId: string,
   oauthState: string,
 ): Promise<{ connectorId: string; authorizeUrl: string }> {
+  const { beginEvernoteMcpOAuth } = await import(
+    "../connectors/evernote-mcp"
+  );
   const rows = await getDb()
     .select()
     .from(connectors)
@@ -2426,6 +2425,9 @@ export async function finishEvernoteMcpOAuthForUser(
   oauthState: string,
   callbackParams: URLSearchParams,
 ): Promise<ConnectorDto> {
+  const { finishEvernoteMcpOAuth, testEvernoteMcpConnection } = await import(
+    "../connectors/evernote-mcp"
+  );
   const rows = await getDb()
     .select()
     .from(connectors)
@@ -2674,6 +2676,9 @@ export async function testEvernoteConnectorForUser(
     throw new Error("Evernote connector is missing sealed credentials");
   }
   if (settings.authTransport === "mcp") {
+    const { testEvernoteMcpConnection } = await import(
+      "../connectors/evernote-mcp"
+    );
     const persistMcpState = async (next: Record<string, unknown>) => {
       await getDb()
         .update(connectors)
