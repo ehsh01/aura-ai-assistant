@@ -320,7 +320,8 @@ Public API key from [FlipperForce Integrations](https://tools.flipperforce.com/i
   settings; list DTOs never return settings.
 - Sync allowlists read-only `search_notes`, `semantic_search`, `get_note`,
   `search_notebooks`, and `search_tags`; backfill calls are sequentially paced
-  with bounded 429 retries and store `evernote_note` records keyed by note GUID.
+  with bounded 429 retries and chunked across Sync Now runs. Deferred work is
+  logged as `partial_success`; records use `evernote_note` keyed by note GUID.
 - Record metadata uses `notebookGuid`, `notebookName`, `tagGuids`, `tagNames`,
   `contentHash`, `usn`, `evernoteUpdated`, and `hasAttachments`. Attachment
   bodies remain phase 2.

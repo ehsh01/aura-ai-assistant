@@ -139,6 +139,7 @@ export type EvernoteFetchResult = {
   recordsFetched: number;
   recordsSkipped: number;
   recordsFailed: number;
+  recordsDeferred?: number;
   deletedExternalIds: string[];
   errors: string[];
 };

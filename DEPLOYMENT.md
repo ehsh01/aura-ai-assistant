@@ -240,6 +240,7 @@ EVERNOTE_MCP_URL=https://mcp.evernote.com/mcp
 EVERNOTE_OAUTH_REDIRECT_URI=https://recall-app.net/api/connectors/evernote/oauth/callback
 EVERNOTE_MCP_PACE_MS=1000
 EVERNOTE_MCP_MAX_429_RETRIES=2
+EVERNOTE_MCP_BACKFILL_CHUNK_SIZE=25
 SECRETS_ENCRYPTION_KEY=... # seals access/refresh tokens and DCR client secret
 APP_PUBLIC_URL=https://recall-app.net
 ```
@@ -253,6 +254,9 @@ APP_PUBLIC_URL=https://recall-app.net
    `get_note`, `search_notebooks`, and `search_tags`; backfill uses the listing
    and note-read tools sequentially. Calls default to one per second and retry
    429s at most twice using a bounded Retry-After delay.
+   Changed-note bodies are limited to 25 per Sync Now; additional notes are
+   logged as deferred with `partial_success` so another Sync Now continues
+   backfill without wedging the API process.
 
 The existing OAuth1/EDAM and personal developer-token implementations remain
 disabled optional fallbacks:

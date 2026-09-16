@@ -1839,6 +1839,7 @@ export async function listConnectors(): Promise<{
     type: string;
     syncStatus: string;
     enabled: boolean;
+    lastSyncAt: string | null;
   }[];
   googleOAuthConfigured?: boolean;
   microsoftOAuthConfigured?: boolean;
@@ -1866,7 +1867,7 @@ export function startHomeyOAuth(): void {
   window.location.assign("/api/connectors/homey/oauth/start");
 }
 
-/** Full-page navigation for Evernote OAuth 1.0a. */
+/** Full-page navigation for Evernote MCP OAuth2+DCR. */
 export function startEvernoteOAuth(): void {
   window.location.assign("/api/connectors/evernote/oauth/start");
 }

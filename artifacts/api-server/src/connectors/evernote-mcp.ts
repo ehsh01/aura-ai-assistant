@@ -658,6 +658,14 @@ function paceMs(): number {
   return Math.min(Math.max(Math.floor(configured), 0), 10_000);
 }
 
+export function evernoteMcpBackfillChunkSize(): number {
+  const configured = Number(
+    process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE ?? 25,
+  );
+  if (!Number.isFinite(configured)) return 25;
+  return Math.min(Math.max(Math.floor(configured), 1), 100);
+}
+
 async function pace(): Promise<void> {
   const delay = paceMs();
   if (delay <= 0) return;
@@ -760,10 +768,12 @@ export async function fetchEvernoteViaMcp(
     const updated = noteUpdated(summary);
     return !known || !updated || known.evernoteUpdated !== iso(updated);
   });
+  const batch = changed.slice(0, evernoteMcpBackfillChunkSize());
+  const recordsDeferred = Math.max(0, changed.length - batch.length);
 
   const records: EvernoteRawRecord[] = [];
   const errors: string[] = [];
-  for (const summary of changed) {
+  for (const summary of batch) {
     const guid = noteGuid(summary);
     if (!guid) continue;
     try {
@@ -784,6 +794,7 @@ export async function fetchEvernoteViaMcp(
     recordsFetched: activeGuids.size,
     recordsSkipped: activeGuids.size - changed.length,
     recordsFailed: errors.length,
+    recordsDeferred,
     deletedExternalIds,
     errors,
   };

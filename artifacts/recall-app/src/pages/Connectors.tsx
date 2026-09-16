@@ -8,6 +8,7 @@ import {
   getFinanceSummary,
   getHomeyWebhookInfo,
   listConnectors,
+  listConnectorSyncRuns,
   listFinanceSubscriptions,
   patchConnector,
   rotateHomeyWebhookSecret,
@@ -20,6 +21,7 @@ import {
   testEvernoteConnector,
   testHomeyWebhook,
   type FinanceSummary,
+  type ConnectorSyncRun,
 } from "@/lib/recall-api";
 import {
   createExtensionToken,
@@ -36,6 +38,7 @@ type ConnectorRow = {
   type: string;
   syncStatus: string;
   enabled: boolean;
+  lastSyncAt: string | null;
 };
 
 const STATUS_STYLES: Record<string, string> = {
@@ -74,6 +77,8 @@ export function Connectors() {
   const [savingFlipper, setSavingFlipper] = useState(false);
   const [testingFlipper, setTestingFlipper] = useState(false);
   const [testingEvernote, setTestingEvernote] = useState(false);
+  const [evernoteLastRun, setEvernoteLastRun] =
+    useState<ConnectorSyncRun | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [summary, setSummary] = useState<{ connectorId: string; data: FinanceSummary } | null>(null);
@@ -110,6 +115,13 @@ export function Connectors() {
       setEvernoteDeveloperTokenConfigured(
         Boolean(res.evernoteDeveloperTokenConfigured),
       );
+      const evernote = res.connectors.find((connector) => connector.type === "evernote");
+      if (evernote) {
+        const runs = await listConnectorSyncRuns(evernote.id).catch(() => null);
+        setEvernoteLastRun(runs?.runs[0] ?? null);
+      } else {
+        setEvernoteLastRun(null);
+      }
       const tokenRes = await listExtensionTokens().catch(() => null);
       if (tokenRes) setExtensionTokens(tokenRes.items);
     } finally {
@@ -216,7 +228,9 @@ export function Connectors() {
       });
     } else if (status === "error") {
       const detail =
-        reason === "not_configured"
+        reason === "plan_required"
+          ? "Evernote MCP requires an eligible paid Evernote plan. Confirm the account plan, then try Connect again."
+          : reason === "not_configured"
           ? "Evernote OAuth is not configured on the server yet."
           : reason === "missing_verifier"
             ? "Evernote authorization was canceled or expired."
@@ -332,7 +346,11 @@ export function Connectors() {
           res.result.recordsSkipped ?? 0
         } skipped, ${res.result.recordsDeleted ?? 0} removed, ${
           res.result.recordsFailed ?? 0
-        } failed`,
+        } failed${
+          (res.result.recordsDeferred ?? 0) > 0
+            ? `, ${res.result.recordsDeferred} deferred to the next Sync Now`
+            : ""
+        }`,
       });
       await load();
       if (connector.type === "finance_api") await loadSummary(connector.id);
@@ -627,6 +645,19 @@ export function Connectors() {
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
+                  onClick={() => void runSync(evernoteConnector)}
+                  disabled={
+                    syncingId === evernoteConnector.id ||
+                    !evernoteConnector.enabled
+                  }
+                  className="rounded-lg bg-indigo-500/20 px-3 py-1.5 text-xs text-indigo-200 hover:bg-indigo-500/30 disabled:opacity-50"
+                >
+                  {syncingId === evernoteConnector.id
+                    ? "Syncing…"
+                    : "Sync Now"}
+                </button>
+                <button
+                  type="button"
                   disabled={testingEvernote}
                   onClick={async () => {
                     setTestingEvernote(true);
@@ -687,6 +718,28 @@ export function Connectors() {
                     ? "Enabled. Sync Now pulls changed notes."
                     : "Paused. Sync and Ask retrieval are disabled."}
                 </p>
+                <p className="w-full text-xs text-white/45">
+                  Last sync:{" "}
+                  {evernoteConnector.lastSyncAt
+                    ? new Date(evernoteConnector.lastSyncAt).toLocaleString()
+                    : "Not synced yet"}
+                  {evernoteLastRun
+                    ? ` · ${evernoteLastRun.status.replace(/_/g, " ")} · ${evernoteLastRun.recordsFetched} fetched / ${evernoteLastRun.recordsCreated} created / ${evernoteLastRun.recordsUpdated} updated / ${evernoteLastRun.recordsSkipped} skipped / ${evernoteLastRun.recordsFailed} failed`
+                    : ""}
+                </p>
+                {evernoteLastRun &&
+                  (evernoteLastRun.errorMessage ||
+                    (Array.isArray(evernoteLastRun.metadata.errors) &&
+                      evernoteLastRun.metadata.errors.length > 0)) && (
+                    <div className="w-full rounded-lg border border-red-400/20 bg-red-500/5 p-2 text-xs text-red-200/80">
+                      {evernoteLastRun.errorMessage ??
+                        String(
+                          (
+                            evernoteLastRun.metadata.errors as unknown[]
+                          )[0] ?? "Evernote sync reported an error",
+                        )}
+                    </div>
+                  )}
               </div>
             )}
           </div>
@@ -814,7 +867,7 @@ export function Connectors() {
 
           {loading && <p className="mt-8 text-white/40">Loading connectors…</p>}
           <div className="mt-8 space-y-3">
-            {connectors.map((c) => (
+            {connectors.filter((c) => c.type !== "evernote").map((c) => (
               <article
                 key={c.id}
                 className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 flex items-center justify-between gap-4"

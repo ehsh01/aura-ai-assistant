@@ -1834,7 +1834,7 @@ export async function syncConnectorForUser(
   userId: string,
   connectorId: string,
   payload?: { csvText?: string; records?: unknown[] },
-): Promise<{ syncRunId: string; result: { recordsFetched: number; recordsCreated: number; recordsUpdated: number; recordsSkipped: number; recordsDeleted: number; recordsFailed: number } }> {
+): Promise<{ syncRunId: string; result: { recordsFetched: number; recordsCreated: number; recordsUpdated: number; recordsSkipped: number; recordsDeferred: number; recordsDeleted: number; recordsFailed: number } }> {
   const connRows = await getDb()
     .select()
     .from(connectors)
@@ -1873,6 +1873,7 @@ export async function syncConnectorForUser(
   let recordsCreated = 0;
   let recordsUpdated = 0;
   let recordsSkipped = 0;
+  let recordsDeferred = 0;
   let recordsDeleted = 0;
   let recordsEmbedded = 0;
   let evernoteEmbeddingReserved = 0;
@@ -1919,6 +1920,7 @@ export async function syncConnectorForUser(
     const normalized = await impl.normalize(rawRecords);
     recordsFetched = evernoteFetch?.recordsFetched ?? normalized.length;
     recordsSkipped = evernoteFetch?.recordsSkipped ?? 0;
+    recordsDeferred = evernoteFetch?.recordsDeferred ?? 0;
     recordsFailed = evernoteFetch?.recordsFailed ?? 0;
     syncErrors.push(...(evernoteFetch?.errors ?? []));
 
@@ -2028,7 +2030,10 @@ export async function syncConnectorForUser(
     await getDb()
       .update(connectors)
       .set({
-        syncStatus: recordsFailed > 0 ? "partial_success" : "connected",
+        syncStatus:
+          recordsFailed > 0 || recordsDeferred > 0
+            ? "partial_success"
+            : "connected",
         lastSyncAt: new Date(),
         updatedAt: new Date(),
       })
@@ -2037,7 +2042,10 @@ export async function syncConnectorForUser(
     await getDb()
       .update(syncRuns)
       .set({
-        status: recordsFailed > 0 ? "partial_success" : "complete",
+        status:
+          recordsFailed > 0 || recordsDeferred > 0
+            ? "partial_success"
+            : "complete",
         completedAt: new Date(),
         recordsFetched,
         recordsCreated,
@@ -2046,6 +2054,7 @@ export async function syncConnectorForUser(
         recordsFailed,
         metadata: {
           recordsSkipped,
+          recordsDeferred,
           recordsDeleted,
           recordsEmbedded,
           evernoteEmbeddingReserved,
@@ -2076,6 +2085,7 @@ export async function syncConnectorForUser(
         recordsFailed,
         metadata: {
           recordsSkipped,
+          recordsDeferred,
           recordsDeleted,
           recordsEmbedded,
           evernoteEmbeddingReserved,
@@ -2100,6 +2110,7 @@ export async function syncConnectorForUser(
       recordsCreated,
       recordsUpdated,
       recordsSkipped,
+      recordsDeferred,
       recordsDeleted,
       recordsFailed,
     },
@@ -2112,6 +2123,7 @@ export async function syncConnectorForUser(
       recordsCreated,
       recordsUpdated,
       recordsSkipped,
+      recordsDeferred,
       recordsDeleted,
       recordsFailed,
     },

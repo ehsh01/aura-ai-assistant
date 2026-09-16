@@ -24,6 +24,7 @@ import {
   isEvernoteDeveloperTokenConfigured,
   isEvernoteEdamFallbackConfigured,
 } from "../connectors/evernote";
+import { evernoteMcpFailureReason } from "../connectors/evernote-errors";
 import {
   beginEvernoteMcpOAuthForUser,
   createEvernoteConnectorForUser,
@@ -379,7 +380,7 @@ router.get("/connectors/homey/oauth/callback", async (req, res) => {
   }
 });
 
-router.get("/connectors/evernote/oauth/start", requireAuth, async (req, res, next) => {
+router.get("/connectors/evernote/oauth/start", requireAuth, async (req, res) => {
   try {
     const state = signOAuthState(req.user!.id);
     const started = await beginEvernoteMcpOAuthForUser(req.user!.id, state);
@@ -401,7 +402,12 @@ router.get("/connectors/evernote/oauth/start", requireAuth, async (req, res, nex
     );
     res.redirect(started.authorizeUrl);
   } catch (err) {
-    next(err);
+    res.redirect(
+      frontendRedirect({
+        evernote: "error",
+        reason: evernoteMcpFailureReason(err),
+      }),
+    );
   }
 });
 
@@ -448,8 +454,8 @@ router.get("/connectors/evernote/oauth/callback", async (req, res) => {
     res.redirect(
       frontendRedirect({ evernote: "connected", connectorId: connector.id }),
     );
-  } catch {
-    fail("oauth_failed");
+  } catch (error) {
+    fail(evernoteMcpFailureReason(error));
   }
 });
 

@@ -14,6 +14,7 @@ afterEach(() => {
   delete process.env.SECRETS_ENCRYPTION_KEY;
   delete process.env.EVERNOTE_MCP_PACE_MS;
   delete process.env.EVERNOTE_MCP_MAX_429_RETRIES;
+  delete process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE;
   vi.unstubAllGlobals();
 });
 
@@ -283,5 +284,48 @@ describe("Evernote MCP read sync", () => {
     const result = await fetchEvernoteViaMcp(client, new Map());
     expect(notebookCalls).toBe(2);
     expect(result.recordsFetched).toBe(0);
+  });
+
+  it("chunks changed-note backfill and reports deferred work", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE = "2";
+    let noteCalls = 0;
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notebooks") {
+          return { structuredContent: { notebooks: [] } };
+        }
+        if (input.name === "search_tags") {
+          return { structuredContent: { tags: [] } };
+        }
+        if (input.name === "search_notes") {
+          return {
+            structuredContent: {
+              totalResultCount: 3,
+              notes: ["1", "2", "3"].map((suffix) => ({
+                id: `${suffix.repeat(8)}-${suffix.repeat(4)}-4${suffix.repeat(3)}-8${suffix.repeat(3)}-${suffix.repeat(12)}`,
+                updatedAt: "2026-09-16T12:00:00Z",
+              })),
+            },
+          };
+        }
+        noteCalls += 1;
+        return {
+          structuredContent: {
+            id: input.arguments?.noteId,
+            title: "Backfill note",
+            content: "<en-note>Body</en-note>",
+            updatedAt: "2026-09-16T12:00:00Z",
+          },
+        };
+      },
+    };
+    const result = await fetchEvernoteViaMcp(client, new Map());
+    expect(noteCalls).toBe(2);
+    expect(result.records).toHaveLength(2);
+    expect(result.recordsDeferred).toBe(1);
   });
 });
