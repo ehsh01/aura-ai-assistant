@@ -148,4 +148,55 @@ describe("Evernote MCP read sync", () => {
       "22222222-2222-4222-8222-222222222222",
     );
   });
+
+  it("does not reconcile deletions when search_notes omits an explicit total", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notebooks") {
+          return { structuredContent: { notebooks: [] } };
+        }
+        if (input.name === "search_tags") {
+          return { structuredContent: { tags: [] } };
+        }
+        if (input.name === "search_notes") {
+          return {
+            structuredContent: {
+              notes: [
+                {
+                  id: "11111111-1111-4111-8111-111111111111",
+                  updatedAt: "2026-09-16T12:00:00Z",
+                },
+              ],
+            },
+          };
+        }
+        return {
+          structuredContent: {
+            id: input.arguments?.noteId,
+            title: "Visible note",
+            content: "<en-note>Body</en-note>",
+            updatedAt: "2026-09-16T12:00:00Z",
+          },
+        };
+      },
+    };
+    const result = await fetchEvernoteViaMcp(
+      client,
+      new Map([
+        [
+          "99999999-9999-4999-8999-999999999999",
+          {
+            updateSequenceNum: 1,
+            contentHash: "existing",
+            evernoteUpdated: "2026-09-15T12:00:00.000Z",
+          },
+        ],
+      ]),
+    );
+    expect(result.deletedExternalIds).toEqual([]);
+  });
 });

@@ -282,15 +282,22 @@ function mcpServerUrl(): URL {
   return url;
 }
 
-export async function beginEvernoteMcpOAuth(oauthState: string): Promise<{
+export async function beginEvernoteMcpOAuth(
+  oauthState: string,
+  existingSettings?: Record<string, unknown>,
+): Promise<{
   authorizeUrl: string;
   settings: EvernoteMcpConnectorSettings;
 }> {
-  const state: EvernoteMcpOAuthState = { oauthState };
+  const state: EvernoteMcpOAuthState = existingSettings
+    ? mcpOAuthStateFromSettings(existingSettings)
+    : { oauthState };
+  state.oauthState = oauthState;
   const provider = new RecallEvernoteMcpOAuthProvider(state, callbackUrl());
   const result = await auth(provider, {
     serverUrl: mcpServerUrl(),
     scope: "read",
+    forceReauthorization: true,
   });
   if (result !== "REDIRECT") {
     throw new Error("Evernote MCP OAuth unexpectedly completed without consent");
@@ -545,6 +552,7 @@ export async function fetchEvernoteViaMcp(
   const summaries: unknown[] = [];
   let startIndex = 0;
   let total = Number.POSITIVE_INFINITY;
+  let explicitTotal: number | null = null;
   let listingComplete = false;
   while (startIndex < total) {
     const result = await callReadTool(client, "search_notes", {
@@ -556,21 +564,34 @@ export async function fetchEvernoteViaMcp(
     });
     const page = firstArray(result, ["notes", "results", "items"]);
     summaries.push(...page);
-    const reportedTotal =
-      asNumber(result.totalResultCount ?? result.total ?? result.totalNotes) ??
-      startIndex + page.length;
-    total = reportedTotal;
-    if (page.length === 0) {
-      if (startIndex < total) {
+    const reportedTotal = asNumber(
+      result.totalResultCount ?? result.total ?? result.totalNotes,
+    );
+    if (reportedTotal != null) {
+      if (explicitTotal != null && explicitTotal !== reportedTotal) {
         throw new Error(
-          `Evernote MCP note listing ended early at ${startIndex} of ${total}`,
+          `Evernote MCP note total changed during sync (${explicitTotal} to ${reportedTotal})`,
+        );
+      }
+      explicitTotal = reportedTotal;
+      total = reportedTotal;
+    }
+    if (page.length === 0) {
+      if (explicitTotal != null && startIndex < explicitTotal) {
+        throw new Error(
+          `Evernote MCP note listing ended early at ${startIndex} of ${explicitTotal}`,
         );
       }
       listingComplete = true;
       break;
     }
     startIndex += page.length;
-    if (startIndex >= total) listingComplete = true;
+    if (explicitTotal != null && startIndex >= explicitTotal) {
+      listingComplete = true;
+    } else if (explicitTotal == null && page.length < 100) {
+      listingComplete = true;
+      break;
+    }
     await pace();
   }
 
@@ -581,9 +602,9 @@ export async function fetchEvernoteViaMcp(
   // deletions only when every reported row was consumed with no duplicate gap.
   const authoritativeListing =
     listingComplete &&
-    Number.isFinite(total) &&
-    summaries.length >= total &&
-    activeGuids.size >= total;
+    explicitTotal != null &&
+    summaries.length === explicitTotal &&
+    activeGuids.size === explicitTotal;
   const deletedExternalIds = authoritativeListing
     ? [...knownNotes.keys()].filter((guid) => !activeGuids.has(guid))
     : [];

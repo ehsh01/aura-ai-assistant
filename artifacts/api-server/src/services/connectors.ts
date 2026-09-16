@@ -2361,7 +2361,6 @@ export async function beginEvernoteMcpOAuthForUser(
   userId: string,
   oauthState: string,
 ): Promise<{ connectorId: string; authorizeUrl: string }> {
-  const started = await beginEvernoteMcpOAuth(oauthState);
   const rows = await getDb()
     .select()
     .from(connectors)
@@ -2375,8 +2374,20 @@ export async function beginEvernoteMcpOAuthForUser(
       );
       return settings.authTransport === "mcp";
     }) ?? null;
+  const existingSettings = existing
+    ? openConnectorSettings(
+        (existing.settings ?? {}) as Record<string, unknown>,
+      )
+    : undefined;
+  const started = await beginEvernoteMcpOAuth(
+    oauthState,
+    existingSettings,
+  );
   const now = new Date();
-  const sealed = sealConnectorSettings(started.settings);
+  const sealed = sealConnectorSettings({
+    ...(existingSettings ?? {}),
+    ...started.settings,
+  });
   if (existing) {
     await getDb()
       .update(connectors)
@@ -2385,8 +2396,6 @@ export async function beginEvernoteMcpOAuthForUser(
         description: "Read-only Evernote MCP sync for evidence-backed Ask.",
         baseUrl: "https://mcp.evernote.com/mcp",
         authType: "oauth2_dcr",
-        enabled: false,
-        syncStatus: "authorizing",
         settings: sealed,
         updatedAt: now,
       })
