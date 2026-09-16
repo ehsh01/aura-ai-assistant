@@ -16,6 +16,17 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+  IF TG_OP = 'UPDATE'
+    AND OLD.record_title IS NOT DISTINCT FROM NEW.record_title
+    AND OLD.record_text IS NOT DISTINCT FROM NEW.record_text
+    AND (OLD.record_metadata->>'contentHash')
+      IS NOT DISTINCT FROM (NEW.record_metadata->>'contentHash')
+  THEN
+    NEW.search_document := OLD.search_document;
+    NEW.search_tsv := OLD.search_tsv;
+    RETURN NEW;
+  END IF;
+
   NEW.search_document := concat_ws(
     E'\n',
     coalesce(NEW.record_title, ''),

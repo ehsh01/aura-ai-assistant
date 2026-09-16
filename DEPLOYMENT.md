@@ -254,8 +254,9 @@ SECRETS_ENCRYPTION_KEY=... # OAuth tokens are encrypted at rest
    edit, or delete Evernote data.
 
 Evernote sync compares each note's update sequence and SHA-256 content hash.
-Unchanged notes skip database, FTS, and embedding writes. Sync-time embeddings
-are limited to changed notes and default to 25 per run (hard maximum 100):
+Unchanged notes only advance their lightweight sync checkpoint; content, FTS,
+and embeddings are not rewritten. Sync-time embeddings are limited to changed
+notes and default to 25 per run (hard maximum 100):
 
 ```bash
 RECALL_EVERNOTE_EMBEDDINGS_ENABLED=true

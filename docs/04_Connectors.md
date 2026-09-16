@@ -318,7 +318,8 @@ Public API key from [FlipperForce Integrations](https://tools.flipperforce.com/i
   provisioned with read-only/basic access.
 - Sync enumerates note metadata, fetches content only for changed update
   sequences, and stores `evernote_note` records keyed by the Evernote GUID.
-- SHA-256 content hashes skip unchanged database/FTS/embedding writes.
+- SHA-256 content hashes skip unchanged content/FTS/embedding rewrites while
+  advancing a lightweight sync checkpoint.
 - Only changed notes are eligible for capped sync-time embedding warmup; no
   batch LLM summaries run over the library.
 - Ask includes recent Evernote records plus full-library Postgres FTS matches

@@ -52,7 +52,7 @@ describe("Evernote source-record search migration", () => {
         'sr-1',
         'Roof permit',
         'Inspector approved the revised drawings',
-        '{"notebookName":"Construction","tags":["Miami","permit"]}'::jsonb
+        '{"notebookName":"Construction","tags":["Miami","permit"],"contentHash":"same"}'::jsonb
       );
     `);
 
@@ -67,6 +67,21 @@ describe("Evernote source-record search migration", () => {
       WHERE search_tsv @@ to_tsquery('simple', 'construction:* & miami:*')
     `);
     expect(metadataHit.rows.map((row) => row.id)).toEqual(["sr-1"]);
+
+    const before = await db.query<{ search_tsv: string }>(`
+      SELECT search_tsv::text AS search_tsv
+      FROM source_records WHERE id = 'sr-1'
+    `);
+    await db.exec(`
+      UPDATE source_records
+      SET record_metadata = record_metadata || '{"updateSequenceNum":12}'::jsonb
+      WHERE id = 'sr-1'
+    `);
+    const after = await db.query<{ search_tsv: string }>(`
+      SELECT search_tsv::text AS search_tsv
+      FROM source_records WHERE id = 'sr-1'
+    `);
+    expect(after.rows[0]?.search_tsv).toBe(before.rows[0]?.search_tsv);
 
     const sync = await db.query<{ records_skipped: number }>(`
       SELECT records_skipped FROM sync_runs WHERE id = 'sync-1'

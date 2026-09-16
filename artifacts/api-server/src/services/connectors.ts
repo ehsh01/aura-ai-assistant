@@ -1410,6 +1410,22 @@ export async function upsertSourceRecord(
         record.recordMetadata,
       )
     ) {
+      // Advance Evernote's incremental checkpoint without rebuilding FTS or
+      // embeddings. The DB trigger preserves its existing search vector when
+      // contentHash/title/text are unchanged.
+      await getDb()
+        .update(sourceRecords)
+        .set({
+          recordMetadata: {
+            ...(existing[0].recordMetadata ?? {}),
+            ...(record.recordMetadata ?? {}),
+          },
+          sourceUpdatedAt: record.sourceUpdatedAt
+            ? new Date(record.sourceUpdatedAt)
+            : existing[0].sourceUpdatedAt,
+          lastSyncedAt: now,
+        })
+        .where(eq(sourceRecords.id, existing[0].id));
       return { id: existing[0].id, action: "skipped" };
     }
     const meta = withSourceDigest(
