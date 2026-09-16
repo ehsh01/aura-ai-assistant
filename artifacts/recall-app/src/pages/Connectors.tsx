@@ -55,6 +55,18 @@ function formatUsd(value: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
 }
 
+function preferredEvernoteConnector(
+  items: ConnectorRow[],
+): ConnectorRow | null {
+  const rows = items
+    .filter((connector) => connector.type === "evernote")
+    .sort(
+      (a, b) =>
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+    );
+  return rows.find((connector) => connector.enabled) ?? rows[0] ?? null;
+}
+
 export function Connectors() {
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
   const [googleOAuthConfigured, setGoogleOAuthConfigured] = useState(false);
@@ -117,11 +129,7 @@ export function Connectors() {
       setEvernoteDeveloperTokenConfigured(
         Boolean(res.evernoteDeveloperTokenConfigured),
       );
-      const evernote =
-        res.connectors.find(
-          (connector) => connector.type === "evernote" && connector.enabled,
-        ) ??
-        res.connectors.find((connector) => connector.type === "evernote");
+      const evernote = preferredEvernoteConnector(res.connectors);
       if (evernote) {
         const runs = await listConnectorSyncRuns(evernote.id).catch(() => null);
         setEvernoteLastRun(runs?.runs[0] ?? null);
@@ -440,16 +448,7 @@ export function Connectors() {
   const hasGoogle = connectors.some((c) => c.type === "google");
   const hasMicrosoft = connectors.some((c) => c.type === "microsoft");
   const homeyConnector = connectors.find((c) => c.type === "homey") ?? null;
-  const evernoteRows = connectors
-    .filter((connector) => connector.type === "evernote")
-    .sort(
-      (a, b) =>
-        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-    );
-  const evernoteConnector =
-    evernoteRows.find((connector) => connector.enabled) ??
-    evernoteRows[0] ??
-    null;
+  const evernoteConnector = preferredEvernoteConnector(connectors);
   const evernoteAuthAvailable =
     evernoteOAuthConfigured || evernoteDeveloperTokenConfigured;
   const flipperConnector = connectors.find((c) => c.type === "flipperforce") ?? null;
