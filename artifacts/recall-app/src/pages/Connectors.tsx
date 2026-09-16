@@ -39,6 +39,8 @@ type ConnectorRow = {
   syncStatus: string;
   enabled: boolean;
   lastSyncAt: string | null;
+  authType: string | null;
+  updatedAt: string;
 };
 
 const STATUS_STYLES: Record<string, string> = {
@@ -438,9 +440,15 @@ export function Connectors() {
   const hasGoogle = connectors.some((c) => c.type === "google");
   const hasMicrosoft = connectors.some((c) => c.type === "microsoft");
   const homeyConnector = connectors.find((c) => c.type === "homey") ?? null;
+  const evernoteRows = connectors
+    .filter((connector) => connector.type === "evernote")
+    .sort(
+      (a, b) =>
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+    );
   const evernoteConnector =
-    connectors.find((c) => c.type === "evernote" && c.enabled) ??
-    connectors.find((c) => c.type === "evernote") ??
+    evernoteRows.find((connector) => connector.enabled) ??
+    evernoteRows[0] ??
     null;
   const evernoteAuthAvailable =
     evernoteOAuthConfigured || evernoteDeveloperTokenConfigured;

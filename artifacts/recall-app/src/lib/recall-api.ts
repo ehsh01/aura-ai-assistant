@@ -1840,6 +1840,8 @@ export async function listConnectors(): Promise<{
     syncStatus: string;
     enabled: boolean;
     lastSyncAt: string | null;
+    authType: string | null;
+    updatedAt: string;
   }[];
   googleOAuthConfigured?: boolean;
   microsoftOAuthConfigured?: boolean;
