@@ -61,7 +61,8 @@ git clone https://github.com/ehsh01/aura-ai-assistant.git /var/www/recall-app
 cd /var/www/recall-app
 
 cp artifacts/api-server/.env.example artifacts/api-server/.env
-# Edit .env — at minimum PORT/API_PORT=5008 and DIGITALOCEAN_DATABASE_URL
+# Edit .env — at minimum PORT/API_PORT=5008 and DATABASE_URL pointing to
+# DigitalOcean managed Postgres
 
 pnpm install
 pnpm run build:prod

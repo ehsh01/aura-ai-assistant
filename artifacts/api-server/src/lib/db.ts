@@ -7,18 +7,8 @@ type Db = NodePgDatabase<typeof schema>;
 let pool: pg.Pool | null = null;
 let db: Db | null = null;
 
-function configuredDatabaseUrl(): string | null {
-  // Production's managed cluster has an explicit name so a stray local
-  // DATABASE_URL can never override it.
-  return (
-    process.env.DIGITALOCEAN_DATABASE_URL?.trim() ||
-    process.env.DATABASE_URL?.trim() ||
-    null
-  );
-}
-
 export function isDatabaseConfigured(): boolean {
-  return Boolean(configuredDatabaseUrl());
+  return Boolean(process.env.DATABASE_URL?.trim());
 }
 
 function normalizeDatabaseUrl(url: string): string {
@@ -50,11 +40,9 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
 }
 
 export function getDb(): Db {
-  const url = configuredDatabaseUrl();
+  const url = process.env.DATABASE_URL?.trim();
   if (!url) {
-    throw new Error(
-      "DIGITALOCEAN_DATABASE_URL or DATABASE_URL is not configured",
-    );
+    throw new Error("DATABASE_URL is not configured");
   }
   if (!db) {
     const connectionString = normalizeDatabaseUrl(url);
