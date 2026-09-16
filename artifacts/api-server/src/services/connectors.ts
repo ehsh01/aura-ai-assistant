@@ -2398,29 +2398,80 @@ export async function createEvernoteConnectorFromDeveloperTokenForUser(
   }
   const account = await inspectEvernoteToken(token);
   await testEvernoteReadAccess(account.accessToken, account.noteStoreUrl);
-  const existingEvernote = await getDb()
-    .select()
-    .from(connectors)
-    .where(eq(connectors.type, "evernote"));
-  for (const row of existingEvernote) {
-    const settings = openConnectorSettings(
-      (row.settings ?? {}) as Record<string, unknown>,
-    );
-    if (
-      settings.evernoteAccountId === account.accountId &&
-      row.userId !== userId
-    ) {
-      const error = new Error(
-        "This single-user Evernote developer token is already linked to another Recall account",
-      ) as Error & { status?: number };
-      error.status = 409;
-      throw error;
-    }
-  }
-  const connector = await createEvernoteConnectorForUser(userId, {
-    ...account,
-    authType: "developer_token",
+  const now = new Date();
+  const identity =
+    account.accountEmail?.trim() ||
+    account.accountName?.trim() ||
+    account.accountId;
+  const sealedSettings = sealConnectorSettings({
+    evernoteAccountId: account.accountId,
+    evernoteAccountName: account.accountName,
+    evernoteAccountEmail: account.accountEmail,
+    accessToken: account.accessToken,
+    noteStoreUrl: account.noteStoreUrl,
+    webApiUrlPrefix: account.webApiUrlPrefix,
+    accessTokenExpiresAt: null,
   });
+  const row = await getDb().transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`evernote-dev-token:${account.accountId}`}, 0))`,
+    );
+    const existingEvernote = await tx
+      .select()
+      .from(connectors)
+      .where(eq(connectors.type, "evernote"));
+    let sameUser: Connector | null = null;
+    for (const existing of existingEvernote) {
+      const settings = openConnectorSettings(
+        (existing.settings ?? {}) as Record<string, unknown>,
+      );
+      if (settings.evernoteAccountId !== account.accountId) continue;
+      if (existing.userId !== userId) {
+        const error = new Error(
+          "This single-user Evernote developer token is already linked to another Recall account",
+        ) as Error & { status?: number };
+        error.status = 409;
+        throw error;
+      }
+      sameUser = existing;
+    }
+    if (sameUser) {
+      const [updated] = await tx
+        .update(connectors)
+        .set({
+          name: `Evernote · ${identity}`,
+          description: "Read-only Evernote notes synced for evidence-backed Ask.",
+          baseUrl: account.noteStoreUrl,
+          authType: "developer_token",
+          enabled: true,
+          syncStatus: "connected",
+          settings: sealedSettings,
+          updatedAt: now,
+        })
+        .where(eq(connectors.id, sameUser.id))
+        .returning();
+      return updated!;
+    }
+    const [created] = await tx
+      .insert(connectors)
+      .values({
+        id: newConnectorId(),
+        userId,
+        name: `Evernote · ${identity}`,
+        type: "evernote",
+        description: "Read-only Evernote notes synced for evidence-backed Ask.",
+        baseUrl: account.noteStoreUrl,
+        authType: "developer_token",
+        enabled: true,
+        syncStatus: "connected",
+        settings: sealedSettings,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
+    return created!;
+  });
+  const connector = toDto(row);
   return { ...connector, evernoteAccountId: account.accountId };
 }
 

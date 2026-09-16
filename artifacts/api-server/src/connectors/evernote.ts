@@ -677,6 +677,15 @@ export async function fetchEvernoteBundle(
     },
   );
 
+  const exhaustedRateLimit = fetched.find(
+    (result) =>
+      result.status === "rejected" &&
+      result.reason instanceof EvernoteRateLimitError,
+  );
+  if (exhaustedRateLimit?.status === "rejected") {
+    throw exhaustedRateLimit.reason;
+  }
+
   const records = fetched
     .filter(
       (result): result is PromiseFulfilledResult<EvernoteRawRecord> =>

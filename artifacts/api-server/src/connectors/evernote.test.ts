@@ -205,6 +205,25 @@ describe("evernote connector", () => {
     expect(result.records[0]?.metadata.notebookName).toBe("New name");
   });
 
+  it("fails the sync with 429 when a note fetch exhausts its rate limit", async () => {
+    const noteStore: EvernoteNoteStore = {
+      listNotebooks: async () => [],
+      listTags: async () => [],
+      findNotesMetadata: async () => ({
+        totalNotes: 1,
+        notes: [{ guid: "note-1", updateSequenceNum: 1 }],
+      }),
+      getNote: async () => {
+        throw { errorCode: 19, rateLimitDuration: 90 };
+      },
+    };
+    await expect(
+      fetchEvernoteBundle("token", "https://note-store", { noteStore }),
+    ).rejects.toEqual(
+      expect.objectContaining({ status: 429, retryAfterSeconds: 90 }),
+    );
+  });
+
   it("fails the sync when tag names cannot be loaded", async () => {
     const noteStore: EvernoteNoteStore = {
       listNotebooks: async () => [],
