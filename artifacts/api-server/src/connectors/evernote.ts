@@ -20,6 +20,8 @@ type EvernoteNoteMetadata = {
   notebookGuid?: string;
   tagGuids?: string[];
   attributes?: { sourceURL?: string };
+  largestResourceMime?: string;
+  largestResourceSize?: number;
 };
 
 type EvernoteNote = EvernoteNoteMetadata & {
@@ -70,6 +72,10 @@ type EvernoteClientInstance = {
   ): void;
   getUserStore(): {
     getUser(): Promise<{ id?: number; username?: string; name?: string; email?: string }>;
+    getUserUrls(): Promise<{
+      noteStoreUrl?: string;
+      webApiUrlPrefix?: string;
+    }>;
   };
   getNoteStore(noteStoreUrl?: string): EvernoteNoteStore;
 };
@@ -119,13 +125,14 @@ export type EvernoteFetchResult = {
   recordsSkipped: number;
   recordsFailed: number;
   deletedExternalIds: string[];
+  errors: string[];
 };
 
 function evernoteConfig() {
   const consumerKey = process.env.EVERNOTE_CONSUMER_KEY?.trim();
   const consumerSecret = process.env.EVERNOTE_CONSUMER_SECRET?.trim();
   const callbackUrl =
-    process.env.EVERNOTE_OAUTH_CALLBACK_URL?.trim() ||
+    process.env.EVERNOTE_OAUTH_REDIRECT_URI?.trim() ||
     "https://recall-app.net/api/connectors/evernote/oauth/callback";
   if (!consumerKey || !consumerSecret) {
     const error = new Error(
@@ -144,7 +151,19 @@ function evernoteConfig() {
 }
 
 function newEvernoteClient(token?: string): EvernoteClientInstance {
-  const cfg = evernoteConfig();
+  const oauthConfigured = isEvernoteOAuthConfigured();
+  const cfg = oauthConfigured
+    ? evernoteConfig()
+    : {
+        consumerKey: undefined,
+        consumerSecret: undefined,
+        sandbox: process.env.EVERNOTE_SANDBOX?.trim().toLowerCase() !== "false",
+      };
+  if (!token && !oauthConfigured) {
+    throw new Error(
+      "EVERNOTE_CONSUMER_KEY and EVERNOTE_CONSUMER_SECRET are not configured",
+    );
+  }
   return new Evernote.Client({
     consumerKey: cfg.consumerKey,
     consumerSecret: cfg.consumerSecret,
@@ -158,6 +177,41 @@ export function isEvernoteOAuthConfigured(): boolean {
     process.env.EVERNOTE_CONSUMER_KEY?.trim() &&
       process.env.EVERNOTE_CONSUMER_SECRET?.trim(),
   );
+}
+
+export function isEvernoteDeveloperTokenConfigured(): boolean {
+  return Boolean(process.env.EVERNOTE_DEVELOPER_TOKEN?.trim());
+}
+
+export async function inspectEvernoteToken(accessToken: string): Promise<{
+  accessToken: string;
+  noteStoreUrl: string;
+  webApiUrlPrefix: string | null;
+  accountId: string;
+  accountName: string | null;
+  accountEmail: string | null;
+  expiresAt: string | null;
+}> {
+  const client = newEvernoteClient(accessToken);
+  const [profile, urls] = await Promise.all([
+    client.getUserStore().getUser(),
+    client.getUserStore().getUserUrls(),
+  ]);
+  const accountId = String(profile.id ?? "").trim();
+  if (!accountId || !urls.noteStoreUrl) {
+    throw new EvernoteAuthError(
+      "Evernote developer token did not return an account and NoteStore URL",
+    );
+  }
+  return {
+    accessToken,
+    noteStoreUrl: urls.noteStoreUrl,
+    webApiUrlPrefix: urls.webApiUrlPrefix ?? null,
+    accountId,
+    accountName: profile.name?.trim() || profile.username?.trim() || null,
+    accountEmail: profile.email?.trim().toLowerCase() || null,
+    expiresAt: null,
+  };
 }
 
 export async function beginEvernoteOAuth(state: string): Promise<{
@@ -270,6 +324,71 @@ function epochMillisToIso(value: number | undefined): string | null {
   if (!value || !Number.isFinite(value)) return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function evernoteErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message.slice(0, 300);
+  if (error && typeof error === "object") {
+    const row = error as Record<string, unknown>;
+    const message =
+      typeof row.message === "string"
+        ? row.message
+        : typeof row.errorCode === "number"
+          ? `Evernote API error ${row.errorCode}`
+          : "Evernote API request failed";
+    return message.slice(0, 300);
+  }
+  return "Evernote API request failed";
+}
+
+function evernoteRateLimitSeconds(error: unknown): number | null {
+  if (!error || typeof error !== "object") return null;
+  const row = error as Record<string, unknown>;
+  const code = Number(row.errorCode ?? row.code);
+  const duration = Number(row.rateLimitDuration ?? row.rate_limit_duration);
+  // EDAMErrorCode.RATE_LIMIT_REACHED = 19.
+  if (code !== 19 || !Number.isFinite(duration) || duration < 0) return null;
+  return duration;
+}
+
+export async function withEvernoteRateLimitRetry<T>(
+  operation: () => Promise<T>,
+  options?: { maxRetries?: number; maxWaitSeconds?: number },
+): Promise<T> {
+  const maxRetries = Math.min(Math.max(options?.maxRetries ?? 1, 0), 2);
+  const maxWaitSeconds = Math.min(
+    Math.max(options?.maxWaitSeconds ?? 30, 0),
+    60,
+  );
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      const retryAfter = evernoteRateLimitSeconds(error);
+      if (
+        retryAfter == null ||
+        attempt >= maxRetries ||
+        retryAfter > maxWaitSeconds
+      ) {
+        throw error;
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.max(0, retryAfter) * 1_000),
+      );
+    }
+  }
+}
+
+export async function testEvernoteReadAccess(
+  accessToken: string,
+  noteStoreUrl: string,
+): Promise<{ notebookCount: number; tagCount: number }> {
+  const store = newEvernoteClient(accessToken).getNoteStore(noteStoreUrl);
+  const [notebooks, tags] = await Promise.all([
+    withEvernoteRateLimitRetry(() => store.listNotebooks()),
+    withEvernoteRateLimitRetry(() => store.listTags()),
+  ]);
+  return { notebookCount: notebooks.length, tagCount: tags.length };
 }
 
 function decodeXmlEntities(text: string): string {
@@ -387,10 +506,10 @@ export async function fetchEvernoteBundle(
     options?.noteStore ??
     newEvernoteClient(accessToken).getNoteStore(noteStoreUrl);
   const [notebooks, tags] = await Promise.all([
-    store.listNotebooks(),
+    withEvernoteRateLimitRetry(() => store.listNotebooks()),
     // Do not turn a transient tag failure into GUID-as-name metadata that the
     // next unchanged-USN sync would preserve.
-    store.listTags(),
+    withEvernoteRateLimitRetry(() => store.listTags()),
   ]);
   const notebooksByGuid = new Map(
     notebooks
@@ -417,17 +536,21 @@ export async function fetchEvernoteBundle(
     includeNotebookGuid: true,
     includeTagGuids: true,
     includeAttributes: true,
+    includeLargestResourceMime: true,
+    includeLargestResourceSize: true,
   });
 
   const allMetadata: EvernoteNoteMetadata[] = [];
   let offset = 0;
   let total = Number.POSITIVE_INFINITY;
   while (offset < total) {
-    const page = await store.findNotesMetadata(
-      filter,
-      offset,
-      METADATA_PAGE_SIZE,
-      spec,
+    const page = await withEvernoteRateLimitRetry(() =>
+      store.findNotesMetadata(
+        filter,
+        offset,
+        METADATA_PAGE_SIZE,
+        spec,
+      ),
     );
     const rows = page.notes ?? [];
     total = page.totalNotes ?? offset + rows.length;
@@ -458,7 +581,9 @@ export async function fetchEvernoteBundle(
     async (metadata): Promise<EvernoteRawRecord> => {
       const guid = metadata.guid!;
       // Explicitly omit resource bytes/recognition/alternate data in v1.
-      const note = await store.getNote(guid, true, false, false, false);
+      const note = await withEvernoteRateLimitRetry(() =>
+        store.getNote(guid, true, false, false, false),
+      );
       const title = (note.title ?? metadata.title ?? "Untitled").trim() || "Untitled";
       const text = evernoteEnmlToText(note.content ?? "");
       const notebookGuid = note.notebookGuid ?? metadata.notebookGuid ?? null;
@@ -504,15 +629,19 @@ export async function fetchEvernoteBundle(
         metadata: {
           contentHash,
           evernoteGuid: guid,
-          updateSequenceNum:
+          usn:
             note.updateSequenceNum ?? metadata.updateSequenceNum ?? null,
           notebookGuid,
           notebookName,
           tagGuids,
-          tags: tagNames,
+          tagNames,
+          evernoteUpdated: sourceUpdatedAt,
+          hasAttachments: Boolean(
+            metadata.largestResourceMime ||
+              (metadata.largestResourceSize ?? 0) > 0,
+          ),
           originalSourceUrl: externalSourceUrl,
           evernoteUrl: noteUrl,
-          sourceUpdatedAt,
         },
       };
     },
@@ -525,6 +654,11 @@ export async function fetchEvernoteBundle(
     )
     .map((result) => result.value);
   const recordsFailed = fetched.length - records.length;
+  const errors = fetched
+    .filter(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    )
+    .map((result) => evernoteErrorMessage(result.reason));
   const activeGuids = new Set(
     allMetadata
       .filter((metadata) => metadata.guid && !metadata.deleted)
@@ -540,6 +674,7 @@ export async function fetchEvernoteBundle(
     recordsSkipped: unchangedBySequence,
     recordsFailed,
     deletedExternalIds,
+    errors,
   };
 }
 

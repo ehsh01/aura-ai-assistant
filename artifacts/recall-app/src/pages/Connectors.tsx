@@ -2,18 +2,21 @@ import React, { useEffect, useState } from "react";
 import { AppLayout } from "@/components/AppLayout";
 import {
   createConnector,
+  connectEvernoteDeveloperToken,
   deleteConnector,
   testFlipperForceConnector,
   getFinanceSummary,
   getHomeyWebhookInfo,
   listConnectors,
   listFinanceSubscriptions,
+  patchConnector,
   rotateHomeyWebhookSecret,
   startEvernoteOAuth,
   startGoogleOAuth,
   startHomeyOAuth,
   startMicrosoftOAuth,
   syncConnector,
+  testEvernoteConnector,
   testHomeyWebhook,
   type FinanceSummary,
 } from "@/lib/recall-api";
@@ -39,6 +42,7 @@ const STATUS_STYLES: Record<string, string> = {
   partial_success: "text-amber-300 bg-amber-500/10",
   sync_failed: "text-red-300 bg-red-500/10",
   authentication_failed: "text-red-300 bg-red-500/10",
+  paused: "text-slate-300 bg-slate-500/10",
 };
 
 function formatUsd(value: number): string {
@@ -51,6 +55,8 @@ export function Connectors() {
   const [microsoftOAuthConfigured, setMicrosoftOAuthConfigured] = useState(false);
   const [homeyOAuthConfigured, setHomeyOAuthConfigured] = useState(false);
   const [evernoteOAuthConfigured, setEvernoteOAuthConfigured] = useState(false);
+  const [evernoteDeveloperTokenConfigured, setEvernoteDeveloperTokenConfigured] =
+    useState(false);
   const [homeyWebhook, setHomeyWebhook] = useState<{
     connectorId: string;
     url: string;
@@ -64,6 +70,7 @@ export function Connectors() {
   const [flipperApiKey, setFlipperApiKey] = useState("");
   const [savingFlipper, setSavingFlipper] = useState(false);
   const [testingFlipper, setTestingFlipper] = useState(false);
+  const [testingEvernote, setTestingEvernote] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [summary, setSummary] = useState<{ connectorId: string; data: FinanceSummary } | null>(null);
@@ -94,6 +101,9 @@ export function Connectors() {
       setMicrosoftOAuthConfigured(Boolean(res.microsoftOAuthConfigured));
       setHomeyOAuthConfigured(Boolean(res.homeyOAuthConfigured));
       setEvernoteOAuthConfigured(Boolean(res.evernoteOAuthConfigured));
+      setEvernoteDeveloperTokenConfigured(
+        Boolean(res.evernoteDeveloperTokenConfigured),
+      );
       const tokenRes = await listExtensionTokens().catch(() => null);
       if (tokenRes) setExtensionTokens(tokenRes.items);
     } finally {
@@ -245,6 +255,29 @@ export function Connectors() {
     }
   };
 
+  const connectEvernote = async () => {
+    if (evernoteOAuthConfigured) {
+      startEvernoteOAuth();
+      return;
+    }
+    if (!evernoteDeveloperTokenConfigured) return;
+    try {
+      await connectEvernoteDeveloperToken();
+      toast({
+        title: "Evernote connected",
+        description:
+          "The server-configured developer token was sealed into this connector.",
+      });
+      await load();
+    } catch (err) {
+      toast({
+        title: "Evernote connect failed",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    }
+  };
+
   const addTicketEmailConnector = async () => {
     setCreatingTicket(true);
     try {
@@ -378,6 +411,8 @@ export function Connectors() {
   const hasMicrosoft = connectors.some((c) => c.type === "microsoft");
   const homeyConnector = connectors.find((c) => c.type === "homey") ?? null;
   const evernoteConnector = connectors.find((c) => c.type === "evernote") ?? null;
+  const evernoteAuthAvailable =
+    evernoteOAuthConfigured || evernoteDeveloperTokenConfigured;
   const flipperConnector = connectors.find((c) => c.type === "flipperforce") ?? null;
 
   const showHomeyWebhook = async (connectorId: string) => {
@@ -547,21 +582,90 @@ export function Connectors() {
             </p>
             <button
               type="button"
-              onClick={() => startEvernoteOAuth()}
-              disabled={!evernoteOAuthConfigured}
+              onClick={() => void connectEvernote()}
+              disabled={!evernoteAuthAvailable}
               className="mt-4 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {evernoteConnector ? "Reconnect Evernote" : "Connect Evernote"}
             </button>
-            {!evernoteOAuthConfigured && (
+            {!evernoteAuthAvailable && (
               <p className="mt-3 text-xs text-amber-200/80">
-                Evernote OAuth is not configured yet (needs EVERNOTE_CONSUMER_KEY / SECRET).
+                Credential blocker: configure EVERNOTE_CONSUMER_KEY /
+                EVERNOTE_CONSUMER_SECRET for OAuth, or an
+                EVERNOTE_DEVELOPER_TOKEN for single-user v1.
+              </p>
+            )}
+            {!evernoteOAuthConfigured && evernoteDeveloperTokenConfigured && (
+              <p className="mt-3 text-xs text-white/45">
+                OAuth is unavailable; Connect uses the sealed server-configured
+                developer token.
               </p>
             )}
             {evernoteConnector && (
-              <p className="mt-3 text-xs text-emerald-200/70">
-                Connected. Use Sync Now in the connector list to pull changed notes.
-              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={testingEvernote}
+                  onClick={async () => {
+                    setTestingEvernote(true);
+                    try {
+                      const result = await testEvernoteConnector(
+                        evernoteConnector.id,
+                      );
+                      toast({
+                        title: "Evernote connection works",
+                        description: `${result.notebookCount} notebook(s) · ${result.tagCount} tag(s)`,
+                      });
+                      await load();
+                    } catch (err) {
+                      toast({
+                        title: "Evernote test failed",
+                        description:
+                          err instanceof Error ? err.message : undefined,
+                        variant: "destructive",
+                      });
+                    } finally {
+                      setTestingEvernote(false);
+                    }
+                  }}
+                  className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/80 hover:bg-white/5 disabled:opacity-50"
+                >
+                  {testingEvernote ? "Testing…" : "Test connection"}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await patchConnector(evernoteConnector.id, {
+                      enabled: !evernoteConnector.enabled,
+                    });
+                    toast({
+                      title: evernoteConnector.enabled
+                        ? "Evernote paused"
+                        : "Evernote enabled",
+                    });
+                    await load();
+                  }}
+                  className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/80 hover:bg-white/5"
+                >
+                  {evernoteConnector.enabled ? "Pause" : "Enable"}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await deleteConnector(evernoteConnector.id);
+                    toast({ title: "Evernote disconnected" });
+                    await load();
+                  }}
+                  className="rounded-lg border border-red-400/20 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/10"
+                >
+                  Disconnect
+                </button>
+                <p className="w-full text-xs text-emerald-200/70">
+                  {evernoteConnector.enabled
+                    ? "Enabled. Sync Now pulls changed notes."
+                    : "Paused. Sync and Ask retrieval are disabled."}
+                </p>
+              </div>
             )}
           </div>
 
@@ -719,10 +823,14 @@ export function Connectors() {
                   <button
                     type="button"
                     onClick={() => void runSync(c)}
-                    disabled={syncingId === c.id}
+                    disabled={syncingId === c.id || !c.enabled}
                     className="rounded-xl bg-indigo-500/20 px-3 py-2 text-sm text-indigo-200 hover:bg-indigo-500/30 disabled:opacity-50"
                   >
-                    {syncingId === c.id ? "Syncing…" : "Sync Now"}
+                    {!c.enabled
+                      ? "Paused"
+                      : syncingId === c.id
+                        ? "Syncing…"
+                        : "Sync Now"}
                   </button>
                 </div>
               </article>

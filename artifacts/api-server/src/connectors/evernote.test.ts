@@ -4,13 +4,17 @@ import {
   evernoteContentHash,
   evernoteEnmlToText,
   fetchEvernoteBundle,
+  isEvernoteDeveloperTokenConfigured,
   isEvernoteOAuthConfigured,
+  withEvernoteRateLimitRetry,
   type EvernoteNoteStore,
 } from "./evernote";
 
 afterEach(() => {
   delete process.env.EVERNOTE_CONSUMER_KEY;
   delete process.env.EVERNOTE_CONSUMER_SECRET;
+  delete process.env.EVERNOTE_DEVELOPER_TOKEN;
+  delete process.env.EVERNOTE_OAUTH_REDIRECT_URI;
 });
 
 describe("evernote connector", () => {
@@ -19,6 +23,12 @@ describe("evernote connector", () => {
     expect(isEvernoteOAuthConfigured()).toBe(false);
     process.env.EVERNOTE_CONSUMER_SECRET = "secret";
     expect(isEvernoteOAuthConfigured()).toBe(true);
+  });
+
+  it("recognizes an optional server-side developer token", () => {
+    expect(isEvernoteDeveloperTokenConfigured()).toBe(false);
+    process.env.EVERNOTE_DEVELOPER_TOKEN = "developer-token";
+    expect(isEvernoteDeveloperTokenConfigured()).toBe(true);
   });
 
   it("converts ENML to plain searchable text without encrypted payloads", () => {
@@ -72,6 +82,8 @@ describe("evernote connector", () => {
             guid: "changed-guid",
             title: "Changed note",
             updateSequenceNum: 12,
+            largestResourceMime: "image/jpeg",
+            largestResourceSize: 1024,
           },
         ],
       }),
@@ -108,11 +120,29 @@ describe("evernote connector", () => {
         "https://www.evernote.com/shard/s1/nl/42/changed-guid",
       metadata: {
         notebookName: "Construction",
-        tags: ["permit"],
-        updateSequenceNum: 12,
+        tagNames: ["permit"],
+        usn: 12,
+        evernoteUpdated: new Date(1_710_000_000_000).toISOString(),
+        hasAttachments: true,
       },
     });
     expect(result.records[0]?.recordText).toContain("Call inspector");
+  });
+
+  it("retries EDAM rate limits within the bounded wait", async () => {
+    let calls = 0;
+    const result = await withEvernoteRateLimitRetry(
+      async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw { errorCode: 19, rateLimitDuration: 0 };
+        }
+        return "ok";
+      },
+      { maxRetries: 1, maxWaitSeconds: 1 },
+    );
+    expect(result).toBe("ok");
+    expect(calls).toBe(2);
   });
 
   it("fails the sync when tag names cannot be loaded", async () => {

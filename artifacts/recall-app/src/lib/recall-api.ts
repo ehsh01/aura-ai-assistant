@@ -1844,6 +1844,7 @@ export async function listConnectors(): Promise<{
   microsoftOAuthConfigured?: boolean;
   homeyOAuthConfigured?: boolean;
   evernoteOAuthConfigured?: boolean;
+  evernoteDeveloperTokenConfigured?: boolean;
 }> {
   return apiFetch("/connectors");
 }
@@ -1866,6 +1867,19 @@ export function startHomeyOAuth(): void {
 /** Full-page navigation for Evernote OAuth 1.0a. */
 export function startEvernoteOAuth(): void {
   window.location.assign("/api/connectors/evernote/oauth/start");
+}
+
+export async function connectEvernoteDeveloperToken(): Promise<{
+  id: string;
+  name: string;
+  type: string;
+  syncStatus: string;
+}> {
+  return createConnector({
+    name: "Evernote",
+    type: "evernote",
+    description: "Read-only Evernote notes via configured developer token.",
+  });
 }
 
 export async function getHomeyWebhookInfo(
@@ -1931,6 +1945,47 @@ export async function testFlipperForceConnector(
     method: "POST",
     body: "{}",
   });
+}
+
+export async function testEvernoteConnector(
+  connectorId: string,
+): Promise<{ ok: true; notebookCount: number; tagCount: number }> {
+  return apiFetch(`/connectors/${encodeURIComponent(connectorId)}/test`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export async function patchConnector(
+  connectorId: string,
+  patch: { enabled?: boolean; name?: string },
+): Promise<{ id: string; name: string; type: string; syncStatus: string; enabled: boolean }> {
+  return apiFetch(`/connectors/${encodeURIComponent(connectorId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export type ConnectorSyncRun = {
+  id: string;
+  status: string;
+  startedAt: string;
+  completedAt: string | null;
+  recordsFetched: number;
+  recordsCreated: number;
+  recordsUpdated: number;
+  recordsSkipped: number;
+  recordsFailed: number;
+  errorMessage: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export async function listConnectorSyncRuns(
+  connectorId: string,
+): Promise<{ runs: ConnectorSyncRun[] }> {
+  return apiFetch(
+    `/connectors/${encodeURIComponent(connectorId)}/sync-runs`,
+  );
 }
 
 export async function syncConnector(

@@ -758,6 +758,22 @@ export function Dashboard() {
                                 typeof ev.evidenceMetadata?.sourceUrl === "string"
                                   ? ev.evidenceMetadata.sourceUrl
                                   : null;
+                              const sourceTitle =
+                                typeof ev.evidenceMetadata?.sourceTitle === "string"
+                                  ? ev.evidenceMetadata.sourceTitle
+                                  : null;
+                              const notebookName =
+                                typeof ev.evidenceMetadata?.notebookName === "string"
+                                  ? ev.evidenceMetadata.notebookName
+                                  : null;
+                              const evernoteGuid =
+                                typeof ev.evidenceMetadata?.evernoteGuid === "string"
+                                  ? ev.evidenceMetadata.evernoteGuid
+                                  : null;
+                              const linkLabel =
+                                typeof ev.evidenceMetadata?.primaryLinkLabel === "string"
+                                  ? ev.evidenceMetadata.primaryLinkLabel
+                                  : "Open link";
                               return (
                                 <article
                                   key={ev.id}
@@ -766,6 +782,18 @@ export function Dashboard() {
                                   <p className="text-xs uppercase tracking-wider text-indigo-300/80">
                                     {ev.claimType.replace(/_/g, " ")} · {relatedType}
                                   </p>
+                                  {sourceTitle && (
+                                    <p className="mt-2 text-sm font-medium text-white/90">
+                                      {sourceTitle}
+                                    </p>
+                                  )}
+                                  {(notebookName || evernoteGuid) && (
+                                    <p className="mt-1 text-xs text-white/45">
+                                      {[notebookName, evernoteGuid ? `GUID ${evernoteGuid}` : null]
+                                        .filter(Boolean)
+                                        .join(" · ")}
+                                    </p>
+                                  )}
                                   {ev.evidenceText && (
                                     <p className="mt-2 whitespace-pre-wrap text-sm text-white/75">
                                       {ev.evidenceText}
@@ -778,7 +806,7 @@ export function Dashboard() {
                                       rel="noopener noreferrer"
                                       className="mt-2 inline-block text-xs text-indigo-300 no-underline hover:underline"
                                     >
-                                      Open link
+                                      {linkLabel}
                                     </a>
                                   ) : href ? (
                                     <Link

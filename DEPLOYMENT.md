@@ -242,10 +242,15 @@ are activated separately.
 ```bash
 EVERNOTE_CONSUMER_KEY=...
 EVERNOTE_CONSUMER_SECRET=...
-EVERNOTE_OAUTH_CALLBACK_URL=https://recall-app.net/api/connectors/evernote/oauth/callback
+EVERNOTE_OAUTH_REDIRECT_URI=https://recall-app.net/api/connectors/evernote/oauth/callback
 EVERNOTE_SANDBOX=true
 SECRETS_ENCRYPTION_KEY=... # OAuth tokens are encrypted at rest
 ```
+
+If Ernesto can only obtain a personal developer token for single-user v1,
+configure `EVERNOTE_DEVELOPER_TOKEN` instead. Recall verifies it server-side
+and seals it into connector settings; the API and UI never return the token.
+OAuth remains the preferred production path.
 
 4. After Evernote activates the same integration for production, set
    `EVERNOTE_SANDBOX=false` and restart both Recall processes with updated env.
@@ -261,11 +266,22 @@ notes and default to 25 per run (hard maximum 100):
 ```bash
 RECALL_EVERNOTE_EMBEDDINGS_ENABLED=true
 EVERNOTE_EMBEDDING_MAX_PER_SYNC=25
+EVERNOTE_EMBEDDING_DAILY_CAP=100
+# RECALL_EVERNOTE_ASK_ENABLED=false excludes synced Evernote data from Ask.
 # Set either this or RECALL_BACKGROUND_AI_ENABLED=false as a kill-switch.
 ```
 
 No summarization or other batch LLM work runs over the Evernote library. Ask
 continues to call AI only on demand.
+
+Disabling the connector through `PATCH /api/connectors/:id` pauses Sync Now and
+excludes that connector from Ask. The official Evernote MCP may be used only as
+a future parity reference or non-LLM sync transport; Recall does not call MCP
+tools at Ask time.
+
+**Credential blocker:** neither OAuth consumer credentials nor a personal
+developer token are provisioned in this repository. The Connect UI remains
+disabled until one of those server-side auth paths is configured.
 
 ## Database backups
 

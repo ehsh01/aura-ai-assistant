@@ -66,8 +66,10 @@ Required API environment:
 ```bash
 EVERNOTE_CONSUMER_KEY=...
 EVERNOTE_CONSUMER_SECRET=...
-EVERNOTE_OAUTH_CALLBACK_URL=https://recall-app.net/api/connectors/evernote/oauth/callback
+EVERNOTE_OAUTH_REDIRECT_URI=https://recall-app.net/api/connectors/evernote/oauth/callback
 EVERNOTE_SANDBOX=true # false only for an Evernote production-activated key
+# Optional single-user fallback:
+# EVERNOTE_DEVELOPER_TOKEN=...
 ```
 
 See `DEPLOYMENT.md` for sandbox/production activation and embedding caps.

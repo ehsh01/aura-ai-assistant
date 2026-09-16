@@ -32,7 +32,11 @@ BEGIN
     coalesce(NEW.record_title, ''),
     coalesce(NEW.record_text, ''),
     coalesce(NEW.record_metadata->>'notebookName', ''),
-    coalesce(NEW.record_metadata->>'tags', '')
+    coalesce(
+      NEW.record_metadata->>'tagNames',
+      NEW.record_metadata->>'tags',
+      ''
+    )
   );
   NEW.search_tsv := to_tsvector('simple', NEW.search_document);
   RETURN NEW;
@@ -53,7 +57,11 @@ SET
     coalesce(record_title, ''),
     coalesce(record_text, ''),
     coalesce(record_metadata->>'notebookName', ''),
-    coalesce(record_metadata->>'tags', '')
+    coalesce(
+      record_metadata->>'tagNames',
+      record_metadata->>'tags',
+      ''
+    )
   ),
   search_tsv = to_tsvector(
     'simple',
@@ -62,7 +70,11 @@ SET
       coalesce(record_title, ''),
       coalesce(record_text, ''),
       coalesce(record_metadata->>'notebookName', ''),
-      coalesce(record_metadata->>'tags', '')
+      coalesce(
+        record_metadata->>'tagNames',
+        record_metadata->>'tags',
+        ''
+      )
     )
   );
 

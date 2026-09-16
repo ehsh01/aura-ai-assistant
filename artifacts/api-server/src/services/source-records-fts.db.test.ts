@@ -52,7 +52,7 @@ describe("Evernote source-record search migration", () => {
         'sr-1',
         'Roof permit',
         'Inspector approved the revised drawings',
-        '{"notebookName":"Construction","tags":["Miami","permit"],"contentHash":"same"}'::jsonb
+        '{"notebookName":"Construction","tagNames":["Miami","permit"],"contentHash":"same"}'::jsonb
       );
     `);
 

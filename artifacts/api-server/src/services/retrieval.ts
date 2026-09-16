@@ -64,6 +64,7 @@ export type RetrievedRecord = {
   updatedAt?: string;
   /** External source link for evidence chips. */
   sourceUrl?: string | null;
+  sourceMetadata?: Record<string, unknown> | null;
   digest?: string | null;
   pinned?: boolean;
   expandPreferred?: boolean;
@@ -84,6 +85,7 @@ type ContextRecord = {
   /** ISO timestamp for recency boosts. */
   updatedAt?: string;
   sourceUrl?: string | null;
+  sourceMetadata?: Record<string, unknown> | null;
   /** Force full-text expansion into the answer prompt. */
   expandPreferred?: boolean;
 };
@@ -151,6 +153,12 @@ function sourceTypeAliases(recordType: string): string {
     default:
       return "source record";
   }
+}
+
+export function isEvernoteAskEnabled(): boolean {
+  return (
+    process.env.RECALL_EVERNOTE_ASK_ENABLED?.trim().toLowerCase() !== "false"
+  );
 }
 
 const QUESTION_STOP =
@@ -578,6 +586,7 @@ function sourceRowToContext(s: SourceRow): ContextRecord {
     mailbox: s.mailbox,
     updatedAt: sourceIso,
     sourceUrl: s.sourceUrl ?? null,
+    sourceMetadata: s.metadata ?? null,
   };
 }
 
@@ -685,7 +694,9 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
 
   // Evernote remains external truth, but recent notes participate in the normal
   // Ask corpus. Full-library keyword matches are injected separately via FTS.
-  const evernoteRows = await getDb()
+  const evernoteRows = !isEvernoteAskEnabled()
+    ? []
+    : await getDb()
     .select({
       id: sourceRecords.id,
       recordType: sourceRecords.recordType,
@@ -698,6 +709,13 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
       metadata: sourceRecords.recordMetadata,
     })
     .from(sourceRecords)
+    .innerJoin(
+      connectors,
+      and(
+        eq(connectors.id, sourceRecords.connectorId),
+        eq(connectors.enabled, true),
+      ),
+    )
     .where(
       and(
         eq(sourceRecords.userId, userId),
@@ -759,6 +777,7 @@ export async function searchEvernoteSourceRecordsForUser(
   query: string,
   limit = 20,
 ): Promise<ContextRecord[]> {
+  if (!isEvernoteAskEnabled()) return [];
   const terms = sourceRecordSearchTerms(query);
   const tsQuery = sourceRecordTsQuery(terms);
   if (!tsQuery) return [];
@@ -775,6 +794,13 @@ export async function searchEvernoteSourceRecordsForUser(
       metadata: sourceRecords.recordMetadata,
     })
     .from(sourceRecords)
+    .innerJoin(
+      connectors,
+      and(
+        eq(connectors.id, sourceRecords.connectorId),
+        eq(connectors.enabled, true),
+      ),
+    )
     .where(
       and(
         eq(sourceRecords.userId, userId),
@@ -1408,6 +1434,7 @@ export async function retrieveRelevantRecords(
       recordType: r.recordType,
       updatedAt: r.updatedAt,
       sourceUrl: r.sourceUrl ?? null,
+      sourceMetadata: r.sourceMetadata ?? null,
       digest: r.digest ?? null,
       pinned: r.pinned,
       expandPreferred: r.expandPreferred,

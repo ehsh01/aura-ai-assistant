@@ -318,6 +318,9 @@ Public API key from [FlipperForce Integrations](https://tools.flipperforce.com/i
   provisioned with read-only/basic access.
 - Sync enumerates note metadata, fetches content only for changed update
   sequences, and stores `evernote_note` records keyed by the Evernote GUID.
+- Record metadata uses `notebookGuid`, `notebookName`, `tagGuids`, `tagNames`,
+  `contentHash`, `usn`, `evernoteUpdated`, and `hasAttachments`. Attachment
+  bodies remain phase 2.
 - SHA-256 content hashes skip unchanged content/FTS/embedding rewrites while
   advancing a lightweight sync checkpoint.
 - Only changed notes are eligible for capped sync-time embedding warmup; no
@@ -326,3 +329,9 @@ Public API key from [FlipperForce Integrations](https://tools.flipperforce.com/i
   and source evidence links.
 - Evernote remains external truth. Recall does not create, update, or delete
   Evernote notes.
+- OAuth 1.0a is preferred. A server-only `EVERNOTE_DEVELOPER_TOKEN` may be
+  verified and sealed for single-user v1 when OAuth credentials are unavailable.
+- Pausing the connector blocks sync and removes it from Ask; independent Ask,
+  per-sync embedding, and UTC-daily embedding kill switches/caps are available.
+- Evernote MCP is not an Ask-time tool. It is only a parity reference or
+  potential non-LLM sync transport.

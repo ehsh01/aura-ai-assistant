@@ -21,10 +21,12 @@ import {
 import {
   beginEvernoteOAuth,
   exchangeEvernoteOAuth,
+  isEvernoteDeveloperTokenConfigured,
   isEvernoteOAuthConfigured,
 } from "../connectors/evernote";
 import {
   createEvernoteConnectorForUser,
+  createEvernoteConnectorFromDeveloperTokenForUser,
   createConnectorForUser,
   deleteConnectorForUser,
   upsertFlipperForceConnectorForUser,
@@ -35,8 +37,11 @@ import {
   getConnectorForUser,
   getHomeyWebhookInfoForUser,
   listConnectorsForUser,
+  listConnectorSyncRunsForUser,
   rotateHomeyWebhookSecretForUser,
   syncConnectorForUser,
+  testEvernoteConnectorForUser,
+  updateConnectorForUser,
   writeGoogleConnectAudit,
   writeEvernoteConnectAudit,
   writeHomeyConnectAudit,
@@ -82,6 +87,15 @@ const SyncConnectorBody = z.object({
   csvText: z.string().optional(),
   records: z.array(z.record(z.unknown())).optional(),
 });
+
+const PatchConnectorBody = z
+  .object({
+    enabled: z.boolean().optional(),
+    name: z.string().min(1).max(255).optional(),
+  })
+  .refine((body) => body.enabled !== undefined || body.name !== undefined, {
+    message: "At least one connector field is required",
+  });
 
 const OAUTH_STATE_COOKIE_GOOGLE = "recall_google_oauth_state";
 const OAUTH_STATE_COOKIE_MS = "recall_ms_oauth_state";
@@ -479,6 +493,7 @@ router.get("/connectors", async (req, res, next) => {
       microsoftOAuthConfigured: isMicrosoftOAuthConfigured(),
       homeyOAuthConfigured: isHomeyOAuthConfigured(),
       evernoteOAuthConfigured: isEvernoteOAuthConfigured(),
+      evernoteDeveloperTokenConfigured: isEvernoteDeveloperTokenConfigured(),
     });
   } catch (err) {
     next(err);
@@ -510,10 +525,23 @@ router.post("/connectors", async (req, res, next) => {
       return;
     }
     if (body.type === "evernote") {
-      res.status(400).json({
-        error: "VALIDATION_ERROR",
-        message: "Connect Evernote via OAuth (Connect Evernote button)",
-      });
+      if (!isEvernoteDeveloperTokenConfigured()) {
+        res.status(400).json({
+          error: "VALIDATION_ERROR",
+          message:
+            "Connect Evernote via OAuth, or configure EVERNOTE_DEVELOPER_TOKEN for single-user v1",
+        });
+        return;
+      }
+      const connected =
+        await createEvernoteConnectorFromDeveloperTokenForUser(req.user!.id);
+      await writeEvernoteConnectAudit(
+        req.user!.id,
+        connected.id,
+        connected.evernoteAccountId,
+      );
+      const { evernoteAccountId: _accountId, ...connector } = connected;
+      res.status(201).json(connector);
       return;
     }
     if (body.type === "ticket_email") {
@@ -580,14 +608,68 @@ router.get("/connectors/:connectorId", async (req, res, next) => {
   }
 });
 
+router.patch("/connectors/:connectorId", async (req, res, next) => {
+  try {
+    const body = PatchConnectorBody.parse(req.body ?? {});
+    const connector = await updateConnectorForUser(
+      req.user!.id,
+      req.params.connectorId,
+      body,
+    );
+    if (!connector) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Connector not found" });
+      return;
+    }
+    res.json(connector);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/connectors/:connectorId/sync-runs", async (req, res, next) => {
+  try {
+    const requestedLimit = Number(req.query.limit ?? 25);
+    const runs = await listConnectorSyncRunsForUser(
+      req.user!.id,
+      req.params.connectorId,
+      Number.isFinite(requestedLimit) ? requestedLimit : 25,
+    );
+    if (!runs) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Connector not found" });
+      return;
+    }
+    res.json({ runs });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/connectors/:connectorId/test", async (req, res, next) => {
   try {
     const connector = await getConnectorForUser(req.user!.id, req.params.connectorId);
-    if (!connector || connector.type !== "flipperforce") {
-      res.status(404).json({ error: "NOT_FOUND", message: "FlipperForce connector not found" });
+    if (!connector) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Connector not found" });
       return;
     }
-    const result = await testFlipperForceConnectorForUser(req.user!.id, req.params.connectorId);
+    const result =
+      connector.type === "flipperforce"
+        ? await testFlipperForceConnectorForUser(
+            req.user!.id,
+            req.params.connectorId,
+          )
+        : connector.type === "evernote"
+          ? await testEvernoteConnectorForUser(
+              req.user!.id,
+              req.params.connectorId,
+            )
+          : null;
+    if (!result) {
+      res.status(400).json({
+        error: "UNSUPPORTED_OPERATION",
+        message: `Connection test is not supported for ${connector.type}`,
+      });
+      return;
+    }
     res.json(result);
   } catch (err) {
     const status =
@@ -596,7 +678,7 @@ router.post("/connectors/:connectorId/test", async (req, res, next) => {
         : 502;
     res.status(status === 401 ? 401 : 502).json({
       error: status === 401 ? "AUTH_FAILED" : "UPSTREAM_ERROR",
-      message: err instanceof Error ? err.message : "FlipperForce test failed",
+      message: err instanceof Error ? err.message : "Connector test failed",
     });
   }
 });
