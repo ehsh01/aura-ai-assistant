@@ -3,6 +3,7 @@ import {
   evernoteConnector,
   evernoteContentHash,
   evernoteEnmlToText,
+  EvernoteRateLimitError,
   fetchEvernoteBundle,
   isEvernoteDeveloperTokenConfigured,
   isEvernoteOAuthConfigured,
@@ -143,6 +144,65 @@ describe("evernote connector", () => {
     );
     expect(result).toBe("ok");
     expect(calls).toBe(2);
+  });
+
+  it("surfaces exhausted EDAM rate limits with retry details", async () => {
+    await expect(
+      withEvernoteRateLimitRetry(
+        async () => {
+          throw { errorCode: 19, rateLimitDuration: 90 };
+        },
+        { maxRetries: 1, maxWaitSeconds: 30 },
+      ),
+    ).rejects.toEqual(expect.objectContaining<Partial<EvernoteRateLimitError>>({
+      status: 429,
+      retryAfterSeconds: 90,
+    }));
+  });
+
+  it("refreshes note metadata when a notebook is renamed without a note USN change", async () => {
+    const getNote = vi.fn(async () => ({
+      guid: "note-1",
+      title: "Note",
+      content: "<en-note>Body</en-note>",
+      updateSequenceNum: 7,
+      notebookGuid: "nb-1",
+      tagGuids: [],
+    }));
+    const noteStore: EvernoteNoteStore = {
+      listNotebooks: async () => [{ guid: "nb-1", name: "New name" }],
+      listTags: async () => [],
+      findNotesMetadata: async () => ({
+        totalNotes: 1,
+        notes: [
+          {
+            guid: "note-1",
+            updateSequenceNum: 7,
+            notebookGuid: "nb-1",
+            tagGuids: [],
+          },
+        ],
+      }),
+      getNote,
+    };
+    const result = await fetchEvernoteBundle("token", "https://note-store", {
+      noteStore,
+      knownNotes: new Map([
+        [
+          "note-1",
+          {
+            updateSequenceNum: 7,
+            contentHash: "old",
+            notebookGuid: "nb-1",
+            notebookName: "Old name",
+            tagGuids: [],
+            tagNames: [],
+          },
+        ],
+      ]),
+    });
+    expect(getNote).toHaveBeenCalledTimes(1);
+    expect(result.records[0]?.metadata.notebookName).toBe("New name");
   });
 
   it("fails the sync when tag names cannot be loaded", async () => {

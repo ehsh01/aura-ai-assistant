@@ -65,6 +65,7 @@ export type RetrievedRecord = {
   /** External source link for evidence chips. */
   sourceUrl?: string | null;
   sourceMetadata?: Record<string, unknown> | null;
+  sourceExternalId?: string | null;
   digest?: string | null;
   pinned?: boolean;
   expandPreferred?: boolean;
@@ -86,6 +87,7 @@ type ContextRecord = {
   updatedAt?: string;
   sourceUrl?: string | null;
   sourceMetadata?: Record<string, unknown> | null;
+  sourceExternalId?: string | null;
   /** Force full-text expansion into the answer prompt. */
   expandPreferred?: boolean;
 };
@@ -546,6 +548,7 @@ export function extractMailboxHint(question: string, mailboxes: string[]): strin
 
 type SourceRow = {
   id: string;
+  externalId?: string | null;
   recordType: string;
   recordTitle: string | null;
   recordText: string | null;
@@ -587,6 +590,7 @@ function sourceRowToContext(s: SourceRow): ContextRecord {
     updatedAt: sourceIso,
     sourceUrl: s.sourceUrl ?? null,
     sourceMetadata: s.metadata ?? null,
+    sourceExternalId: s.externalId ?? null,
   };
 }
 
@@ -699,6 +703,7 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
     : await getDb()
     .select({
       id: sourceRecords.id,
+      externalId: sourceRecords.externalId,
       recordType: sourceRecords.recordType,
       recordTitle: sourceRecords.recordTitle,
       recordText: sourceRecords.recordText,
@@ -784,6 +789,7 @@ export async function searchEvernoteSourceRecordsForUser(
   const rows = await getDb()
     .select({
       id: sourceRecords.id,
+      externalId: sourceRecords.externalId,
       recordType: sourceRecords.recordType,
       recordTitle: sourceRecords.recordTitle,
       recordText: sourceRecords.recordText,
@@ -1435,6 +1441,7 @@ export async function retrieveRelevantRecords(
       updatedAt: r.updatedAt,
       sourceUrl: r.sourceUrl ?? null,
       sourceMetadata: r.sourceMetadata ?? null,
+      sourceExternalId: r.sourceExternalId ?? null,
       digest: r.digest ?? null,
       pinned: r.pinned,
       expandPreferred: r.expandPreferred,

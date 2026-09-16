@@ -676,8 +676,14 @@ router.post("/connectors/:connectorId/test", async (req, res, next) => {
       err && typeof err === "object" && "status" in err && typeof err.status === "number"
         ? err.status
         : 502;
-    res.status(status === 401 ? 401 : 502).json({
-      error: status === 401 ? "AUTH_FAILED" : "UPSTREAM_ERROR",
+    const responseStatus = status === 401 || status === 429 ? status : 502;
+    res.status(responseStatus).json({
+      error:
+        responseStatus === 401
+          ? "AUTH_FAILED"
+          : responseStatus === 429
+            ? "RATE_LIMITED"
+            : "UPSTREAM_ERROR",
       message: err instanceof Error ? err.message : "Connector test failed",
     });
   }

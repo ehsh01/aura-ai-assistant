@@ -667,11 +667,7 @@ async function runQueryForUser(
             retrievalScore: Number(rec.score.toFixed(4)),
             retrievalMethod: rec.method,
             usedSemantic,
-            sourceUrl:
-              rec.recordType === "evernote_note" &&
-              typeof rec.sourceMetadata?.evernoteUrl === "string"
-                ? rec.sourceMetadata.evernoteUrl
-                : rec.sourceUrl ?? null,
+            sourceUrl: rec.sourceUrl ?? null,
             system:
               rec.recordType === "evernote_note"
                 ? "Evernote"
@@ -684,9 +680,7 @@ async function runQueryForUser(
                       ? rec.sourceMetadata.notebookName
                       : null,
                   evernoteGuid:
-                    typeof rec.sourceMetadata?.evernoteGuid === "string"
-                      ? rec.sourceMetadata.evernoteGuid
-                      : null,
+                    rec.sourceExternalId ?? null,
                   tagNames: Array.isArray(rec.sourceMetadata?.tagNames)
                     ? rec.sourceMetadata.tagNames
                     : [],

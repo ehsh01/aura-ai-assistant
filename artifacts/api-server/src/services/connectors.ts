@@ -1001,10 +1001,26 @@ async function fetchEvernoteRecordsForConnector(
   for (const row of existing) {
     const usn = row.metadata?.usn ?? row.metadata?.updateSequenceNum;
     const hash = row.metadata?.contentHash;
+    const tagGuids = row.metadata?.tagGuids;
+    const tagNames = row.metadata?.tagNames ?? row.metadata?.tags;
     knownNotes.set(row.externalId, {
       updateSequenceNum:
         typeof usn === "number" && Number.isFinite(usn) ? usn : null,
       contentHash: typeof hash === "string" ? hash : null,
+      notebookGuid:
+        typeof row.metadata?.notebookGuid === "string"
+          ? row.metadata.notebookGuid
+          : null,
+      notebookName:
+        typeof row.metadata?.notebookName === "string"
+          ? row.metadata.notebookName
+          : null,
+      tagGuids: Array.isArray(tagGuids)
+        ? tagGuids.filter((tag): tag is string => typeof tag === "string")
+        : [],
+      tagNames: Array.isArray(tagNames)
+        ? tagNames.filter((tag): tag is string => typeof tag === "string")
+        : [],
     });
   }
 
@@ -2382,6 +2398,25 @@ export async function createEvernoteConnectorFromDeveloperTokenForUser(
   }
   const account = await inspectEvernoteToken(token);
   await testEvernoteReadAccess(account.accessToken, account.noteStoreUrl);
+  const existingEvernote = await getDb()
+    .select()
+    .from(connectors)
+    .where(eq(connectors.type, "evernote"));
+  for (const row of existingEvernote) {
+    const settings = openConnectorSettings(
+      (row.settings ?? {}) as Record<string, unknown>,
+    );
+    if (
+      settings.evernoteAccountId === account.accountId &&
+      row.userId !== userId
+    ) {
+      const error = new Error(
+        "This single-user Evernote developer token is already linked to another Recall account",
+      ) as Error & { status?: number };
+      error.status = 409;
+      throw error;
+    }
+  }
   const connector = await createEvernoteConnectorForUser(userId, {
     ...account,
     authType: "developer_token",

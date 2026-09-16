@@ -103,9 +103,23 @@ export class EvernoteAuthError extends Error {
   }
 }
 
+export class EvernoteRateLimitError extends Error {
+  status = 429;
+  constructor(public readonly retryAfterSeconds: number) {
+    super(
+      `Evernote rate limit reached; retry after ${retryAfterSeconds} second(s)`,
+    );
+    this.name = "EvernoteRateLimitError";
+  }
+}
+
 export type EvernoteKnownNote = {
   updateSequenceNum: number | null;
   contentHash: string | null;
+  notebookGuid?: string | null;
+  notebookName?: string | null;
+  tagGuids?: string[];
+  tagNames?: string[];
 };
 
 export type EvernoteRawRecord = {
@@ -370,6 +384,9 @@ export async function withEvernoteRateLimitRetry<T>(
         attempt >= maxRetries ||
         retryAfter > maxWaitSeconds
       ) {
+        if (retryAfter != null) {
+          throw new EvernoteRateLimitError(retryAfter);
+        }
         throw error;
       }
       await new Promise((resolve) =>
@@ -563,11 +580,27 @@ export async function fetchEvernoteBundle(
   const changedMetadata = allMetadata.filter((metadata) => {
     if (!metadata.guid || metadata.deleted) return false;
     const known = options?.knownNotes?.get(metadata.guid);
+    const currentNotebookGuid = metadata.notebookGuid ?? null;
+    const currentNotebookName = currentNotebookGuid
+      ? notebooksByGuid.get(currentNotebookGuid) ?? currentNotebookGuid
+      : null;
+    const currentTagGuids = metadata.tagGuids ?? [];
+    const currentTagNames = currentTagGuids.map(
+      (tagGuid) => tagsByGuid.get(tagGuid) ?? tagGuid,
+    );
+    const taxonomyUnchanged =
+      (known?.notebookGuid ?? null) === currentNotebookGuid &&
+      (known?.notebookName ?? null) === currentNotebookName &&
+      JSON.stringify([...(known?.tagGuids ?? [])].sort()) ===
+        JSON.stringify([...currentTagGuids].sort()) &&
+      JSON.stringify([...(known?.tagNames ?? [])].sort()) ===
+        JSON.stringify([...currentTagNames].sort());
     if (
       known &&
       known.updateSequenceNum != null &&
       metadata.updateSequenceNum != null &&
-      known.updateSequenceNum === metadata.updateSequenceNum
+      known.updateSequenceNum === metadata.updateSequenceNum &&
+      taxonomyUnchanged
     ) {
       unchangedBySequence += 1;
       return false;
@@ -601,7 +634,7 @@ export async function fetchEvernoteBundle(
         options?.accountId,
         guid,
       );
-      const sourceUrl = externalSourceUrl ?? noteUrl;
+      const sourceUrl = noteUrl ?? externalSourceUrl;
       const sourceCreatedAt = epochMillisToIso(note.created ?? metadata.created);
       const sourceUpdatedAt = epochMillisToIso(note.updated ?? metadata.updated);
       const contentHash = evernoteContentHash({
@@ -628,7 +661,6 @@ export async function fetchEvernoteBundle(
         sourceUpdatedAt,
         metadata: {
           contentHash,
-          evernoteGuid: guid,
           usn:
             note.updateSequenceNum ?? metadata.updateSequenceNum ?? null,
           notebookGuid,
@@ -640,8 +672,6 @@ export async function fetchEvernoteBundle(
             metadata.largestResourceMime ||
               (metadata.largestResourceSize ?? 0) > 0,
           ),
-          originalSourceUrl: externalSourceUrl,
-          evernoteUrl: noteUrl,
         },
       };
     },
