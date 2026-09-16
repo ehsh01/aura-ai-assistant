@@ -54,4 +54,22 @@ See `/docs` for the complete Engineering Playbook.
 4.  Update tests.
 5.  Update documentation when architecture changes.
 
+## Evernote connector
+
+The Evernote connector is read-only external truth: OAuth 1.0a connects an
+account, Sync Now incrementally stores changed notes in `source_records`, and
+Ask retrieves them with source evidence. It never writes to Evernote and never
+runs batch LLM summarization over the library.
+
+Required API environment:
+
+```bash
+EVERNOTE_CONSUMER_KEY=...
+EVERNOTE_CONSUMER_SECRET=...
+EVERNOTE_OAUTH_CALLBACK_URL=https://recall-app.net/api/connectors/evernote/oauth/callback
+EVERNOTE_SANDBOX=true # false only for an Evernote production-activated key
+```
+
+See `DEPLOYMENT.md` for sandbox/production activation and embedding caps.
+
 Happy building.

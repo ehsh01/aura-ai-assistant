@@ -1843,6 +1843,7 @@ export async function listConnectors(): Promise<{
   googleOAuthConfigured?: boolean;
   microsoftOAuthConfigured?: boolean;
   homeyOAuthConfigured?: boolean;
+  evernoteOAuthConfigured?: boolean;
 }> {
   return apiFetch("/connectors");
 }
@@ -1860,6 +1861,11 @@ export function startMicrosoftOAuth(): void {
 /** Full-page navigation for Homey (Athom) OAuth. */
 export function startHomeyOAuth(): void {
   window.location.assign("/api/connectors/homey/oauth/start");
+}
+
+/** Full-page navigation for Evernote OAuth 1.0a. */
+export function startEvernoteOAuth(): void {
+  window.location.assign("/api/connectors/evernote/oauth/start");
 }
 
 export async function getHomeyWebhookInfo(

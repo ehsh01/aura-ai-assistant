@@ -61,7 +61,7 @@ git clone https://github.com/ehsh01/aura-ai-assistant.git /var/www/recall-app
 cd /var/www/recall-app
 
 cp artifacts/api-server/.env.example artifacts/api-server/.env
-# Edit .env — at minimum PORT/API_PORT=5008; add DATABASE_URL when schema exists
+# Edit .env — at minimum PORT/API_PORT=5008 and DIGITALOCEAN_DATABASE_URL
 
 pnpm install
 pnpm run build:prod
@@ -226,6 +226,45 @@ SECRETS_ENCRYPTION_KEY=...   # required so tokens + webhook secret are encrypted
 
 4. Restart `recall-api`. On `/connectors`, click **Connect Homey**, then **Sync** and **Show webhook**.
 5. In Homey Flows, add an HTTP POST (Logic / HTTP request cards) to the webhook URL with `Authorization: Bearer <secret>` and JSON body — see `docs/Homey_Flow_Cookbook.md`.
+
+## Evernote connector (OAuth 1.0a, read-only)
+
+Evernote's public Cloud API is the legacy EDAM/Thrift API. API keys have an
+Evernote-assigned permission level rather than OAuth scopes, so request and
+activate the key for **read-only** access. Sandbox and production credentials
+are activated separately.
+
+1. Register an Evernote Cloud API consumer key and select read-only/basic access.
+2. Configure this callback URL:
+   - Production: `https://recall-app.net/api/connectors/evernote/oauth/callback`
+3. Start against Evernote sandbox:
+
+```bash
+EVERNOTE_CONSUMER_KEY=...
+EVERNOTE_CONSUMER_SECRET=...
+EVERNOTE_OAUTH_CALLBACK_URL=https://recall-app.net/api/connectors/evernote/oauth/callback
+EVERNOTE_SANDBOX=true
+SECRETS_ENCRYPTION_KEY=... # OAuth tokens are encrypted at rest
+```
+
+4. After Evernote activates the same integration for production, set
+   `EVERNOTE_SANDBOX=false` and restart both Recall processes with updated env.
+5. On `/connectors`, click **Connect Evernote**, authorize access, then click
+   **Sync Now**. Sync only reads note metadata/content. Recall does not create,
+   edit, or delete Evernote data.
+
+Evernote sync compares each note's update sequence and SHA-256 content hash.
+Unchanged notes skip database, FTS, and embedding writes. Sync-time embeddings
+are limited to changed notes and default to 25 per run (hard maximum 100):
+
+```bash
+RECALL_EVERNOTE_EMBEDDINGS_ENABLED=true
+EVERNOTE_EMBEDDING_MAX_PER_SYNC=25
+# Set either this or RECALL_BACKGROUND_AI_ENABLED=false as a kill-switch.
+```
+
+No summarization or other batch LLM work runs over the Evernote library. Ask
+continues to call AI only on demand.
 
 ## Database backups
 

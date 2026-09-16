@@ -311,3 +311,17 @@ Public API key from [FlipperForce Integrations](https://tools.flipperforce.com/i
 - Paste the key on Connectors (password field). Stored as `settings.apiKey` via `sealConnectorSettings`. List DTO never returns settings.
 - Sync stores project summaries (`flipperforce_project`) only — not a second expense ledger.
 - Ask live-queries projects, activity log, and per-project expense/income totals. No writes.
+
+## 15. Evernote (OAuth 1.0a, read-only)
+
+- OAuth tokens are sealed in connector settings; Evernote API keys must be
+  provisioned with read-only/basic access.
+- Sync enumerates note metadata, fetches content only for changed update
+  sequences, and stores `evernote_note` records keyed by the Evernote GUID.
+- SHA-256 content hashes skip unchanged database/FTS/embedding writes.
+- Only changed notes are eligible for capped sync-time embedding warmup; no
+  batch LLM summaries run over the library.
+- Ask includes recent Evernote records plus full-library Postgres FTS matches
+  and source evidence links.
+- Evernote remains external truth. Recall does not create, update, or delete
+  Evernote notes.

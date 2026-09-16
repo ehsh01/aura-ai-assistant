@@ -667,6 +667,11 @@ async function runQueryForUser(
             retrievalScore: Number(rec.score.toFixed(4)),
             retrievalMethod: rec.method,
             usedSemantic,
+            sourceUrl: rec.sourceUrl ?? null,
+            system:
+              rec.recordType === "evernote_note"
+                ? "Evernote"
+                : rec.recordType ?? rec.entityType,
             ...personMeta,
           },
         }),

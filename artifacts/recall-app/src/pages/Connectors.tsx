@@ -9,6 +9,7 @@ import {
   listConnectors,
   listFinanceSubscriptions,
   rotateHomeyWebhookSecret,
+  startEvernoteOAuth,
   startGoogleOAuth,
   startHomeyOAuth,
   startMicrosoftOAuth,
@@ -49,6 +50,7 @@ export function Connectors() {
   const [googleOAuthConfigured, setGoogleOAuthConfigured] = useState(false);
   const [microsoftOAuthConfigured, setMicrosoftOAuthConfigured] = useState(false);
   const [homeyOAuthConfigured, setHomeyOAuthConfigured] = useState(false);
+  const [evernoteOAuthConfigured, setEvernoteOAuthConfigured] = useState(false);
   const [homeyWebhook, setHomeyWebhook] = useState<{
     connectorId: string;
     url: string;
@@ -91,6 +93,7 @@ export function Connectors() {
       setGoogleOAuthConfigured(Boolean(res.googleOAuthConfigured));
       setMicrosoftOAuthConfigured(Boolean(res.microsoftOAuthConfigured));
       setHomeyOAuthConfigured(Boolean(res.homeyOAuthConfigured));
+      setEvernoteOAuthConfigured(Boolean(res.evernoteOAuthConfigured));
       const tokenRes = await listExtensionTokens().catch(() => null);
       if (tokenRes) setExtensionTokens(tokenRes.items);
     } finally {
@@ -186,6 +189,36 @@ export function Connectors() {
     void load();
   }, []);
 
+  useEffect(() => {
+    const status = readSearchParam("evernote");
+    if (!status) return;
+    const reason = readSearchParam("reason");
+    if (status === "connected") {
+      toast({
+        title: "Evernote connected",
+        description: "Click Sync Now to index new or changed notes for Ask.",
+      });
+    } else if (status === "error") {
+      const detail =
+        reason === "not_configured"
+          ? "Evernote OAuth is not configured on the server yet."
+          : reason === "missing_verifier"
+            ? "Evernote authorization was canceled or expired."
+            : "Could not complete Evernote authorization. Try again.";
+      toast({
+        title: "Evernote connect failed",
+        description: detail,
+        variant: "destructive",
+      });
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete("evernote");
+    url.searchParams.delete("reason");
+    url.searchParams.delete("connectorId");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    void load();
+  }, []);
+
   const addFlipperForceConnector = async () => {
     setSavingFlipper(true);
     try {
@@ -256,7 +289,9 @@ export function Connectors() {
         title: "Sync complete",
         description: `${connector.name}: ${res.result.recordsFetched ?? 0} fetched, ${
           res.result.recordsCreated ?? 0
-        } new`,
+        } created, ${res.result.recordsUpdated ?? 0} updated, ${
+          res.result.recordsSkipped ?? 0
+        } skipped, ${res.result.recordsFailed ?? 0} failed`,
       });
       await load();
       if (connector.type === "finance_api") await loadSummary(connector.id);
@@ -340,6 +375,7 @@ export function Connectors() {
   const hasGoogle = connectors.some((c) => c.type === "google");
   const hasMicrosoft = connectors.some((c) => c.type === "microsoft");
   const homeyConnector = connectors.find((c) => c.type === "homey") ?? null;
+  const evernoteConnector = connectors.find((c) => c.type === "evernote") ?? null;
   const flipperConnector = connectors.find((c) => c.type === "flipperforce") ?? null;
 
   const showHomeyWebhook = async (connectorId: string) => {
@@ -501,6 +537,33 @@ export function Connectors() {
           </div>
 
           <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+            <h2 className="text-lg font-semibold">Evernote</h2>
+            <p className="mt-2 text-sm text-white/55">
+              Read-only sync for Evernote notes, notebooks, and tags. Recall indexes only new or
+              changed notes, then uses them as cited evidence when you Ask. Recall never writes to
+              Evernote.
+            </p>
+            <button
+              type="button"
+              onClick={() => startEvernoteOAuth()}
+              disabled={!evernoteOAuthConfigured}
+              className="mt-4 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {evernoteConnector ? "Reconnect Evernote" : "Connect Evernote"}
+            </button>
+            {!evernoteOAuthConfigured && (
+              <p className="mt-3 text-xs text-amber-200/80">
+                Evernote OAuth is not configured yet (needs EVERNOTE_CONSUMER_KEY / SECRET).
+              </p>
+            )}
+            {evernoteConnector && (
+              <p className="mt-3 text-xs text-emerald-200/70">
+                Connected. Use Sync Now in the connector list to pull changed notes.
+              </p>
+            )}
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-5">
             <h2 className="text-lg font-semibold">FlipperForce</h2>
             <p className="mt-2 text-sm text-white/55">
               Read-only access so Ask can search projects, activity, and rehab reports. Paste the
@@ -657,7 +720,7 @@ export function Connectors() {
                     disabled={syncingId === c.id}
                     className="rounded-xl bg-indigo-500/20 px-3 py-2 text-sm text-indigo-200 hover:bg-indigo-500/30 disabled:opacity-50"
                   >
-                    {syncingId === c.id ? "Syncing…" : "Sync"}
+                    {syncingId === c.id ? "Syncing…" : "Sync Now"}
                   </button>
                 </div>
               </article>

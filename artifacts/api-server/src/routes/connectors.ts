@@ -19,6 +19,12 @@ import {
   isMicrosoftOAuthConfigured,
 } from "../connectors/microsoft";
 import {
+  beginEvernoteOAuth,
+  exchangeEvernoteOAuth,
+  isEvernoteOAuthConfigured,
+} from "../connectors/evernote";
+import {
+  createEvernoteConnectorForUser,
   createConnectorForUser,
   deleteConnectorForUser,
   upsertFlipperForceConnectorForUser,
@@ -32,9 +38,11 @@ import {
   rotateHomeyWebhookSecretForUser,
   syncConnectorForUser,
   writeGoogleConnectAudit,
+  writeEvernoteConnectAudit,
   writeHomeyConnectAudit,
   writeMicrosoftConnectAudit,
 } from "../services/connectors";
+import { openSecret, sealSecret } from "../lib/secret-box";
 import {
   acknowledgeHomeyAlertForUser,
   listOpenHomeyAlertsForUser,
@@ -62,6 +70,7 @@ const CreateConnectorBody = z.object({
     "microsoft",
     "homey",
     "flipperforce",
+    "evernote",
   ]),
   description: z.string().max(2000).nullish(),
   baseUrl: z.string().url().nullish(),
@@ -77,6 +86,7 @@ const SyncConnectorBody = z.object({
 const OAUTH_STATE_COOKIE_GOOGLE = "recall_google_oauth_state";
 const OAUTH_STATE_COOKIE_MS = "recall_ms_oauth_state";
 const OAUTH_STATE_COOKIE_HOMEY = "recall_homey_oauth_state";
+const OAUTH_STATE_COOKIE_EVERNOTE = "recall_evernote_oauth_state";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 function stateSecret(): string {
@@ -352,6 +362,112 @@ router.get("/connectors/homey/oauth/callback", async (req, res) => {
   }
 });
 
+router.get("/connectors/evernote/oauth/start", requireAuth, async (req, res, next) => {
+  try {
+    if (!isEvernoteOAuthConfigured()) {
+      res.status(503).json({
+        error: "EVERNOTE_NOT_CONFIGURED",
+        message: "Evernote OAuth is not configured on this server",
+      });
+      return;
+    }
+    const state = signOAuthState(req.user!.id);
+    const request = await beginEvernoteOAuth(state);
+    const temporary = sealSecret(
+      JSON.stringify({
+        state,
+        oauthToken: request.oauthToken,
+        oauthTokenSecret: request.oauthTokenSecret,
+      }),
+    );
+    res.cookie(OAUTH_STATE_COOKIE_EVERNOTE, temporary, {
+      httpOnly: true,
+      secure: config.sessionCookieSecure,
+      sameSite: "lax",
+      maxAge: OAUTH_STATE_TTL_MS,
+      path: "/",
+    });
+    res.redirect(request.authorizeUrl);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/connectors/evernote/oauth/callback", async (req, res) => {
+  const fail = (code: string) => {
+    res.clearCookie(OAUTH_STATE_COOKIE_EVERNOTE, { path: "/" });
+    res.redirect(frontendRedirect({ evernote: "error", reason: code }));
+  };
+
+  try {
+    if (!isEvernoteOAuthConfigured()) {
+      fail("not_configured");
+      return;
+    }
+    const state = typeof req.query.state === "string" ? req.query.state : "";
+    const oauthToken =
+      typeof req.query.oauth_token === "string" ? req.query.oauth_token : "";
+    const oauthVerifier =
+      typeof req.query.oauth_verifier === "string"
+        ? req.query.oauth_verifier
+        : "";
+    const cookieValue =
+      typeof req.cookies?.[OAUTH_STATE_COOKIE_EVERNOTE] === "string"
+        ? req.cookies[OAUTH_STATE_COOKIE_EVERNOTE]
+        : "";
+    if (!state || !oauthToken || !oauthVerifier || !cookieValue) {
+      fail("missing_verifier");
+      return;
+    }
+
+    const temporary = JSON.parse(openSecret(cookieValue)) as {
+      state?: string;
+      oauthToken?: string;
+      oauthTokenSecret?: string;
+    };
+    if (
+      temporary.state !== state ||
+      temporary.oauthToken !== oauthToken ||
+      !temporary.oauthTokenSecret
+    ) {
+      fail("state_mismatch");
+      return;
+    }
+    const verified = verifyOAuthState(state);
+    if (!verified) {
+      fail("state_invalid");
+      return;
+    }
+
+    const tokens = await exchangeEvernoteOAuth({
+      oauthToken,
+      oauthTokenSecret: temporary.oauthTokenSecret,
+      oauthVerifier,
+    });
+    const connector = await createEvernoteConnectorForUser(verified.userId, {
+      accountId: tokens.accountId,
+      accountName: tokens.accountName,
+      accountEmail: tokens.accountEmail,
+      accessToken: tokens.accessToken,
+      noteStoreUrl: tokens.noteStoreUrl,
+      webApiUrlPrefix: tokens.webApiUrlPrefix,
+      expiresAt: tokens.expiresAt,
+    });
+    await writeEvernoteConnectAudit(
+      verified.userId,
+      connector.id,
+      tokens.accountId,
+    );
+
+    res.clearCookie(OAUTH_STATE_COOKIE_EVERNOTE, { path: "/" });
+    res.redirect(
+      frontendRedirect({ evernote: "connected", connectorId: connector.id }),
+    );
+  } catch {
+    fail("oauth_failed");
+  }
+});
+
 router.use(requireAuth);
 
 router.get("/connectors", async (req, res, next) => {
@@ -362,6 +478,7 @@ router.get("/connectors", async (req, res, next) => {
       googleOAuthConfigured: isGoogleOAuthConfigured(),
       microsoftOAuthConfigured: isMicrosoftOAuthConfigured(),
       homeyOAuthConfigured: isHomeyOAuthConfigured(),
+      evernoteOAuthConfigured: isEvernoteOAuthConfigured(),
     });
   } catch (err) {
     next(err);
@@ -389,6 +506,13 @@ router.post("/connectors", async (req, res, next) => {
       res.status(400).json({
         error: "VALIDATION_ERROR",
         message: "Connect Homey via OAuth (Connect Homey button)",
+      });
+      return;
+    }
+    if (body.type === "evernote") {
+      res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Connect Evernote via OAuth (Connect Evernote button)",
       });
       return;
     }

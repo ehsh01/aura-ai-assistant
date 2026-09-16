@@ -9,7 +9,8 @@ export type ConnectorType =
   | "google"
   | "microsoft"
   | "homey"
-  | "flipperforce";
+  | "flipperforce"
+  | "evernote";
 
 export type NormalizedSourceRecord = {
   externalId: string;
@@ -19,6 +20,7 @@ export type NormalizedSourceRecord = {
   recordMetadata?: Record<string, unknown>;
   sourceUrl?: string | null;
   sourceCreatedAt?: string | null;
+  sourceUpdatedAt?: string | null;
 };
 
 export type EvidenceInput = {
@@ -33,6 +35,7 @@ export type SyncResult = {
   recordsFetched: number;
   recordsCreated: number;
   recordsUpdated: number;
+  recordsSkipped: number;
   recordsFailed: number;
   errorMessage?: string | null;
 };
