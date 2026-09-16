@@ -115,7 +115,11 @@ export function Connectors() {
       setEvernoteDeveloperTokenConfigured(
         Boolean(res.evernoteDeveloperTokenConfigured),
       );
-      const evernote = res.connectors.find((connector) => connector.type === "evernote");
+      const evernote =
+        res.connectors.find(
+          (connector) => connector.type === "evernote" && connector.enabled,
+        ) ??
+        res.connectors.find((connector) => connector.type === "evernote");
       if (evernote) {
         const runs = await listConnectorSyncRuns(evernote.id).catch(() => null);
         setEvernoteLastRun(runs?.runs[0] ?? null);
@@ -434,7 +438,10 @@ export function Connectors() {
   const hasGoogle = connectors.some((c) => c.type === "google");
   const hasMicrosoft = connectors.some((c) => c.type === "microsoft");
   const homeyConnector = connectors.find((c) => c.type === "homey") ?? null;
-  const evernoteConnector = connectors.find((c) => c.type === "evernote") ?? null;
+  const evernoteConnector =
+    connectors.find((c) => c.type === "evernote" && c.enabled) ??
+    connectors.find((c) => c.type === "evernote") ??
+    null;
   const evernoteAuthAvailable =
     evernoteOAuthConfigured || evernoteDeveloperTokenConfigured;
   const flipperConnector = connectors.find((c) => c.type === "flipperforce") ?? null;

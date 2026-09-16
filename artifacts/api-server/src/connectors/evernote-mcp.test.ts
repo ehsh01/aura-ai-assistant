@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   evernoteMcpFetch,
+  evernoteMcpAuthorizationCode,
   fetchEvernoteViaMcp,
   mcpOAuthStateFromSettings,
   mcpSettingsFromOAuthState,
@@ -54,6 +55,18 @@ describe("Evernote MCP auth persistence", () => {
     expect(restored.accessToken).toBe("access-secret");
     expect(restored.refreshToken).toBe("refresh-secret");
     expect(restored.codeVerifier).toBe("pkce-secret");
+  });
+
+  it("preserves OAuth plan rejection details for Connect UX", () => {
+    expect(() =>
+      evernoteMcpAuthorizationCode(
+        new URLSearchParams({
+          error: "access_denied",
+          error_description:
+            "This account is not eligible without a paid plan",
+        }),
+      ),
+    ).toThrow("not eligible without a paid plan");
   });
 });
 

@@ -366,10 +366,7 @@ export async function finishEvernoteMcpOAuth(
     callbackUrl(),
     onStateChanged,
   );
-  const authorizationCode = callbackParams.get("code");
-  if (!authorizationCode) {
-    throw new Error("Evernote MCP OAuth callback is missing code");
-  }
+  const authorizationCode = evernoteMcpAuthorizationCode(callbackParams);
   await auth(provider, {
     serverUrl: mcpServerUrl(),
     authorizationCode,
@@ -378,6 +375,20 @@ export async function finishEvernoteMcpOAuth(
     fetchFn: evernoteMcpFetch,
   });
   return mcpSettingsFromOAuthState(state);
+}
+
+export function evernoteMcpAuthorizationCode(
+  callbackParams: URLSearchParams,
+): string {
+  const authorizationCode = callbackParams.get("code");
+  if (!authorizationCode) {
+    const oauthError =
+      callbackParams.get("error_description") ??
+      callbackParams.get("error") ??
+      "Evernote MCP OAuth callback is missing code";
+    throw new Error(oauthError.slice(0, 300));
+  }
+  return authorizationCode;
 }
 
 type ToolCaller = {
