@@ -1490,35 +1490,38 @@ export async function upsertSourceRecord(
       (record.recordMetadata ?? {}) as Record<string, unknown>,
       heuristicDigest(record.recordTitle ?? "", record.recordText ?? "", 400),
     );
-    await getDb()
-      .update(sourceRecords)
-      .set({
-        recordType: record.recordType,
-        recordTitle: record.recordTitle ?? null,
-        recordText: record.recordText ?? null,
-        recordMetadata: meta,
-        sourceUrl: record.sourceUrl ?? null,
-        sourceCreatedAt: record.sourceCreatedAt
-          ? new Date(record.sourceCreatedAt)
-          : existing[0].sourceCreatedAt,
-        sourceUpdatedAt: record.sourceUpdatedAt
-          ? new Date(record.sourceUpdatedAt)
-          : null,
-        lastSyncedAt: now,
-        updatedAt: now,
-      })
-      .where(eq(sourceRecords.id, existing[0].id));
-    // A changed row must never retain an ANN vector for old content. Capped
-    // warmup may regenerate it; otherwise Ask stays keyword/FTS-only.
-    await getDb()
-      .delete(entityEmbeddings)
-      .where(
-        and(
-          eq(entityEmbeddings.userId, userId),
-          eq(entityEmbeddings.entityType, "source_record"),
-          eq(entityEmbeddings.entityId, existing[0].id),
-        ),
-      );
+    await getDb().transaction(async (tx) => {
+      await tx
+        .update(sourceRecords)
+        .set({
+          recordType: record.recordType,
+          recordTitle: record.recordTitle ?? null,
+          recordText: record.recordText ?? null,
+          recordMetadata: meta,
+          sourceUrl: record.sourceUrl ?? null,
+          sourceCreatedAt: record.sourceCreatedAt
+            ? new Date(record.sourceCreatedAt)
+            : existing[0].sourceCreatedAt,
+          sourceUpdatedAt: record.sourceUpdatedAt
+            ? new Date(record.sourceUpdatedAt)
+            : null,
+          lastSyncedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(sourceRecords.id, existing[0].id));
+      // Atomic with the content update: a changed row must never retain an ANN
+      // vector for old content. Capped warmup may regenerate it; otherwise Ask
+      // stays keyword/FTS-only.
+      await tx
+        .delete(entityEmbeddings)
+        .where(
+          and(
+            eq(entityEmbeddings.userId, userId),
+            eq(entityEmbeddings.entityType, "source_record"),
+            eq(entityEmbeddings.entityId, existing[0].id),
+          ),
+        );
+    });
     return { id: existing[0].id, action: "updated" };
   }
 
