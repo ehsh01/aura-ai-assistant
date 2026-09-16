@@ -11,6 +11,7 @@ import {
   listFinanceSubscriptions,
   patchConnector,
   rotateHomeyWebhookSecret,
+  startEvernoteEdamOAuth,
   startEvernoteOAuth,
   startGoogleOAuth,
   startHomeyOAuth,
@@ -55,6 +56,8 @@ export function Connectors() {
   const [microsoftOAuthConfigured, setMicrosoftOAuthConfigured] = useState(false);
   const [homeyOAuthConfigured, setHomeyOAuthConfigured] = useState(false);
   const [evernoteOAuthConfigured, setEvernoteOAuthConfigured] = useState(false);
+  const [evernoteEdamFallbackConfigured, setEvernoteEdamFallbackConfigured] =
+    useState(false);
   const [evernoteDeveloperTokenConfigured, setEvernoteDeveloperTokenConfigured] =
     useState(false);
   const [homeyWebhook, setHomeyWebhook] = useState<{
@@ -101,6 +104,9 @@ export function Connectors() {
       setMicrosoftOAuthConfigured(Boolean(res.microsoftOAuthConfigured));
       setHomeyOAuthConfigured(Boolean(res.homeyOAuthConfigured));
       setEvernoteOAuthConfigured(Boolean(res.evernoteOAuthConfigured));
+      setEvernoteEdamFallbackConfigured(
+        Boolean(res.evernoteEdamFallbackConfigured),
+      );
       setEvernoteDeveloperTokenConfigured(
         Boolean(res.evernoteDeveloperTokenConfigured),
       );
@@ -256,17 +262,17 @@ export function Connectors() {
   };
 
   const connectEvernote = async () => {
-    if (evernoteOAuthConfigured) {
-      startEvernoteOAuth();
-      return;
-    }
+    startEvernoteOAuth();
+  };
+
+  const connectEvernoteDeveloperFallback = async () => {
     if (!evernoteDeveloperTokenConfigured) return;
     try {
       await connectEvernoteDeveloperToken();
       toast({
         title: "Evernote connected",
         description:
-          "The server-configured developer token was sealed into this connector.",
+          "The fallback developer token was sealed into this connector.",
       });
       await load();
     } catch (err) {
@@ -576,9 +582,9 @@ export function Connectors() {
           <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-5">
             <h2 className="text-lg font-semibold">Evernote</h2>
             <p className="mt-2 text-sm text-white/55">
-              Read-only sync for Evernote notes, notebooks, and tags. Recall indexes only new or
-              changed notes, then uses them as cited evidence when you Ask. Recall never writes to
-              Evernote.
+              Connect through Evernote MCP OAuth2 with dynamic client registration—no consumer
+              key or secret required. Sync Now uses paced read tools to index only new or changed
+              notes. Ask stays local to Recall and never calls Evernote MCP.
             </p>
             <button
               type="button"
@@ -586,20 +592,36 @@ export function Connectors() {
               disabled={!evernoteAuthAvailable}
               className="mt-4 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {evernoteConnector ? "Reconnect Evernote" : "Connect Evernote"}
+              {evernoteConnector
+                ? "Reconnect Evernote (MCP)"
+                : "Connect Evernote (MCP)"}
             </button>
-            {!evernoteAuthAvailable && (
-              <p className="mt-3 text-xs text-amber-200/80">
-                Credential blocker: configure EVERNOTE_CONSUMER_KEY /
-                EVERNOTE_CONSUMER_SECRET for OAuth, or an
-                EVERNOTE_DEVELOPER_TOKEN for single-user v1.
-              </p>
-            )}
-            {!evernoteOAuthConfigured && evernoteDeveloperTokenConfigured && (
-              <p className="mt-3 text-xs text-white/45">
-                OAuth is unavailable; Connect uses the sealed server-configured
-                developer token.
-              </p>
+            <p className="mt-3 text-xs text-white/45">
+              Browser authorization by Ernesto is still required. Access and refresh tokens,
+              plus any DCR client secret, are sealed server-side.
+            </p>
+            {(evernoteEdamFallbackConfigured ||
+              evernoteDeveloperTokenConfigured) && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {evernoteEdamFallbackConfigured && (
+                  <button
+                    type="button"
+                    onClick={() => startEvernoteEdamOAuth()}
+                    className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/60 hover:bg-white/5"
+                  >
+                    Use EDAM OAuth1 fallback
+                  </button>
+                )}
+                {evernoteDeveloperTokenConfigured && (
+                  <button
+                    type="button"
+                    onClick={() => void connectEvernoteDeveloperFallback()}
+                    className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/60 hover:bg-white/5"
+                  >
+                    Use developer-token fallback
+                  </button>
+                )}
+              </div>
             )}
             {evernoteConnector && (
               <div className="mt-4 flex flex-wrap items-center gap-2">

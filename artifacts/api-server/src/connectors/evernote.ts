@@ -120,6 +120,7 @@ export type EvernoteKnownNote = {
   notebookName?: string | null;
   tagGuids?: string[];
   tagNames?: string[];
+  evernoteUpdated?: string | null;
 };
 
 export type EvernoteRawRecord = {
@@ -150,8 +151,8 @@ function evernoteConfig() {
   const consumerKey = process.env.EVERNOTE_CONSUMER_KEY?.trim();
   const consumerSecret = process.env.EVERNOTE_CONSUMER_SECRET?.trim();
   const callbackUrl =
-    process.env.EVERNOTE_OAUTH_REDIRECT_URI?.trim() ||
-    "https://recall-app.net/api/connectors/evernote/oauth/callback";
+    process.env.EVERNOTE_EDAM_OAUTH_REDIRECT_URI?.trim() ||
+    "https://recall-app.net/api/connectors/evernote/edam/oauth/callback";
   if (!consumerKey || !consumerSecret) {
     const error = new Error(
       "EVERNOTE_CONSUMER_KEY and EVERNOTE_CONSUMER_SECRET are not configured",
@@ -193,6 +194,13 @@ export function isEvernoteOAuthConfigured(): boolean {
   return Boolean(
     process.env.EVERNOTE_CONSUMER_KEY?.trim() &&
       process.env.EVERNOTE_CONSUMER_SECRET?.trim(),
+  );
+}
+
+export function isEvernoteEdamFallbackConfigured(): boolean {
+  return (
+    process.env.EVERNOTE_EDAM_FALLBACK_ENABLED?.trim().toLowerCase() ===
+      "true" && isEvernoteOAuthConfigured()
   );
 }
 

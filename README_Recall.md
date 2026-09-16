@@ -56,22 +56,24 @@ See `/docs` for the complete Engineering Playbook.
 
 ## Evernote connector
 
-The Evernote connector is read-only external truth: OAuth 1.0a connects an
-account, Sync Now incrementally stores changed notes in `source_records`, and
-Ask retrieves them with source evidence. It never writes to Evernote and never
-runs batch LLM summarization over the library.
+The Evernote connector is read-only external truth. The default Connect flow
+uses Evernote MCP Streamable HTTP with OAuth2 Dynamic Client Registration.
+Sync Now incrementally stores changed notes in `source_records`; Ask retrieves
+local Postgres evidence and never calls MCP at query time.
 
 Required API environment:
 
 ```bash
-EVERNOTE_CONSUMER_KEY=...
-EVERNOTE_CONSUMER_SECRET=...
+EVERNOTE_MCP_URL=https://mcp.evernote.com/mcp
 EVERNOTE_OAUTH_REDIRECT_URI=https://recall-app.net/api/connectors/evernote/oauth/callback
-EVERNOTE_SANDBOX=false # Ernesto's locked path: production OAuth
-# Optional single-user fallback:
+# Optional fallback-only settings:
+# EVERNOTE_EDAM_FALLBACK_ENABLED=true
+# EVERNOTE_CONSUMER_KEY=...
+# EVERNOTE_CONSUMER_SECRET=...
+# EVERNOTE_SANDBOX=false
 # EVERNOTE_DEVELOPER_TOKEN=...
 ```
 
-See `DEPLOYMENT.md` for sandbox/production activation and embedding caps.
+See `DEPLOYMENT.md` for token sealing, EDAM fallback, pacing, and embedding caps.
 
 Happy building.

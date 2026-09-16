@@ -78,6 +78,13 @@ import {
   type EvernoteFetchResult,
   type EvernoteKnownNote,
 } from "../connectors/evernote";
+import {
+  beginEvernoteMcpOAuth,
+  fetchEvernoteViaMcp,
+  finishEvernoteMcpOAuth,
+  testEvernoteMcpConnection,
+  withEvernoteMcpClient,
+} from "../connectors/evernote-mcp";
 import { embedItemsCached } from "./embedding-cache";
 import { embeddingTextForContextRecord } from "./embedding-text";
 
@@ -981,7 +988,9 @@ async function fetchEvernoteRecordsForConnector(
     typeof settings.accessToken === "string" ? settings.accessToken : "";
   const noteStoreUrl =
     typeof settings.noteStoreUrl === "string" ? settings.noteStoreUrl : "";
-  if (!accessToken || !noteStoreUrl) {
+  const authTransport =
+    settings.authTransport === "mcp" ? "mcp" : "edam";
+  if (!accessToken || (authTransport === "edam" && !noteStoreUrl)) {
     throw new Error("Evernote connector is missing OAuth credentials — reconnect Evernote");
   }
 
@@ -1021,7 +1030,28 @@ async function fetchEvernoteRecordsForConnector(
       tagNames: Array.isArray(tagNames)
         ? tagNames.filter((tag): tag is string => typeof tag === "string")
         : [],
+      evernoteUpdated:
+        typeof row.metadata?.evernoteUpdated === "string"
+          ? row.metadata.evernoteUpdated
+          : null,
     });
+  }
+
+  if (authTransport === "mcp") {
+    const synced = await withEvernoteMcpClient(settings, (client) =>
+      fetchEvernoteViaMcp(client, knownNotes),
+    );
+    await getDb()
+      .update(connectors)
+      .set({
+        settings: sealConnectorSettings({
+          ...settings,
+          ...synced.settings,
+        }),
+        updatedAt: new Date(),
+      })
+      .where(eq(connectors.id, conn.id));
+    return synced.value;
   }
 
   return fetchEvernoteBundle(accessToken, noteStoreUrl, {
@@ -2316,6 +2346,109 @@ async function findEvernoteConnectorByAccountId(
   return null;
 }
 
+export async function beginEvernoteMcpOAuthForUser(
+  userId: string,
+  oauthState: string,
+): Promise<{ connectorId: string; authorizeUrl: string }> {
+  const started = await beginEvernoteMcpOAuth(oauthState);
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(
+      and(eq(connectors.userId, userId), eq(connectors.type, "evernote")),
+    );
+  const existing =
+    rows.find((row) => {
+      const settings = openConnectorSettings(
+        (row.settings ?? {}) as Record<string, unknown>,
+      );
+      return settings.authTransport === "mcp";
+    }) ?? null;
+  const now = new Date();
+  const sealed = sealConnectorSettings(started.settings);
+  if (existing) {
+    await getDb()
+      .update(connectors)
+      .set({
+        name: "Evernote",
+        description: "Read-only Evernote MCP sync for evidence-backed Ask.",
+        baseUrl: "https://mcp.evernote.com/mcp",
+        authType: "oauth2_dcr",
+        enabled: false,
+        syncStatus: "authorizing",
+        settings: sealed,
+        updatedAt: now,
+      })
+      .where(eq(connectors.id, existing.id));
+    return { connectorId: existing.id, authorizeUrl: started.authorizeUrl };
+  }
+  const connectorId = newConnectorId();
+  await getDb().insert(connectors).values({
+    id: connectorId,
+    userId,
+    name: "Evernote",
+    type: "evernote",
+    description: "Read-only Evernote MCP sync for evidence-backed Ask.",
+    baseUrl: "https://mcp.evernote.com/mcp",
+    authType: "oauth2_dcr",
+    enabled: false,
+    syncStatus: "authorizing",
+    settings: sealed,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return { connectorId, authorizeUrl: started.authorizeUrl };
+}
+
+export async function finishEvernoteMcpOAuthForUser(
+  userId: string,
+  connectorId: string,
+  oauthState: string,
+  callbackParams: URLSearchParams,
+): Promise<ConnectorDto> {
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(
+      and(
+        eq(connectors.id, connectorId),
+        eq(connectors.userId, userId),
+        eq(connectors.type, "evernote"),
+      ),
+    )
+    .limit(1);
+  const connector = rows[0];
+  if (!connector) throw new Error("Evernote MCP authorization connector not found");
+  const settings = openConnectorSettings(
+    (connector.settings ?? {}) as Record<string, unknown>,
+  );
+  if (
+    settings.authTransport !== "mcp" ||
+    settings.mcpOAuthState !== oauthState
+  ) {
+    throw new Error("Evernote MCP OAuth state mismatch");
+  }
+  const completed = await finishEvernoteMcpOAuth(settings, callbackParams);
+  const checked = await testEvernoteMcpConnection(completed);
+  const finalSettings = sealConnectorSettings({
+    ...completed,
+    ...checked.settings,
+    mcpOAuthState: "",
+    token: "",
+  });
+  const [updated] = await getDb()
+    .update(connectors)
+    .set({
+      enabled: true,
+      syncStatus: "connected",
+      settings: finalSettings,
+      updatedAt: new Date(),
+    })
+    .where(eq(connectors.id, connector.id))
+    .returning();
+  return toDto(updated!);
+}
+
 export async function createEvernoteConnectorForUser(
   userId: string,
   input: {
@@ -2335,6 +2468,7 @@ export async function createEvernoteConnectorForUser(
     input.accountName?.trim() ||
     input.accountId;
   const settings = sealConnectorSettings({
+    authTransport: "edam",
     evernoteAccountId: input.accountId,
     evernoteAccountName: input.accountName ?? null,
     evernoteAccountEmail: input.accountEmail ?? null,
@@ -2404,6 +2538,7 @@ export async function createEvernoteConnectorFromDeveloperTokenForUser(
     account.accountName?.trim() ||
     account.accountId;
   const sealedSettings = sealConnectorSettings({
+    authTransport: "edam",
     evernoteAccountId: account.accountId,
     evernoteAccountName: account.accountName,
     evernoteAccountEmail: account.accountEmail,
@@ -2499,8 +2634,30 @@ export async function testEvernoteConnectorForUser(
     typeof settings.accessToken === "string" ? settings.accessToken : "";
   const noteStoreUrl =
     typeof settings.noteStoreUrl === "string" ? settings.noteStoreUrl : "";
-  if (!accessToken || !noteStoreUrl) {
+  if (!accessToken) {
     throw new Error("Evernote connector is missing sealed credentials");
+  }
+  if (settings.authTransport === "mcp") {
+    const result = await testEvernoteMcpConnection(settings);
+    await getDb()
+      .update(connectors)
+      .set({
+        syncStatus: "connected",
+        settings: sealConnectorSettings({
+          ...settings,
+          ...result.settings,
+        }),
+        updatedAt: new Date(),
+      })
+      .where(eq(connectors.id, connector.id));
+    return {
+      ok: true,
+      notebookCount: result.notebookCount,
+      tagCount: result.tagCount,
+    };
+  }
+  if (!noteStoreUrl) {
+    throw new Error("Evernote EDAM connector is missing its NoteStore URL");
   }
   const result = await testEvernoteReadAccess(accessToken, noteStoreUrl);
   await getDb()

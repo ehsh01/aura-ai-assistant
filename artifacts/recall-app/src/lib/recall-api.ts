@@ -1844,6 +1844,8 @@ export async function listConnectors(): Promise<{
   microsoftOAuthConfigured?: boolean;
   homeyOAuthConfigured?: boolean;
   evernoteOAuthConfigured?: boolean;
+  evernoteMcpEnabled?: boolean;
+  evernoteEdamFallbackConfigured?: boolean;
   evernoteDeveloperTokenConfigured?: boolean;
 }> {
   return apiFetch("/connectors");
@@ -1867,6 +1869,11 @@ export function startHomeyOAuth(): void {
 /** Full-page navigation for Evernote OAuth 1.0a. */
 export function startEvernoteOAuth(): void {
   window.location.assign("/api/connectors/evernote/oauth/start");
+}
+
+/** Explicit legacy fallback; default Connect always uses MCP OAuth2+DCR. */
+export function startEvernoteEdamOAuth(): void {
+  window.location.assign("/api/connectors/evernote/edam/oauth/start");
 }
 
 export async function connectEvernoteDeveloperToken(): Promise<{

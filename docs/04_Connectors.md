@@ -312,12 +312,14 @@ Public API key from [FlipperForce Integrations](https://tools.flipperforce.com/i
 - Sync stores project summaries (`flipperforce_project`) only — not a second expense ledger.
 - Ask live-queries projects, activity log, and per-project expense/income totals. No writes.
 
-## 15. Evernote (OAuth 1.0a, read-only)
+## 15. Evernote (MCP OAuth2+DCR, read-only)
 
-- OAuth tokens are sealed in connector settings; Evernote API keys must be
-  provisioned with read-only/basic access.
-- Sync enumerates note metadata, fetches content only for changed update
-  sequences, and stores `evernote_note` records keyed by the Evernote GUID.
+- Default Connect uses Streamable HTTP at `https://mcp.evernote.com/mcp`.
+  OAuth2 Dynamic Client Registration requires no static consumer key/secret.
+- Access/refresh tokens and any DCR client secret are sealed in connector
+  settings; list DTOs never return settings.
+- Sync uses paced read-only `search_notes`, `get_note`, `search_notebooks`, and
+  `search_tags` calls and stores `evernote_note` records keyed by note GUID.
 - Record metadata uses `notebookGuid`, `notebookName`, `tagGuids`, `tagNames`,
   `contentHash`, `usn`, `evernoteUpdated`, and `hasAttachments`. Attachment
   bodies remain phase 2.
@@ -329,9 +331,9 @@ Public API key from [FlipperForce Integrations](https://tools.flipperforce.com/i
   and source evidence links.
 - Evernote remains external truth. Recall does not create, update, or delete
   Evernote notes.
-- OAuth 1.0a is preferred. A server-only `EVERNOTE_DEVELOPER_TOKEN` may be
-  verified and sealed for single-user v1 when OAuth credentials are unavailable.
+- OAuth1/EDAM and a server-only `EVERNOTE_DEVELOPER_TOKEN` remain explicitly
+  enabled fallback transports only.
 - Pausing the connector blocks sync and removes it from Ask; independent Ask,
   per-sync embedding, and UTC-daily embedding kill switches/caps are available.
-- Evernote MCP is not an Ask-time tool. It is only a parity reference or
-  potential non-LLM sync transport.
+- Evernote MCP is never an Ask-time tool. Ask uses local Postgres FTS/cached
+  embeddings and one answer LLM over top-k evidence.

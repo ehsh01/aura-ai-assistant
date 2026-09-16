@@ -22,9 +22,10 @@ import {
   beginEvernoteOAuth,
   exchangeEvernoteOAuth,
   isEvernoteDeveloperTokenConfigured,
-  isEvernoteOAuthConfigured,
+  isEvernoteEdamFallbackConfigured,
 } from "../connectors/evernote";
 import {
+  beginEvernoteMcpOAuthForUser,
   createEvernoteConnectorForUser,
   createEvernoteConnectorFromDeveloperTokenForUser,
   createConnectorForUser,
@@ -40,6 +41,7 @@ import {
   listConnectorSyncRunsForUser,
   rotateHomeyWebhookSecretForUser,
   syncConnectorForUser,
+  finishEvernoteMcpOAuthForUser,
   testEvernoteConnectorForUser,
   updateConnectorForUser,
   writeGoogleConnectAudit,
@@ -100,7 +102,8 @@ const PatchConnectorBody = z
 const OAUTH_STATE_COOKIE_GOOGLE = "recall_google_oauth_state";
 const OAUTH_STATE_COOKIE_MS = "recall_ms_oauth_state";
 const OAUTH_STATE_COOKIE_HOMEY = "recall_homey_oauth_state";
-const OAUTH_STATE_COOKIE_EVERNOTE = "recall_evernote_oauth_state";
+const OAUTH_STATE_COOKIE_EVERNOTE_MCP = "recall_evernote_mcp_oauth_state";
+const OAUTH_STATE_COOKIE_EVERNOTE_EDAM = "recall_evernote_edam_oauth_state";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 function stateSecret(): string {
@@ -378,10 +381,84 @@ router.get("/connectors/homey/oauth/callback", async (req, res) => {
 
 router.get("/connectors/evernote/oauth/start", requireAuth, async (req, res, next) => {
   try {
-    if (!isEvernoteOAuthConfigured()) {
+    const state = signOAuthState(req.user!.id);
+    const started = await beginEvernoteMcpOAuthForUser(req.user!.id, state);
+    res.cookie(
+      OAUTH_STATE_COOKIE_EVERNOTE_MCP,
+      sealSecret(
+        JSON.stringify({
+          state,
+          connectorId: started.connectorId,
+        }),
+      ),
+      {
+        httpOnly: true,
+        secure: config.sessionCookieSecure,
+        sameSite: "lax",
+        maxAge: OAUTH_STATE_TTL_MS,
+        path: "/",
+      },
+    );
+    res.redirect(started.authorizeUrl);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/connectors/evernote/oauth/callback", async (req, res) => {
+  const fail = (code: string) => {
+    res.clearCookie(OAUTH_STATE_COOKIE_EVERNOTE_MCP, { path: "/" });
+    res.redirect(frontendRedirect({ evernote: "error", reason: code }));
+  };
+  try {
+    const state = typeof req.query.state === "string" ? req.query.state : "";
+    const cookieValue =
+      typeof req.cookies?.[OAUTH_STATE_COOKIE_EVERNOTE_MCP] === "string"
+        ? req.cookies[OAUTH_STATE_COOKIE_EVERNOTE_MCP]
+        : "";
+    if (!state || !cookieValue) {
+      fail("missing_code");
+      return;
+    }
+    const pending = JSON.parse(openSecret(cookieValue)) as {
+      state?: string;
+      connectorId?: string;
+    };
+    const verified = verifyOAuthState(state);
+    if (
+      !verified ||
+      pending.state !== state ||
+      typeof pending.connectorId !== "string"
+    ) {
+      fail("state_mismatch");
+      return;
+    }
+    const callbackParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(req.query)) {
+      if (typeof value === "string") callbackParams.set(key, value);
+    }
+    const connector = await finishEvernoteMcpOAuthForUser(
+      verified.userId,
+      pending.connectorId,
+      state,
+      callbackParams,
+    );
+    await writeEvernoteConnectAudit(verified.userId, connector.id, "mcp");
+    res.clearCookie(OAUTH_STATE_COOKIE_EVERNOTE_MCP, { path: "/" });
+    res.redirect(
+      frontendRedirect({ evernote: "connected", connectorId: connector.id }),
+    );
+  } catch {
+    fail("oauth_failed");
+  }
+});
+
+router.get("/connectors/evernote/edam/oauth/start", requireAuth, async (req, res, next) => {
+  try {
+    if (!isEvernoteEdamFallbackConfigured()) {
       res.status(503).json({
-        error: "EVERNOTE_NOT_CONFIGURED",
-        message: "Evernote OAuth is not configured on this server",
+        error: "EVERNOTE_EDAM_NOT_CONFIGURED",
+        message: "Evernote EDAM fallback is not enabled on this server",
       });
       return;
     }
@@ -394,7 +471,7 @@ router.get("/connectors/evernote/oauth/start", requireAuth, async (req, res, nex
         oauthTokenSecret: request.oauthTokenSecret,
       }),
     );
-    res.cookie(OAUTH_STATE_COOKIE_EVERNOTE, temporary, {
+    res.cookie(OAUTH_STATE_COOKIE_EVERNOTE_EDAM, temporary, {
       httpOnly: true,
       secure: config.sessionCookieSecure,
       sameSite: "lax",
@@ -407,14 +484,14 @@ router.get("/connectors/evernote/oauth/start", requireAuth, async (req, res, nex
   }
 });
 
-router.get("/connectors/evernote/oauth/callback", async (req, res) => {
+router.get("/connectors/evernote/edam/oauth/callback", async (req, res) => {
   const fail = (code: string) => {
-    res.clearCookie(OAUTH_STATE_COOKIE_EVERNOTE, { path: "/" });
+    res.clearCookie(OAUTH_STATE_COOKIE_EVERNOTE_EDAM, { path: "/" });
     res.redirect(frontendRedirect({ evernote: "error", reason: code }));
   };
 
   try {
-    if (!isEvernoteOAuthConfigured()) {
+    if (!isEvernoteEdamFallbackConfigured()) {
       fail("not_configured");
       return;
     }
@@ -426,8 +503,8 @@ router.get("/connectors/evernote/oauth/callback", async (req, res) => {
         ? req.query.oauth_verifier
         : "";
     const cookieValue =
-      typeof req.cookies?.[OAUTH_STATE_COOKIE_EVERNOTE] === "string"
-        ? req.cookies[OAUTH_STATE_COOKIE_EVERNOTE]
+      typeof req.cookies?.[OAUTH_STATE_COOKIE_EVERNOTE_EDAM] === "string"
+        ? req.cookies[OAUTH_STATE_COOKIE_EVERNOTE_EDAM]
         : "";
     if (!state || !oauthToken || !oauthVerifier || !cookieValue) {
       fail("missing_verifier");
@@ -473,7 +550,7 @@ router.get("/connectors/evernote/oauth/callback", async (req, res) => {
       tokens.accountId,
     );
 
-    res.clearCookie(OAUTH_STATE_COOKIE_EVERNOTE, { path: "/" });
+    res.clearCookie(OAUTH_STATE_COOKIE_EVERNOTE_EDAM, { path: "/" });
     res.redirect(
       frontendRedirect({ evernote: "connected", connectorId: connector.id }),
     );
@@ -492,7 +569,10 @@ router.get("/connectors", async (req, res, next) => {
       googleOAuthConfigured: isGoogleOAuthConfigured(),
       microsoftOAuthConfigured: isMicrosoftOAuthConfigured(),
       homeyOAuthConfigured: isHomeyOAuthConfigured(),
-      evernoteOAuthConfigured: isEvernoteOAuthConfigured(),
+      // MCP OAuth2+DCR is the default and requires no static consumer secret.
+      evernoteOAuthConfigured: true,
+      evernoteMcpEnabled: true,
+      evernoteEdamFallbackConfigured: isEvernoteEdamFallbackConfigured(),
       evernoteDeveloperTokenConfigured: isEvernoteDeveloperTokenConfigured(),
     });
   } catch (err) {
