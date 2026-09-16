@@ -1111,15 +1111,18 @@ export async function retrieveRelevantRecords(
     });
     corpusNoteIds.add(note.id);
   }
-  const corpusSourceIds = new Set(
-    corpus
-      .filter((record) => record.entityType === "source_record")
-      .map((record) => record.entityId),
-  );
   for (const record of evernoteSearchHits) {
-    if (corpusSourceIds.has(record.entityId)) continue;
-    corpus.push(record);
-    corpusSourceIds.add(record.entityId);
+    const existingIndex = corpus.findIndex(
+      (candidate) =>
+        candidate.entityType === "source_record" &&
+        candidate.entityId === record.entityId,
+    );
+    if (existingIndex >= 0) {
+      // Replace the recent-prefix version with the FTS match-centered passage.
+      corpus[existingIndex] = record;
+    } else {
+      corpus.push(record);
+    }
   }
   if (corpus.length === 0) {
     return { records: [], usedSemantic: false, namedPeople: [], tasks };

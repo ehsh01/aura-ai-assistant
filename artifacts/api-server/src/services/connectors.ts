@@ -1508,6 +1508,17 @@ export async function upsertSourceRecord(
         updatedAt: now,
       })
       .where(eq(sourceRecords.id, existing[0].id));
+    // A changed row must never retain an ANN vector for old content. Capped
+    // warmup may regenerate it; otherwise Ask stays keyword/FTS-only.
+    await getDb()
+      .delete(entityEmbeddings)
+      .where(
+        and(
+          eq(entityEmbeddings.userId, userId),
+          eq(entityEmbeddings.entityType, "source_record"),
+          eq(entityEmbeddings.entityId, existing[0].id),
+        ),
+      );
     return { id: existing[0].id, action: "updated" };
   }
 
