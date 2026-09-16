@@ -41,4 +41,12 @@ describe("connector apiKey sealing", () => {
     expect(openSecret(String(sealed.apiKey))).toBe("ff-secret");
     expect(sealSecret("ff-secret").startsWith("v1.")).toBe(true);
   });
+
+  it("encrypts opaque OAuth values that happen to start with v1", () => {
+    process.env.SECRETS_ENCRYPTION_KEY = "c".repeat(64);
+    const opaque = "v1.oauth-provider-issued-token";
+    const sealed = sealConnectorSettings({ accessToken: opaque });
+    expect(sealed.accessToken).not.toBe(opaque);
+    expect(openSecret(String(sealed.accessToken))).toBe(opaque);
+  });
 });

@@ -98,12 +98,18 @@ function stripTokens(value: StoredOAuthTokens): {
   refreshToken: string | null;
   metadata: Omit<StoredOAuthTokens, "access_token" | "refresh_token">;
 } {
-  const {
-    access_token: accessToken,
-    refresh_token: refreshToken,
-    ...metadata
-  } = value;
-  return { accessToken, refreshToken: refreshToken ?? null, metadata };
+  const row = { ...value } as StoredOAuthTokens & { id_token?: string };
+  const accessToken = row.access_token;
+  const refreshToken = row.refresh_token;
+  delete row.access_token;
+  delete row.refresh_token;
+  // Recall does not use identity tokens; never retain one in unsealed metadata.
+  delete row.id_token;
+  return {
+    accessToken,
+    refreshToken: refreshToken ?? null,
+    metadata: row,
+  };
 }
 
 export function mcpOAuthStateFromSettings(
@@ -161,7 +167,14 @@ class RecallEvernoteMcpOAuthProvider implements OAuthClientProvider {
   constructor(
     private readonly stateValue: EvernoteMcpOAuthState,
     private readonly callbackUrl: string,
+    private readonly onStateChanged?: (
+      settings: EvernoteMcpConnectorSettings,
+    ) => Promise<void>,
   ) {}
+
+  private async persist(): Promise<void> {
+    await this.onStateChanged?.(mcpSettingsFromOAuthState(this.stateValue));
+  }
 
   get redirectUrl(): string {
     return this.callbackUrl;
@@ -174,7 +187,7 @@ class RecallEvernoteMcpOAuthProvider implements OAuthClientProvider {
       redirect_uris: [this.callbackUrl],
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
-      token_endpoint_auth_method: "client_secret_post",
+      token_endpoint_auth_method: "none",
     };
   }
 
@@ -188,16 +201,17 @@ class RecallEvernoteMcpOAuthProvider implements OAuthClientProvider {
     return this.stateValue.clientInformation;
   }
 
-  saveClientInformation(
+  async saveClientInformation(
     information: StoredOAuthClientInformation,
     _ctx?: OAuthClientInformationContext,
-  ): void {
+  ): Promise<void> {
     const split = stripClientSecret(information);
     this.stateValue.clientInformation = {
       ...split.information,
       ...(split.secret ? { client_secret: split.secret } : {}),
     } as StoredOAuthClientInformation;
     this.stateValue.clientSecret = split.secret;
+    await this.persist();
   }
 
   tokens(_ctx?: OAuthClientInformationContext): StoredOAuthTokens | undefined {
@@ -211,22 +225,24 @@ class RecallEvernoteMcpOAuthProvider implements OAuthClientProvider {
     } as StoredOAuthTokens;
   }
 
-  saveTokens(
+  async saveTokens(
     tokens: StoredOAuthTokens,
     _ctx?: OAuthClientInformationContext,
-  ): void {
+  ): Promise<void> {
     const split = stripTokens(tokens);
     this.stateValue.accessToken = split.accessToken;
     this.stateValue.refreshToken = split.refreshToken;
     this.stateValue.tokenMetadata = split.metadata;
+    await this.persist();
   }
 
   redirectToAuthorization(url: URL): void {
     this.authorizationUrl = url;
   }
 
-  saveCodeVerifier(codeVerifier: string): void {
+  async saveCodeVerifier(codeVerifier: string): Promise<void> {
     this.stateValue.codeVerifier = codeVerifier;
+    await this.persist();
   }
 
   codeVerifier(): string {
@@ -236,8 +252,9 @@ class RecallEvernoteMcpOAuthProvider implements OAuthClientProvider {
     return this.stateValue.codeVerifier;
   }
 
-  saveDiscoveryState(state: OAuthDiscoveryState): void {
+  async saveDiscoveryState(state: OAuthDiscoveryState): Promise<void> {
     this.stateValue.discoveryState = state;
+    await this.persist();
   }
 
   discoveryState(): OAuthDiscoveryState | undefined {
@@ -269,15 +286,17 @@ export async function beginEvernoteMcpOAuth(oauthState: string): Promise<{
   const provider = new RecallEvernoteMcpOAuthProvider(state, callbackUrl());
   const transport = new StreamableHTTPClientTransport(mcpServerUrl(), {
     authProvider: provider,
+    scope: "read",
   });
+  const client = new Client({ name: "Recall", version: "1.0.0" });
   try {
-    await transport.start();
+    await client.connect(transport);
   } catch (error) {
     if (!(error instanceof UnauthorizedError) || !provider.authorizationUrl) {
       throw error;
     }
   } finally {
-    await transport.close().catch(() => undefined);
+    await client.close().catch(() => undefined);
   }
   if (!provider.authorizationUrl) {
     throw new Error("Evernote MCP did not start OAuth authorization");
@@ -291,11 +310,19 @@ export async function beginEvernoteMcpOAuth(oauthState: string): Promise<{
 export async function finishEvernoteMcpOAuth(
   settings: Record<string, unknown>,
   callbackParams: URLSearchParams,
+  onStateChanged?: (
+    settings: EvernoteMcpConnectorSettings,
+  ) => Promise<void>,
 ): Promise<EvernoteMcpConnectorSettings> {
   const state = mcpOAuthStateFromSettings(settings);
-  const provider = new RecallEvernoteMcpOAuthProvider(state, callbackUrl());
+  const provider = new RecallEvernoteMcpOAuthProvider(
+    state,
+    callbackUrl(),
+    onStateChanged,
+  );
   const transport = new StreamableHTTPClientTransport(mcpServerUrl(), {
     authProvider: provider,
+    scope: "read",
   });
   try {
     await transport.finishAuth(callbackParams);
@@ -520,6 +547,7 @@ export async function fetchEvernoteViaMcp(
   const summaries: unknown[] = [];
   let startIndex = 0;
   let total = Number.POSITIVE_INFINITY;
+  let listingComplete = false;
   while (startIndex < total) {
     const result = await callReadTool(client, "search_notes", {
       query: "",
@@ -534,17 +562,33 @@ export async function fetchEvernoteViaMcp(
       asNumber(result.totalResultCount ?? result.total ?? result.totalNotes) ??
       startIndex + page.length;
     total = reportedTotal;
-    if (page.length === 0) break;
+    if (page.length === 0) {
+      if (startIndex < total) {
+        throw new Error(
+          `Evernote MCP note listing ended early at ${startIndex} of ${total}`,
+        );
+      }
+      listingComplete = true;
+      break;
+    }
     startIndex += page.length;
+    if (startIndex >= total) listingComplete = true;
     await pace();
   }
 
   const activeGuids = new Set(
     summaries.map(noteGuid).filter((guid): guid is string => Boolean(guid)),
   );
-  const deletedExternalIds = [...knownNotes.keys()].filter(
-    (guid) => !activeGuids.has(guid),
-  );
+  // Offset listings can shift while notes are concurrently edited. Reconcile
+  // deletions only when every reported row was consumed with no duplicate gap.
+  const authoritativeListing =
+    listingComplete &&
+    Number.isFinite(total) &&
+    summaries.length >= total &&
+    activeGuids.size >= total;
+  const deletedExternalIds = authoritativeListing
+    ? [...knownNotes.keys()].filter((guid) => !activeGuids.has(guid))
+    : [];
   const changed = summaries.filter((summary) => {
     const guid = noteGuid(summary);
     if (!guid) return false;
@@ -584,14 +628,22 @@ export async function fetchEvernoteViaMcp(
 export async function withEvernoteMcpClient<T>(
   settings: Record<string, unknown>,
   operation: (client: ToolCaller) => Promise<T>,
+  onStateChanged?: (
+    settings: EvernoteMcpConnectorSettings,
+  ) => Promise<void>,
 ): Promise<{
   value: T;
   settings: EvernoteMcpConnectorSettings;
 }> {
   const state = mcpOAuthStateFromSettings(settings);
-  const provider = new RecallEvernoteMcpOAuthProvider(state, callbackUrl());
+  const provider = new RecallEvernoteMcpOAuthProvider(
+    state,
+    callbackUrl(),
+    onStateChanged,
+  );
   const transport = new StreamableHTTPClientTransport(mcpServerUrl(), {
     authProvider: provider,
+    scope: "read",
   });
   const client = new Client({ name: "Recall", version: "1.0.0" });
   try {
@@ -605,6 +657,9 @@ export async function withEvernoteMcpClient<T>(
 
 export async function testEvernoteMcpConnection(
   settings: Record<string, unknown>,
+  onStateChanged?: (
+    settings: EvernoteMcpConnectorSettings,
+  ) => Promise<void>,
 ): Promise<{
   notebookCount: number;
   tagCount: number;
@@ -627,6 +682,6 @@ export async function testEvernoteMcpConnection(
         .length,
       tagCount: firstArray(tags, ["tags", "results", "items"]).length,
     };
-  });
+  }, onStateChanged);
   return { ...result.value, settings: result.settings };
 }

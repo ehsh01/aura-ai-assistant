@@ -1038,8 +1038,19 @@ async function fetchEvernoteRecordsForConnector(
   }
 
   if (authTransport === "mcp") {
-    const synced = await withEvernoteMcpClient(settings, (client) =>
-      fetchEvernoteViaMcp(client, knownNotes),
+    const persistMcpState = async (next: Record<string, unknown>) => {
+      await getDb()
+        .update(connectors)
+        .set({
+          settings: sealConnectorSettings({ ...settings, ...next }),
+          updatedAt: new Date(),
+        })
+        .where(eq(connectors.id, conn.id));
+    };
+    const synced = await withEvernoteMcpClient(
+      settings,
+      (client) => fetchEvernoteViaMcp(client, knownNotes),
+      persistMcpState,
     );
     await getDb()
       .update(connectors)
@@ -2428,8 +2439,24 @@ export async function finishEvernoteMcpOAuthForUser(
   ) {
     throw new Error("Evernote MCP OAuth state mismatch");
   }
-  const completed = await finishEvernoteMcpOAuth(settings, callbackParams);
-  const checked = await testEvernoteMcpConnection(completed);
+  const persistMcpState = async (next: Record<string, unknown>) => {
+    await getDb()
+      .update(connectors)
+      .set({
+        settings: sealConnectorSettings({ ...settings, ...next }),
+        updatedAt: new Date(),
+      })
+      .where(eq(connectors.id, connector.id));
+  };
+  const completed = await finishEvernoteMcpOAuth(
+    settings,
+    callbackParams,
+    persistMcpState,
+  );
+  const checked = await testEvernoteMcpConnection(
+    completed,
+    persistMcpState,
+  );
   const finalSettings = sealConnectorSettings({
     ...completed,
     ...checked.settings,
@@ -2638,7 +2665,19 @@ export async function testEvernoteConnectorForUser(
     throw new Error("Evernote connector is missing sealed credentials");
   }
   if (settings.authTransport === "mcp") {
-    const result = await testEvernoteMcpConnection(settings);
+    const persistMcpState = async (next: Record<string, unknown>) => {
+      await getDb()
+        .update(connectors)
+        .set({
+          settings: sealConnectorSettings({ ...settings, ...next }),
+          updatedAt: new Date(),
+        })
+        .where(eq(connectors.id, connector.id));
+    };
+    const result = await testEvernoteMcpConnection(
+      settings,
+      persistMcpState,
+    );
     await getDb()
       .update(connectors)
       .set({
