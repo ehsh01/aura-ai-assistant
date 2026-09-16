@@ -1,5 +1,12 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { connectors, sourceRecords, syncRuns, type Connector } from "@workspace/db/schema";
+import {
+  connectors,
+  entityEmbeddings,
+  evidence,
+  sourceRecords,
+  syncRuns,
+  type Connector,
+} from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newConnectorId, newSourceRecordId, newSyncRunId } from "../lib/recall-format";
 import { csvImportConnector, parseCsvText } from "../connectors/csv-import";
@@ -70,6 +77,7 @@ import {
   type EvernoteKnownNote,
 } from "../connectors/evernote";
 import { embedItemsCached } from "./embedding-cache";
+import { embeddingTextForContextRecord } from "./embedding-text";
 
 const CONNECTOR_IMPLS: Record<string, RecallConnector> = {
   manual: manualConnector,
@@ -929,6 +937,56 @@ async function fetchEvernoteRecordsForConnector(
   });
 }
 
+async function removeDeletedEvernoteRecords(
+  userId: string,
+  connectorId: string,
+  externalIds: string[],
+): Promise<number> {
+  if (externalIds.length === 0) return 0;
+  const rows = await getDb()
+    .select({ id: sourceRecords.id })
+    .from(sourceRecords)
+    .where(
+      and(
+        eq(sourceRecords.userId, userId),
+        eq(sourceRecords.connectorId, connectorId),
+        inArray(sourceRecords.externalId, externalIds),
+      ),
+    );
+  const ids = rows.map((row) => row.id);
+  if (ids.length === 0) return 0;
+
+  await getDb().transaction(async (tx) => {
+    await tx
+      .delete(evidence)
+      .where(
+        and(
+          eq(evidence.userId, userId),
+          inArray(evidence.sourceRecordId, ids),
+        ),
+      );
+    await tx
+      .delete(entityEmbeddings)
+      .where(
+        and(
+          eq(entityEmbeddings.userId, userId),
+          eq(entityEmbeddings.entityType, "source_record"),
+          inArray(entityEmbeddings.entityId, ids),
+        ),
+      );
+    await tx
+      .delete(sourceRecords)
+      .where(
+        and(
+          eq(sourceRecords.userId, userId),
+          eq(sourceRecords.connectorId, connectorId),
+          inArray(sourceRecords.id, ids),
+        ),
+      );
+  });
+  return ids.length;
+}
+
 export type LiveGmailHit = {
   mailbox: string;
   title: string;
@@ -1499,6 +1557,7 @@ async function warmRecentSourceEmbeddings(
       title: sourceRecords.recordTitle,
       text: sourceRecords.recordText,
       metadata: sourceRecords.recordMetadata,
+      metadata: sourceRecords.recordMetadata,
     })
     .from(sourceRecords)
     .where(and(...conds))
@@ -1543,6 +1602,7 @@ async function warmChangedEvernoteEmbeddings(
       id: sourceRecords.id,
       title: sourceRecords.recordTitle,
       text: sourceRecords.recordText,
+      metadata: sourceRecords.recordMetadata,
     })
     .from(sourceRecords)
     .where(
@@ -1556,7 +1616,15 @@ async function warmChangedEvernoteEmbeddings(
     rows.map((row) => ({
       entityType: "source_record",
       entityId: row.id,
-      text: `${row.title ?? "Evernote note"}\n${(row.text ?? "").slice(0, 2_000)}`,
+      text: embeddingTextForContextRecord({
+        entityType: "source_record",
+        title: row.title ?? "Evernote note",
+        text: row.text ?? "",
+        digest:
+          typeof row.metadata?.digest === "string"
+            ? row.metadata.digest
+            : null,
+      }),
     })),
   );
 }
@@ -1565,7 +1633,7 @@ export async function syncConnectorForUser(
   userId: string,
   connectorId: string,
   payload?: { csvText?: string; records?: unknown[] },
-): Promise<{ syncRunId: string; result: { recordsFetched: number; recordsCreated: number; recordsUpdated: number; recordsSkipped: number; recordsFailed: number } }> {
+): Promise<{ syncRunId: string; result: { recordsFetched: number; recordsCreated: number; recordsUpdated: number; recordsSkipped: number; recordsDeleted: number; recordsFailed: number } }> {
   const connRows = await getDb()
     .select()
     .from(connectors)
@@ -1597,6 +1665,7 @@ export async function syncConnectorForUser(
   let recordsCreated = 0;
   let recordsUpdated = 0;
   let recordsSkipped = 0;
+  let recordsDeleted = 0;
   let recordsFailed = 0;
   let errorMessage: string | null = null;
   const changedSourceRecordIds: string[] = [];
@@ -1629,6 +1698,11 @@ export async function syncConnectorForUser(
     if (conn.type === "evernote") {
       evernoteFetch = await fetchEvernoteRecordsForConnector(conn);
       rawRecords = evernoteFetch.records;
+      recordsDeleted = await removeDeletedEvernoteRecords(
+        userId,
+        connectorId,
+        evernoteFetch.deletedExternalIds,
+      );
     }
 
     const normalized = await impl.normalize(rawRecords);
@@ -1736,6 +1810,7 @@ export async function syncConnectorForUser(
         recordsUpdated,
         recordsSkipped,
         recordsFailed,
+        metadata: { recordsDeleted },
       })
       .where(eq(syncRuns.id, syncRunId));
   } catch (err) {
@@ -1759,6 +1834,7 @@ export async function syncConnectorForUser(
         recordsUpdated,
         recordsSkipped,
         recordsFailed,
+        metadata: { recordsDeleted },
       })
       .where(eq(syncRuns.id, syncRunId));
     throw err;
@@ -1775,6 +1851,7 @@ export async function syncConnectorForUser(
       recordsCreated,
       recordsUpdated,
       recordsSkipped,
+      recordsDeleted,
       recordsFailed,
     },
   });
@@ -1786,6 +1863,7 @@ export async function syncConnectorForUser(
       recordsCreated,
       recordsUpdated,
       recordsSkipped,
+      recordsDeleted,
       recordsFailed,
     },
   };

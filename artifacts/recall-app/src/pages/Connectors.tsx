@@ -291,7 +291,9 @@ export function Connectors() {
           res.result.recordsCreated ?? 0
         } created, ${res.result.recordsUpdated ?? 0} updated, ${
           res.result.recordsSkipped ?? 0
-        } skipped, ${res.result.recordsFailed ?? 0} failed`,
+        } skipped, ${res.result.recordsDeleted ?? 0} removed, ${
+          res.result.recordsFailed ?? 0
+        } failed`,
       });
       await load();
       if (connector.type === "finance_api") await loadSummary(connector.id);

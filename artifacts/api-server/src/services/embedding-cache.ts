@@ -254,6 +254,7 @@ export async function rankEntitiesByPgvector(opts: {
 export async function embedItemsCached(
   userId: string,
   items: EmbeddableItem[],
+  options?: { generateMissing?: boolean },
 ): Promise<Map<string, number[]> | null> {
   if (aiService.getStatus().degraded || items.length === 0) return null;
   if (typeof aiService.embedTexts !== "function") return null;
@@ -290,6 +291,10 @@ export async function embedItemsCached(
       }
     }
     pending = stillMissing;
+  }
+
+  if (options?.generateMissing === false) {
+    return vectors;
   }
 
   if (pending.length > 0) {

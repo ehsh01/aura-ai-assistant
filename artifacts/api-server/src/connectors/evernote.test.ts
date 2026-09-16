@@ -85,12 +85,14 @@ describe("evernote connector", () => {
       knownNotes: new Map([
         ["same-guid", { updateSequenceNum: 4, contentHash: "old" }],
         ["changed-guid", { updateSequenceNum: 11, contentHash: "old" }],
+        ["deleted-guid", { updateSequenceNum: 3, contentHash: "old" }],
       ]),
     });
 
     expect(result.recordsFetched).toBe(2);
     expect(result.recordsSkipped).toBe(1);
     expect(result.recordsFailed).toBe(0);
+    expect(result.deletedExternalIds).toEqual(["deleted-guid"]);
     expect(getNote).toHaveBeenCalledTimes(1);
     expect(getNote).toHaveBeenCalledWith(
       "changed-guid",
@@ -111,6 +113,20 @@ describe("evernote connector", () => {
       },
     });
     expect(result.records[0]?.recordText).toContain("Call inspector");
+  });
+
+  it("fails the sync when tag names cannot be loaded", async () => {
+    const noteStore: EvernoteNoteStore = {
+      listNotebooks: async () => [],
+      listTags: async () => {
+        throw new Error("rate limited");
+      },
+      findNotesMetadata: async () => ({ totalNotes: 0, notes: [] }),
+      getNote: async () => ({}),
+    };
+    await expect(
+      fetchEvernoteBundle("token", "https://note-store", { noteStore }),
+    ).rejects.toThrow("rate limited");
   });
 
   it("normalizes Evernote GUIDs as source-record dedupe keys", async () => {

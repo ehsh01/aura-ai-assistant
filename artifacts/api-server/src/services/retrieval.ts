@@ -715,8 +715,8 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
   return out;
 }
 
-function sourceRecordTsQuery(query: string): string | null {
-  const terms = [
+function sourceRecordSearchTerms(query: string): string[] {
+  return [
     ...new Set(
       query
         .toLowerCase()
@@ -725,9 +725,32 @@ function sourceRecordTsQuery(query: string): string | null {
         .filter((term) => term.length >= 2 && !KEYWORD_STOP_WORDS.has(term)),
     ),
   ].filter((term) => /^[a-z0-9]+$/i.test(term));
+}
+
+function sourceRecordTsQuery(terms: string[]): string | null {
   if (terms.length === 0) return null;
   const prefixes = terms.map((term) => `${term}:*`);
   return prefixes.length <= 3 ? prefixes.join(" & ") : prefixes.join(" | ");
+}
+
+/** Match-centered evidence so full-library FTS hits remain grounded. */
+export function evernoteMatchExcerpt(
+  text: string,
+  terms: string[],
+  maxChars = 1_200,
+): string {
+  if (text.length <= maxChars) return text;
+  const lower = text.toLowerCase();
+  const positions = terms
+    .map((term) => lower.indexOf(term.toLowerCase()))
+    .filter((position) => position >= 0);
+  const first = positions.length > 0 ? Math.min(...positions) : 0;
+  let start = Math.max(0, first - 300);
+  let end = Math.min(text.length, start + maxChars);
+  if (end === text.length) start = Math.max(0, end - maxChars);
+  return `${start > 0 ? "…" : ""}${text.slice(start, end)}${
+    end < text.length ? "…" : ""
+  }`;
 }
 
 /** Full-library Evernote FTS, independent of the recent-source corpus cap. */
@@ -736,7 +759,8 @@ export async function searchEvernoteSourceRecordsForUser(
   query: string,
   limit = 20,
 ): Promise<ContextRecord[]> {
-  const tsQuery = sourceRecordTsQuery(query);
+  const terms = sourceRecordSearchTerms(query);
+  const tsQuery = sourceRecordTsQuery(terms);
   if (!tsQuery) return [];
   const rows = await getDb()
     .select({
@@ -763,7 +787,14 @@ export async function searchEvernoteSourceRecordsForUser(
       desc(sourceRecords.sourceUpdatedAt),
     )
     .limit(Math.min(Math.max(limit, 1), 50));
-  return rows.map((row) => sourceRowToContext({ ...row, mailbox: null }));
+  return rows.map((row) => {
+    const context = sourceRowToContext({ ...row, mailbox: null });
+    const excerpt = evernoteMatchExcerpt(row.recordText ?? "", terms);
+    return {
+      ...context,
+      text: `${sourceTypeAliases(row.recordType)} source=${row.recordType} ${context.title}\nMatched passage: ${excerpt}`,
+    };
+  });
 }
 
 async function collectCorpus(
@@ -1282,14 +1313,32 @@ export async function retrieveRelevantRecords(
       }
 
       const metricsBefore = getEmbeddingCacheMetrics();
-      const vectors = await embedItemsCached(
-        userId,
-        candidates.map((r) => ({
-          entityType: r.entityType,
-          entityId: r.entityId,
-          text: embeddingTextForContextRecord(r),
-        })),
+      const toEmbeddable = (r: ContextRecord) => ({
+        entityType: r.entityType,
+        entityId: r.entityId,
+        text: embeddingTextForContextRecord(r),
+      });
+      const evernoteCandidates = candidates.filter(
+        (record) => record.recordType === "evernote_note",
       );
+      const otherCandidates = candidates.filter(
+        (record) => record.recordType !== "evernote_note",
+      );
+      const [normalVectors, cachedEvernoteVectors] = await Promise.all([
+        embedItemsCached(userId, otherCandidates.map(toEmbeddable)),
+        // Hard cost rule: Ask may use vectors produced by a changed-note sync,
+        // but must never batch-embed an Evernote library cache miss.
+        embedItemsCached(userId, evernoteCandidates.map(toEmbeddable), {
+          generateMissing: false,
+        }),
+      ]);
+      const vectors =
+        normalVectors || cachedEvernoteVectors
+          ? new Map([
+              ...(normalVectors?.entries() ?? []),
+              ...(cachedEvernoteVectors?.entries() ?? []),
+            ])
+          : null;
 
       if (vectors) {
         usedSemantic = true;

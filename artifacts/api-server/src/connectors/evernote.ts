@@ -118,6 +118,7 @@ export type EvernoteFetchResult = {
   recordsFetched: number;
   recordsSkipped: number;
   recordsFailed: number;
+  deletedExternalIds: string[];
 };
 
 function evernoteConfig() {
@@ -387,7 +388,9 @@ export async function fetchEvernoteBundle(
     newEvernoteClient(accessToken).getNoteStore(noteStoreUrl);
   const [notebooks, tags] = await Promise.all([
     store.listNotebooks(),
-    store.listTags().catch(() => []),
+    // Do not turn a transient tag failure into GUID-as-name metadata that the
+    // next unchanged-USN sync would preserve.
+    store.listTags(),
   ]);
   const notebooksByGuid = new Map(
     notebooks
@@ -522,12 +525,21 @@ export async function fetchEvernoteBundle(
     )
     .map((result) => result.value);
   const recordsFailed = fetched.length - records.length;
+  const activeGuids = new Set(
+    allMetadata
+      .filter((metadata) => metadata.guid && !metadata.deleted)
+      .map((metadata) => metadata.guid!),
+  );
+  const deletedExternalIds = options?.knownNotes
+    ? [...options.knownNotes.keys()].filter((guid) => !activeGuids.has(guid))
+    : [];
 
   return {
     records,
     recordsFetched: allMetadata.filter((metadata) => !metadata.deleted).length,
     recordsSkipped: unchangedBySequence,
     recordsFailed,
+    deletedExternalIds,
   };
 }
 

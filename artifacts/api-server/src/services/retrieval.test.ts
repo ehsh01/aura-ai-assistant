@@ -8,8 +8,19 @@ import {
   relationTermsInQuestion,
   textFuzzyHasName,
   extractMailboxHint,
+  evernoteMatchExcerpt,
 } from "./retrieval";
 import { FAMILY_RELATION_INTENT, PERSON_INTENT, WAITING_INTENT } from "./query-utils";
+
+describe("evernoteMatchExcerpt", () => {
+  it("centers long FTS evidence around the matching passage", () => {
+    const text = `${"old context ".repeat(500)}roof inspector approved the permit${" later".repeat(500)}`;
+    const excerpt = evernoteMatchExcerpt(text, ["inspector"], 600);
+    expect(excerpt).toContain("inspector approved");
+    expect(excerpt.length).toBeLessThanOrEqual(602);
+    expect(excerpt.startsWith("…")).toBe(true);
+  });
+});
 
 describe("mentionedPeople", () => {
   const people = [
