@@ -1,7 +1,7 @@
 import {
   Client,
   StreamableHTTPClientTransport,
-  UnauthorizedError,
+  auth,
   type OAuthClientInformationContext,
   type OAuthClientMetadata,
   type OAuthClientProvider,
@@ -98,9 +98,9 @@ function stripTokens(value: StoredOAuthTokens): {
   refreshToken: string | null;
   metadata: Omit<StoredOAuthTokens, "access_token" | "refresh_token">;
 } {
-  const row = { ...value } as StoredOAuthTokens & { id_token?: string };
-  const accessToken = row.access_token;
-  const refreshToken = row.refresh_token;
+  const row = { ...value } as Record<string, unknown>;
+  const accessToken = String(row.access_token ?? "");
+  const refreshToken = asString(row.refresh_token);
   delete row.access_token;
   delete row.refresh_token;
   // Recall does not use identity tokens; never retain one in unsealed metadata.
@@ -108,7 +108,10 @@ function stripTokens(value: StoredOAuthTokens): {
   return {
     accessToken,
     refreshToken: refreshToken ?? null,
-    metadata: row,
+    metadata: row as Omit<
+      StoredOAuthTokens,
+      "access_token" | "refresh_token"
+    >,
   };
 }
 
@@ -188,6 +191,7 @@ class RecallEvernoteMcpOAuthProvider implements OAuthClientProvider {
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
+      scope: "read",
     };
   }
 
@@ -284,19 +288,12 @@ export async function beginEvernoteMcpOAuth(oauthState: string): Promise<{
 }> {
   const state: EvernoteMcpOAuthState = { oauthState };
   const provider = new RecallEvernoteMcpOAuthProvider(state, callbackUrl());
-  const transport = new StreamableHTTPClientTransport(mcpServerUrl(), {
-    authProvider: provider,
+  const result = await auth(provider, {
+    serverUrl: mcpServerUrl(),
     scope: "read",
   });
-  const client = new Client({ name: "Recall", version: "1.0.0" });
-  try {
-    await client.connect(transport);
-  } catch (error) {
-    if (!(error instanceof UnauthorizedError) || !provider.authorizationUrl) {
-      throw error;
-    }
-  } finally {
-    await client.close().catch(() => undefined);
+  if (result !== "REDIRECT") {
+    throw new Error("Evernote MCP OAuth unexpectedly completed without consent");
   }
   if (!provider.authorizationUrl) {
     throw new Error("Evernote MCP did not start OAuth authorization");
@@ -320,15 +317,16 @@ export async function finishEvernoteMcpOAuth(
     callbackUrl(),
     onStateChanged,
   );
-  const transport = new StreamableHTTPClientTransport(mcpServerUrl(), {
-    authProvider: provider,
+  const authorizationCode = callbackParams.get("code");
+  if (!authorizationCode) {
+    throw new Error("Evernote MCP OAuth callback is missing code");
+  }
+  await auth(provider, {
+    serverUrl: mcpServerUrl(),
+    authorizationCode,
+    iss: callbackParams.get("iss") ?? undefined,
     scope: "read",
   });
-  try {
-    await transport.finishAuth(callbackParams);
-  } finally {
-    await transport.close().catch(() => undefined);
-  }
   return mcpSettingsFromOAuthState(state);
 }
 
@@ -643,7 +641,6 @@ export async function withEvernoteMcpClient<T>(
   );
   const transport = new StreamableHTTPClientTransport(mcpServerUrl(), {
     authProvider: provider,
-    scope: "read",
   });
   const client = new Client({ name: "Recall", version: "1.0.0" });
   try {
