@@ -92,7 +92,15 @@ export const evernoteMcpFetch: FetchLike = async (input, init) => {
   for (let attempt = 0; ; attempt++) {
     const request = input instanceof Request ? input.clone() : input;
     const response = await fetch(request, init);
-    if (response.status !== 429 || attempt >= retries) return response;
+    if (response.status !== 429) return response;
+    if (attempt >= retries) {
+      const error = new Error(
+        `Evernote MCP HTTP 429 after ${attempt + 1} request(s)`,
+      ) as Error & { status: number; mcpRetriesExhausted: boolean };
+      error.status = 429;
+      error.mcpRetriesExhausted = true;
+      throw error;
+    }
     const delay = Math.min(
       retryAfterHeaderMs(response.headers.get("retry-after")) ?? 1_000,
       60_000,
@@ -442,7 +450,13 @@ async function callReadTool(
       const message = error instanceof Error ? error.message : "";
       const rateLimited =
         status === 429 || /\b429\b|rate.?limit/i.test(message);
-      if (!rateLimited || attempt >= maxRetries) throw error;
+      if (
+        !rateLimited ||
+        row.mcpRetriesExhausted === true ||
+        attempt >= maxRetries
+      ) {
+        throw error;
+      }
       const headersValue = row.headers ?? data.headers;
       const headerRetryAfter =
         headersValue instanceof Headers

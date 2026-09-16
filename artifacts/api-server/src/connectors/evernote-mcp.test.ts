@@ -75,6 +75,30 @@ describe("Evernote MCP HTTP pacing", () => {
     expect(response.status).toBe(200);
     expect(calls).toBe(2);
   });
+
+  it("marks exhausted HTTP retries so tool retries cannot multiply them", async () => {
+    process.env.EVERNOTE_MCP_MAX_429_RETRIES = "2";
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        return new Response("limited", {
+          status: 429,
+          headers: { "Retry-After": "0" },
+        });
+      }),
+    );
+    await expect(
+      evernoteMcpFetch("https://mcp.evernote.com/mcp"),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        status: 429,
+        mcpRetriesExhausted: true,
+      }),
+    );
+    expect(calls).toBe(3);
+  });
 });
 
 describe("Evernote MCP read sync", () => {
