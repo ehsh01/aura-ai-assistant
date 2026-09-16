@@ -1557,7 +1557,6 @@ async function warmRecentSourceEmbeddings(
       title: sourceRecords.recordTitle,
       text: sourceRecords.recordText,
       metadata: sourceRecords.recordMetadata,
-      metadata: sourceRecords.recordMetadata,
     })
     .from(sourceRecords)
     .where(and(...conds))
