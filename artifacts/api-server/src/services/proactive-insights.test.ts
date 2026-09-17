@@ -10,11 +10,13 @@ import type { RecallTaskDto } from "./tasks";
 
 describe("proactive insights helpers", () => {
   it("finds recurring payees in the lookback window", () => {
+    const dateDaysAgo = (days: number) =>
+      new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
     const txs = [
-      { payee: "Netflix", date: "2026-07-01", amount: -15.99 },
-      { payee: "Netflix", date: "2026-06-01", amount: -15.99 },
-      { payee: "Netflix", date: "2026-05-01", amount: -15.99 },
-      { payee: "Coffee Spot", date: "2026-07-10", amount: -4.5 },
+      { payee: "Netflix", date: dateDaysAgo(30), amount: -15.99 },
+      { payee: "Netflix", date: dateDaysAgo(60), amount: -15.99 },
+      { payee: "Netflix", date: dateDaysAgo(90), amount: -15.99 },
+      { payee: "Coffee Spot", date: dateDaysAgo(10), amount: -4.5 },
     ];
     expect(findRecurringPayees(txs, { minCount: 3, lookbackDays: 120 })).toEqual([
       expect.objectContaining({ payee: "Netflix", count: 3 }),

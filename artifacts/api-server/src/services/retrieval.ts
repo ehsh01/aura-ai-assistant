@@ -23,7 +23,11 @@ import { listCapturesForUser } from "./captures";
 import { listAttentionForToday } from "./attention";
 import { listMemoriesForUser } from "./life-memory";
 import { noteRetrievalText } from "./note-retrieval";
-import { keywordScore } from "./keyword-match";
+import {
+  KEYWORD_STOP_WORDS,
+  keywordScore,
+  normalizeKeywordToken,
+} from "./keyword-match";
 import {
   cosineSimilarity,
   embedItemsCached,
@@ -58,6 +62,10 @@ export type RetrievedRecord = {
   recordType?: string;
   /** ISO source timestamp (email sent / file modified / etc.). */
   updatedAt?: string;
+  /** External source link for evidence chips. */
+  sourceUrl?: string | null;
+  sourceMetadata?: Record<string, unknown> | null;
+  sourceExternalId?: string | null;
   digest?: string | null;
   pinned?: boolean;
   expandPreferred?: boolean;
@@ -77,6 +85,9 @@ type ContextRecord = {
   mailbox?: string | null;
   /** ISO timestamp for recency boosts. */
   updatedAt?: string;
+  sourceUrl?: string | null;
+  sourceMetadata?: Record<string, unknown> | null;
+  sourceExternalId?: string | null;
   /** Force full-text expansion into the answer prompt. */
   expandPreferred?: boolean;
 };
@@ -139,9 +150,17 @@ function sourceTypeAliases(recordType: string): string {
       return "homey smart home alert notification emergency door leak smoke";
     case "flipperforce_project":
       return "flipperforce rehab property flip wholesale project address";
+    case "evernote_note":
+      return "evernote note notebook tag personal knowledge";
     default:
       return "source record";
   }
+}
+
+export function isEvernoteAskEnabled(): boolean {
+  return (
+    process.env.RECALL_EVERNOTE_ASK_ENABLED?.trim().toLowerCase() !== "false"
+  );
 }
 
 const QUESTION_STOP =
@@ -504,6 +523,7 @@ const CORPUS = {
   contactsTotal: 40,
   driveTotal: 40,
   calendarTotal: 40,
+  evernoteRecent: 150,
   keywordShortlist: 80,
   semanticCandidates: 280,
 } as const;
@@ -528,11 +548,14 @@ export function extractMailboxHint(question: string, mailboxes: string[]): strin
 
 type SourceRow = {
   id: string;
+  externalId?: string | null;
   recordType: string;
   recordTitle: string | null;
   recordText: string | null;
   updatedAt: Date | null;
   sourceCreatedAt: Date | null;
+  sourceUpdatedAt?: Date | null;
+  sourceUrl?: string | null;
   mailbox: string | null;
   metadata?: Record<string, unknown> | null;
 };
@@ -545,11 +568,10 @@ function sourceRowToContext(s: SourceRow): ContextRecord {
     ? ` sender_name=${from.name} sender_email=${from.email}`
     : "";
   const mailboxBit = s.mailbox ? ` mailbox=${s.mailbox}` : "";
-  const sourceIso = s.sourceCreatedAt
-    ? new Date(s.sourceCreatedAt).toISOString()
-    : s.updatedAt
-      ? new Date(s.updatedAt).toISOString()
-      : undefined;
+  const sourceDate = s.sourceUpdatedAt ?? s.sourceCreatedAt ?? s.updatedAt;
+  const sourceIso = sourceDate
+    ? new Date(sourceDate).toISOString()
+    : undefined;
   const dateLabel = formatInstantForUser(sourceIso);
   const titleWithDate =
     dateLabel && s.recordType === "gmail_message" ? `${title} · ${dateLabel}` : title;
@@ -566,6 +588,9 @@ function sourceRowToContext(s: SourceRow): ContextRecord {
     recordType: s.recordType,
     mailbox: s.mailbox,
     updatedAt: sourceIso,
+    sourceUrl: s.sourceUrl ?? null,
+    sourceMetadata: s.metadata ?? null,
+    sourceExternalId: s.externalId ?? null,
   };
 }
 
@@ -671,7 +696,137 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
     );
   }
 
+  // Evernote remains external truth, but recent notes participate in the normal
+  // Ask corpus. Full-library keyword matches are injected separately via FTS.
+  const evernoteRows = !isEvernoteAskEnabled()
+    ? []
+    : await getDb()
+    .select({
+      id: sourceRecords.id,
+      externalId: sourceRecords.externalId,
+      recordType: sourceRecords.recordType,
+      recordTitle: sourceRecords.recordTitle,
+      recordText: sourceRecords.recordText,
+      updatedAt: sourceRecords.updatedAt,
+      sourceCreatedAt: sourceRecords.sourceCreatedAt,
+      sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
+      sourceUrl: sourceRecords.sourceUrl,
+      metadata: sourceRecords.recordMetadata,
+    })
+    .from(sourceRecords)
+    .innerJoin(
+      connectors,
+      and(
+        eq(connectors.id, sourceRecords.connectorId),
+        eq(connectors.enabled, true),
+      ),
+    )
+    .where(
+      and(
+        eq(sourceRecords.userId, userId),
+        eq(sourceRecords.recordType, "evernote_note"),
+      ),
+    )
+    .orderBy(
+      desc(
+        sql`coalesce(${sourceRecords.sourceUpdatedAt}, ${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`,
+      ),
+    )
+    .limit(CORPUS.evernoteRecent);
+  pushRows(evernoteRows.map((row) => ({ ...row, mailbox: null })));
+
   return out;
+}
+
+function sourceRecordSearchTerms(query: string): string[] {
+  return [
+    ...new Set(
+      query
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .map(normalizeKeywordToken)
+        .filter((term) => term.length >= 2 && !KEYWORD_STOP_WORDS.has(term)),
+    ),
+  ].filter((term) => /^[a-z0-9]+$/i.test(term));
+}
+
+function sourceRecordTsQuery(terms: string[]): string | null {
+  if (terms.length === 0) return null;
+  const prefixes = terms.map((term) => `${term}:*`);
+  return prefixes.length <= 3 ? prefixes.join(" & ") : prefixes.join(" | ");
+}
+
+/** Match-centered evidence so full-library FTS hits remain grounded. */
+export function evernoteMatchExcerpt(
+  text: string,
+  terms: string[],
+  maxChars = 1_200,
+): string {
+  if (text.length <= maxChars) return text;
+  const lower = text.toLowerCase();
+  const positions = terms
+    .map((term) => lower.indexOf(term.toLowerCase()))
+    .filter((position) => position >= 0);
+  const first = positions.length > 0 ? Math.min(...positions) : 0;
+  let start = Math.max(0, first - 300);
+  let end = Math.min(text.length, start + maxChars);
+  if (end === text.length) start = Math.max(0, end - maxChars);
+  return `${start > 0 ? "…" : ""}${text.slice(start, end)}${
+    end < text.length ? "…" : ""
+  }`;
+}
+
+/** Full-library Evernote FTS, independent of the recent-source corpus cap. */
+export async function searchEvernoteSourceRecordsForUser(
+  userId: string,
+  query: string,
+  limit = 20,
+): Promise<ContextRecord[]> {
+  if (!isEvernoteAskEnabled()) return [];
+  const terms = sourceRecordSearchTerms(query);
+  const tsQuery = sourceRecordTsQuery(terms);
+  if (!tsQuery) return [];
+  const rows = await getDb()
+    .select({
+      id: sourceRecords.id,
+      externalId: sourceRecords.externalId,
+      recordType: sourceRecords.recordType,
+      recordTitle: sourceRecords.recordTitle,
+      recordText: sourceRecords.recordText,
+      updatedAt: sourceRecords.updatedAt,
+      sourceCreatedAt: sourceRecords.sourceCreatedAt,
+      sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
+      sourceUrl: sourceRecords.sourceUrl,
+      metadata: sourceRecords.recordMetadata,
+    })
+    .from(sourceRecords)
+    .innerJoin(
+      connectors,
+      and(
+        eq(connectors.id, sourceRecords.connectorId),
+        eq(connectors.enabled, true),
+      ),
+    )
+    .where(
+      and(
+        eq(sourceRecords.userId, userId),
+        eq(sourceRecords.recordType, "evernote_note"),
+        sql`${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQuery})`,
+      ),
+    )
+    .orderBy(
+      sql`ts_rank_cd(coalesce(${sourceRecords.searchTsv}, ''::tsvector), to_tsquery('simple', ${tsQuery})) DESC`,
+      desc(sourceRecords.sourceUpdatedAt),
+    )
+    .limit(Math.min(Math.max(limit, 1), 50));
+  return rows.map((row) => {
+    const context = sourceRowToContext({ ...row, mailbox: null });
+    const excerpt = evernoteMatchExcerpt(row.recordText ?? "", terms);
+    return {
+      ...context,
+      text: `${sourceTypeAliases(row.recordType)} source=${row.recordType} ${context.title}\nMatched passage: ${excerpt}`,
+    };
+  });
 }
 
 async function collectCorpus(
@@ -962,9 +1117,15 @@ export async function retrieveRelevantRecords(
   const noteQuery = (options?.noteSearchQuery ?? question).trim() || question;
   // Embed the query in parallel with the corpus load — it doesn't depend on the
   // corpus, so this removes a sequential OpenAI round-trip from the critical path.
-  const [{ records: baseCorpus, people, tasks }, noteSearchHits, queryVec] = await Promise.all([
+  const [
+    { records: baseCorpus, people, tasks },
+    noteSearchHits,
+    evernoteSearchHits,
+    queryVec,
+  ] = await Promise.all([
     collectCorpus(userId),
     searchNotesForUser(userId, noteQuery, 20).catch(() => []),
+    searchEvernoteSourceRecordsForUser(userId, noteQuery, 20).catch(() => []),
     embedQuery(question).catch(() => null),
   ]);
   const corpus = [...baseCorpus];
@@ -981,6 +1142,19 @@ export async function retrieveRelevantRecords(
       text: noteRetrievalText(note),
     });
     corpusNoteIds.add(note.id);
+  }
+  for (const record of evernoteSearchHits) {
+    const existingIndex = corpus.findIndex(
+      (candidate) =>
+        candidate.entityType === "source_record" &&
+        candidate.entityId === record.entityId,
+    );
+    if (existingIndex >= 0) {
+      // Replace the recent-prefix version with the FTS match-centered passage.
+      corpus[existingIndex] = record;
+    } else {
+      corpus.push(record);
+    }
   }
   if (corpus.length === 0) {
     return { records: [], usedSemantic: false, namedPeople: [], tasks };
@@ -1174,14 +1348,32 @@ export async function retrieveRelevantRecords(
       }
 
       const metricsBefore = getEmbeddingCacheMetrics();
-      const vectors = await embedItemsCached(
-        userId,
-        candidates.map((r) => ({
-          entityType: r.entityType,
-          entityId: r.entityId,
-          text: embeddingTextForContextRecord(r),
-        })),
+      const toEmbeddable = (r: ContextRecord) => ({
+        entityType: r.entityType,
+        entityId: r.entityId,
+        text: embeddingTextForContextRecord(r),
+      });
+      const evernoteCandidates = candidates.filter(
+        (record) => record.recordType === "evernote_note",
       );
+      const otherCandidates = candidates.filter(
+        (record) => record.recordType !== "evernote_note",
+      );
+      const [normalVectors, cachedEvernoteVectors] = await Promise.all([
+        embedItemsCached(userId, otherCandidates.map(toEmbeddable)),
+        // Hard cost rule: Ask may use vectors produced by a changed-note sync,
+        // but must never batch-embed an Evernote library cache miss.
+        embedItemsCached(userId, evernoteCandidates.map(toEmbeddable), {
+          generateMissing: false,
+        }),
+      ]);
+      const vectors =
+        normalVectors || cachedEvernoteVectors
+          ? new Map([
+              ...(normalVectors?.entries() ?? []),
+              ...(cachedEvernoteVectors?.entries() ?? []),
+            ])
+          : null;
 
       if (vectors) {
         usedSemantic = true;
@@ -1247,6 +1439,9 @@ export async function retrieveRelevantRecords(
       matchedPersonName: match?.displayName ?? null,
       recordType: r.recordType,
       updatedAt: r.updatedAt,
+      sourceUrl: r.sourceUrl ?? null,
+      sourceMetadata: r.sourceMetadata ?? null,
+      sourceExternalId: r.sourceExternalId ?? null,
       digest: r.digest ?? null,
       pinned: r.pinned,
       expandPreferred: r.expandPreferred,
@@ -1275,6 +1470,25 @@ export async function retrieveRelevantRecords(
       const r = noteById.get(note.id);
       if (!r) continue;
       injected.push(toRetrieved(r, 1.05, "keyword"));
+      already.add(key);
+    }
+    if (injected.length > 0) {
+      top = [...injected, ...top].slice(
+        0,
+        Math.max(limit, Math.min(16, injected.length + 6)),
+      );
+    }
+  }
+
+  // Keep exact Evernote FTS hits visible even when semantic/person boosts crowd
+  // an older synced note out of the top set.
+  if (evernoteSearchHits.length > 0) {
+    const already = new Set(top.map((record) => `${record.entityType}:${record.entityId}`));
+    const injected: RetrievedRecord[] = [];
+    for (const record of evernoteSearchHits.slice(0, Math.min(8, limit))) {
+      const key = `${record.entityType}:${record.entityId}`;
+      if (already.has(key)) continue;
+      injected.push(toRetrieved(record, 1.05, "keyword"));
       already.add(key);
     }
     if (injected.length > 0) {

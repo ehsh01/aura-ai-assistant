@@ -19,6 +19,16 @@ import {
   isMicrosoftOAuthConfigured,
 } from "../connectors/microsoft";
 import {
+  beginEvernoteOAuth,
+  exchangeEvernoteOAuth,
+  isEvernoteDeveloperTokenConfigured,
+  isEvernoteEdamFallbackConfigured,
+} from "../connectors/evernote";
+import { evernoteMcpFailureReason } from "../connectors/evernote-errors";
+import {
+  beginEvernoteMcpOAuthForUser,
+  createEvernoteConnectorForUser,
+  createEvernoteConnectorFromDeveloperTokenForUser,
   createConnectorForUser,
   deleteConnectorForUser,
   upsertFlipperForceConnectorForUser,
@@ -29,12 +39,18 @@ import {
   getConnectorForUser,
   getHomeyWebhookInfoForUser,
   listConnectorsForUser,
+  listConnectorSyncRunsForUser,
   rotateHomeyWebhookSecretForUser,
   syncConnectorForUser,
+  finishEvernoteMcpOAuthForUser,
+  testEvernoteConnectorForUser,
+  updateConnectorForUser,
   writeGoogleConnectAudit,
+  writeEvernoteConnectAudit,
   writeHomeyConnectAudit,
   writeMicrosoftConnectAudit,
 } from "../services/connectors";
+import { openSecret, sealSecret } from "../lib/secret-box";
 import {
   acknowledgeHomeyAlertForUser,
   listOpenHomeyAlertsForUser,
@@ -62,6 +78,7 @@ const CreateConnectorBody = z.object({
     "microsoft",
     "homey",
     "flipperforce",
+    "evernote",
   ]),
   description: z.string().max(2000).nullish(),
   baseUrl: z.string().url().nullish(),
@@ -74,9 +91,20 @@ const SyncConnectorBody = z.object({
   records: z.array(z.record(z.unknown())).optional(),
 });
 
+const PatchConnectorBody = z
+  .object({
+    enabled: z.boolean().optional(),
+    name: z.string().min(1).max(255).optional(),
+  })
+  .refine((body) => body.enabled !== undefined || body.name !== undefined, {
+    message: "At least one connector field is required",
+  });
+
 const OAUTH_STATE_COOKIE_GOOGLE = "recall_google_oauth_state";
 const OAUTH_STATE_COOKIE_MS = "recall_ms_oauth_state";
 const OAUTH_STATE_COOKIE_HOMEY = "recall_homey_oauth_state";
+const OAUTH_STATE_COOKIE_EVERNOTE_MCP = "recall_evernote_mcp_oauth_state";
+const OAUTH_STATE_COOKIE_EVERNOTE_EDAM = "recall_evernote_edam_oauth_state";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 function stateSecret(): string {
@@ -352,6 +380,191 @@ router.get("/connectors/homey/oauth/callback", async (req, res) => {
   }
 });
 
+router.get("/connectors/evernote/oauth/start", requireAuth, async (req, res) => {
+  try {
+    const state = signOAuthState(req.user!.id);
+    const started = await beginEvernoteMcpOAuthForUser(req.user!.id, state);
+    res.cookie(
+      OAUTH_STATE_COOKIE_EVERNOTE_MCP,
+      sealSecret(
+        JSON.stringify({
+          state,
+          connectorId: started.connectorId,
+        }),
+      ),
+      {
+        httpOnly: true,
+        secure: config.sessionCookieSecure,
+        sameSite: "lax",
+        maxAge: OAUTH_STATE_TTL_MS,
+        path: "/",
+      },
+    );
+    res.redirect(started.authorizeUrl);
+  } catch (err) {
+    res.redirect(
+      frontendRedirect({
+        evernote: "error",
+        reason: evernoteMcpFailureReason(err),
+      }),
+    );
+  }
+});
+
+router.get("/connectors/evernote/oauth/callback", async (req, res) => {
+  const fail = (code: string) => {
+    res.clearCookie(OAUTH_STATE_COOKIE_EVERNOTE_MCP, { path: "/" });
+    res.redirect(frontendRedirect({ evernote: "error", reason: code }));
+  };
+  try {
+    const state = typeof req.query.state === "string" ? req.query.state : "";
+    const cookieValue =
+      typeof req.cookies?.[OAUTH_STATE_COOKIE_EVERNOTE_MCP] === "string"
+        ? req.cookies[OAUTH_STATE_COOKIE_EVERNOTE_MCP]
+        : "";
+    if (!state || !cookieValue) {
+      fail("missing_code");
+      return;
+    }
+    const pending = JSON.parse(openSecret(cookieValue)) as {
+      state?: string;
+      connectorId?: string;
+    };
+    const verified = verifyOAuthState(state);
+    if (
+      !verified ||
+      pending.state !== state ||
+      typeof pending.connectorId !== "string"
+    ) {
+      fail("state_mismatch");
+      return;
+    }
+    const callbackParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(req.query)) {
+      if (typeof value === "string") callbackParams.set(key, value);
+    }
+    const connector = await finishEvernoteMcpOAuthForUser(
+      verified.userId,
+      pending.connectorId,
+      state,
+      callbackParams,
+    );
+    await writeEvernoteConnectAudit(verified.userId, connector.id, "mcp");
+    res.clearCookie(OAUTH_STATE_COOKIE_EVERNOTE_MCP, { path: "/" });
+    res.redirect(
+      frontendRedirect({ evernote: "connected", connectorId: connector.id }),
+    );
+  } catch (error) {
+    fail(evernoteMcpFailureReason(error));
+  }
+});
+
+router.get("/connectors/evernote/edam/oauth/start", requireAuth, async (req, res, next) => {
+  try {
+    if (!isEvernoteEdamFallbackConfigured()) {
+      res.status(503).json({
+        error: "EVERNOTE_EDAM_NOT_CONFIGURED",
+        message: "Evernote EDAM fallback is not enabled on this server",
+      });
+      return;
+    }
+    const state = signOAuthState(req.user!.id);
+    const request = await beginEvernoteOAuth(state);
+    const temporary = sealSecret(
+      JSON.stringify({
+        state,
+        oauthToken: request.oauthToken,
+        oauthTokenSecret: request.oauthTokenSecret,
+      }),
+    );
+    res.cookie(OAUTH_STATE_COOKIE_EVERNOTE_EDAM, temporary, {
+      httpOnly: true,
+      secure: config.sessionCookieSecure,
+      sameSite: "lax",
+      maxAge: OAUTH_STATE_TTL_MS,
+      path: "/",
+    });
+    res.redirect(request.authorizeUrl);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/connectors/evernote/edam/oauth/callback", async (req, res) => {
+  const fail = (code: string) => {
+    res.clearCookie(OAUTH_STATE_COOKIE_EVERNOTE_EDAM, { path: "/" });
+    res.redirect(frontendRedirect({ evernote: "error", reason: code }));
+  };
+
+  try {
+    if (!isEvernoteEdamFallbackConfigured()) {
+      fail("not_configured");
+      return;
+    }
+    const state = typeof req.query.state === "string" ? req.query.state : "";
+    const oauthToken =
+      typeof req.query.oauth_token === "string" ? req.query.oauth_token : "";
+    const oauthVerifier =
+      typeof req.query.oauth_verifier === "string"
+        ? req.query.oauth_verifier
+        : "";
+    const cookieValue =
+      typeof req.cookies?.[OAUTH_STATE_COOKIE_EVERNOTE_EDAM] === "string"
+        ? req.cookies[OAUTH_STATE_COOKIE_EVERNOTE_EDAM]
+        : "";
+    if (!state || !oauthToken || !oauthVerifier || !cookieValue) {
+      fail("missing_verifier");
+      return;
+    }
+
+    const temporary = JSON.parse(openSecret(cookieValue)) as {
+      state?: string;
+      oauthToken?: string;
+      oauthTokenSecret?: string;
+    };
+    if (
+      temporary.state !== state ||
+      temporary.oauthToken !== oauthToken ||
+      !temporary.oauthTokenSecret
+    ) {
+      fail("state_mismatch");
+      return;
+    }
+    const verified = verifyOAuthState(state);
+    if (!verified) {
+      fail("state_invalid");
+      return;
+    }
+
+    const tokens = await exchangeEvernoteOAuth({
+      oauthToken,
+      oauthTokenSecret: temporary.oauthTokenSecret,
+      oauthVerifier,
+    });
+    const connector = await createEvernoteConnectorForUser(verified.userId, {
+      accountId: tokens.accountId,
+      accountName: tokens.accountName,
+      accountEmail: tokens.accountEmail,
+      accessToken: tokens.accessToken,
+      noteStoreUrl: tokens.noteStoreUrl,
+      webApiUrlPrefix: tokens.webApiUrlPrefix,
+      expiresAt: tokens.expiresAt,
+    });
+    await writeEvernoteConnectAudit(
+      verified.userId,
+      connector.id,
+      tokens.accountId,
+    );
+
+    res.clearCookie(OAUTH_STATE_COOKIE_EVERNOTE_EDAM, { path: "/" });
+    res.redirect(
+      frontendRedirect({ evernote: "connected", connectorId: connector.id }),
+    );
+  } catch {
+    fail("oauth_failed");
+  }
+});
+
 router.use(requireAuth);
 
 router.get("/connectors", async (req, res, next) => {
@@ -362,6 +575,11 @@ router.get("/connectors", async (req, res, next) => {
       googleOAuthConfigured: isGoogleOAuthConfigured(),
       microsoftOAuthConfigured: isMicrosoftOAuthConfigured(),
       homeyOAuthConfigured: isHomeyOAuthConfigured(),
+      // MCP OAuth2+DCR is the default and requires no static consumer secret.
+      evernoteOAuthConfigured: true,
+      evernoteMcpEnabled: true,
+      evernoteEdamFallbackConfigured: isEvernoteEdamFallbackConfigured(),
+      evernoteDeveloperTokenConfigured: isEvernoteDeveloperTokenConfigured(),
     });
   } catch (err) {
     next(err);
@@ -390,6 +608,26 @@ router.post("/connectors", async (req, res, next) => {
         error: "VALIDATION_ERROR",
         message: "Connect Homey via OAuth (Connect Homey button)",
       });
+      return;
+    }
+    if (body.type === "evernote") {
+      if (!isEvernoteDeveloperTokenConfigured()) {
+        res.status(400).json({
+          error: "VALIDATION_ERROR",
+          message:
+            "Connect Evernote via OAuth, or configure EVERNOTE_DEVELOPER_TOKEN for single-user v1",
+        });
+        return;
+      }
+      const connected =
+        await createEvernoteConnectorFromDeveloperTokenForUser(req.user!.id);
+      await writeEvernoteConnectAudit(
+        req.user!.id,
+        connected.id,
+        connected.evernoteAccountId,
+      );
+      const { evernoteAccountId: _accountId, ...connector } = connected;
+      res.status(201).json(connector);
       return;
     }
     if (body.type === "ticket_email") {
@@ -456,23 +694,83 @@ router.get("/connectors/:connectorId", async (req, res, next) => {
   }
 });
 
+router.patch("/connectors/:connectorId", async (req, res, next) => {
+  try {
+    const body = PatchConnectorBody.parse(req.body ?? {});
+    const connector = await updateConnectorForUser(
+      req.user!.id,
+      req.params.connectorId,
+      body,
+    );
+    if (!connector) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Connector not found" });
+      return;
+    }
+    res.json(connector);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/connectors/:connectorId/sync-runs", async (req, res, next) => {
+  try {
+    const requestedLimit = Number(req.query.limit ?? 25);
+    const runs = await listConnectorSyncRunsForUser(
+      req.user!.id,
+      req.params.connectorId,
+      Number.isFinite(requestedLimit) ? requestedLimit : 25,
+    );
+    if (!runs) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Connector not found" });
+      return;
+    }
+    res.json({ runs });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/connectors/:connectorId/test", async (req, res, next) => {
   try {
     const connector = await getConnectorForUser(req.user!.id, req.params.connectorId);
-    if (!connector || connector.type !== "flipperforce") {
-      res.status(404).json({ error: "NOT_FOUND", message: "FlipperForce connector not found" });
+    if (!connector) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Connector not found" });
       return;
     }
-    const result = await testFlipperForceConnectorForUser(req.user!.id, req.params.connectorId);
+    const result =
+      connector.type === "flipperforce"
+        ? await testFlipperForceConnectorForUser(
+            req.user!.id,
+            req.params.connectorId,
+          )
+        : connector.type === "evernote"
+          ? await testEvernoteConnectorForUser(
+              req.user!.id,
+              req.params.connectorId,
+            )
+          : null;
+    if (!result) {
+      res.status(400).json({
+        error: "UNSUPPORTED_OPERATION",
+        message: `Connection test is not supported for ${connector.type}`,
+      });
+      return;
+    }
     res.json(result);
   } catch (err) {
     const status =
       err && typeof err === "object" && "status" in err && typeof err.status === "number"
         ? err.status
         : 502;
-    res.status(status === 401 ? 401 : 502).json({
-      error: status === 401 ? "AUTH_FAILED" : "UPSTREAM_ERROR",
-      message: err instanceof Error ? err.message : "FlipperForce test failed",
+    const responseStatus = status === 401 || status === 429 ? status : 502;
+    res.status(responseStatus).json({
+      error:
+        responseStatus === 401
+          ? "AUTH_FAILED"
+          : responseStatus === 429
+            ? "RATE_LIMITED"
+            : "UPSTREAM_ERROR",
+      message: err instanceof Error ? err.message : "Connector test failed",
     });
   }
 });

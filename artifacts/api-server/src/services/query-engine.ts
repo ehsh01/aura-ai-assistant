@@ -667,6 +667,26 @@ async function runQueryForUser(
             retrievalScore: Number(rec.score.toFixed(4)),
             retrievalMethod: rec.method,
             usedSemantic,
+            sourceUrl: rec.sourceUrl ?? null,
+            system:
+              rec.recordType === "evernote_note"
+                ? "Evernote"
+                : rec.recordType ?? rec.entityType,
+            ...(rec.recordType === "evernote_note"
+              ? {
+                  sourceTitle: rec.title,
+                  notebookName:
+                    typeof rec.sourceMetadata?.notebookName === "string"
+                      ? rec.sourceMetadata.notebookName
+                      : null,
+                  evernoteGuid:
+                    rec.sourceExternalId ?? null,
+                  tagNames: Array.isArray(rec.sourceMetadata?.tagNames)
+                    ? rec.sourceMetadata.tagNames
+                    : [],
+                  primaryLinkLabel: "Open in Evernote",
+                }
+              : {}),
             ...personMeta,
           },
         }),

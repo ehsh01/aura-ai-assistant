@@ -54,4 +54,27 @@ See `/docs` for the complete Engineering Playbook.
 4.  Update tests.
 5.  Update documentation when architecture changes.
 
+## Evernote connector
+
+The Evernote connector is read-only external truth. The default Connect flow
+uses Evernote MCP Streamable HTTP with OAuth2 Dynamic Client Registration.
+Sync Now incrementally stores changed notes in `source_records`; Ask retrieves
+local Postgres evidence and never calls MCP at query time.
+The live MCP connection requires an eligible paid Evernote plan.
+
+Required API environment:
+
+```bash
+EVERNOTE_MCP_URL=https://mcp.evernote.com/mcp
+EVERNOTE_OAUTH_REDIRECT_URI=https://recall-app.net/api/connectors/evernote/oauth/callback
+# Optional fallback-only settings:
+# EVERNOTE_EDAM_FALLBACK_ENABLED=true
+# EVERNOTE_CONSUMER_KEY=...
+# EVERNOTE_CONSUMER_SECRET=...
+# EVERNOTE_SANDBOX=false
+# EVERNOTE_DEVELOPER_TOKEN=...
+```
+
+See `DEPLOYMENT.md` for token sealing, EDAM fallback, pacing, and embedding caps.
+
 Happy building.
