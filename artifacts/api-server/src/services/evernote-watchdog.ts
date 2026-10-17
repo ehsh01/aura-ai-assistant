@@ -13,10 +13,13 @@ export type EvernoteWatchdogStatus = {
 export class EvernoteWatchdogPauseError extends Error {
   readonly retryAfterMs: number;
 
-  constructor(public readonly status: EvernoteWatchdogStatus) {
+  constructor(
+    public readonly status: EvernoteWatchdogStatus,
+    retryAfterMs = watchdogRetryMs(),
+  ) {
     super(`Evernote import paused by load watchdog: ${status.reasons.join("; ")}`);
     this.name = "EvernoteWatchdogPauseError";
-    this.retryAfterMs = watchdogRetryMs();
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -48,6 +51,14 @@ export function parseMemAvailableMb(meminfo: string): number | null {
   const match = meminfo.match(/^MemAvailable:\s+(\d+)\s+kB$/m);
   if (!match) return null;
   return Number(match[1]) / 1024;
+}
+
+export function requiredMemoryMbForBytes(sizeBytes: number): number {
+  const scaled =
+    Number.isFinite(sizeBytes) && sizeBytes > 0
+      ? (sizeBytes / (1024 * 1024)) * 2.5
+      : 0;
+  return Math.max(watchdogMinMemoryMb(), scaled);
 }
 
 async function defaultDbConnections(): Promise<number | null> {
@@ -101,6 +112,8 @@ export async function checkEvernoteImportWatchdog(deps?: {
   availableMemoryMb?: () => Promise<number | null>;
   healthCheck?: (url: string) => Promise<boolean>;
   healthUrls?: string[];
+  minimumMemoryMb?: number;
+  requireMemoryMeasurement?: boolean;
 }): Promise<EvernoteWatchdogStatus> {
   const [dbConnections, availableMemoryMb] = await Promise.all([
     (deps?.dbConnections ?? defaultDbConnections)(),
@@ -115,14 +128,20 @@ export async function checkEvernoteImportWatchdog(deps?: {
   );
   const unhealthyUrls = checks.filter((check) => !check.healthy).map((check) => check.url);
   const reasons: string[] = [];
+  const minimumMemoryMb = Math.max(
+    watchdogMinMemoryMb(),
+    deps?.minimumMemoryMb ?? 0,
+  );
   if (dbConnections != null && dbConnections >= watchdogDbConnectionLimit()) {
     reasons.push(
       `database connections ${dbConnections} >= ${watchdogDbConnectionLimit()}`,
     );
   }
-  if (availableMemoryMb != null && availableMemoryMb < watchdogMinMemoryMb()) {
+  if (availableMemoryMb == null && deps?.requireMemoryMeasurement) {
+    reasons.push("available memory could not be measured");
+  } else if (availableMemoryMb != null && availableMemoryMb < minimumMemoryMb) {
     reasons.push(
-      `available memory ${availableMemoryMb.toFixed(1)} MB < ${watchdogMinMemoryMb()} MB`,
+      `available memory ${availableMemoryMb.toFixed(1)} MB < ${minimumMemoryMb.toFixed(1)} MB`,
     );
   }
   if (unhealthyUrls.length > 0) {
@@ -137,7 +156,25 @@ export async function checkEvernoteImportWatchdog(deps?: {
   };
 }
 
-export async function assertEvernoteImportSafe(): Promise<void> {
-  const status = await checkEvernoteImportWatchdog();
+export async function assertEvernoteImportSafe(
+  options?: Parameters<typeof checkEvernoteImportWatchdog>[0],
+): Promise<void> {
+  const status = await checkEvernoteImportWatchdog(options);
   if (!status.safe) throw new EvernoteWatchdogPauseError(status);
+}
+
+export function evernoteDeferredError(
+  reason: string,
+  retryAfterMs = watchdogRetryMs(),
+): EvernoteWatchdogPauseError {
+  return new EvernoteWatchdogPauseError(
+    {
+      safe: false,
+      reasons: [reason],
+      dbConnections: null,
+      availableMemoryMb: null,
+      unhealthyUrls: [],
+    },
+    retryAfterMs,
+  );
 }

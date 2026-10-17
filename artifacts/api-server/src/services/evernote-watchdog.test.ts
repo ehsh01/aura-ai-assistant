@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   checkEvernoteImportWatchdog,
   parseMemAvailableMb,
+  requiredMemoryMbForBytes,
 } from "./evernote-watchdog";
 
 afterEach(() => {
@@ -48,5 +49,30 @@ describe("Evernote import watchdog", () => {
       healthUrls: [],
     });
     expect(status.safe).toBe(true);
+  });
+
+  it("requires max(150MB, 2.5x file size) for attachment work", async () => {
+    expect(requiredMemoryMbForBytes(20 * 1024 * 1024)).toBe(150);
+    expect(requiredMemoryMbForBytes(100 * 1024 * 1024)).toBe(250);
+    const paused = await checkEvernoteImportWatchdog({
+      dbConnections: async () => 1,
+      availableMemoryMb: async () => 199,
+      healthUrls: [],
+      minimumMemoryMb: 200,
+      requireMemoryMeasurement: true,
+    });
+    expect(paused.safe).toBe(false);
+    expect(paused.reasons[0]).toContain("199.0 MB < 200.0 MB");
+  });
+
+  it("fails closed when attachment memory cannot be measured", async () => {
+    const status = await checkEvernoteImportWatchdog({
+      dbConnections: async () => 1,
+      availableMemoryMb: async () => null,
+      healthUrls: [],
+      requireMemoryMeasurement: true,
+    });
+    expect(status.safe).toBe(false);
+    expect(status.reasons).toContain("available memory could not be measured");
   });
 });

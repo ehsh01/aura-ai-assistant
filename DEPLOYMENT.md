@@ -260,11 +260,16 @@ EVERNOTE_INCREMENTAL_SYNC_ENABLED=true
 EVERNOTE_INCREMENTAL_SYNC_MINUTES=15
 EVERNOTE_FULL_RECONCILE_ENABLED=true
 EVERNOTE_FULL_RECONCILE_MINUTES=1440
+EVERNOTE_AUTO_FULL_IMPORT=false
+EVERNOTE_NIGHT_WINDOW_START_HOUR=1
+EVERNOTE_NIGHT_WINDOW_END_HOUR=5
+EVERNOTE_NIGHT_WINDOW_TIMEZONE=America/New_York
 EVERNOTE_WATCHDOG_DB_CONNECTIONS=22
 EVERNOTE_WATCHDOG_MIN_MEM_MB=150
 # Comma-separated sibling-app health endpoints:
 EVERNOTE_WATCHDOG_HEALTH_URLS=
-EVERNOTE_ATTACHMENT_MAX_BYTES=104857600
+EVERNOTE_ATTACHMENT_MAX_BYTES=20971520
+EVERNOTE_PDF_PARSE_MAX_BYTES=15728640
 EVERNOTE_TESSERACT_TIMEOUT_MS=30000
 PG_WORKER_POOL_MAX=3
 PG_IMPORT_POOL_MAX=3
@@ -277,17 +282,20 @@ APP_PUBLIC_URL=https://recall-app.net
    Evernote (MCP)**.
 3. Ernesto completes Evernote's browser OAuth consent. Recall dynamically
    registers the client and seals registration/tokens in connector settings.
-4. Recall starts a durable full import automatically. MCP access remains
+4. Click **Sync Now** to start the first durable full import. Automatic first
+   imports are disabled unless `EVERNOTE_AUTO_FULL_IMPORT=true`. MCP access remains
    read-only and includes notes, notebooks, tags, Spaces, tasks, and attachment
    download links. Note bodies are fetched and committed one at a time.
-   Server-side slices continue until complete; **Sync Now is optional**.
+   Server-side slices continue until complete.
 5. Install `tesseract-ocr` on the worker host before enabling the import.
    Images at least 20KB use one serialized Tesseract process with a 30s timeout;
-   PDFs use `pdf-parse`. Attachment bytes are held only in memory and discarded.
+   PDFs up to 15MB use `pdf-parse`. Attachments default to a 20MB limit (50MB
+   hard ceiling); bytes are held only in memory and discarded.
 6. The worker auto-pauses at 22 DB connections, below 150MB available RAM, or
    when a configured sibling health URL fails. It resumes from its persisted
-   cursor when the gates recover. Incremental sync runs every 15 minutes and a
-   full count reconciliation runs nightly.
+   cursor when the gates recover. Incremental sync runs every 15 minutes after
+   the first import. Scheduled full reconciliation and image OCR run only from
+   1–5 AM America/New_York by default and are load-checked before work.
 
 The existing OAuth1/EDAM and personal developer-token implementations remain
 disabled optional fallbacks:

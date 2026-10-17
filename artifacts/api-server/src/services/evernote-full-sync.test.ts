@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   calculateEvernoteReport,
+  evernoteAttachmentFailureTransition,
+  interruptedAttachmentResetOutcome,
   isAllowedEvernoteAttachmentUrl,
+  shouldResetEvernoteAttachmentFailure,
 } from "./evernote-full-sync";
-import { evernoteScheduleDecision } from "./evernote-sync-scheduler";
+import {
+  evernoteScheduleDecision,
+  scheduledEvernoteLoadIsSafe,
+} from "./evernote-sync-scheduler";
 import { processEvernoteSyncJob } from "./connectors";
 
 describe("Evernote completeness report", () => {
@@ -86,6 +92,8 @@ describe("Evernote unattended schedule", () => {
         lastFullReconcileAt: new Date("2026-10-16T11:59:00Z"),
         incrementalEnabled: true,
         fullReconcileEnabled: true,
+        autoFullImportEnabled: false,
+        inNightWindow: true,
         incrementalMinutes: 15,
         fullReconcileMinutes: 1440,
       }),
@@ -97,10 +105,102 @@ describe("Evernote unattended schedule", () => {
         lastFullReconcileAt: new Date("2026-10-17T01:00:00Z"),
         incrementalEnabled: true,
         fullReconcileEnabled: true,
+        autoFullImportEnabled: false,
+        inNightWindow: false,
         incrementalMinutes: 15,
         fullReconcileMinutes: 1440,
       }),
     ).toBe("incremental");
+  });
+
+  it("never starts a first import unless auto-full is explicitly enabled at night", () => {
+    const base = {
+      now: new Date("2026-10-17T06:00:00Z"),
+      lastSyncAt: null,
+      lastFullReconcileAt: null,
+      incrementalEnabled: true,
+      fullReconcileEnabled: true,
+      incrementalMinutes: 15,
+      fullReconcileMinutes: 1440,
+    };
+    expect(
+      evernoteScheduleDecision({
+        ...base,
+        autoFullImportEnabled: false,
+        inNightWindow: true,
+      }),
+    ).toBeNull();
+    expect(
+      evernoteScheduleDecision({
+        ...base,
+        autoFullImportEnabled: true,
+        inNightWindow: false,
+      }),
+    ).toBeNull();
+    expect(
+      evernoteScheduleDecision({
+        ...base,
+        autoFullImportEnabled: true,
+        inNightWindow: true,
+      }),
+    ).toBe("full");
+  });
+
+  it("requires a passing load check before scheduled work", async () => {
+    expect(
+      await scheduledEvernoteLoadIsSafe(async () => ({
+        safe: false,
+        reasons: ["memory"],
+        dbConnections: 10,
+        availableMemoryMb: 100,
+        unhealthyUrls: [],
+      })),
+    ).toBe(false);
+    expect(
+      await scheduledEvernoteLoadIsSafe(async () => ({
+        safe: true,
+        reasons: [],
+        dbConnections: 10,
+        availableMemoryMb: 300,
+        unhealthyUrls: [],
+      })),
+    ).toBe(true);
+  });
+});
+
+describe("Evernote attachment retry policy", () => {
+  it("does not spend attempts for memory deferrals or size skips", () => {
+    expect(evernoteAttachmentFailureTransition(2, "memory")).toEqual({
+      attempts: 2,
+      fetchState: "pending",
+    });
+    expect(evernoteAttachmentFailureTransition(2, "too_large")).toEqual({
+      attempts: 2,
+      fetchState: "skipped_too_large",
+    });
+    expect(evernoteAttachmentFailureTransition(2, "error")).toEqual({
+      attempts: 3,
+      fetchState: "failed",
+    });
+  });
+
+  it("makes the third stale-fetch reset terminal", () => {
+    expect(interruptedAttachmentResetOutcome(0)).toEqual({
+      attempts: 1,
+      fetchState: "pending",
+    });
+    expect(interruptedAttachmentResetOutcome(2)).toEqual({
+      attempts: 3,
+      fetchState: "failed_oom",
+    });
+    expect(shouldResetEvernoteAttachmentFailure("failed", 2)).toBe(true);
+    expect(shouldResetEvernoteAttachmentFailure("failed", 3)).toBe(false);
+    expect(
+      shouldResetEvernoteAttachmentFailure("failed_oom", 1),
+    ).toBe(false);
+    expect(
+      shouldResetEvernoteAttachmentFailure("skipped_too_large", 0),
+    ).toBe(false);
   });
 });
 
@@ -110,5 +210,11 @@ describe("Evernote import AI boundary", () => {
     expect(implementation).not.toContain("openai");
     expect(implementation).not.toContain("embeditem");
     expect(implementation).not.toContain("warmentityembedding");
+  });
+
+  it("rechecks the night window on every scheduled full-import slice", () => {
+    const implementation = processEvernoteSyncJob.toString();
+    expect(implementation).toContain("evernoteScheduled");
+    expect(implementation).toContain("isEvernoteNightWindow");
   });
 });

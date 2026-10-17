@@ -86,6 +86,7 @@ import {
 import {
   assertEvernoteImportSafe,
   EvernoteWatchdogPauseError,
+  evernoteDeferredError,
 } from "./evernote-watchdog";
 import {
   buildEvernoteCompletenessReport,
@@ -99,6 +100,7 @@ import {
   syncEvernoteReminderFlags,
   verifyOneEvernoteNotebook,
 } from "./evernote-full-sync";
+import { isEvernoteNightWindow } from "./evernote-runtime-policy";
 
 const CONNECTOR_IMPLS: Record<string, RecallConnector> = {
   manual: manualConnector,
@@ -1915,6 +1917,7 @@ export async function enqueueEvernoteSyncForUser(
   userId: string,
   connectorId: string,
   mode: "full" | "incremental" = "full",
+  options?: { scheduled?: boolean },
 ): Promise<{ syncRunId: string; jobId: string; status: string }> {
   const rows = await getDb()
     .select()
@@ -1970,6 +1973,7 @@ export async function enqueueEvernoteSyncForUser(
       startedAt: now,
       metadata: {
         evernoteSyncMode: mode,
+        evernoteScheduled: options?.scheduled === true,
         evernotePhase: "active",
         evernoteCheckpoint: {
           startIndex: 0,
@@ -2039,6 +2043,16 @@ export async function processEvernoteSyncJob(
   if (!connector || !run) throw new Error("Evernote sync job target not found");
   if (run.status === "complete" || run.status === "partial_success") return true;
   if (!connector.enabled) throw new Error("Evernote connector is paused");
+  if (
+    run.metadata?.evernoteScheduled === true &&
+    run.metadata?.evernoteSyncMode !== "incremental" &&
+    !isEvernoteNightWindow()
+  ) {
+    throw evernoteDeferredError(
+      "scheduled full reconcile is outside the Evernote night window",
+      60 * 60_000,
+    );
+  }
   try {
     await assertEvernoteImportSafe();
   } catch (error) {
@@ -2132,20 +2146,7 @@ export async function processEvernoteSyncJob(
   const syncMode =
     metadata.evernoteSyncMode === "incremental" ? "incremental" : "full";
   if (phase === "attachments") {
-    const resetTerminalFailures =
-      syncMode === "full" &&
-      metadata.evernoteAttachmentFailuresReset !== true;
-    await resetInterruptedEvernoteAttachments(
-      connectorId,
-      resetTerminalFailures,
-    );
-    if (resetTerminalFailures) {
-      metadata = { ...metadata, evernoteAttachmentFailuresReset: true };
-      await getDb()
-        .update(syncRuns)
-        .set({ metadata })
-        .where(eq(syncRuns.id, syncRunId));
-    }
+    await resetInterruptedEvernoteAttachments(connectorId);
     const processed = await withEvernoteMcpClient(
       settings,
       (client) => processOneEvernoteAttachment(client, connectorId),

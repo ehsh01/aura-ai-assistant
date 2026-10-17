@@ -28,10 +28,20 @@ import {
 } from "../connectors/evernote-mcp";
 import { getDb } from "../lib/db";
 import {
+  EvernoteAttachmentTooLargeError,
+  evernoteAttachmentMaxBytes,
+  evernotePdfParseMaxBytes,
   extractImageTextInMemory,
   extractPdfTextInMemory,
   responseBytesInMemory,
 } from "./evernote-attachment-extract";
+import { isEvernoteNightWindow } from "./evernote-runtime-policy";
+import {
+  assertEvernoteImportSafe,
+  EvernoteWatchdogPauseError,
+  evernoteDeferredError,
+  requiredMemoryMbForBytes,
+} from "./evernote-watchdog";
 
 type ToolCaller = {
   callTool(input: {
@@ -488,15 +498,28 @@ async function fetchEvernoteAttachmentUrl(value: string): Promise<Response> {
     if (response.status < 300 || response.status >= 400) return response;
     const location = response.headers.get("location");
     if (!location) throw new Error("Evernote attachment redirect has no location");
+    await response.body?.cancel().catch(() => undefined);
     url = new URL(location, url).toString();
   }
   throw new Error("Evernote attachment exceeded redirect limit");
+}
+
+export function evernoteAttachmentFailureTransition(
+  attempts: number,
+  reason: "memory" | "too_large" | "error",
+): { attempts: number; fetchState: "pending" | "skipped_too_large" | "failed" } {
+  if (reason === "memory") return { attempts, fetchState: "pending" };
+  if (reason === "too_large") {
+    return { attempts, fetchState: "skipped_too_large" };
+  }
+  return { attempts: attempts + 1, fetchState: "failed" };
 }
 
 export async function processOneEvernoteAttachment(
   client: ToolCaller,
   connectorId: string,
 ): Promise<boolean> {
+  const inNightWindow = isEvernoteNightWindow();
   const [attachment] = await getDb()
     .select()
     .from(evernoteAttachments)
@@ -506,27 +529,105 @@ export async function processOneEvernoteAttachment(
         eq(evernoteAttachments.fetchState, "pending"),
       ),
     )
-    .orderBy(asc(evernoteAttachments.createdAt))
+    .orderBy(
+      inNightWindow
+        ? asc(evernoteAttachments.createdAt)
+        : sql`case
+            when lower(coalesce(${evernoteAttachments.mime}, '')) like 'image/%'
+              or lower(coalesce(${evernoteAttachments.fileName}, '')) ~ '\\.(jpe?g|png|gif|webp|bmp|tiff?|heic)$'
+            then 1 else 0
+          end`,
+      asc(evernoteAttachments.createdAt),
+    )
     .limit(1);
   if (!attachment) return false;
-  await getDb()
-    .update(evernoteAttachments)
-    .set({
-      fetchState: "fetching",
-      attempts: attachment.attempts + 1,
-      fetchError: null,
-      updatedAt: new Date(),
-    })
-    .where(eq(evernoteAttachments.id, attachment.id));
 
+  const mime = (attachment.mime ?? "").toLowerCase();
+  const name = (attachment.fileName ?? "").toLowerCase();
+  const isImage =
+    mime.startsWith("image/") ||
+    /\.(?:jpe?g|png|gif|webp|bmp|tiff?|heic)$/i.test(name);
+  const requiresImageOcr =
+    isImage &&
+    (attachment.sizeBytes == null || attachment.sizeBytes >= 20 * 1024);
+  const maxBytes = evernoteAttachmentMaxBytes();
+  if (attachment.sizeBytes != null && attachment.sizeBytes > maxBytes) {
+    const transition = evernoteAttachmentFailureTransition(
+      attachment.attempts,
+      "too_large",
+    );
+    await getDb()
+      .update(evernoteAttachments)
+      .set({
+        fetchState: transition.fetchState,
+        attempts: transition.attempts,
+        fetchError: `resource metadata size ${attachment.sizeBytes} exceeds ${maxBytes}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(evernoteAttachments.id, attachment.id));
+    return true;
+  }
+  if (requiresImageOcr && !inNightWindow) {
+    throw evernoteDeferredError(
+      "image OCR backlog is outside the Evernote night window",
+      60 * 60_000,
+    );
+  }
+
+  let attemptStarted = false;
+  let response: Response | null = null;
   try {
     const result = await callEvernoteReadTool(client, "get_attachment", {
       attachmentId: attachment.externalId,
     });
     const downloadUrl = attachmentDownloadUrl(result);
     if (!downloadUrl) throw new Error("Evernote get_attachment returned no download URL");
+    const expectedSize = attachment.sizeBytes ?? maxBytes;
+    await assertEvernoteImportSafe({
+      minimumMemoryMb: requiredMemoryMbForBytes(expectedSize),
+      requireMemoryMeasurement: true,
+    });
+    response = await fetchEvernoteAttachmentUrl(downloadUrl);
+    const contentLengthHeader = response.headers.get("content-length");
+    const contentLength =
+      contentLengthHeader == null ? null : Number(contentLengthHeader);
+    if (
+      contentLength != null &&
+      Number.isFinite(contentLength) &&
+      contentLength > maxBytes
+    ) {
+      await response.body?.cancel().catch(() => undefined);
+      await getDb()
+        .update(evernoteAttachments)
+        .set({
+          fetchState: "skipped_too_large",
+          fetchError: `Content-Length ${contentLength} exceeds ${maxBytes}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(evernoteAttachments.id, attachment.id));
+      return true;
+    }
+    const downloadSize =
+      contentLength != null && Number.isFinite(contentLength) && contentLength > 0
+        ? contentLength
+        : expectedSize;
+    await assertEvernoteImportSafe({
+      minimumMemoryMb: requiredMemoryMbForBytes(downloadSize),
+      requireMemoryMeasurement: true,
+    });
+    await getDb()
+      .update(evernoteAttachments)
+      .set({
+        fetchState: "fetching",
+        fetchError: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(evernoteAttachments.id, attachment.id));
+    attemptStarted = true;
     const { data, sha256 } = await responseBytesInMemory(
-      await fetchEvernoteAttachmentUrl(downloadUrl),
+      response,
+      maxBytes,
+      attachment.sizeBytes,
     );
     const [duplicate] = await getDb()
       .select({
@@ -545,16 +646,16 @@ export async function processOneEvernoteAttachment(
       .limit(1);
     let extractedText = duplicate?.extractedText ?? "";
     let textEngine = duplicate?.textEngine ?? null;
+    let extractionSkipped: string | null = null;
     if (!duplicate) {
-      const mime = (attachment.mime ?? "").toLowerCase();
-      const name = (attachment.fileName ?? "").toLowerCase();
       if (mime === "application/pdf" || name.endsWith(".pdf")) {
-        extractedText = await extractPdfTextInMemory(data);
-        textEngine = "pdf-parse";
-      } else if (
-        mime.startsWith("image/") ||
-        /\.(?:jpe?g|png|gif|webp|bmp|tiff?|heic)$/i.test(name)
-      ) {
+        if (data.length > evernotePdfParseMaxBytes()) {
+          extractionSkipped = "pdf_too_large_for_parse";
+        } else {
+          extractedText = await extractPdfTextInMemory(data);
+          textEngine = "pdf-parse";
+        }
+      } else if (isImage) {
         if (data.length >= 20 * 1024) {
           extractedText = await extractImageTextInMemory(data);
           textEngine = "tesseract";
@@ -570,15 +671,59 @@ export async function processOneEvernoteAttachment(
         textEngine,
         fetchState: "complete",
         fetchError: null,
+        metadata: {
+          ...(attachment.metadata ?? {}),
+          ...(extractionSkipped ? { extractionSkipped } : {}),
+        },
         extractedAt: new Date(),
         updatedAt: new Date(),
       })
       .where(eq(evernoteAttachments.id, attachment.id));
   } catch (error) {
+    await response?.body?.cancel().catch(() => undefined);
+    if (error instanceof EvernoteWatchdogPauseError) {
+      const transition = evernoteAttachmentFailureTransition(
+        attachment.attempts,
+        "memory",
+      );
+      if (attemptStarted) {
+        await getDb()
+          .update(evernoteAttachments)
+          .set({
+            fetchState: transition.fetchState,
+            attempts: transition.attempts,
+            fetchError: error.message.slice(0, 1_000),
+            updatedAt: new Date(),
+          })
+          .where(eq(evernoteAttachments.id, attachment.id));
+      }
+      throw error;
+    }
+    if (error instanceof EvernoteAttachmentTooLargeError) {
+      const transition = evernoteAttachmentFailureTransition(
+        attachment.attempts,
+        "too_large",
+      );
+      await getDb()
+        .update(evernoteAttachments)
+        .set({
+          fetchState: transition.fetchState,
+          attempts: transition.attempts,
+          fetchError: error.message.slice(0, 1_000),
+          updatedAt: new Date(),
+        })
+        .where(eq(evernoteAttachments.id, attachment.id));
+      return true;
+    }
+    const transition = evernoteAttachmentFailureTransition(
+      attachment.attempts,
+      "error",
+    );
     await getDb()
       .update(evernoteAttachments)
       .set({
-        fetchState: "failed",
+        fetchState: transition.fetchState,
+        attempts: transition.attempts,
         fetchError:
           error instanceof Error ? error.message.slice(0, 1_000) : "Attachment fetch failed",
         updatedAt: new Date(),
@@ -1129,31 +1274,60 @@ export async function searchEvernoteRecords(
     .limit(Math.min(Math.max(filters.limit ?? 50, 1), 100));
 }
 
+export function interruptedAttachmentResetOutcome(attempts: number): {
+  attempts: number;
+  fetchState: "pending" | "failed_oom";
+} {
+  const nextAttempts = Math.max(0, Math.floor(attempts)) + 1;
+  return {
+    attempts: nextAttempts,
+    fetchState: nextAttempts >= 3 ? "failed_oom" : "pending",
+  };
+}
+
+export function shouldResetEvernoteAttachmentFailure(
+  fetchState: string,
+  attempts: number,
+): boolean {
+  return fetchState === "failed" && attempts < 3;
+}
+
 export async function resetInterruptedEvernoteAttachments(
   connectorId: string,
-  resetTerminalFailures = false,
 ): Promise<void> {
+  await getDb()
+    .update(evernoteAttachments)
+    .set({
+      attempts: sql`${evernoteAttachments.attempts} + 1`,
+      fetchState: sql`case
+        when ${evernoteAttachments.attempts} + 1 >= 3 then 'failed_oom'
+        else 'pending'
+      end`,
+      fetchError: sql`case
+        when ${evernoteAttachments.attempts} + 1 >= 3
+          then 'stale fetching reset reached terminal limit'
+        else 'recovered stale fetching attachment'
+      end`,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(evernoteAttachments.connectorId, connectorId),
+        eq(evernoteAttachments.fetchState, "fetching"),
+        lt(
+          evernoteAttachments.updatedAt,
+          new Date(Date.now() - 15 * 60_000),
+        ),
+      ),
+    );
   await getDb()
     .update(evernoteAttachments)
     .set({ fetchState: "pending", updatedAt: new Date() })
     .where(
       and(
         eq(evernoteAttachments.connectorId, connectorId),
-        or(
-          and(
-            eq(evernoteAttachments.fetchState, "fetching"),
-            lt(
-              evernoteAttachments.updatedAt,
-              new Date(Date.now() - 15 * 60_000),
-            ),
-          ),
-          and(
-            eq(evernoteAttachments.fetchState, "failed"),
-            resetTerminalFailures
-              ? sql`true`
-              : lt(evernoteAttachments.attempts, 3),
-          ),
-        ),
+        eq(evernoteAttachments.fetchState, "failed"),
+        lt(evernoteAttachments.attempts, 3),
       ),
     );
 }

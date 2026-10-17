@@ -3,16 +3,18 @@ import { connectors, evernoteSyncState } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { logger } from "../lib/logger";
 import { enqueueEvernoteSyncForUser } from "./connectors";
+import {
+  isEvernoteAutoFullImportEnabled,
+  isEvernoteFullReconcileEnabled,
+  isEvernoteIncrementalSyncEnabled,
+  isEvernoteNightWindow,
+  isEvernoteSchedulerEnabled,
+} from "./evernote-runtime-policy";
+import { checkEvernoteImportWatchdog } from "./evernote-watchdog";
 
 const SCHEDULER_TICK_MS = 60_000;
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
-
-function enabled(name: string, fallback = true): boolean {
-  const value = process.env[name]?.trim().toLowerCase();
-  if (value == null || value === "") return fallback;
-  return value !== "false" && value !== "0";
-}
 
 function envMinutes(name: string, fallback: number): number {
   const value = Number(process.env[name]);
@@ -21,18 +23,35 @@ function envMinutes(name: string, fallback: number): number {
 
 export type EvernoteScheduleDecision = "full" | "incremental" | null;
 
+export async function scheduledEvernoteLoadIsSafe(
+  check: typeof checkEvernoteImportWatchdog = checkEvernoteImportWatchdog,
+): Promise<boolean> {
+  return (await check()).safe;
+}
+
 export function evernoteScheduleDecision(input: {
   now: Date;
   lastSyncAt: Date | null;
   lastFullReconcileAt: Date | null;
   incrementalEnabled: boolean;
   fullReconcileEnabled: boolean;
+  autoFullImportEnabled: boolean;
+  inNightWindow: boolean;
   incrementalMinutes: number;
   fullReconcileMinutes: number;
 }): EvernoteScheduleDecision {
   const { now } = input;
+  const hasCompletedSync = Boolean(input.lastSyncAt || input.lastFullReconcileAt);
+  if (!hasCompletedSync) {
+    return input.autoFullImportEnabled &&
+      input.fullReconcileEnabled &&
+      input.inNightWindow
+      ? "full"
+      : null;
+  }
   if (
     input.fullReconcileEnabled &&
+    input.inNightWindow &&
     (!input.lastFullReconcileAt ||
       now.getTime() - input.lastFullReconcileAt.getTime() >=
         input.fullReconcileMinutes * 60_000)
@@ -51,7 +70,7 @@ export function evernoteScheduleDecision(input: {
 }
 
 export async function scheduleDueEvernoteSyncs(now = new Date()): Promise<number> {
-  if (!enabled("EVERNOTE_SYNC_ENABLED", true)) return 0;
+  if (!isEvernoteSchedulerEnabled()) return 0;
   const rows = await getDb()
     .select({
       connector: connectors,
@@ -65,12 +84,15 @@ export async function scheduleDueEvernoteSyncs(now = new Date()): Promise<number
     .where(and(eq(connectors.type, "evernote"), eq(connectors.enabled, true)));
   let queued = 0;
   for (const { connector, state } of rows) {
+    const inNightWindow = isEvernoteNightWindow(now);
     const mode = evernoteScheduleDecision({
       now,
       lastSyncAt: connector.lastSyncAt,
       lastFullReconcileAt: state?.lastFullReconcileAt ?? null,
-      incrementalEnabled: enabled("EVERNOTE_INCREMENTAL_SYNC_ENABLED", true),
-      fullReconcileEnabled: enabled("EVERNOTE_FULL_RECONCILE_ENABLED", true),
+      incrementalEnabled: isEvernoteIncrementalSyncEnabled(),
+      fullReconcileEnabled: isEvernoteFullReconcileEnabled(),
+      autoFullImportEnabled: isEvernoteAutoFullImportEnabled(),
+      inNightWindow,
       incrementalMinutes: envMinutes("EVERNOTE_INCREMENTAL_SYNC_MINUTES", 15),
       fullReconcileMinutes: envMinutes(
         "EVERNOTE_FULL_RECONCILE_MINUTES",
@@ -78,11 +100,20 @@ export async function scheduleDueEvernoteSyncs(now = new Date()): Promise<number
       ),
     });
     if (!mode) continue;
+    const loadSafe = await scheduledEvernoteLoadIsSafe();
+    if (!loadSafe) {
+      logger.info(
+        { connectorId: connector.id, mode },
+        "Evernote scheduled sync deferred by load watchdog",
+      );
+      continue;
+    }
     try {
       const result = await enqueueEvernoteSyncForUser(
         connector.userId,
         connector.id,
         mode,
+        { scheduled: true },
       );
       if (result.status === "queued") {
         queued += 1;
@@ -100,7 +131,7 @@ export async function scheduleDueEvernoteSyncs(now = new Date()): Promise<number
 }
 
 export function startEvernoteSyncScheduler(): void {
-  if (timer || !enabled("EVERNOTE_SYNC_ENABLED", true)) return;
+  if (timer || !isEvernoteSchedulerEnabled()) return;
   const initial = setTimeout(() => {
     void scheduleDueEvernoteSyncs();
   }, 30_000);

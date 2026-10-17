@@ -106,6 +106,18 @@ export async function getJobForUser(userId: string, jobId: string): Promise<Job 
   return rows[0] ?? null;
 }
 
+export async function listQueuedJobsOfType(
+  type: string,
+  limit = 100,
+): Promise<Job[]> {
+  return getDb()
+    .select()
+    .from(jobs)
+    .where(and(eq(jobs.type, type), eq(jobs.status, "queued")))
+    .orderBy(jobs.availableAt, jobs.createdAt)
+    .limit(Math.min(Math.max(limit, 1), 1_000));
+}
+
 /**
  * Atomically claim the next due queued job (Postgres SKIP LOCKED).
  * Returns null when the queue is empty.

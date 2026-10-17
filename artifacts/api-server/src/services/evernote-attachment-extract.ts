@@ -1,8 +1,20 @@
 import { createHash } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  spawn,
+  type ChildProcessWithoutNullStreams,
+  type SpawnOptionsWithoutStdio,
+} from "node:child_process";
 import { logger } from "../lib/logger";
+import { isEvernoteNightWindow } from "./evernote-runtime-policy";
+import {
+  assertEvernoteImportSafe,
+  evernoteDeferredError,
+  requiredMemoryMbForBytes,
+} from "./evernote-watchdog";
 
-const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
+const DEFAULT_MAX_BYTES = 20 * 1024 * 1024;
+const HARD_MAX_BYTES = 50 * 1024 * 1024;
+const DEFAULT_PDF_PARSE_MAX_BYTES = 15 * 1024 * 1024;
 const DEFAULT_TESSERACT_TIMEOUT_MS = 30_000;
 const MIN_IMAGE_BYTES = 20 * 1024;
 const MAX_TEXT_CHARS = 500_000;
@@ -20,7 +32,16 @@ export function evernoteAttachmentMaxBytes(): number {
     "EVERNOTE_ATTACHMENT_MAX_BYTES",
     DEFAULT_MAX_BYTES,
     1,
-    500 * 1024 * 1024,
+    HARD_MAX_BYTES,
+  );
+}
+
+export function evernotePdfParseMaxBytes(): number {
+  return envNumber(
+    "EVERNOTE_PDF_PARSE_MAX_BYTES",
+    DEFAULT_PDF_PARSE_MAX_BYTES,
+    1,
+    DEFAULT_PDF_PARSE_MAX_BYTES,
   );
 }
 
@@ -53,32 +74,65 @@ function serializedTesseract<T>(work: () => Promise<T>): Promise<T> {
 export async function responseBytesInMemory(
   response: Response,
   maxBytes = evernoteAttachmentMaxBytes(),
+  _expectedSizeBytes?: number | null,
 ): Promise<{ data: Buffer; sha256: string }> {
   if (!response.ok) {
     throw new Error(`Evernote attachment download failed with HTTP ${response.status}`);
   }
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    throw new Error(`Evernote attachment exceeds ${maxBytes} byte limit`);
+  const header = response.headers.get("content-length");
+  const declared = header == null ? null : Number(header);
+  if (declared != null && Number.isFinite(declared) && declared > maxBytes) {
+    throw new EvernoteAttachmentTooLargeError(declared, maxBytes);
   }
   if (!response.body) throw new Error("Evernote attachment response has no body");
 
-  const chunks: Buffer[] = [];
+  const expected =
+    declared != null && Number.isFinite(declared) && declared >= 0
+      ? declared
+      : maxBytes;
+  // One allocation only. Unknown-length responses reserve the bounded maximum
+  // so returning a contiguous Buffer never requires Buffer.concat.
+  const data = Buffer.allocUnsafe(Math.max(1, expected));
   const hash = createHash("sha256");
   let total = 0;
   for await (const value of response.body as unknown as AsyncIterable<Uint8Array>) {
-    const chunk = Buffer.from(value);
-    total += chunk.length;
-    if (total > maxBytes) {
-      throw new Error(`Evernote attachment exceeds ${maxBytes} byte limit`);
+    const chunk = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+    const nextTotal = total + chunk.length;
+    if (nextTotal > maxBytes || nextTotal > data.length) {
+      throw new EvernoteAttachmentTooLargeError(nextTotal, maxBytes);
     }
     hash.update(chunk);
-    chunks.push(chunk);
+    chunk.copy(data, total);
+    total = nextTotal;
   }
-  return { data: Buffer.concat(chunks, total), sha256: hash.digest("hex") };
+  return { data: data.subarray(0, total), sha256: hash.digest("hex") };
 }
 
-export async function extractPdfTextInMemory(data: Buffer): Promise<string> {
+export class EvernoteAttachmentTooLargeError extends Error {
+  constructor(
+    public readonly sizeBytes: number,
+    public readonly maxBytes: number,
+  ) {
+    super(`Evernote attachment exceeds ${maxBytes} byte limit`);
+    this.name = "EvernoteAttachmentTooLargeError";
+  }
+}
+
+type LoadCheck = (sizeBytes: number) => Promise<void>;
+
+async function defaultLoadCheck(sizeBytes: number): Promise<void> {
+  await assertEvernoteImportSafe({
+    minimumMemoryMb: requiredMemoryMbForBytes(sizeBytes),
+    requireMemoryMeasurement: true,
+  });
+}
+
+export async function extractPdfTextInMemory(
+  data: Buffer,
+  loadCheck: LoadCheck = defaultLoadCheck,
+): Promise<string> {
+  if (data.length > evernotePdfParseMaxBytes()) return "";
+  await loadCheck(data.length);
   const module = await import("pdf-parse");
   const parser =
     (module as { default?: (input: Buffer) => Promise<{ text?: string }> }).default ??
@@ -92,30 +146,51 @@ export async function extractPdfTextInMemory(data: Buffer): Promise<string> {
 type SpawnTesseract = (
   command: string,
   args: string[],
+  options: SpawnOptionsWithoutStdio & {
+    stdio: ["pipe", "pipe", "pipe"];
+  },
 ) => ChildProcessWithoutNullStreams;
 
 export async function extractImageTextInMemory(
   data: Buffer,
-  run: SpawnTesseract = (command, args) =>
-    spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] }),
+  run: SpawnTesseract = (command, args, options) =>
+    spawn(command, args, options),
+  options?: { now?: Date; loadCheck?: LoadCheck },
 ): Promise<string> {
   if (data.length < MIN_IMAGE_BYTES) return "";
+  if (!isEvernoteNightWindow(options?.now)) {
+    throw evernoteDeferredError(
+      "image OCR is outside the Evernote night window",
+      60 * 60_000,
+    );
+  }
   return serializedTesseract(
-    () =>
-      new Promise<string>((resolve) => {
+    async () => {
+      await (options?.loadCheck ?? defaultLoadCheck)(data.length);
+      return new Promise<string>((resolve) => {
         let child: ChildProcessWithoutNullStreams;
         try {
           // Reuse PR #9's host-wide flock while feeding bytes over stdin, so
           // Evernote never writes an attachment copy and all PM2 processes
           // still share a single Tesseract slot.
-          child = run("flock", [
-            "-x",
-            "-F",
-            "/tmp/recall-tesseract.lock",
-            "tesseract",
-            "stdin",
-            "stdout",
-          ]);
+          child = run(
+            "nice",
+            [
+              "-n",
+              "19",
+              "flock",
+              "-x",
+              "-F",
+              "/tmp/recall-tesseract.lock",
+              "tesseract",
+              "stdin",
+              "stdout",
+            ],
+            {
+              stdio: ["pipe", "pipe", "pipe"],
+              env: { ...process.env, OMP_THREAD_LIMIT: "1" },
+            },
+          );
         } catch (error) {
           logger.warn({ error }, "Could not start Tesseract");
           resolve("");
@@ -167,7 +242,8 @@ export async function extractImageTextInMemory(
         });
         child.stdin.on("error", () => undefined);
         child.stdin.end(data);
-      }),
+      });
+    },
   );
 }
 
@@ -180,21 +256,47 @@ export type EvernoteAttachmentExtraction = {
 
 export async function fetchAndExtractEvernoteAttachment(
   downloadUrl: string,
-  input: { mime: string | null; fileName: string | null },
+  input: { mime: string | null; fileName: string | null; sizeBytes?: number | null },
   deps?: {
     fetch?: typeof fetch;
     tesseract?: (data: Buffer) => Promise<string>;
+    loadCheck?: LoadCheck;
   },
 ): Promise<EvernoteAttachmentExtraction> {
   // Download immediately: Evernote's signed URL expires after about 300s.
+  const maxBytes = evernoteAttachmentMaxBytes();
+  if (input.sizeBytes != null && input.sizeBytes > maxBytes) {
+    throw new EvernoteAttachmentTooLargeError(input.sizeBytes, maxBytes);
+  }
+  await (deps?.loadCheck ?? defaultLoadCheck)(input.sizeBytes ?? maxBytes);
   const response = await (deps?.fetch ?? fetch)(downloadUrl);
-  const { data, sha256 } = await responseBytesInMemory(response);
+  const header = Number(response.headers.get("content-length"));
+  if (Number.isFinite(header) && header > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new EvernoteAttachmentTooLargeError(header, maxBytes);
+  }
+  await (deps?.loadCheck ?? defaultLoadCheck)(
+    Number.isFinite(header) && header > 0
+      ? header
+      : input.sizeBytes ?? maxBytes,
+  );
+  const { data, sha256 } = await responseBytesInMemory(
+    response,
+    maxBytes,
+    input.sizeBytes,
+  );
   const mime = (input.mime ?? "").toLowerCase();
   const name = (input.fileName ?? "").toLowerCase();
   if (mime === "application/pdf" || name.endsWith(".pdf")) {
+    if (data.length > evernotePdfParseMaxBytes()) {
+      return { sha256, extractedText: "", textEngine: null, sizeBytes: data.length };
+    }
     return {
       sha256,
-      extractedText: await extractPdfTextInMemory(data),
+      extractedText: await extractPdfTextInMemory(
+        data,
+        deps?.loadCheck ?? defaultLoadCheck,
+      ),
       textEngine: "pdf-parse",
       sizeBytes: data.length,
     };

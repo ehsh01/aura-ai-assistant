@@ -23,7 +23,16 @@ describe("Evernote worker boundary", () => {
       /claimNextJobOfTypes\(workerId,\s*TIMER_SAFE_JOB_TYPES\)/,
     );
     expect(worker).toMatch(
-      /continueJob\(job\.id\)[\s\S]*nudgeJobWorker\(job\.id\)/,
+      /continueJob\(job\.id\)[\s\S]*scheduleExplicitJobResume/,
+    );
+    expect(worker).toMatch(
+      /deferJob\(job\.id,[\s\S]*scheduleExplicitJobResume/,
+    );
+    expect(worker).toMatch(
+      /failJob\(job\.id,[\s\S]*scheduleExplicitJobResume\(queued\)/,
+    );
+    expect(worker).toMatch(
+      /resumeQueuedConnectorJobs[\s\S]*listQueuedJobsOfType\(JOB_TYPE_CONNECTOR_SYNC\)/,
     );
     expect(scheduler).toMatch(/nudgeJobWorker\(result\.jobId\)/);
   });
