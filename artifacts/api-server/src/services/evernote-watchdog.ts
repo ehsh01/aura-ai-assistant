@@ -33,7 +33,7 @@ export function watchdogDbConnectionLimit(): number {
 }
 
 export function watchdogMinMemoryMb(): number {
-  return envNumber("EVERNOTE_WATCHDOG_MIN_MEM_MB", 150, 1, 1_000_000);
+  return envNumber("EVERNOTE_WATCHDOG_MIN_MEM_MB", 200, 1, 1_000_000);
 }
 
 export function watchdogRetryMs(): number {
@@ -58,7 +58,7 @@ export function requiredMemoryMbForBytes(sizeBytes: number): number {
     Number.isFinite(sizeBytes) && sizeBytes > 0
       ? (sizeBytes / (1024 * 1024)) * 2.5
       : 0;
-  return Math.max(watchdogMinMemoryMb(), scaled);
+  return Math.max(200, watchdogMinMemoryMb(), scaled);
 }
 
 async function defaultDbConnections(): Promise<number | null> {

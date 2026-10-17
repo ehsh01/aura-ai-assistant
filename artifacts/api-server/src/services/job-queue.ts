@@ -38,6 +38,17 @@ export function backoffMs(attemptsAfterFail: number): number {
   return Math.min(base, 30 * 60_000);
 }
 
+export function attemptsAfterDeferredClaim(claimedAttempts: number): number {
+  return Math.max(0, Math.floor(claimedAttempts) - 1);
+}
+
+export function jobFailureIsTerminal(
+  attempts: number,
+  maxAttempts: number,
+): boolean {
+  return attempts >= maxAttempts;
+}
+
 type RawJobRow = Record<string, unknown>;
 
 function asDate(value: unknown): Date | null {
@@ -255,7 +266,7 @@ export async function failJob(
   if (!job) return true;
 
   const now = new Date();
-  const terminal = job.attempts >= job.maxAttempts;
+  const terminal = jobFailureIsTerminal(job.attempts, job.maxAttempts);
 
   if (terminal) {
     await getDb()

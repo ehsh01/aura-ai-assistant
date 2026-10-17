@@ -3,6 +3,7 @@ import {
   checkEvernoteImportWatchdog,
   parseMemAvailableMb,
   requiredMemoryMbForBytes,
+  watchdogMinMemoryMb,
 } from "./evernote-watchdog";
 
 afterEach(() => {
@@ -11,6 +12,10 @@ afterEach(() => {
 });
 
 describe("Evernote import watchdog", () => {
+  it("defaults the minimum available memory floor to 200MB", () => {
+    expect(watchdogMinMemoryMb()).toBe(200);
+  });
+
   it("parses Linux MemAvailable", () => {
     expect(
       parseMemAvailableMb("MemTotal:       2048000 kB\nMemAvailable:    153600 kB\n"),
@@ -51,8 +56,8 @@ describe("Evernote import watchdog", () => {
     expect(status.safe).toBe(true);
   });
 
-  it("requires max(150MB, 2.5x file size) for attachment work", async () => {
-    expect(requiredMemoryMbForBytes(20 * 1024 * 1024)).toBe(150);
+  it("requires max(200MB, 2.5x file size) for attachment work", async () => {
+    expect(requiredMemoryMbForBytes(20 * 1024 * 1024)).toBe(200);
     expect(requiredMemoryMbForBytes(100 * 1024 * 1024)).toBe(250);
     const paused = await checkEvernoteImportWatchdog({
       dbConnections: async () => 1,

@@ -231,4 +231,30 @@ describe("Evernote attachment memory-only extraction", () => {
     expect(invocation?.args).toContain("tesseract");
     expect(invocation?.options.env?.OMP_THREAD_LIMIT).toBe("1");
   });
+
+  it("keeps Evernote Tesseract execution failures retryable", async () => {
+    const run = (() => {
+      const child = new EventEmitter() as EventEmitter & {
+        stdin: PassThrough;
+        stdout: PassThrough;
+        stderr: PassThrough;
+        kill: () => boolean;
+      };
+      child.stdin = new PassThrough();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = () => true;
+      queueMicrotask(() => {
+        child.stderr.write("bad image");
+        child.emit("close", 1);
+      });
+      return child;
+    }) as never;
+    await expect(
+      extractImageTextInMemory(Buffer.alloc(20 * 1024), run, {
+        now: new Date("2026-10-17T06:00:00Z"),
+        loadCheck: async () => undefined,
+      }),
+    ).rejects.toThrow("Evernote Tesseract exited 1");
+  });
 });

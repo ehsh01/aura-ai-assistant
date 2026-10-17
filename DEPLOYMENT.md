@@ -175,6 +175,9 @@ OPENAI_PLANNER_MODEL=gpt-4.1-nano
 # It is off by default and capped per user per UTC day.
 RECALL_ATTACHMENT_OCR_ENABLED=false
 RECALL_ATTACHMENT_OCR_AI_DAILY_LIMIT=20
+# Free upload OCR remains independent of the paid AI switch:
+RECALL_UPLOAD_TESSERACT_ENABLED=true
+TESSERACT_OCR_TIMEOUT_MS=30000
 ```
 
 Image uploads use the system `tesseract` CLI locally (one subprocess at a time,
@@ -265,7 +268,7 @@ EVERNOTE_NIGHT_WINDOW_START_HOUR=1
 EVERNOTE_NIGHT_WINDOW_END_HOUR=5
 EVERNOTE_NIGHT_WINDOW_TIMEZONE=America/New_York
 EVERNOTE_WATCHDOG_DB_CONNECTIONS=22
-EVERNOTE_WATCHDOG_MIN_MEM_MB=150
+EVERNOTE_WATCHDOG_MIN_MEM_MB=200
 # Comma-separated sibling-app health endpoints:
 EVERNOTE_WATCHDOG_HEALTH_URLS=
 EVERNOTE_ATTACHMENT_MAX_BYTES=20971520
@@ -291,7 +294,7 @@ APP_PUBLIC_URL=https://recall-app.net
    Images at least 20KB use one serialized Tesseract process with a 30s timeout;
    PDFs up to 15MB use `pdf-parse`. Attachments default to a 20MB limit (50MB
    hard ceiling); bytes are held only in memory and discarded.
-6. The worker auto-pauses at 22 DB connections, below 150MB available RAM, or
+6. The worker auto-pauses at 22 DB connections, below 200MB available RAM, or
    when a configured sibling health URL fails. It resumes from its persisted
    cursor when the gates recover. Incremental sync runs every 15 minutes after
    the first import. Scheduled full reconciliation and image OCR run only from
