@@ -54,15 +54,26 @@ function json(route: Route, body: unknown, status = 200) {
 
 async function mockRecall(
   page: Page,
-  options: { graphSourceCount?: number; askAiAllowed?: boolean } = {},
+  options: {
+    graphSourceCount?: number;
+    askAiAllowed?: boolean;
+    denseNotebook?: boolean;
+    notebookEdgeCap?: number;
+  } = {},
 ) {
   const items = [...baseItems];
   const calls = { ai: 0, itemSearch: 0 };
   let graphMetrics: {
     sourceCount: number;
     returnedNodes: number;
+    returnedEdges: number;
     nextOffset: number | null;
-  } = { sourceCount: items.length, returnedNodes: 0, nextOffset: null };
+  } = {
+    sourceCount: items.length,
+    returnedNodes: 0,
+    returnedEdges: 0,
+    nextOffset: null,
+  };
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -117,6 +128,75 @@ async function mockRecall(
         Number(url.searchParams.get("limit") ?? 350),
         500,
       );
+      if (options.denseNotebook) {
+        const itemCount = Math.floor(requestedLimit * 0.8);
+        const itemNodes = Array.from({ length: itemCount }, (_, index) => ({
+          id: `item-node:dense-${index}`,
+          itemId: items[index % items.length]!.id,
+          type: index % 5 === 0 ? ("evernote" as const) : ("notes" as const),
+          label: `Imported note ${index + 1}`,
+          value: 4 + (index % 3),
+          hub: false,
+          href: `/everything/${items[index % items.length]!.id}`,
+        }));
+        const notebookHub = {
+          id: "notebooks:dense-everything",
+          itemId: null,
+          type: "notebooks" as const,
+          label: "Everything",
+          value: 18,
+          hub: true,
+          href: "/everything?notebook=Everything",
+        };
+        const tagHubs = Array.from({ length: 8 }, (_, index) => ({
+          id: `tags:dense-${index}`,
+          itemId: null,
+          type: "tags" as const,
+          label: `Topic ${index + 1}`,
+          value: 8,
+          hub: true,
+          href: "/everything",
+        }));
+        const notebookEdgeCount = Math.min(
+          itemCount - 3,
+          options.notebookEdgeCap ?? Number.POSITIVE_INFINITY,
+        );
+        const notebookEdges = itemNodes
+          .slice(0, notebookEdgeCount)
+          .map((node, index) => ({
+            id: `dense-notebook-edge-${index}`,
+            source: node.id,
+            target: notebookHub.id,
+            signal: "notebook" as const,
+          }));
+        const tagEdges = itemNodes
+          .filter((_, index) => index % 29 === 0)
+          .map((node, index) => ({
+            id: `dense-tag-edge-${index}`,
+            source: node.id,
+            target: tagHubs[index % tagHubs.length]!.id,
+            signal: "tag" as const,
+          }));
+        const graphNodes = [...itemNodes, notebookHub, ...tagHubs];
+        const graphEdges = [...notebookEdges, ...tagEdges];
+        const nextOffset = sourceCount > requestedLimit ? requestedLimit : null;
+        graphMetrics = {
+          sourceCount,
+          returnedNodes: graphNodes.length,
+          returnedEdges: graphEdges.length,
+          nextOffset,
+        };
+        return json(route, {
+          nodes: graphNodes,
+          edges: graphEdges,
+          page: {
+            offset: 0,
+            limit: requestedLimit,
+            nextOffset,
+            sourceCount,
+          },
+        });
+      }
       const returnedNodes = Math.min(requestedLimit, sourceCount);
       const itemCount = Math.max(1, Math.floor(returnedNodes * 0.78));
       const hubCount = returnedNodes - itemCount;
@@ -148,6 +228,7 @@ async function mockRecall(
       graphMetrics = {
         sourceCount,
         returnedNodes: graphNodes.length,
+        returnedEdges: itemCount,
         nextOffset,
       };
       return json(route, {
@@ -308,6 +389,91 @@ test.describe("Everything capture, graph, grid, and search", () => {
     expect(graphMetrics.returnedNodes).toBeLessThanOrEqual(180);
     expect(graphMetrics.nextOffset).toBe(180);
     expect(sample.fps).toBeGreaterThanOrEqual(12);
+  });
+
+  test("keeps a 2,900-note notebook responsive and heap-stable on mobile", async ({
+    context,
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+    await cdp.send("HeapProfiler.enable");
+    const configuredCap = Number(process.env.RECALL_NOTEBOOK_EDGE_CAP);
+    const notebookEdgeCap =
+      Number.isFinite(configuredCap) && configuredCap > 0
+        ? configuredCap
+        : undefined;
+    const metrics = await mockRecall(page, {
+      graphSourceCount: 2_900,
+      denseNotebook: true,
+      notebookEdgeCap,
+    });
+
+    await page.goto("/");
+    const graphCanvas = page.getByLabel("Interactive knowledge graph");
+    await expect(graphCanvas).toBeVisible();
+    await page.waitForTimeout(1_800);
+    await cdp.send("HeapProfiler.collectGarbage");
+    const heapBefore = await cdp.send("Runtime.getHeapUsage");
+    const sample = await page.evaluate(
+      () =>
+        new Promise<{
+          frames: number;
+          elapsedMs: number;
+          fps: number;
+          averageFrameMs: number;
+          p95FrameMs: number;
+        }>((resolve) => {
+          const canvas = document.querySelector(
+            'canvas[aria-label="Interactive knowledge graph"]',
+          );
+          const frameTimes: number[] = [];
+          let frames = 0;
+          let previous = performance.now();
+          const started = previous;
+          const step = (now: number) => {
+            frames += 1;
+            frameTimes.push(now - previous);
+            previous = now;
+            canvas?.dispatchEvent(
+              new WheelEvent("wheel", {
+                deltaY: frames % 2 === 0 ? 1 : -1,
+                cancelable: true,
+              }),
+            );
+            const elapsedMs = now - started;
+            if (elapsedMs >= 2_000) {
+              const sorted = frameTimes.slice().sort((a, b) => a - b);
+              resolve({
+                frames,
+                elapsedMs,
+                fps: (frames * 1_000) / elapsedMs,
+                averageFrameMs: elapsedMs / frames,
+                p95FrameMs:
+                  sorted[Math.floor((sorted.length - 1) * 0.95)] ?? elapsedMs,
+              });
+              return;
+            }
+            requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+        }),
+    );
+    await cdp.send("HeapProfiler.collectGarbage");
+    const heapAfter = await cdp.send("Runtime.getHeapUsage");
+    const graphMetrics = metrics.getGraphMetrics();
+    const heapGrowthBytes = heapAfter.usedSize - heapBefore.usedSize;
+    console.info(
+      `[dense-notebook-perf] cap=${notebookEdgeCap ?? "unlimited"} source=${graphMetrics.sourceCount} nodes=${graphMetrics.returnedNodes} edges=${graphMetrics.returnedEdges} fps=${sample.fps.toFixed(1)} avgFrameMs=${sample.averageFrameMs.toFixed(1)} p95FrameMs=${sample.p95FrameMs.toFixed(1)} heapBefore=${heapBefore.usedSize} heapAfter=${heapAfter.usedSize} heapGrowth=${heapGrowthBytes}`,
+    );
+
+    expect(graphMetrics.sourceCount).toBe(2_900);
+    if (notebookEdgeCap == null) {
+      expect(graphMetrics.returnedEdges).toBeGreaterThanOrEqual(141);
+    }
+    expect(sample.fps).toBeGreaterThanOrEqual(12);
+    expect(heapGrowthBytes).toBeLessThan(4 * 1024 * 1024);
   });
 
   test("falls back to the complete grid for reduced motion", async ({

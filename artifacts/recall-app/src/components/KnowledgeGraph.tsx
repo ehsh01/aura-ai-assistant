@@ -162,6 +162,10 @@ export function KnowledgeGraph({
     canvas.dataset.graphHubs = String(
       layoutNodes.filter((node) => node.hub).length,
     );
+    canvas.dataset.graphEdges = String(layoutEdges.length);
+    canvas.dataset.graphNotebookEdges = String(
+      layoutEdges.filter((edge) => edge.signal === "notebook").length,
+    );
 
     let width = container.clientWidth;
     let height = container.clientHeight;
@@ -189,7 +193,7 @@ export function KnowledgeGraph({
 
     const strokeEdgeLayer = (
       activeNodeId: string | null,
-      highlightedOnly: boolean,
+      layer: "notebook" | "structure" | "highlighted",
       lineWidth: number,
       strokeStyle: string,
       alpha: number,
@@ -199,8 +203,10 @@ export function KnowledgeGraph({
         const source = edge.source as LayoutNode;
         const target = edge.target as LayoutNode;
         if (typeof source !== "object" || typeof target !== "object") continue;
+        if (layer === "notebook" && edge.signal !== "notebook") continue;
+        if (layer === "structure" && edge.signal === "notebook") continue;
         if (
-          highlightedOnly &&
+          layer === "highlighted" &&
           !isHighlightedEdge(edge.sourceId, edge.targetId, activeNodeId)
         ) {
           continue;
@@ -249,19 +255,34 @@ export function KnowledgeGraph({
           renderedEdgeCoreWidth = edgeCoreWidth;
         }
 
-        // Two batched paths create the glow and bright core. Hover adds only
-        // two more bounded passes for connected edges; no per-edge shadows or
-        // screen-point objects are allocated during animation frames.
+        // Shared-notebook stars stay legible with a dimmer batched pair;
+        // higher-signal tag/item edges retain the bright core and glow. Hover
+        // adds only two bounded passes, with no per-edge shadows or point
+        // objects allocated during animation frames.
         strokeEdgeLayer(
           activeNodeId,
-          false,
+          "notebook",
+          edgeGlowWidth,
+          GRAPH_EDGE_GLOW_COLOR,
+          activeNodeId ? 0.03 : focus ? 0.06 : 0.08,
+        );
+        strokeEdgeLayer(
+          activeNodeId,
+          "notebook",
+          edgeCoreWidth,
+          GRAPH_EDGE_CORE_COLOR,
+          activeNodeId ? 0.1 : focus ? 0.3 : 0.4,
+        );
+        strokeEdgeLayer(
+          activeNodeId,
+          "structure",
           edgeGlowWidth,
           GRAPH_EDGE_GLOW_COLOR,
           activeNodeId ? 0.1 : focus ? 0.22 : 0.28,
         );
         strokeEdgeLayer(
           activeNodeId,
-          false,
+          "structure",
           edgeCoreWidth,
           GRAPH_EDGE_CORE_COLOR,
           activeNodeId ? 0.2 : focus ? 0.82 : 0.9,
@@ -269,14 +290,14 @@ export function KnowledgeGraph({
         if (activeNodeId) {
           strokeEdgeLayer(
             activeNodeId,
-            true,
+            "highlighted",
             graphEdgeGlowWidth(edgeCoreWidth + 0.8),
             GRAPH_EDGE_GLOW_COLOR,
             0.46,
           );
           strokeEdgeLayer(
             activeNodeId,
-            true,
+            "highlighted",
             edgeCoreWidth + 0.8,
             GRAPH_EDGE_HIGHLIGHT_COLOR,
             1,
@@ -452,14 +473,16 @@ export function KnowledgeGraph({
     const simulation = forceSimulation(layoutNodes)
       .force(
         "charge",
-        forceManyBody<LayoutNode>().strength((node) => (node.hub ? -90 : -35)),
+        forceManyBody<LayoutNode>().strength((node) =>
+          node.type === "notebooks" ? -180 : node.hub ? -110 : -42,
+        ),
       )
       .force(
         "link",
         forceLink<LayoutNode, LayoutEdge>(layoutEdges)
           .id((node) => node.id)
-          .distance((edge) => (edge.signal === "notebook" ? 54 : 42))
-          .strength(0.28),
+          .distance((edge) => (edge.signal === "notebook" ? 88 : 42))
+          .strength((edge) => (edge.signal === "notebook" ? 0.12 : 0.28)),
       )
       .force(
         "collide",

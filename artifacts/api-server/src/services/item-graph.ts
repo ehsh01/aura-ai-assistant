@@ -117,9 +117,21 @@ export function buildKnowledgeGraph(
     target: string,
     signal: GraphEdge["signal"],
   ): void => {
-    if (!nodes.has(source) || !nodes.has(target) || source === target) return;
-    if ((edgeCounts.get(source) ?? 0) >= query.maxEdgesPerNode) return;
-    if ((edgeCounts.get(target) ?? 0) >= query.maxEdgesPerNode) return;
+    const sourceNode = nodes.get(source);
+    const targetNode = nodes.get(target);
+    if (!sourceNode || !targetNode || source === target) return;
+    if (
+      sourceNode.type !== "notebooks" &&
+      (edgeCounts.get(source) ?? 0) >= query.maxEdgesPerNode
+    ) {
+      return;
+    }
+    if (
+      targetNode.type !== "notebooks" &&
+      (edgeCounts.get(target) ?? 0) >= query.maxEdgesPerNode
+    ) {
+      return;
+    }
     const id = [source, target].sort().join("~");
     if (edges.some((edge) => edge.id === id)) return;
     edges.push({ id, source, target, signal });
@@ -207,14 +219,11 @@ export async function getKnowledgeGraphForUser(
   // Page through at most the 1,500 freshest source items. Each response still
   // contains no more than 500 rendered nodes, keeping DB and client work bounded.
   const fetchLimit = Math.min(1_501, query.limit + query.offset + 1);
-  const rows = await listItemsForUser(
-    userId,
-    {
-      ...parseItemSearchFilters({ limit: fetchLimit }),
-      limit: fetchLimit,
-      bodyTextLimit: ITEM_GRAPH_BODY_MAX_CHARS,
-    },
-  );
+  const rows = await listItemsForUser(userId, {
+    ...parseItemSearchFilters({ limit: fetchLimit }),
+    limit: fetchLimit,
+    bodyTextLimit: ITEM_GRAPH_BODY_MAX_CHARS,
+  });
   const pageRows = rows.slice(query.offset, query.offset + query.limit);
   const graph = buildKnowledgeGraph(pageRows, query);
   return {
