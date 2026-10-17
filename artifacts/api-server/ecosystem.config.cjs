@@ -48,6 +48,9 @@ module.exports = {
       exec_mode: "fork",
       instances: 1,
       autorestart: true,
+      // Keep the external .map for offline debugging; parsing it in-process
+      // retains hundreds of MB in V8 for this bundled server.
+      source_map_support: false,
       // Must stay BELOW the RSS the heap cap implies (heap + ~100M runtime), or
       // V8 aborts with a fatal OOM before pm2 ever reaches this threshold and
       // in-flight requests die as 502s. Restarting on RSS is the graceful path.
@@ -77,6 +80,7 @@ module.exports = {
       exec_mode: "fork",
       instances: 1,
       autorestart: true,
+      source_map_support: false,
       // Same ordering as the API: restart on RSS before V8's heap cap aborts.
       // OCR and embedding batches keep this near 600M, so the ceiling has to
       // sit above that to avoid a restart loop.

@@ -105,7 +105,9 @@ async function buildAll() {
       "puppeteer-core",
       "electron",
     ],
-    sourcemap: "linked",
+    // Emit a standalone map for offline debugging. Production processes must
+    // not discover and parse it at runtime; the decoded map retains ~300MB.
+    sourcemap: "external",
     plugins: [
       // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
       esbuildPluginPino({ transports: ["pino-pretty"] })
