@@ -3,7 +3,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const migrationUrl = new URL(
-  "../../../../lib/db/migrations/0037_saved_items.sql",
+  "../../../../lib/db/migrations/0039_saved_items.sql",
   import.meta.url,
 );
 
