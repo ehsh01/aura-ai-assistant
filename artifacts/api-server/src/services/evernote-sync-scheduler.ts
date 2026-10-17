@@ -1,0 +1,123 @@
+import { and, eq } from "drizzle-orm";
+import { connectors, evernoteSyncState } from "@workspace/db/schema";
+import { getDb } from "../lib/db";
+import { logger } from "../lib/logger";
+import { enqueueEvernoteSyncForUser } from "./connectors";
+
+const SCHEDULER_TICK_MS = 60_000;
+let timer: ReturnType<typeof setInterval> | null = null;
+let running = false;
+
+function enabled(name: string, fallback = true): boolean {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (value == null || value === "") return fallback;
+  return value !== "false" && value !== "0";
+}
+
+function envMinutes(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) ? Math.min(10_080, Math.max(1, value)) : fallback;
+}
+
+export type EvernoteScheduleDecision = "full" | "incremental" | null;
+
+export function evernoteScheduleDecision(input: {
+  now: Date;
+  lastSyncAt: Date | null;
+  lastFullReconcileAt: Date | null;
+  incrementalEnabled: boolean;
+  fullReconcileEnabled: boolean;
+  incrementalMinutes: number;
+  fullReconcileMinutes: number;
+}): EvernoteScheduleDecision {
+  const { now } = input;
+  if (
+    input.fullReconcileEnabled &&
+    (!input.lastFullReconcileAt ||
+      now.getTime() - input.lastFullReconcileAt.getTime() >=
+        input.fullReconcileMinutes * 60_000)
+  ) {
+    return "full";
+  }
+  if (
+    input.incrementalEnabled &&
+    (!input.lastSyncAt ||
+      now.getTime() - input.lastSyncAt.getTime() >=
+        input.incrementalMinutes * 60_000)
+  ) {
+    return "incremental";
+  }
+  return null;
+}
+
+export async function scheduleDueEvernoteSyncs(now = new Date()): Promise<number> {
+  if (!enabled("EVERNOTE_SYNC_ENABLED", true)) return 0;
+  const rows = await getDb()
+    .select({
+      connector: connectors,
+      state: evernoteSyncState,
+    })
+    .from(connectors)
+    .leftJoin(
+      evernoteSyncState,
+      eq(evernoteSyncState.connectorId, connectors.id),
+    )
+    .where(and(eq(connectors.type, "evernote"), eq(connectors.enabled, true)));
+  let queued = 0;
+  for (const { connector, state } of rows) {
+    const mode = evernoteScheduleDecision({
+      now,
+      lastSyncAt: connector.lastSyncAt,
+      lastFullReconcileAt: state?.lastFullReconcileAt ?? null,
+      incrementalEnabled: enabled("EVERNOTE_INCREMENTAL_SYNC_ENABLED", true),
+      fullReconcileEnabled: enabled("EVERNOTE_FULL_RECONCILE_ENABLED", true),
+      incrementalMinutes: envMinutes("EVERNOTE_INCREMENTAL_SYNC_MINUTES", 15),
+      fullReconcileMinutes: envMinutes(
+        "EVERNOTE_FULL_RECONCILE_MINUTES",
+        24 * 60,
+      ),
+    });
+    if (!mode) continue;
+    try {
+      const result = await enqueueEvernoteSyncForUser(
+        connector.userId,
+        connector.id,
+        mode,
+      );
+      if (result.status === "queued") {
+        queued += 1;
+        const { nudgeJobWorker } = await import("./job-worker");
+        nudgeJobWorker(result.jobId);
+      }
+    } catch (error) {
+      logger.warn(
+        { error, connectorId: connector.id, mode },
+        "Could not schedule Evernote sync",
+      );
+    }
+  }
+  return queued;
+}
+
+export function startEvernoteSyncScheduler(): void {
+  if (timer || !enabled("EVERNOTE_SYNC_ENABLED", true)) return;
+  const initial = setTimeout(() => {
+    void scheduleDueEvernoteSyncs();
+  }, 30_000);
+  initial.unref?.();
+  timer = setInterval(() => {
+    if (running) return;
+    running = true;
+    void scheduleDueEvernoteSyncs()
+      .catch((error) => logger.warn({ error }, "Evernote scheduler failed"))
+      .finally(() => {
+        running = false;
+      });
+  }, SCHEDULER_TICK_MS);
+  timer.unref?.();
+}
+
+export function stopEvernoteSyncScheduler(): void {
+  if (timer) clearInterval(timer);
+  timer = null;
+}

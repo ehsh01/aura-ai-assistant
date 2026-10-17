@@ -25,6 +25,11 @@ const READ_TOOLS = new Set([
   "get_note",
   "search_notebooks",
   "search_tags",
+  "search_tasks",
+  "get_task",
+  "get_attachment",
+  "search_spaces",
+  "get_space",
 ]);
 
 type JsonRecord = Record<string, unknown>;
@@ -530,6 +535,15 @@ async function callReadTool(
   }
 }
 
+/** Read-only escape hatch for the durable worker's attachment/task phases. */
+export async function callEvernoteReadTool(
+  client: ToolCaller,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<JsonRecord> {
+  return callReadTool(client, name, args);
+}
+
 function isMcpRateLimitError(error: unknown): boolean {
   const row = asRecord(error);
   const data = asRecord(row.data);
@@ -603,14 +617,15 @@ function deepLink(guid: string, row: JsonRecord): string {
  * Keep one remote note from dominating the worker heap. Attachments remain
  * metadata-only; resource bytes are never copied into source records.
  */
-export const EVERNOTE_MAX_NOTE_CONTENT_CHARS = 128 * 1024;
+/** Full ENML is retained. Kept as an export for compatibility with older tests. */
+export const EVERNOTE_MAX_NOTE_CONTENT_CHARS = Number.POSITIVE_INFINITY;
 
 function boundedText(value: unknown, max = EVERNOTE_MAX_NOTE_CONTENT_CHARS): {
   text: string;
   truncated: boolean;
 } {
   const text = typeof value === "string" ? value : "";
-  return text.length > max
+  return Number.isFinite(max) && text.length > max
     ? { text: text.slice(0, max), truncated: true }
     : { text, truncated: false };
 }
@@ -638,11 +653,52 @@ function compactNoteForSync(raw: JsonRecord): JsonRecord {
       name:
         boundedScalar(row.name, 500) ?? boundedScalar(row.label, 500) ?? "",
       title: boundedScalar(row.title, 1_000) ?? "",
+      parentId: boundedScalar(row.parentId, 500),
     };
   };
-  const hasResources =
-    asArray(raw.resources).length > 0 ||
-    asArray(structured.resources).length > 0;
+  const compactResource = (value: unknown): JsonRecord => {
+    const row = asRecord(value);
+    return {
+      id:
+        boundedScalar(row.id, 500) ??
+        boundedScalar(row.guid, 500) ??
+        boundedScalar(row.resourceId, 500),
+      hash: boundedScalar(row.hash, 128) ?? boundedScalar(row.md5, 128),
+      mime: boundedScalar(row.mime, 255) ?? boundedScalar(row.mimeType, 255),
+      name:
+        boundedScalar(row.name, 2_000) ??
+        boundedScalar(row.fileName, 2_000),
+      sizeBytes: asNumber(row.sizeBytes ?? row.size),
+    };
+  };
+  const compactTask = (value: unknown): JsonRecord => {
+    const row = asRecord(value);
+    return {
+      id:
+        boundedScalar(row.id, 500) ??
+        boundedScalar(row.guid, 500) ??
+        boundedScalar(row.taskId, 500),
+      noteId: boundedScalar(row.noteId, 500),
+      label: boundedScalar(row.label, 10_000) ?? "",
+      description: boundedScalar(row.description, 50_000),
+      status: boundedScalar(row.status, 64),
+      dueDate: row.dueDate ?? row.dueAt,
+      completedAt: row.completedAt,
+      updatedAt: row.updatedAt ?? row.updated,
+      priority: boundedScalar(row.priority, 64),
+      flagged: row.flagged === true,
+      recurring: row.recurring === true,
+      assignee: boundedScalar(row.assignee, 500),
+    };
+  };
+  const resources = [
+    ...asArray(raw.resources),
+    ...asArray(structured.resources),
+  ].map(compactResource);
+  const tasks = [
+    ...asArray(raw.tasks),
+    ...asArray(structured.tasks),
+  ].map(compactTask);
   return {
     id: noteGuid(raw),
     title: boundedScalar(raw.title, 1_000) ?? "Untitled",
@@ -652,10 +708,9 @@ function compactNoteForSync(raw: JsonRecord): JsonRecord {
     notebookGuid: boundedScalar(raw.notebookGuid, 500),
     notebookName: boundedScalar(raw.notebookName, 500),
     tagIds: asArray(raw.tagIds)
-      .slice(0, 100)
       .map((tag) => boundedScalar(tag, 500))
       .filter(Boolean),
-    tags: asArray(raw.tags).slice(0, 100).map(compactEntity),
+    tags: asArray(raw.tags).map(compactEntity),
     created: raw.created,
     createdAt: raw.createdAt,
     updated: raw.updated,
@@ -663,13 +718,22 @@ function compactNoteForSync(raw: JsonRecord): JsonRecord {
     usn: raw.usn,
     version: raw.version,
     updateSequenceNum: raw.updateSequenceNum,
+    deleted: raw.deleted,
+    trashed: raw.trashed,
+    inTrash: raw.inTrash,
+    reminderOrder: raw.reminderOrder,
+    reminderTime: raw.reminderTime,
+    reminderDoneTime: raw.reminderDoneTime,
     webUrl: boundedScalar(raw.webUrl, 2_000),
     url: boundedScalar(raw.url, 2_000),
     deepLink: boundedScalar(raw.deepLink, 2_000),
-    resources: hasResources ? [{}] : [],
+    resources,
+    tasks,
     structuredContent: {
       notebookId: boundedScalar(structured.notebookId, 500),
-      tags: asArray(structured.tags).slice(0, 100).map(compactEntity),
+      tags: asArray(structured.tags).map(compactEntity),
+      resources: [],
+      tasks: [],
     },
   };
 }
@@ -697,9 +761,14 @@ function noteToRaw(
     ...asArray(raw.tags),
     ...asArray(structured.tags),
   ];
-  const parsedTags = tagRows
-    .map(idAndName)
-    .filter((tag): tag is { id: string; name: string } => Boolean(tag));
+  const parsedTags = [
+    ...new Map(
+      tagRows
+        .map(idAndName)
+        .filter((tag): tag is { id: string; name: string } => Boolean(tag))
+        .map((tag) => [tag.id, tag] as const),
+    ).values(),
+  ];
   const tagGuids =
     parsedTags.length > 0
       ? parsedTags.map((tag) => tag.id)
@@ -716,6 +785,10 @@ function noteToRaw(
     ...asArray(raw.resources),
     ...asArray(structured.resources),
   ];
+  const tasks = [
+    ...asArray(raw.tasks),
+    ...asArray(structured.tasks),
+  ];
   const sourceCreatedAt = iso(raw.created ?? raw.createdAt);
   const sourceUpdatedAt = iso(raw.updated ?? raw.updatedAt);
   const sourceUrl = deepLink(guid, raw);
@@ -725,6 +798,17 @@ function noteToRaw(
     notebookName,
     tags: tagNames,
     sourceUrl,
+    extras: {
+      resources,
+      tasks,
+      trashed:
+        raw.trashed === true ||
+        raw.inTrash === true ||
+        Boolean(raw.deleted),
+      reminderOrder: raw.reminderOrder ?? null,
+      reminderTime: raw.reminderTime ?? null,
+      reminderDoneTime: raw.reminderDoneTime ?? null,
+    },
   });
   return {
     externalId: guid,
@@ -751,6 +835,54 @@ function noteToRaw(
       tagNames,
       evernoteUpdated: sourceUpdatedAt,
       hasAttachments: resources.length > 0,
+      attachments: resources.map((value) => {
+        const row = asRecord(value);
+        return {
+          id:
+            boundedScalar(row.id, 500) ??
+            boundedScalar(row.guid, 500) ??
+            boundedScalar(row.resourceId, 500),
+          hash: boundedScalar(row.hash, 128) ?? boundedScalar(row.md5, 128),
+          mime:
+            boundedScalar(row.mime, 255) ??
+            boundedScalar(row.mimeType, 255),
+          name:
+            boundedScalar(row.name, 2_000) ??
+            boundedScalar(row.fileName, 2_000),
+          sizeBytes: asNumber(row.sizeBytes ?? row.size),
+        };
+      }),
+      tasks: tasks.map((value) => {
+        const row = asRecord(value);
+        return {
+          id:
+            boundedScalar(row.id, 500) ??
+            boundedScalar(row.guid, 500) ??
+            boundedScalar(row.taskId, 500),
+          noteId: boundedScalar(row.noteId, 500) ?? guid,
+          label: boundedScalar(row.label, 10_000) ?? "",
+          description: boundedScalar(row.description, 50_000),
+          status: boundedScalar(row.status, 64),
+          dueDate: iso(row.dueDate ?? row.dueAt),
+          completedAt: iso(row.completedAt),
+          updatedAt: iso(row.updatedAt ?? row.updated),
+          priority: boundedScalar(row.priority, 64),
+          flagged: row.flagged === true,
+          recurring: row.recurring === true,
+          assignee: boundedScalar(row.assignee, 500),
+        };
+      }),
+      trashed:
+        raw.trashed === true ||
+        raw.inTrash === true ||
+        Boolean(raw.deleted),
+      hasReminder:
+        raw.reminderOrder != null ||
+        raw.reminderTime != null ||
+        raw.reminderDoneTime != null,
+      reminderOrder: raw.reminderOrder ?? null,
+      reminderTime: iso(raw.reminderTime),
+      reminderDoneTime: iso(raw.reminderDoneTime),
       contentTruncated: content.truncated,
     },
   };
@@ -768,6 +900,128 @@ export function evernoteMcpBackfillChunkSize(): number {
   );
   if (!Number.isFinite(configured)) return 25;
   return Math.min(Math.max(Math.floor(configured), 1), 100);
+}
+
+export type EvernoteTaxonomyEntity = {
+  id: string;
+  name: string;
+  parentId: string | null;
+  stack: string | null;
+  spaceId: string | null;
+  access: string | null;
+  metadata: JsonRecord;
+};
+
+export type EvernoteTaxonomy = {
+  notebooks: EvernoteTaxonomyEntity[];
+  tags: EvernoteTaxonomyEntity[];
+  spaces: EvernoteTaxonomyEntity[];
+};
+
+function taxonomyEntity(value: unknown): EvernoteTaxonomyEntity | null {
+  const row = asRecord(value);
+  const named = idAndName(row);
+  if (!named) return null;
+  return {
+    ...named,
+    parentId:
+      boundedScalar(row.parentId, 500) ??
+      boundedScalar(row.parentGuid, 500),
+    stack: boundedScalar(row.stack, 1_000),
+    spaceId:
+      boundedScalar(row.workspaceId, 500) ??
+      boundedScalar(row.spaceId, 500),
+    access:
+      boundedScalar(row.primaryAccess, 64) ??
+      boundedScalar(row.access, 64),
+    metadata: row,
+  };
+}
+
+async function enumerateNameSearch(
+  client: ToolCaller,
+  tool: "search_notebooks" | "search_tags",
+  keys: string[],
+): Promise<EvernoteTaxonomyEntity[]> {
+  const cap = 100;
+  const entities = new Map<string, EvernoteTaxonomyEntity>();
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789".split("");
+  const queue: string[] = [""];
+  const visited = new Set<string>();
+  const maxCalls = 5_000;
+  const maxDepth = 12;
+  while (queue.length > 0) {
+    if (visited.size >= maxCalls) {
+      throw new Error(
+        `Evernote ${tool} enumeration exceeded ${maxCalls} refined searches`,
+      );
+    }
+    const query = queue.shift()!;
+    if (visited.has(query)) continue;
+    visited.add(query);
+    const result = await callReadTool(client, tool, {
+      query,
+      maxResults: cap,
+      sortBy: "name",
+    });
+    const rows = firstArray(result, keys);
+    for (const row of rows) {
+      const entity = taxonomyEntity(row);
+      if (entity) entities.set(entity.id, entity);
+    }
+    const total = asNumber(
+      result.totalResultCount ?? result.total ?? result.totalCount,
+    );
+    const saturated = rows.length >= cap || (total != null && total > rows.length);
+    if (saturated) {
+      if (query.length >= maxDepth) {
+        throw new Error(
+          `Evernote ${tool} result remained capped for query ${JSON.stringify(query)}`,
+        );
+      }
+      for (const char of alphabet) queue.push(`${query}${char}`);
+    }
+    await pace();
+  }
+  return [...entities.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Evernote's notebook/tag tools have no cursor. Repeated name searches split
+ * saturated result sets; note-body IDs are unioned by the caller.
+ */
+export async function enumerateEvernoteTaxonomy(
+  client: ToolCaller,
+): Promise<EvernoteTaxonomy> {
+  const notebooks = await enumerateNameSearch(client, "search_notebooks", [
+    "notebooks",
+    "results",
+    "items",
+  ]);
+  const tags = await enumerateNameSearch(client, "search_tags", [
+    "tags",
+    "results",
+    "items",
+  ]);
+  const spaceResult = await callReadTool(client, "search_spaces", {
+    query: "",
+    maxResults: 100,
+  });
+  await pace();
+  const spaces = firstArray(spaceResult, ["spaces", "results", "items"])
+    .map(taxonomyEntity)
+    .filter(
+      (entity): entity is EvernoteTaxonomyEntity => Boolean(entity),
+    );
+  const reportedSpaces = asNumber(
+    spaceResult.totalResultCount ?? spaceResult.total ?? spaceResult.totalCount,
+  );
+  if (reportedSpaces != null && reportedSpaces > spaces.length) {
+    throw new Error(
+      `Evernote space listing was capped at ${spaces.length} of ${reportedSpaces}`,
+    );
+  }
+  return { notebooks, tags, spaces };
 }
 
 async function pace(): Promise<void> {
@@ -803,6 +1057,11 @@ type EvernoteMcpStreamOptions = {
   processBatch: (batch: EvernoteMcpSyncBatch) => Promise<void>;
   stopAfterOneBatch?: boolean;
   maxBatchesPerInvocation?: number;
+  taxonomy?: EvernoteTaxonomy;
+  onTaxonomy?: (taxonomy: EvernoteTaxonomy) => Promise<void>;
+  query?: string;
+  forceTrashed?: boolean;
+  stopAtFirstUnchanged?: boolean;
 };
 
 function initialCheckpoint(
@@ -841,31 +1100,14 @@ export async function streamEvernoteViaMcp(
     authoritativeListing: boolean;
   }
 > {
-  const notebookResult = await callReadTool(client, "search_notebooks", {
-    query: "",
-    maxResults: 100,
-    sortBy: "name",
-  });
-  await pace();
-  const tagResult = await callReadTool(client, "search_tags", {
-    query: "",
-    maxResults: 100,
-    sortBy: "name",
-  });
-  await pace();
+  const taxonomy =
+    options.taxonomy ?? (await enumerateEvernoteTaxonomy(client));
+  if (!options.taxonomy) await options.onTaxonomy?.(taxonomy);
   const notebooks = new Map(
-    firstArray(notebookResult, ["notebooks", "results", "items"])
-      .slice(0, 100)
-      .map(idAndName)
-      .filter((item): item is { id: string; name: string } => Boolean(item))
-      .map((item) => [item.id, item.name] as const),
+    taxonomy.notebooks.map((item) => [item.id, item.name] as const),
   );
   const tags = new Map(
-    firstArray(tagResult, ["tags", "results", "items"])
-      .slice(0, 100)
-      .map(idAndName)
-      .filter((item): item is { id: string; name: string } => Boolean(item))
-      .map((item) => [item.id, item.name] as const),
+    taxonomy.tags.map((item) => [item.id, item.name] as const),
   );
 
   let checkpoint = initialCheckpoint(options.checkpoint);
@@ -873,6 +1115,7 @@ export async function streamEvernoteViaMcp(
     checkpoint.expectedTotal != null &&
     checkpoint.startIndex >= checkpoint.expectedTotal;
   let invocationBatches = 0;
+  let reachedIncrementalBoundary = false;
   const pageSize = evernoteMcpBackfillChunkSize();
 
   while (
@@ -881,7 +1124,7 @@ export async function streamEvernoteViaMcp(
   ) {
     const pageStart = checkpoint.startIndex;
     const result = await callReadTool(client, "search_notes", {
-      query: "",
+      query: options.query ?? "",
       maxResults: pageSize,
       startIndex: pageStart,
       sortBy: "updated",
@@ -954,97 +1197,124 @@ export async function streamEvernoteViaMcp(
       checkpoint = { ...checkpoint, listingAuthoritative: false };
     }
     const knownNotes = await options.loadKnownNotes([...new Set(ids)]);
-    const seen: Array<{ externalId: string; listingIndex: number }> = [];
-    const records: EvernoteRawRecord[] = [];
-    const replayExternalIds: string[] = [];
-    const errors: string[] = [];
-    let skipped = 0;
-    let failed = 0;
-
     for (const summary of summaries) {
       const guid = summary.externalId;
-      if (!guid) continue;
-      const known = knownNotes.get(guid);
-      const processedHere =
-        known?.evernoteProcessedSyncRunId === options.syncRunId &&
-        known.evernoteProcessedAtIndex === summary.listingIndex;
-      if (processedHere) {
-        continue;
-      }
-      const seenHere =
-        known?.evernoteSeenSyncRunId === options.syncRunId &&
-        known.evernoteSeenAtIndex === summary.listingIndex;
-      if (
-        (known?.evernoteSeenSyncRunId === options.syncRunId && !seenHere) ||
-        (known?.evernoteProcessedSyncRunId === options.syncRunId &&
-          !processedHere)
-      ) {
+      const seen =
+        guid == null
+          ? []
+          : [{ externalId: guid, listingIndex: summary.listingIndex }];
+      const records: EvernoteRawRecord[] = [];
+      const errors: string[] = [];
+      let replayExternalIds: string[] = [];
+      let skipped = 0;
+      let failed = 0;
+
+      if (!guid) {
+        failed = 1;
+        errors.push("Evernote MCP note summary is missing a GUID");
         checkpoint = { ...checkpoint, listingAuthoritative: false };
-      }
-      seen.push({ externalId: guid, listingIndex: summary.listingIndex });
-      if (seenHere) replayExternalIds.push(guid);
-      if (
-        !seenHere &&
-        known &&
-        summary.updatedAt &&
-        known.evernoteUpdated === summary.updatedAt
-      ) {
-        skipped += 1;
-        continue;
-      }
-      try {
-        const note = compactNoteForSync(
-          await callReadTool(client, "get_note", { noteId: guid }),
-        );
-        const record = noteToRaw(note, notebooks, tags);
-        if (record.externalId !== guid) {
-          throw new Error(
-            `Evernote MCP get_note returned ${record.externalId} for ${guid}`,
-          );
+      } else {
+        const known = knownNotes.get(guid);
+        const processedHere =
+          known?.evernoteProcessedSyncRunId === options.syncRunId &&
+          known.evernoteProcessedAtIndex === summary.listingIndex;
+        const seenHere =
+          known?.evernoteSeenSyncRunId === options.syncRunId &&
+          known.evernoteSeenAtIndex === summary.listingIndex;
+        if (
+          (known?.evernoteSeenSyncRunId === options.syncRunId && !seenHere) ||
+          (known?.evernoteProcessedSyncRunId === options.syncRunId &&
+            !processedHere)
+        ) {
+          checkpoint = { ...checkpoint, listingAuthoritative: false };
         }
-        records.push(record);
-      } catch (error) {
-        if (isMcpRateLimitError(error)) throw error;
-        failed += 1;
-        errors.push(
-          error instanceof Error
-            ? error.message.slice(0, 300)
-            : `Evernote MCP get_note failed for ${guid}`,
-        );
+        if (seenHere && !processedHere) replayExternalIds = [guid];
+        if (
+          processedHere ||
+          (!seenHere &&
+            known &&
+            summary.updatedAt &&
+            known.evernoteUpdated === summary.updatedAt &&
+            (known.trashed ?? false) === Boolean(options.forceTrashed))
+        ) {
+          skipped = 1;
+          if (options.stopAtFirstUnchanged && !processedHere) {
+            reachedIncrementalBoundary = true;
+            checkpoint = { ...checkpoint, listingAuthoritative: false };
+          }
+        } else {
+          try {
+            const note = compactNoteForSync(
+              await callReadTool(client, "get_note", { noteId: guid }),
+            );
+            const record = noteToRaw(note, notebooks, tags);
+            if (options.forceTrashed) record.metadata.trashed = true;
+            if (record.externalId !== guid) {
+              throw new Error(
+                `Evernote MCP get_note returned ${record.externalId} for ${guid}`,
+              );
+            }
+            records.push(record);
+          } catch (error) {
+            if (isMcpRateLimitError(error)) throw error;
+            failed = 1;
+            errors.push(
+              error instanceof Error
+                ? error.message.slice(0, 300)
+                : `Evernote MCP get_note failed for ${guid}`,
+            );
+          }
+          await pace();
+        }
       }
-      // Concurrency intentionally remains one so MCP pacing is global.
-      await pace();
-    }
 
-    const nextStart = pageStart + page.length;
-    checkpoint = {
-      ...checkpoint,
-      startIndex: nextStart,
-      recordsFetched: Math.max(checkpoint.recordsFetched, nextStart),
-      recordsSkipped: checkpoint.recordsSkipped + skipped,
-      recordsFailed: checkpoint.recordsFailed + failed,
-      batchesProcessed: checkpoint.batchesProcessed + 1,
-    };
-    await options.processBatch({
-      records,
-      seen,
-      replayExternalIds,
-      errors,
-      checkpoint,
-    });
-    invocationBatches += 1;
+      const nextStart = summary.listingIndex + 1;
+      checkpoint = {
+        ...checkpoint,
+        startIndex: nextStart,
+        recordsFetched: Math.max(checkpoint.recordsFetched, nextStart),
+        recordsSkipped: checkpoint.recordsSkipped + skipped,
+        recordsFailed: checkpoint.recordsFailed + failed,
+        batchesProcessed: checkpoint.batchesProcessed + 1,
+      };
+      await options.processBatch({
+        records,
+        seen,
+        replayExternalIds,
+        errors,
+        checkpoint,
+      });
+      invocationBatches += 1;
 
-    if (
-      checkpoint.expectedTotal != null &&
-      nextStart >= checkpoint.expectedTotal
-    ) {
-      listingComplete = true;
-      break;
+      if (reachedIncrementalBoundary) {
+        listingComplete = true;
+        break;
+      }
+
+      if (
+        checkpoint.expectedTotal != null &&
+        nextStart >= checkpoint.expectedTotal
+      ) {
+        listingComplete = true;
+        break;
+      }
+      if (
+        checkpoint.expectedTotal == null &&
+        nextStart >= pageStart + page.length &&
+        page.length < pageSize
+      ) {
+        listingComplete = true;
+        break;
+      }
+      const maxBatches = options.stopAfterOneBatch
+        ? 1
+        : Math.max(
+            1,
+            Math.floor(options.maxBatchesPerInvocation ?? Infinity),
+          );
+      if (invocationBatches >= maxBatches) break;
     }
-    if (checkpoint.expectedTotal == null && page.length < pageSize) {
-      listingComplete = true;
-      break;
-    }
+    if (listingComplete) break;
     const maxBatches = options.stopAfterOneBatch
       ? 1
       : Math.max(1, Math.floor(options.maxBatchesPerInvocation ?? Infinity));
@@ -1090,7 +1360,7 @@ export async function fetchEvernoteViaMcp(
       errors.push(...batch.errors);
       for (const item of batch.seen) activeGuids.add(item.externalId);
     },
-    stopAfterOneBatch: true,
+    maxBatchesPerInvocation: evernoteMcpBackfillChunkSize(),
   });
   const deletedExternalIds = result.authoritativeListing
     ? [...knownNotes.keys()].filter((guid) => !activeGuids.has(guid))
@@ -1148,21 +1418,10 @@ export async function testEvernoteMcpConnection(
   settings: EvernoteMcpConnectorSettings;
 }> {
   const result = await withEvernoteMcpClient(settings, async (client) => {
-    const notebooks = await callReadTool(client, "search_notebooks", {
-      query: "",
-      maxResults: 100,
-      sortBy: "name",
-    });
-    await pace();
-    const tags = await callReadTool(client, "search_tags", {
-      query: "",
-      maxResults: 100,
-      sortBy: "name",
-    });
+    const taxonomy = await enumerateEvernoteTaxonomy(client);
     return {
-      notebookCount: firstArray(notebooks, ["notebooks", "results", "items"])
-        .length,
-      tagCount: firstArray(tags, ["tags", "results", "items"]).length,
+      notebookCount: taxonomy.notebooks.length,
+      tagCount: taxonomy.tags.length,
     };
   }, onStateChanged);
   return { ...result.value, settings: result.settings };

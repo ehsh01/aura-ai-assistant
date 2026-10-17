@@ -16,6 +16,7 @@ import {
   completeJob,
   connectorSyncFromPayload,
   continueJob,
+  deferJob,
   enexImportFromPayload,
   failJob,
   heartbeatJob,
@@ -139,11 +140,25 @@ async function runOneJob(job: Job): Promise<void> {
     const result = await handler(job);
     if (result === "continue") {
       await continueJob(job.id);
+      // Timer polling intentionally claims only local attachment extraction.
+      // A durable multi-slice connector job must explicitly request its own
+      // next slice after continueJob's one-second availability delay.
+      const continuation = setTimeout(() => nudgeJobWorker(job.id), 1_100);
+      continuation.unref?.();
     } else {
       await completeJob(job.id);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Job failed";
+    const { EvernoteWatchdogPauseError } = await import("./evernote-watchdog");
+    if (err instanceof EvernoteWatchdogPauseError) {
+      await deferJob(job.id, err.retryAfterMs, message);
+      logger.info(
+        { jobId: job.id, type: job.type, status: err.status },
+        "Background job paused by load watchdog",
+      );
+      return;
+    }
     const retryAfterMs =
       err &&
       typeof err === "object" &&

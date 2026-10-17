@@ -32,14 +32,10 @@ describe("Evernote sync cost policy", () => {
     expect(sourceRecordContentHashUnchanged({}, {})).toBe(false);
   });
 
-  it("defaults off and enforces the hard maximum when explicitly enabled", () => {
+  it("permanently disables sync-time embeddings", () => {
     expect(evernoteEmbeddingSyncLimit()).toBe(0);
-    process.env.RECALL_BACKGROUND_AI_ENABLED = "true";
-    process.env.RECALL_EMBEDDING_WARM_ENABLED = "true";
-    process.env.RECALL_EVERNOTE_EMBEDDINGS_ENABLED = "true";
-    expect(evernoteEmbeddingSyncLimit()).toBe(25);
     process.env.EVERNOTE_EMBEDDING_MAX_PER_SYNC = "500";
-    expect(evernoteEmbeddingSyncLimit()).toBe(100);
+    expect(evernoteEmbeddingSyncLimit()).toBe(0);
   });
 
   it("supports connector and global embedding kill-switches", () => {
@@ -56,10 +52,10 @@ describe("Evernote sync cost policy", () => {
     expect(evernoteEmbeddingSyncLimit()).toBe(0);
   });
 
-  it("caps total Evernote embedding reservations per UTC day", () => {
-    expect(evernoteEmbeddingDailyLimit()).toBe(100);
+  it("permanently disables daily embedding reservations", () => {
+    expect(evernoteEmbeddingDailyLimit()).toBe(0);
     process.env.EVERNOTE_EMBEDDING_DAILY_CAP = "5000";
-    expect(evernoteEmbeddingDailyLimit()).toBe(1000);
+    expect(evernoteEmbeddingDailyLimit()).toBe(0);
   });
 
   it("can exclude Evernote from Ask independently", () => {

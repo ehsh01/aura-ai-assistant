@@ -3,9 +3,10 @@ import { describe, expect, it } from "vitest";
 
 describe("Evernote worker boundary", () => {
   it("claims only the explicit Sync Now job while timer polling stays local-only", async () => {
-    const [routes, worker] = await Promise.all([
+    const [routes, worker, scheduler] = await Promise.all([
       readFile(new URL("../routes/connectors.ts", import.meta.url), "utf8"),
       readFile(new URL("./job-worker.ts", import.meta.url), "utf8"),
+      readFile(new URL("./evernote-sync-scheduler.ts", import.meta.url), "utf8"),
     ]);
 
     expect(routes).toMatch(
@@ -21,5 +22,9 @@ describe("Evernote worker boundary", () => {
     expect(worker).toMatch(
       /claimNextJobOfTypes\(workerId,\s*TIMER_SAFE_JOB_TYPES\)/,
     );
+    expect(worker).toMatch(
+      /continueJob\(job\.id\)[\s\S]*nudgeJobWorker\(job\.id\)/,
+    );
+    expect(scheduler).toMatch(/nudgeJobWorker\(result\.jobId\)/);
   });
 });

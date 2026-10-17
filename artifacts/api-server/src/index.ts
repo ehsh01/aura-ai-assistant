@@ -6,6 +6,7 @@ import { startFinanceAutoSync } from "./services/finance-auto-sync";
 import { startJobWorker } from "./services/job-worker";
 import { startSmsReminderSweep } from "./services/sms-reminders";
 import { startBriefingSweep } from "./services/briefing-sweep";
+import { startEvernoteSyncScheduler } from "./services/evernote-sync-scheduler";
 
 /**
  * RECALL_ROLE splits responsibilities across PM2 processes:
@@ -23,6 +24,7 @@ function startBackgroundServices(): void {
   startJobWorker();
   startSmsReminderSweep();
   startBriefingSweep();
+  startEvernoteSyncScheduler();
 }
 
 assertSecretEncryptionConfigured(config.isProduction);

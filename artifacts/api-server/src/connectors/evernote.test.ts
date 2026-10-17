@@ -180,8 +180,8 @@ describe("evernote connector", () => {
     expect(noteCalls).toBe(25);
     expect(result.records).toHaveLength(25);
     expect(result.recordsDeferred).toBe(total - 25);
-    expect(result.records[0]?.metadata.contentTruncated).toBe(true);
-    expect(result.records[0]?.recordText.length).toBeLessThan(140 * 1024);
+    expect(result.records[0]?.metadata.contentTruncated).toBe(false);
+    expect(result.records[0]?.recordText.length).toBeGreaterThanOrEqual(256 * 1024);
     expect(result.deletedExternalIds).toEqual([]);
   });
 

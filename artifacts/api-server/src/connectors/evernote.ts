@@ -93,8 +93,7 @@ const require = createRequire(import.meta.url);
 const Evernote = require("evernote") as EvernoteSdk;
 
 const METADATA_PAGE_SIZE = 250;
-const NOTE_FETCH_CONCURRENCY = 2;
-const MAX_NOTE_CONTENT_CHARS = 128 * 1024;
+const NOTE_FETCH_CONCURRENCY = 1;
 
 function evernoteBackfillBatchSize(): number {
   const configured = Number(
@@ -130,6 +129,7 @@ export type EvernoteKnownNote = {
   tagGuids?: string[];
   tagNames?: string[];
   evernoteUpdated?: string | null;
+  trashed?: boolean;
   /** Durable page marker used to resume a worker after a crash. */
   evernoteSeenSyncRunId?: string | null;
   evernoteSeenAtIndex?: number | null;
@@ -487,6 +487,7 @@ export function evernoteContentHash(input: {
   notebookName: string | null;
   tags: string[];
   sourceUrl: string | null;
+  extras?: unknown;
 }): string {
   return createHash("sha256")
     .update(
@@ -496,6 +497,7 @@ export function evernoteContentHash(input: {
         notebookName: input.notebookName,
         tags: [...input.tags].sort(),
         sourceUrl: input.sourceUrl,
+        extras: input.extras ?? null,
       }),
     )
     .digest("hex");
@@ -695,12 +697,8 @@ export async function fetchEvernoteBundle(
         const title =
           (note.title ?? metadata.title ?? "Untitled").trim() || "Untitled";
         const rawContent = note.content ?? "";
-        const contentTruncated = rawContent.length > MAX_NOTE_CONTENT_CHARS;
-        const text = evernoteEnmlToText(
-          contentTruncated
-            ? rawContent.slice(0, MAX_NOTE_CONTENT_CHARS)
-            : rawContent,
-        );
+        const contentTruncated = false;
+        const text = evernoteEnmlToText(rawContent);
         const notebookGuid =
           note.notebookGuid ?? metadata.notebookGuid ?? null;
         const notebookName = notebookGuid

@@ -8,7 +8,8 @@ import { runMigrations } from "../../../../scripts/db-migrate.mjs";
 const CURRENT_MIGRATIONS = [
   "0034_attachment_ai_ocr.sql",
   "0035_ai_result_cache.sql",
-  "0036_evernote_source_search.sql",
+  "0037_evernote_source_search.sql",
+  "0038_evernote_full_fidelity.sql",
 ] as const;
 
 const migrationUrls = new Map<string, URL>(
@@ -32,6 +33,10 @@ async function createPreMigrationSchema(db: PGlite): Promise<void> {
       user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       content_hash varchar(64)
     );
+    CREATE TABLE connectors (
+      id varchar(64) PRIMARY KEY,
+      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE
+    );
     CREATE TABLE sync_runs (
       id varchar(64) PRIMARY KEY,
       records_fetched integer NOT NULL DEFAULT 0,
@@ -41,20 +46,33 @@ async function createPreMigrationSchema(db: PGlite): Promise<void> {
     );
     CREATE TABLE source_records (
       id varchar(64) PRIMARY KEY,
+      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      connector_id varchar(64) NOT NULL REFERENCES connectors(id) ON DELETE CASCADE,
+      external_id varchar(255) NOT NULL,
+      record_type varchar(32) NOT NULL,
       record_title varchar(500),
       record_text text,
       record_metadata jsonb NOT NULL DEFAULT '{}'::jsonb
     );
     INSERT INTO users (id) VALUES ('11111111-1111-4111-8111-111111111111');
+    INSERT INTO connectors (id, user_id)
+    VALUES ('connector-1', '11111111-1111-4111-8111-111111111111');
     INSERT INTO note_attachments (id, user_id, content_hash)
     VALUES (
       '22222222-2222-4222-8222-222222222222',
       '11111111-1111-4111-8111-111111111111',
       'hash-1'
     );
-    INSERT INTO source_records (id, record_title, record_text, record_metadata)
+    INSERT INTO source_records (
+      id, user_id, connector_id, external_id, record_type,
+      record_title, record_text, record_metadata
+    )
     VALUES (
       'source-1',
+      '11111111-1111-4111-8111-111111111111',
+      'connector-1',
+      'evernote-note-1',
+      'evernote_note',
       'Roof permit',
       'Inspector approved the revised drawings',
       '{"notebookName":"Construction","tagNames":["permit"],"contentHash":"same"}'
@@ -90,6 +108,11 @@ async function expectCurrentSchema(db: PGlite): Promise<void> {
     SELECT to_regclass('public.ai_result_cache')::text AS name
   `);
   expect(cacheTable.rows[0]?.name).toBe("ai_result_cache");
+
+  const evernoteTables = await db.query<{ name: string | null }>(`
+    SELECT to_regclass('public.evernote_sync_state')::text AS name
+  `);
+  expect(evernoteTables.rows[0]?.name).toBe("evernote_sync_state");
 
   const source = await db.query<{
     record_title: string;
@@ -134,7 +157,7 @@ describe("current migration upgrade path", () => {
     db = null;
   });
 
-  it("applies 0034, 0035, and 0036 on a fresh pre-migration schema", async () => {
+  it("applies 0034, 0035, 0037, and 0038 on a fresh pre-migration schema", async () => {
     db = new PGlite();
     await createPreMigrationSchema(db);
 
@@ -146,7 +169,7 @@ describe("current migration upgrade path", () => {
     expect(second.applied).toEqual([]);
   });
 
-  it("safely replays renamed 0036 after production applied old Evernote 0034", async () => {
+  it("safely upgrades a database at the 963f7c7 Evernote 0034 state", async () => {
     db = new PGlite();
     await createPreMigrationSchema(db);
     await db.exec(await readFile(historicalEvernoteMigration, "utf8"));
@@ -172,7 +195,8 @@ describe("current migration upgrade path", () => {
       "0034_attachment_ai_ocr.sql",
       "0034_evernote_source_search.sql",
       "0035_ai_result_cache.sql",
-      "0036_evernote_source_search.sql",
+      "0037_evernote_source_search.sql",
+      "0038_evernote_full_fidelity.sql",
     ]);
     const historicalData = await db.query<{ records_skipped: number }>(`
       SELECT records_skipped
@@ -183,5 +207,45 @@ describe("current migration upgrade path", () => {
 
     const rerun = await runCurrentMigrations(db);
     expect(rerun.applied).toEqual([]);
+  });
+
+  it("safely upgrades a database whose runner already applied PR 12 migrations", async () => {
+    db = new PGlite();
+    await createPreMigrationSchema(db);
+    await db.exec(
+      await readFile(migrationUrls.get("0034_attachment_ai_ocr.sql")!, "utf8"),
+    );
+    await db.exec(
+      await readFile(migrationUrls.get("0035_ai_result_cache.sql")!, "utf8"),
+    );
+    await db.exec(await readFile(historicalEvernoteMigration, "utf8"));
+    await db.exec(`
+      CREATE TABLE schema_migrations (
+        filename text PRIMARY KEY,
+        applied_at timestamptz NOT NULL DEFAULT now()
+      );
+      INSERT INTO schema_migrations (filename) VALUES
+        ('0034_attachment_ai_ocr.sql'),
+        ('0035_ai_result_cache.sql'),
+        ('0036_evernote_source_search.sql');
+    `);
+
+    const result = await runCurrentMigrations(db);
+    expect(result.applied).toEqual([
+      "0037_evernote_source_search.sql",
+      "0038_evernote_full_fidelity.sql",
+    ]);
+    await expectCurrentSchema(db);
+
+    const ledger = await db.query<{ filename: string }>(`
+      SELECT filename FROM schema_migrations ORDER BY filename
+    `);
+    expect(ledger.rows.map((row) => row.filename)).toEqual([
+      "0034_attachment_ai_ocr.sql",
+      "0035_ai_result_cache.sql",
+      "0036_evernote_source_search.sql",
+      "0037_evernote_source_search.sql",
+      "0038_evernote_full_fidelity.sql",
+    ]);
   });
 });

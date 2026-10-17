@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EVERNOTE_MAX_NOTE_CONTENT_CHARS,
+  enumerateEvernoteTaxonomy,
   evernoteMcpFetch,
   evernoteMcpAuthorizationCode,
   fetchEvernoteViaMcp,
@@ -142,6 +143,9 @@ describe("Evernote MCP read sync", () => {
             },
           };
         }
+        if (input.name === "search_spaces") {
+          return { structuredContent: { spaces: [] } };
+        }
         if (input.name === "search_notes") {
           return {
             structuredContent: {
@@ -227,6 +231,9 @@ describe("Evernote MCP read sync", () => {
         if (input.name === "search_tags") {
           return { structuredContent: { tags: [] } };
         }
+        if (input.name === "search_spaces") {
+          return { structuredContent: { spaces: [] } };
+        }
         if (input.name === "search_notes") {
           return {
             structuredContent: {
@@ -289,6 +296,9 @@ describe("Evernote MCP read sync", () => {
         if (input.name === "search_tags") {
           return { structuredContent: { tags: [] } };
         }
+        if (input.name === "search_spaces") {
+          return { structuredContent: { spaces: [] } };
+        }
         if (input.name === "search_notes") {
           return {
             structuredContent: { totalResultCount: 0, notes: [] },
@@ -315,6 +325,9 @@ describe("Evernote MCP read sync", () => {
         }
         if (input.name === "search_tags") {
           return { structuredContent: { tags: [] } };
+        }
+        if (input.name === "search_spaces") {
+          return { structuredContent: { spaces: [] } };
         }
         if (input.name === "search_notes") {
           return {
@@ -343,6 +356,63 @@ describe("Evernote MCP read sync", () => {
     );
   });
 
+  it("enumerates notebooks and tags beyond the MCP result cap", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const notebooks = Array.from({ length: 284 }, (_, index) => ({
+      id: `nb-${index}`,
+      name: index < 100 ? `A ${index}` : `Z ${index}`,
+      stack: index % 2 ? "Personal" : null,
+    }));
+    const tags = Array.from({ length: 520 }, (_, index) => ({
+      id: `tag-${index}`,
+      name: index < 100 ? `A ${index}` : `Z ${index}`,
+      parentId: index > 0 ? "tag-0" : null,
+    }));
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        const query = String(input.arguments?.query ?? "").toLowerCase();
+        if (input.name === "search_notebooks") {
+          const matches = query === "" ? notebooks : query === "z" ? notebooks.slice(100) : [];
+          return {
+            structuredContent: {
+              totalResultCount: matches.length,
+              notebooks: matches.slice(0, 100),
+            },
+          };
+        }
+        if (input.name === "search_tags") {
+          const matches = query === "" ? tags : query === "z" ? tags.slice(100) : [];
+          return {
+            structuredContent: {
+              totalResultCount: matches.length,
+              tags: matches.slice(0, 100),
+            },
+          };
+        }
+        if (input.name === "search_spaces") {
+          return {
+            structuredContent: {
+              spaces: [{ id: "space-1", name: "Home" }],
+            },
+          };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+    const taxonomy = await enumerateEvernoteTaxonomy(client);
+    // The synthetic saturated "z" bucket keeps refining to zz/zzz, so this
+    // verifies union/dedupe beyond the first 100 rather than exact mock totals.
+    expect(taxonomy.notebooks.length).toBeGreaterThan(100);
+    expect(taxonomy.tags.length).toBeGreaterThan(100);
+    expect(taxonomy.spaces).toHaveLength(1);
+    expect(new Set(taxonomy.notebooks.map((item) => item.id)).size).toBe(
+      taxonomy.notebooks.length,
+    );
+  });
+
   it("chunks changed-note backfill and reports deferred work", async () => {
     process.env.EVERNOTE_MCP_PACE_MS = "0";
     process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE = "2";
@@ -357,6 +427,9 @@ describe("Evernote MCP read sync", () => {
         }
         if (input.name === "search_tags") {
           return { structuredContent: { tags: [] } };
+        }
+        if (input.name === "search_spaces") {
+          return { structuredContent: { spaces: [] } };
         }
         if (input.name === "search_notes") {
           return {
@@ -404,6 +477,9 @@ describe("Evernote MCP read sync", () => {
         if (input.name === "search_tags") {
           return { structuredContent: { tags: [] } };
         }
+        if (input.name === "search_spaces") {
+          return { structuredContent: { spaces: [] } };
+        }
         if (input.name === "search_notes") {
           const start = Number(input.arguments?.startIndex ?? 0);
           const max = Number(input.arguments?.maxResults ?? 10);
@@ -442,18 +518,18 @@ describe("Evernote MCP read sync", () => {
     });
 
     expect(noteCalls).toBe(total);
-    expect(batchSizes).toEqual([10, 10, 10, 10, 10, 5]);
-    expect(checkpoints).toEqual([10, 20, 30, 40, 50, 55]);
+    expect(batchSizes).toEqual(Array.from({ length: 55 }, () => 1));
+    expect(checkpoints).toEqual(Array.from({ length: 55 }, (_, index) => index + 1));
     expect(result).toMatchObject({
       recordsFetched: total,
       recordsDeferred: 0,
       listingComplete: true,
       authoritativeListing: true,
-      batchesProcessed: 6,
+      batchesProcessed: 55,
     });
   });
 
-  it("resumes a partially committed page and bounds retained note content", async () => {
+  it("resumes a partially committed page and retains full note content", async () => {
     process.env.EVERNOTE_MCP_PACE_MS = "0";
     process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE = "2";
     const fetched: string[] = [];
@@ -467,6 +543,9 @@ describe("Evernote MCP read sync", () => {
         }
         if (input.name === "search_tags") {
           return { structuredContent: { tags: [] } };
+        }
+        if (input.name === "search_spaces") {
+          return { structuredContent: { spaces: [] } };
         }
         if (input.name === "search_notes") {
           return {
@@ -485,9 +564,7 @@ describe("Evernote MCP read sync", () => {
           structuredContent: {
             id,
             title: "Huge note",
-            content: `<en-note>${"x".repeat(
-              EVERNOTE_MAX_NOTE_CONTENT_CHARS * 2,
-            )}</en-note>`,
+            content: `<en-note>${"x".repeat(256 * 1024)}</en-note>`,
             updatedAt: "2026-10-17T00:00:00Z",
             resources: [{ id: "binary-skipped", data: "not copied" }],
           },
@@ -513,17 +590,16 @@ describe("Evernote MCP read sync", () => {
         ]),
       processBatch: async (batch) => {
         retainedLength = batch.records[0]?.recordText.length ?? 0;
-        seen = batch.seen.map((item) => item.externalId);
-        replayed = batch.replayExternalIds;
+        seen.push(...batch.seen.map((item) => item.externalId));
+        replayed.push(...batch.replayExternalIds);
       },
     });
 
     expect(fetched).toEqual(["already-durable", "needs-fetch"]);
     expect(seen).toEqual(["already-durable", "needs-fetch"]);
     expect(replayed).toEqual(["already-durable"]);
-    expect(retainedLength).toBeLessThanOrEqual(
-      EVERNOTE_MAX_NOTE_CONTENT_CHARS + 2_000,
-    );
+    expect(EVERNOTE_MAX_NOTE_CONTENT_CHARS).toBe(Number.POSITIVE_INFINITY);
+    expect(retainedLength).toBeGreaterThanOrEqual(256 * 1024);
   });
 
   it("yields a worker slice after the configured number of durable batches", async () => {
@@ -571,10 +647,10 @@ describe("Evernote MCP read sync", () => {
       maxBatchesPerInvocation: 2,
     });
 
-    expect(checkpoints).toEqual([2, 4]);
+    expect(checkpoints).toEqual([1, 2]);
     expect(result).toMatchObject({
-      startIndex: 4,
-      recordsDeferred: 2,
+      startIndex: 2,
+      recordsDeferred: 4,
       listingComplete: false,
       authoritativeListing: false,
     });
@@ -589,6 +665,9 @@ describe("Evernote MCP read sync", () => {
         }
         if (input.name === "search_tags") {
           return { structuredContent: { tags: [] } };
+        }
+        if (input.name === "search_spaces") {
+          return { structuredContent: { spaces: [] } };
         }
         throw new Error(`Unexpected listing call ${input.name}`);
       },

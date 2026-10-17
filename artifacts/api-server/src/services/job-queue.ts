@@ -211,6 +211,24 @@ export async function continueJob(jobId: string): Promise<void> {
     .where(and(eq(jobs.id, jobId), eq(jobs.status, "processing")));
 }
 
+/** Pause a claimed job without consuming a retry attempt (load watchdog). */
+export async function deferJob(jobId: string, delayMs: number, reason: string): Promise<void> {
+  const now = new Date();
+  const boundedDelay = Math.min(Math.max(delayMs, 1_000), 3_600_000);
+  await getDb()
+    .update(jobs)
+    .set({
+      status: "queued",
+      attempts: sql`greatest(${jobs.attempts} - 1, 0)`,
+      availableAt: new Date(now.getTime() + boundedDelay),
+      lockedAt: null,
+      lockedBy: null,
+      lastError: reason.slice(0, 1_000),
+      updatedAt: now,
+    })
+    .where(and(eq(jobs.id, jobId), eq(jobs.status, "processing")));
+}
+
 /**
  * Mark failure. If attempts remain, re-queue with backoff.
  * @returns whether the job is terminally failed

@@ -1,8 +1,9 @@
 -- Evernote v1: explicit sync skip counts plus connector-record FTS.
 --
--- This migration was previously shipped as 0034_evernote_source_search.sql.
--- The runner records filenames, so databases that applied that file will run
--- this renamed 0036 file once. Every operation is therefore replay-safe.
+-- This migration was previously shipped as 0034_evernote_source_search.sql
+-- and then 0036_evernote_source_search.sql. The runner records filenames, so
+-- those databases will run this renamed 0037 file once. Every operation is
+-- additive and replay-safe.
 --
 -- The trigger only runs for created/changed records; unchanged Evernote notes
 -- are not updated by the sync pipeline.
@@ -37,7 +38,7 @@ BEGIN
   NEW.search_document := concat_ws(
     E'\n',
     coalesce(NEW.record_title, ''),
-    coalesce(NEW.record_text, ''),
+    left(coalesce(NEW.record_text, ''), 180000),
     coalesce(NEW.record_metadata->>'notebookName', ''),
     coalesce(
       NEW.record_metadata->>'tagNames',
@@ -73,7 +74,7 @@ SET
   search_document = concat_ws(
     E'\n',
     coalesce(record_title, ''),
-    coalesce(record_text, ''),
+    left(coalesce(record_text, ''), 180000),
     coalesce(record_metadata->>'notebookName', ''),
     coalesce(
       record_metadata->>'tagNames',
@@ -86,7 +87,7 @@ SET
     concat_ws(
       E'\n',
       coalesce(record_title, ''),
-      coalesce(record_text, ''),
+      left(coalesce(record_text, ''), 180000),
       coalesce(record_metadata->>'notebookName', ''),
       coalesce(
         record_metadata->>'tagNames',
@@ -98,7 +99,7 @@ SET
 WHERE search_document IS DISTINCT FROM concat_ws(
     E'\n',
     coalesce(record_title, ''),
-    coalesce(record_text, ''),
+    left(coalesce(record_text, ''), 180000),
     coalesce(record_metadata->>'notebookName', ''),
     coalesce(
       record_metadata->>'tagNames',
@@ -111,7 +112,7 @@ WHERE search_document IS DISTINCT FROM concat_ws(
     concat_ws(
       E'\n',
       coalesce(record_title, ''),
-      coalesce(record_text, ''),
+      left(coalesce(record_text, ''), 180000),
       coalesce(record_metadata->>'notebookName', ''),
       coalesce(
         record_metadata->>'tagNames',

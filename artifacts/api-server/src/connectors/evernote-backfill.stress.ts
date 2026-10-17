@@ -1,10 +1,7 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import {
-  EVERNOTE_MAX_NOTE_CONTENT_CHARS,
-  streamEvernoteViaMcp,
-} from "./evernote-mcp";
+import { streamEvernoteViaMcp } from "./evernote-mcp";
 
 const NOTE_COUNT = 5_250;
 const SUMMARY_PADDING_BYTES = 96 * 1024;
@@ -108,6 +105,9 @@ async function boundedBackfill(): Promise<void> {
       if (input.name === "search_tags") {
         return { structuredContent: { tags: [] } };
       }
+      if (input.name === "search_spaces") {
+        return { structuredContent: { spaces: [] } };
+      }
       if (input.name === "search_notes") {
         const start = Number(input.arguments?.startIndex ?? 0);
         const max = Number(input.arguments?.maxResults ?? 25);
@@ -152,13 +152,13 @@ async function boundedBackfill(): Promise<void> {
         throw new Error(`Batch exceeded bound: ${batch.records.length}`);
       }
       for (const record of batch.records) {
-        if (record.recordText.length > EVERNOTE_MAX_NOTE_CONTENT_CHARS + 2_000) {
+        if (record.recordText.length > BODY_BYTES + 2_000) {
           throw new Error(`Record content exceeded bound: ${record.recordText.length}`);
         }
         persisted += 1;
       }
-      // Embeddings are mocked and retain the production per-sync cap.
-      embedded += Math.min(batch.records.length, Math.max(0, 25 - embedded));
+      // Evernote import is permanently keyword-only.
+      embedded = 0;
       batches += 1;
       if (batches % 20 === 0) global.gc?.();
       const sample = memoryMb();
