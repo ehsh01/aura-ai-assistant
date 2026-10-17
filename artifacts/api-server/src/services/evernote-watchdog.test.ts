@@ -1,10 +1,26 @@
-import { afterEach, describe, expect, it } from "vitest";
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  execute: vi.fn(),
+}));
+
+vi.mock("../lib/db", () => ({
+  getDb: () => ({ execute: mocks.execute }),
+}));
+
 import {
   checkEvernoteImportWatchdog,
   parseMemAvailableMb,
   requiredMemoryMbForBytes,
+  watchdogDbConnectionLimit,
   watchdogMinMemoryMb,
 } from "./evernote-watchdog";
+
+beforeEach(() => {
+  mocks.execute.mockReset();
+});
 
 afterEach(() => {
   delete process.env.EVERNOTE_WATCHDOG_DB_CONNECTIONS;
@@ -14,6 +30,53 @@ afterEach(() => {
 describe("Evernote import watchdog", () => {
   it("defaults the minimum available memory floor to 200MB", () => {
     expect(watchdogMinMemoryMb()).toBe(200);
+  });
+
+  it("defaults the per-database client connection limit to 15", () => {
+    expect(watchdogDbConnectionLimit()).toBe(15);
+  });
+
+  it("counts only client backends connected to the current database", async () => {
+    mocks.execute.mockResolvedValue({ rows: [{ count: 7 }] });
+
+    const status = await checkEvernoteImportWatchdog({
+      availableMemoryMb: async () => 1_000,
+      healthUrls: [],
+    });
+
+    expect(status.dbConnections).toBe(7);
+    expect(mocks.execute).toHaveBeenCalledOnce();
+    const query = mocks.execute.mock.calls[0]?.[0] as SQL;
+    const renderedSql = new PgDialect()
+      .sqlToQuery(query)
+      .sql.replace(/\s+/g, " ")
+      .trim();
+    expect(renderedSql).toContain(
+      "FROM pg_stat_activity WHERE backend_type = 'client backend' AND datname = current_database()",
+    );
+  });
+
+  it("pauses at or above the DB connection limit and passes below it", async () => {
+    process.env.EVERNOTE_WATCHDOG_DB_CONNECTIONS = "15";
+    const checkConnections = (dbConnections: number) =>
+      checkEvernoteImportWatchdog({
+        dbConnections: async () => dbConnections,
+        availableMemoryMb: async () => 1_000,
+        healthUrls: [],
+      });
+
+    await expect(checkConnections(14)).resolves.toMatchObject({
+      safe: true,
+      reasons: [],
+    });
+    await expect(checkConnections(15)).resolves.toMatchObject({
+      safe: false,
+      reasons: ["recall DB client connections 15 >= 15"],
+    });
+    await expect(checkConnections(16)).resolves.toMatchObject({
+      safe: false,
+      reasons: ["recall DB client connections 16 >= 15"],
+    });
   });
 
   it("parses Linux MemAvailable", () => {
