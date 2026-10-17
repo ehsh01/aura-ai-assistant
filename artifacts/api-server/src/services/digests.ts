@@ -52,7 +52,7 @@ async function maybeAiDigest(
   if (aiService.getStatus().degraded) return null;
   if (typeof aiService.chat !== "function") return null;
   if (body.trim().length < 800) return null;
-  if (!(await allowBackgroundAi("digest"))) return null;
+  if (!(await allowBackgroundAi("digest", userId))) return null;
   try {
     const result = await withAiFeature({ feature: "digest", userId }, () =>
       aiService.chat({

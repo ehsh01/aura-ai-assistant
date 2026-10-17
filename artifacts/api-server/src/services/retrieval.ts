@@ -139,6 +139,8 @@ function sourceTypeAliases(recordType: string): string {
       return "homey smart home alert notification emergency door leak smoke";
     case "flipperforce_project":
       return "flipperforce rehab property flip wholesale project address";
+    case "evernote_note":
+      return "evernote note notebook tag personal knowledge";
     default:
       return "source record";
   }
@@ -504,6 +506,7 @@ const CORPUS = {
   contactsTotal: 40,
   driveTotal: 40,
   calendarTotal: 40,
+  evernoteRecent: 150,
   keywordShortlist: 80,
   semanticCandidates: 280,
 } as const;
@@ -670,6 +673,31 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
       })),
     );
   }
+
+  // Evernote connector rows remain external truth but must still be available
+  // to keyword-only Ask when no embedding exists.
+  const evernoteRows = await getDb()
+    .select({
+      id: sourceRecords.id,
+      recordType: sourceRecords.recordType,
+      recordTitle: sourceRecords.recordTitle,
+      recordText: sourceRecords.recordText,
+      updatedAt: sourceRecords.updatedAt,
+      sourceCreatedAt: sourceRecords.sourceCreatedAt,
+      metadata: sourceRecords.recordMetadata,
+    })
+    .from(sourceRecords)
+    .where(
+      and(
+        eq(sourceRecords.userId, userId),
+        eq(sourceRecords.recordType, "evernote_note"),
+      ),
+    )
+    .orderBy(
+      desc(sql`coalesce(${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`),
+    )
+    .limit(CORPUS.evernoteRecent);
+  pushRows(evernoteRows.map((row) => ({ ...row, mailbox: null })));
 
   return out;
 }
@@ -946,7 +974,7 @@ export async function retrieveRelevantRecords(
   userId: string,
   question: string,
   limit = 16,
-  options?: { noteSearchQuery?: string },
+  options?: { noteSearchQuery?: string; semantic?: boolean },
 ): Promise<{
   records: RetrievedRecord[];
   usedSemantic: boolean;
@@ -965,7 +993,9 @@ export async function retrieveRelevantRecords(
   const [{ records: baseCorpus, people, tasks }, noteSearchHits, queryVec] = await Promise.all([
     collectCorpus(userId),
     searchNotesForUser(userId, noteQuery, 20).catch(() => []),
-    embedQuery(question).catch(() => null),
+    options?.semantic === false
+      ? Promise.resolve(null)
+      : embedQuery(question).catch(() => null),
   ]);
   const corpus = [...baseCorpus];
   const corpusNoteIds = new Set(
@@ -1181,6 +1211,7 @@ export async function retrieveRelevantRecords(
           entityId: r.entityId,
           text: embeddingTextForContextRecord(r),
         })),
+        { generateMissing: false, purpose: "retrieval" },
       );
 
       if (vectors) {

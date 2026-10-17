@@ -15,7 +15,8 @@ import {
   getJobForUser,
 } from "./job-queue";
 import { nudgeJobWorker } from "./job-worker";
-import { aiService } from "./ai";
+import { aiService, fallbackCaptureClassification } from "./ai";
+import { allowBackgroundAi, withAiFeature } from "./ai-usage";
 import {
   autoAcceptEligible,
   normalizeCaptureTypes,
@@ -65,10 +66,15 @@ export async function processCaptureExtraction(
 
   await updateCaptureStatusForUser(userId, captureId, { processedStatus: "processing" });
 
-  const { withAiFeature } = await import("./ai-usage");
-  const aiResult = await withAiFeature({ feature: "capture_classify", userId }, () =>
-    aiService.classifyCapture({ rawText: capture.rawText }),
-  );
+  const aiResult = (await allowBackgroundAi("capture_classify", userId))
+    ? await withAiFeature({ feature: "capture_classify", userId }, () =>
+        aiService.classifyCapture({ rawText: capture.rawText }),
+      )
+    : {
+        degraded: true,
+        degradedReason: "disabled_or_capped",
+        item: fallbackCaptureClassification({ rawText: capture.rawText }),
+      };
   const item = aiResult.item;
   const confidence =
     typeof item.confidence === "number"

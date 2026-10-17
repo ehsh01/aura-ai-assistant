@@ -33,5 +33,6 @@ export * from "./waiting-items";
 export * from "./user-rules";
 export * from "./attention-items";
 export * from "./ai-usage";
+export * from "./ai-result-cache";
 export * from "./action-proposals";
 export * from "./person-identities";

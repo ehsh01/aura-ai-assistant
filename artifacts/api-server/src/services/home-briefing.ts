@@ -34,7 +34,7 @@ import { getBriefingPrefsForUser } from "./notification-settings";
 import { buildProactiveInsights } from "./proactive-insights";
 import { listOpenHomeyAlertsForUser } from "./homey-alerts";
 import { todayIso, recallTimezone } from "./query-utils";
-import { aiService } from "./ai";
+import { getHomeDashboardDigest } from "./home-dashboard-digest";
 
 // ---------------------------------------------------------------------------
 // Response shapes (kept in sync with recall-app home components)
@@ -762,8 +762,9 @@ export async function buildHomeBriefing(
   let summary = fallbackSummary(attentionCount, parts);
   let highlights: string[] = [];
   let degraded = true;
-  try {
-    const digest = await aiService.dashboardDigest({
+  const digest = await getHomeDashboardDigest(
+    userId,
+    {
       userName,
       tasks: tasks
         .filter((t) => !t.completed)
@@ -785,13 +786,17 @@ export async function buildHomeBriefing(
           preview: n.preview,
           tags: n.tags,
         })),
-    });
-    if (digest.digest?.trim()) summary = digest.digest.trim();
-    highlights = digest.highlights ?? [];
-    degraded = digest.degraded;
-  } catch {
-    // Keep deterministic fallback summary.
-  }
+    },
+    {
+      digest: summary,
+      highlights: [],
+      degraded: true,
+      degradedReason: "disabled_or_capped",
+    },
+  );
+  if (digest.digest?.trim()) summary = digest.digest.trim();
+  highlights = digest.highlights ?? [];
+  degraded = digest.degraded;
 
   const briefing: DailyBriefing = {
     greeting: `${greetingForHour(new Date().getHours())}, ${userName}.`,

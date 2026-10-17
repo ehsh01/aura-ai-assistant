@@ -1,6 +1,6 @@
-import OpenAI from "openai";
 import { cleanMailPersonName } from "./connectors";
 import { parseDateRange } from "./nl-gmail-query";
+import { createOpenAiClient } from "./openai-client";
 
 export type PlannedDriveSearch = {
   /** Full Drive `q` string (files.list query). */
@@ -215,7 +215,10 @@ export function planDriveSearchKeywords(text: string): PlannedDriveSearch | null
   };
 }
 
-async function planDriveSearchWithAi(text: string): Promise<PlannedDriveSearch | null> {
+async function planDriveSearchWithAi(
+  text: string,
+  userId?: string,
+): Promise<PlannedDriveSearch | null> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
 
@@ -224,7 +227,7 @@ async function planDriveSearchWithAi(text: string): Promise<PlannedDriveSearch |
     process.env.OPENAI_PLANNER_MODEL?.trim() ||
     process.env.OPENAI_MODEL?.trim() ||
     "gpt-4o-mini";
-  const client = new OpenAI({ apiKey });
+  const client = createOpenAiClient({ apiKey, feature: "intent_route", userId });
   const today = new Date().toISOString().slice(0, 10);
 
   const completion = await client.chat.completions.create({
@@ -285,12 +288,15 @@ Rules:
  * Plan a live Drive search from natural language.
  * Prefers AI when available; falls back to heuristics then keyword stripping.
  */
-export async function planDriveSearch(text: string): Promise<PlannedDriveSearch | null> {
+export async function planDriveSearch(
+  text: string,
+  userId?: string,
+): Promise<PlannedDriveSearch | null> {
   const q = text.trim();
   if (!q || !isDriveSearchIntent(q)) return null;
 
   try {
-    const ai = await planDriveSearchWithAi(q);
+    const ai = await planDriveSearchWithAi(q, userId);
     if (ai?.query) return ai;
   } catch {
     // Fall through to heuristics.

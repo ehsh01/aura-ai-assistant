@@ -4,7 +4,12 @@ import { entityEmbeddings } from "@workspace/db/schema";
 import { getDb, isDatabaseConfigured } from "../lib/db";
 import { newEmbeddingId } from "../lib/recall-format";
 import { aiService } from "./ai";
-import { withAiFeature } from "./ai-usage";
+import { isEnabled } from "../lib/feature-flags";
+import {
+  allowBackgroundAi,
+  dailyFeatureUsageForUser,
+  withAiFeature,
+} from "./ai-usage";
 
 type CacheEntry = {
   hash: string;
@@ -17,6 +22,8 @@ const cache = new Map<string, CacheEntry>();
 
 /** Short-TTL L1 for query embeddings (same Ask may embed the question twice). */
 const queryCache = new Map<string, CacheEntry>();
+/** Serialize save-time warm calls per user so count/token checks cannot race. */
+const warmQueues = new Map<string, Promise<void>>();
 const QUERY_CACHE_TTL_MS = 5 * 60_000;
 const QUERY_CACHE_MAX = 500;
 
@@ -41,7 +48,9 @@ const metrics: EmbedMetrics = {
   queryApiCalls: 0,
 };
 
-export function getEmbeddingCacheMetrics(): EmbedMetrics & { itemHitRate: number } {
+export function getEmbeddingCacheMetrics(): EmbedMetrics & {
+  itemHitRate: number;
+} {
   const total = metrics.itemHits + metrics.itemMisses;
   return {
     ...metrics,
@@ -62,7 +71,11 @@ function contentHash(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 24);
 }
 
-function cacheKey(userId: string, entityType: string, entityId: string): string {
+function cacheKey(
+  userId: string,
+  entityType: string,
+  entityId: string,
+): string {
   return `${userId}:${entityType}:${entityId}`;
 }
 
@@ -76,7 +89,9 @@ function embeddingModel(): string {
 
 function evictIfNeeded(): void {
   if (cache.size <= MAX_ENTRIES) return;
-  const entries = [...cache.entries()].sort((a, b) => a[1].updatedAt - b[1].updatedAt);
+  const entries = [...cache.entries()].sort(
+    (a, b) => a[1].updatedAt - b[1].updatedAt,
+  );
   const drop = Math.ceil(entries.length * 0.1);
   for (let i = 0; i < drop; i++) {
     const key = entries[i]?.[0];
@@ -91,6 +106,60 @@ export type EmbeddableItem = {
 };
 
 type Pending = { item: EmbeddableItem; hash: string; key: string };
+
+export type EmbedItemsOptions = {
+  /** Retrieval reads caches only; warm-on-save is the sole missing-vector writer. */
+  generateMissing?: boolean;
+  purpose?: "retrieval" | "warm";
+};
+
+const DEFAULT_WARM_DAILY_LIMIT = 100;
+const DEFAULT_WARM_DAILY_TOKEN_LIMIT = 100_000;
+
+function positiveInteger(raw: string | undefined, fallback: number): number {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+export function embeddingWarmDailyLimit(): number {
+  return positiveInteger(
+    process.env.RECALL_EMBEDDING_WARM_DAILY_LIMIT,
+    DEFAULT_WARM_DAILY_LIMIT,
+  );
+}
+
+export function embeddingWarmDailyTokenLimit(): number {
+  return positiveInteger(
+    process.env.RECALL_EMBEDDING_WARM_DAILY_TOKEN_LIMIT,
+    DEFAULT_WARM_DAILY_TOKEN_LIMIT,
+  );
+}
+
+function estimateEmbeddingTokens(text: string): number {
+  return Math.max(1, Math.ceil(text.slice(0, 2_000).length / 4));
+}
+
+export function embeddingWarmWithinDailyCaps(
+  usage: { calls: number; totalTokens: number },
+  text: string,
+): boolean {
+  return (
+    usage.calls < embeddingWarmDailyLimit() &&
+    usage.totalTokens + estimateEmbeddingTokens(text) <=
+      embeddingWarmDailyTokenLimit()
+  );
+}
+
+async function allowEmbeddingWarm(
+  userId: string,
+  text: string,
+): Promise<boolean> {
+  if (!isEnabled("RECALL_EMBEDDING_WARM_ENABLED")) return false;
+  if (!(await allowBackgroundAi("embedding_warm", userId))) return false;
+  const usage = await dailyFeatureUsageForUser(userId, "embedding_warm");
+  if (!usage) return false;
+  return embeddingWarmWithinDailyCaps(usage, text);
+}
 
 function toPgVectorLiteral(vector: number[]): string {
   return `[${vector.map((n) => (Number.isFinite(n) ? n : 0)).join(",")}]`;
@@ -218,8 +287,13 @@ export async function rankEntitiesByPgvector(opts: {
   query: number[];
   entityTypes?: string[];
   limit?: number;
-}): Promise<Array<{ entityType: string; entityId: string; distance: number }> | null> {
-  if (!isDatabaseConfigured() || opts.query.length !== PGVECTOR_DIMS) return null;
+}): Promise<Array<{
+  entityType: string;
+  entityId: string;
+  distance: number;
+}> | null> {
+  if (!isDatabaseConfigured() || opts.query.length !== PGVECTOR_DIMS)
+    return null;
   const model = opts.model ?? embeddingModel();
   const limit = Math.min(Math.max(opts.limit ?? 40, 1), 200);
   try {
@@ -254,6 +328,7 @@ export async function rankEntitiesByPgvector(opts: {
 export async function embedItemsCached(
   userId: string,
   items: EmbeddableItem[],
+  options: EmbedItemsOptions = {},
 ): Promise<Map<string, number[]> | null> {
   if (aiService.getStatus().degraded || items.length === 0) return null;
   if (typeof aiService.embedTexts !== "function") return null;
@@ -293,15 +368,31 @@ export async function embedItemsCached(
   }
 
   if (pending.length > 0) {
+    if (options.generateMissing === false) {
+      return vectors.size > 0 ? vectors : null;
+    }
+    if (
+      options.purpose === "warm" &&
+      !(await allowEmbeddingWarm(userId, pending[0]!.item.text))
+    ) {
+      return vectors.size > 0 ? vectors : null;
+    }
+
     const embedMissing = async (
       missing: Pending[],
     ): Promise<{ item: EmbeddableItem; hash: string; vector: number[] }[]> => {
       const CHUNK = 64;
-      const generated: { item: EmbeddableItem; hash: string; vector: number[] }[] = [];
+      const generated: {
+        item: EmbeddableItem;
+        hash: string;
+        vector: number[];
+      }[] = [];
       for (let i = 0; i < missing.length; i += CHUNK) {
         const slice = missing.slice(i, i + CHUNK);
         metrics.itemApiCalls += 1;
-        const embeds = await withAiFeature({ feature: "embedding", userId }, () =>
+        const feature =
+          options.purpose === "warm" ? "embedding_warm" : "embedding";
+        const embeds = await withAiFeature({ feature, userId }, () =>
           aiService.embedTexts!(slice.map((m) => m.item.text.slice(0, 2_000))),
         );
         for (let j = 0; j < slice.length; j++) {
@@ -362,7 +453,10 @@ export async function embedItemsCached(
                 vector: row.vector,
                 updatedAt: Date.now(),
               });
-              vectors.set(`${p.item.entityType}:${p.item.entityId}`, row.vector);
+              vectors.set(
+                `${p.item.entityType}:${p.item.entityId}`,
+                row.vector,
+              );
             } else {
               stillMissing.push(p);
             }
@@ -428,7 +522,9 @@ export async function embedItemsCached(
 
 function evictQueryCacheIfNeeded(): void {
   if (queryCache.size <= QUERY_CACHE_MAX) return;
-  const entries = [...queryCache.entries()].sort((a, b) => a[1].updatedAt - b[1].updatedAt);
+  const entries = [...queryCache.entries()].sort(
+    (a, b) => a[1].updatedAt - b[1].updatedAt,
+  );
   const drop = Math.ceil(entries.length * 0.2);
   for (let i = 0; i < drop; i++) {
     const key = entries[i]?.[0];
@@ -444,7 +540,11 @@ export async function embedQuery(text: string): Promise<number[] | null> {
   const hash = contentHash(sliced);
   const key = `${model}:${hash}`;
   const hit = queryCache.get(key);
-  if (hit && Date.now() - hit.updatedAt < QUERY_CACHE_TTL_MS && hit.hash === hash) {
+  if (
+    hit &&
+    Date.now() - hit.updatedAt < QUERY_CACHE_TTL_MS &&
+    hit.hash === hash
+  ) {
     hit.updatedAt = Date.now();
     metrics.queryHits += 1;
     return hit.vector;
@@ -464,8 +564,19 @@ export function warmEntityEmbedding(
   userId: string,
   item: EmbeddableItem,
 ): void {
-  void embedItemsCached(userId, [item]).catch(() => {
-    // Warming is best-effort; Ask still works without it.
+  if (!isEnabled("RECALL_EMBEDDING_WARM_ENABLED")) return;
+  const previous = warmQueues.get(userId) ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(async () => {
+      await embedItemsCached(userId, [item], { purpose: "warm" });
+    })
+    .catch(() => {
+      // Warming is best-effort; Ask still works without it.
+    });
+  warmQueues.set(userId, next);
+  void next.finally(() => {
+    if (warmQueues.get(userId) === next) warmQueues.delete(userId);
   });
 }
 
@@ -489,4 +600,5 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 export function clearEmbeddingCacheForTests(): void {
   cache.clear();
   queryCache.clear();
+  warmQueues.clear();
 }

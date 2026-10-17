@@ -1,10 +1,10 @@
-import OpenAI from "openai";
 import {
   buildGmailPersonQuery,
   cleanMailPersonName,
   extractMailPersonName,
 } from "./connectors";
 import { isRelationLiteral } from "./ask-accuracy-policy";
+import { createOpenAiClient } from "./openai-client";
 
 export type PlannedGmailSearch = {
   query: string;
@@ -278,7 +278,10 @@ export function planGmailSearchKeywords(text: string): PlannedGmailSearch | null
   };
 }
 
-async function planGmailSearchWithAi(text: string): Promise<PlannedGmailSearch | null> {
+async function planGmailSearchWithAi(
+  text: string,
+  userId?: string,
+): Promise<PlannedGmailSearch | null> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
 
@@ -287,7 +290,7 @@ async function planGmailSearchWithAi(text: string): Promise<PlannedGmailSearch |
     process.env.OPENAI_PLANNER_MODEL?.trim() ||
     process.env.OPENAI_MODEL?.trim() ||
     "gpt-4o-mini";
-  const client = new OpenAI({ apiKey });
+  const client = createOpenAiClient({ apiKey, feature: "intent_route", userId });
   const today = new Date().toISOString().slice(0, 10);
 
   const completion = await client.chat.completions.create({
@@ -364,12 +367,15 @@ export function backfillGmailPlanWithNamedPerson(
  * Plan a live Gmail search from natural language.
  * Prefers AI when available; falls back to heuristics then keyword stripping.
  */
-export async function planGmailSearch(text: string): Promise<PlannedGmailSearch | null> {
+export async function planGmailSearch(
+  text: string,
+  userId?: string,
+): Promise<PlannedGmailSearch | null> {
   const q = text.trim();
   if (!q || !isEmailSearchIntent(q)) return null;
 
   try {
-    const ai = await planGmailSearchWithAi(q);
+    const ai = await planGmailSearchWithAi(q, userId);
     if (ai?.query) return ai;
   } catch {
     // Fall through to heuristics.

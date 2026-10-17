@@ -234,7 +234,10 @@ export async function extractWaitingFromRecord(
   const perspective = perspectiveForRecord(meta);
   const from = parseFromField(row.recordText);
   const to = perspective === "outbound" ? parseToField(row.recordText) : null;
-  const { withAiFeature } = await import("./ai-usage");
+  const { allowBackgroundAi, withAiFeature } = await import("./ai-usage");
+  if (!(await allowBackgroundAi("waiting_extract", userId))) {
+    return { created: 0, items: [] };
+  }
   const extracted = await withAiFeature({ feature: "waiting_extract", userId }, () =>
     aiService.extractWaitingCommitments({
       subject: row.recordTitle ?? "(no subject)",
@@ -377,7 +380,7 @@ export async function scanGmailForWaitingItems(
 }> {
   const limit = opts?.limit ?? 15;
   const { allowBackgroundAi } = await import("./ai-usage");
-  if (!(await allowBackgroundAi("waiting_extract"))) {
+  if (!(await allowBackgroundAi("waiting_extract", userId))) {
     return { scanned: 0, created: 0, skippedLocal: 0, items: [] };
   }
   const rows = await listUnscannedGmailForWaiting(userId, limit);

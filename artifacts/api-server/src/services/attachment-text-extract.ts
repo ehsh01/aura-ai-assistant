@@ -239,7 +239,13 @@ export async function extractAndStoreAttachmentText(attachmentId: string): Promi
             extractedAt: noteAttachments.extractedAt,
           })
           .from(noteAttachments)
-          .where(and(eq(noteAttachments.contentHash, contentHash), isNotNull(noteAttachments.extractedAt)))
+          .where(
+            and(
+              eq(noteAttachments.userId, row.userId),
+              eq(noteAttachments.contentHash, contentHash),
+              isNotNull(noteAttachments.extractedAt),
+            ),
+          )
           .limit(1);
         return reusable?.extractedAt
           ? { processed: true, text: reusable.extractedText }

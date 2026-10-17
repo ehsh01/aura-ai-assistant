@@ -2,9 +2,9 @@
  * OpenAI Whisper transcription adapter.
  * Audio is never logged — only byte length and latency.
  */
-import OpenAI, { toFile } from "openai";
+import { toFile } from "openai";
 import { isEnabled } from "../../../lib/feature-flags";
-import { recordAiUsage } from "../../ai-usage";
+import { createOpenAiClient } from "../../openai-client";
 import {
   TranscriptionUnavailableError,
   TranscriptionValidationError,
@@ -84,24 +84,23 @@ export class OpenAiWhisperTranscriptionProvider implements TranscriptionProvider
     const filename = input.filename?.replace(/[^\w.-]/g, "_") || `utterance.${ext}`;
     const started = Date.now();
 
-    const client = new OpenAI({ apiKey });
+    const client = createOpenAiClient({
+      apiKey,
+      feature: "transcribe",
+      userId: input.userId,
+    });
     const file = await toFile(input.audio, filename, { type: uploadType });
     const result = await client.audio.transcriptions.create({
       file,
       model,
       language: input.locale?.slice(0, 2) || undefined,
+      response_format: "verbose_json",
     });
 
     const text = (result.text ?? "").replace(/\s+/g, " ").trim();
     if (!text) {
       throw new TranscriptionValidationError("No speech detected in the recording");
     }
-    await recordAiUsage({
-      userId: input.userId,
-      feature: "transcribe",
-      model,
-    });
-
     return {
       text,
       provider: this.name,
