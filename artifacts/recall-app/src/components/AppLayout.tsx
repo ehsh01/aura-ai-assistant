@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Inbox, Plus, FolderKanban, FileText, Brain, Car, Settings, CalendarClock, Sparkles, Hourglass } from "lucide-react";
+import { Inbox, Plus, FolderKanban, FileText, Brain, Car, Settings, CalendarClock, Sparkles, Hourglass, Network } from "lucide-react";
 import { CaptureModal } from "@/components/CaptureModal";
 import { MobileBottomNav, MobileMoreSheet } from "@/components/MobileShell";
 import { OfflineQueueBanner } from "@/components/OfflineQueueBanner";
@@ -48,6 +48,12 @@ const staticNavItems: Array<{
 }> = [
   {
     id: "/",
+    label: "Explore",
+    section: "ask",
+    icon: <Network width={18} height={18} strokeWidth={1.8} />,
+  },
+  {
+    id: "/today",
     label: "Today",
     section: "ask",
     icon: (
@@ -188,11 +194,11 @@ function SidebarNavButton({
       style={{
         paddingLeft: nested && !collapsed ? 36 : 12,
         paddingRight: 12,
-        background: active ? "rgba(99,102,241,0.15)" : "transparent",
-        color: active ? "rgba(165,180,252,1)" : "rgba(255,255,255,0.45)",
+        background: active ? "rgba(125,255,217,0.12)" : "transparent",
+        color: active ? "#9dffe4" : "rgba(220,232,228,0.62)",
       }}
     >
-      <span className="flex-shrink-0" style={{ color: active ? "#a5b4fc" : "rgba(255,255,255,0.35)" }}>
+      <span className="flex-shrink-0" style={{ color: active ? "#7dffd9" : "rgba(201,214,210,0.52)" }}>
         {icon}
       </span>
       {!collapsed && (
@@ -202,7 +208,7 @@ function SidebarNavButton({
         <span className="text-[11px] text-white/25 tabular-nums flex-shrink-0">{count}</span>
       )}
       {!collapsed && active && count === undefined && (
-        <span className="ml-auto w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0"/>
+        <span className="ml-auto w-1.5 h-1.5 rounded-full bg-[#7dffd9] shadow-[0_0_8px_rgba(125,255,217,0.7)] flex-shrink-0"/>
       )}
     </Link>
   );
@@ -340,7 +346,9 @@ export function AppLayout({
         icon: item.icon,
         isActive:
           item.id === "/"
-            ? location === "/" || location === "/today"
+            ? location === "/" || location === "/everything" || location.startsWith("/everything/")
+            : item.id === "/today"
+              ? location === "/today" || location.startsWith("/today/")
             : item.id === "/projects"
               ? location === "/projects" || location.startsWith("/projects/")
               : item.id === "/waiting"
@@ -352,6 +360,8 @@ export function AppLayout({
   }
 
   const moreActive =
+    location === "/today" ||
+    location.startsWith("/today/") ||
     location === "/tasks" ||
     location === "/deadlines" ||
     location === "/waiting" ||
@@ -370,7 +380,7 @@ export function AppLayout({
   const sidebarWidth = collapsed ? 64 : 220;
 
   return (
-    <div className="flex h-[100dvh] bg-[#0a0a0f] text-white overflow-hidden recall-safe-top">
+    <div className="flex h-[100dvh] bg-background text-foreground overflow-hidden recall-safe-top">
       {/* Left-edge hover target — reveals nav on immersive Home */}
       {immersive && (
         <div
@@ -408,7 +418,7 @@ export function AppLayout({
             <button
               type="button"
               onClick={() => setCaptureOpen(true)}
-              className="mb-3 flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-500 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-400"
+              className="mb-3 flex w-full items-center justify-center gap-2 rounded-xl bg-[#7dffd9] px-3 py-2 text-sm font-semibold text-[#04100d] hover:bg-[#9dffe4]"
             >
               <Plus size={16} />
               Capture
@@ -525,7 +535,7 @@ export function AppLayout({
       <button
         type="button"
         onClick={() => setCaptureOpen(true)}
-        className={`fixed bottom-6 right-6 z-40 items-center gap-2 rounded-full bg-indigo-500 px-5 py-3 text-sm font-semibold text-white shadow-2xl shadow-indigo-500/25 hover:bg-indigo-400 ${
+        className={`fixed bottom-6 right-6 z-40 items-center gap-2 rounded-full bg-[#7dffd9] px-5 py-3 text-sm font-semibold text-[#04100d] shadow-2xl shadow-cyan-300/20 hover:bg-[#9dffe4] ${
           immersive || todayDashboard ? "hidden" : "hidden md:flex"
         }`}
       >

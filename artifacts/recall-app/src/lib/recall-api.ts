@@ -2329,3 +2329,134 @@ export async function adminSetIsAdmin(
     body: JSON.stringify({ isAdmin }),
   });
 }
+
+// --- Everything: unified saved items and free-signal graph -----------------
+
+export type SavedItemRecord = {
+  id: string;
+  kind: string;
+  state: string;
+  source: string;
+  title: string;
+  description: string | null;
+  domain: string | null;
+  sourceUrl: string | null;
+  bodyText: string;
+  media: {
+    storagePath?: string;
+    remoteUrl?: string;
+    fileName?: string;
+    mimeType?: string;
+    sizeBytes?: number;
+  };
+  tags: string[];
+  notebook: string | null;
+  trashed: boolean;
+  bumpedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  existing?: boolean;
+};
+
+export type ItemSearchInput = {
+  q?: string;
+  type?: string;
+  tag?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  source?: string;
+  notebook?: string;
+  trash?: boolean;
+  limit?: number;
+};
+
+export async function listSavedItems(
+  input: ItemSearchInput = {},
+): Promise<{ items: SavedItemRecord[] }> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(input)) {
+    if (value != null && value !== "" && value !== false) params.set(key, String(value));
+  }
+  const query = params.toString();
+  return apiFetch(`/items${query ? `?${query}` : ""}`);
+}
+
+export async function getSavedItem(id: string): Promise<{ item: SavedItemRecord }> {
+  return apiFetch(`/items/${encodeURIComponent(id)}`);
+}
+
+export async function saveTextItem(
+  value: string,
+): Promise<{ item: SavedItemRecord; existing: boolean }> {
+  return apiFetch("/items", { method: "POST", body: JSON.stringify({ value }) });
+}
+
+export async function saveImageItem(
+  file: File,
+): Promise<{ item: SavedItemRecord; existing: boolean }> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch(`${API_BASE}/items/image`, {
+    method: "POST",
+    body: form,
+    credentials: "include",
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!response.ok) {
+    const error = (await response.json().catch(() => ({}))) as { message?: string };
+    throw new Error(error.message ?? `Upload failed (${response.status})`);
+  }
+  return response.json() as Promise<{ item: SavedItemRecord; existing: boolean }>;
+}
+
+export async function listItemFacets(): Promise<{ tags: string[]; notebooks: string[] }> {
+  return apiFetch("/items/facets");
+}
+
+export function savedItemMediaUrl(id: string): string {
+  return `${API_BASE}/items/${encodeURIComponent(id)}/media`;
+}
+
+export type KnowledgeGraphNodeType =
+  | "notes"
+  | "notebooks"
+  | "tags"
+  | "links"
+  | "files"
+  | "evernote";
+
+export type KnowledgeGraphNode = {
+  id: string;
+  itemId: string | null;
+  type: KnowledgeGraphNodeType;
+  label: string;
+  value: number;
+  hub: boolean;
+  href: string;
+};
+
+export type KnowledgeGraphEdge = {
+  id: string;
+  source: string;
+  target: string;
+  signal: "tag" | "notebook" | "domain" | "backlink";
+};
+
+export type KnowledgeGraphResponse = {
+  nodes: KnowledgeGraphNode[];
+  edges: KnowledgeGraphEdge[];
+  page: { offset: number; limit: number; nextOffset: number | null };
+};
+
+export async function fetchKnowledgeGraph(input?: {
+  types?: KnowledgeGraphNodeType[];
+  limit?: number;
+  offset?: number;
+}): Promise<KnowledgeGraphResponse> {
+  const params = new URLSearchParams();
+  if (input?.types?.length) params.set("types", input.types.join(","));
+  if (input?.limit) params.set("limit", String(input.limit));
+  if (input?.offset) params.set("offset", String(input.offset));
+  const query = params.toString();
+  return apiFetch(`/items/graph${query ? `?${query}` : ""}`);
+}

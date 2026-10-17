@@ -6,8 +6,8 @@ import "./index.css";
 
 normalizeBrowserPath();
 
-// Bump when Ask chrome changes so stale PWAs pick up the new bundle faster.
-const RECALL_UI_BUILD = "ask-compact-2026-07-24b";
+// Bump when app chrome changes so stale PWAs pick up the new bundle faster.
+const RECALL_UI_BUILD = "explore-graph-2026-10-17";
 
 const updateSW = registerSW({
   immediate: true,

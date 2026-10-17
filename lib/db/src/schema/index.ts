@@ -3,6 +3,7 @@ export * from "./notebooks";
 export * from "./projects";
 export * from "./notes";
 export * from "./note-attachments";
+export * from "./items";
 export * from "./captures";
 export * from "./capture-items";
 export * from "./tasks";
