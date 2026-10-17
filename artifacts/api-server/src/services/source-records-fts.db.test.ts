@@ -3,7 +3,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const migrationUrl = new URL(
-  "../../../../lib/db/migrations/0036_evernote_source_search.sql",
+  "../../../../lib/db/migrations/0037_evernote_source_search.sql",
   import.meta.url,
 );
 

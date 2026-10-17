@@ -86,7 +86,8 @@ module.exports = {
         ...fileEnvNoPort,
         NODE_ENV: "production",
         RECALL_ROLE: "worker",
-        PG_POOL_MAX: "3",
+        // Separate hard-capped worker pool; code never permits this above 3.
+        PG_WORKER_POOL_MAX: "3",
       },
     },
   ],

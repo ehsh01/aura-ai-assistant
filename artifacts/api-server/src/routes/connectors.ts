@@ -67,6 +67,10 @@ import {
 import { nudgeJobWorker } from "../services/job-worker";
 import { todayIso } from "../services/query-utils";
 import { listSubscriptionHeuristicsForUser } from "../services/subscriptions";
+import {
+  getEvernoteCompletenessReport,
+  searchEvernoteRecords,
+} from "../services/evernote-full-sync";
 
 const CreateConnectorBody = z.object({
   name: z.string().min(1).max(255),
@@ -101,6 +105,23 @@ const PatchConnectorBody = z
   .refine((body) => body.enabled !== undefined || body.name !== undefined, {
     message: "At least one connector field is required",
   });
+
+const EvernoteSearchQuery = z.object({
+  q: z.string().max(500).optional(),
+  type: z.enum(["note", "attachment", "image", "pdf", "task"]).optional(),
+  createdFrom: z.coerce.date().optional(),
+  createdTo: z.coerce.date().optional(),
+  updatedFrom: z.coerce.date().optional(),
+  updatedTo: z.coerce.date().optional(),
+  tag: z.string().max(500).optional(),
+  notebook: z.string().max(1000).optional(),
+  source: z.literal("evernote").optional(),
+  trash: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
 
 const OAUTH_STATE_COOKIE_GOOGLE = "recall_google_oauth_state";
 const OAUTH_STATE_COOKIE_MS = "recall_ms_oauth_state";
@@ -727,6 +748,56 @@ router.get("/connectors/:connectorId/sync-runs", async (req, res, next) => {
       return;
     }
     res.json({ runs });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/connectors/:connectorId/verification", async (req, res, next) => {
+  try {
+    const connector = await getConnectorForUser(
+      req.user!.id,
+      req.params.connectorId,
+    );
+    if (!connector || connector.type !== "evernote") {
+      res.status(404).json({ error: "NOT_FOUND", message: "Evernote connector not found" });
+      return;
+    }
+    const report = await getEvernoteCompletenessReport(
+      req.user!.id,
+      req.params.connectorId,
+    );
+    res.json(
+      report ?? {
+        generatedAt: null,
+        pass: false,
+        status: "pending",
+        totals: null,
+        notebooks: [],
+      },
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/connectors/:connectorId/search", async (req, res, next) => {
+  try {
+    const connector = await getConnectorForUser(
+      req.user!.id,
+      req.params.connectorId,
+    );
+    if (!connector || connector.type !== "evernote") {
+      res.status(404).json({ error: "NOT_FOUND", message: "Evernote connector not found" });
+      return;
+    }
+    const filters = EvernoteSearchQuery.parse(req.query);
+    const items = await searchEvernoteRecords(
+      req.user!.id,
+      req.params.connectorId,
+      filters,
+    );
+    res.json({ items });
   } catch (err) {
     next(err);
   }

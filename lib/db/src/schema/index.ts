@@ -13,6 +13,7 @@ export * from "./user-corrections";
 export * from "./connectors";
 export * from "./sync-runs";
 export * from "./source-records";
+export * from "./evernote-sync";
 export * from "./documents";
 export * from "./knowledge-items";
 export * from "./life-memories";

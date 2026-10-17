@@ -725,6 +725,7 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
       and(
         eq(sourceRecords.userId, userId),
         eq(sourceRecords.recordType, "evernote_note"),
+        sql`coalesce((${sourceRecords.recordMetadata}->>'trashed')::boolean, false) = false`,
       ),
     )
     .orderBy(
@@ -811,7 +812,16 @@ export async function searchEvernoteSourceRecordsForUser(
       and(
         eq(sourceRecords.userId, userId),
         eq(sourceRecords.recordType, "evernote_note"),
-        sql`${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQuery})`,
+        sql`coalesce((${sourceRecords.recordMetadata}->>'trashed')::boolean, false) = false`,
+        sql`(
+          ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQuery})
+          OR exists (
+            select 1
+            from evernote_attachments ea
+            where ea.source_record_id = ${sourceRecords.id}
+              and ea.search_tsv @@ to_tsquery('simple', ${tsQuery})
+          )
+        )`,
       ),
     )
     .orderBy(
@@ -1334,7 +1344,13 @@ export async function retrieveRelevantRecords(
         for (const hit of pgHits) {
           const id = `${hit.entityType}:${hit.entityId}`;
           const row = corpusById.get(id);
-          if (!row || shortlistIds.has(id)) continue;
+          if (
+            !row ||
+            shortlistIds.has(id) ||
+            row.recordType === "evernote_note"
+          ) {
+            continue;
+          }
           shortlistIds.add(id);
           candidates.push(row);
           // Cosine distance → similarity for scoring (js cosine still refines below).
@@ -1350,13 +1366,17 @@ export async function retrieveRelevantRecords(
       }
 
       const metricsBefore = getEmbeddingCacheMetrics();
+      const toEmbeddable = (r: ContextRecord) => ({
+        entityType: r.entityType,
+        entityId: r.entityId,
+        text: embeddingTextForContextRecord(r),
+      });
+      const otherCandidates = candidates.filter(
+        (record) => record.recordType !== "evernote_note",
+      );
       const vectors = await embedItemsCached(
         userId,
-        candidates.map((r) => ({
-          entityType: r.entityType,
-          entityId: r.entityId,
-          text: embeddingTextForContextRecord(r),
-        })),
+        otherCandidates.map(toEmbeddable),
         { generateMissing: false, purpose: "retrieval" },
       );
 
@@ -1399,10 +1419,16 @@ export async function retrieveRelevantRecords(
     const kw = keywordScore(question, `${r.title}\n${r.text}`);
     const sem = semanticScores.get(id) ?? 0;
     const boost = personBoost(r) + typeBoost(r.entityType, r.pinned) + googleBoost(r);
+    const semanticForRecord =
+      usedSemantic && r.recordType !== "evernote_note" && sem > 0;
     // Blend: semantic dominates when present; keyword still boosts exact matches.
-    const score = (usedSemantic ? sem * 0.75 + kw * 0.25 : kw) + boost;
+    const score = (semanticForRecord ? sem * 0.75 + kw * 0.25 : kw) + boost;
     const method: RetrievedRecord["method"] =
-      usedSemantic && sem > 0 && kw > 0 ? "hybrid" : usedSemantic && sem > 0 ? "semantic" : "keyword";
+      semanticForRecord && kw > 0
+        ? "hybrid"
+        : semanticForRecord
+          ? "semantic"
+          : "keyword";
     return { r, score, method };
   });
 

@@ -1998,6 +1998,47 @@ export async function listConnectorSyncRuns(
   );
 }
 
+export type EvernoteVerificationReport = {
+  generatedAt: string | null;
+  complete?: boolean;
+  pass: boolean;
+  status?: string;
+  totals: {
+    evernoteNotes: number;
+    recallNotes: number;
+    missing: number;
+    trashedEvernoteNotes: number;
+    trashedRecallNotes: number;
+    trashedMissing: number;
+    attachmentsExpected: number;
+    attachmentsStored: number;
+    tasksExpected: number;
+    tasksStored: number;
+  } | null;
+  notebooks: Array<{
+    id: string;
+    notebook: string;
+    stack: string | null;
+    spaceId: string | null;
+    evernoteNotes: number;
+    recallNotes: number;
+    missing: number;
+    attachmentsExpected: number;
+    attachmentsStored: number;
+    tasksExpected: number;
+    tasksStored: number;
+    verified: boolean;
+  }>;
+};
+
+export async function getEvernoteVerification(
+  connectorId: string,
+): Promise<EvernoteVerificationReport> {
+  return apiFetch(
+    `/connectors/${encodeURIComponent(connectorId)}/verification`,
+  );
+}
+
 export async function syncConnector(
   connectorId: string,
   body?: { csvText?: string },

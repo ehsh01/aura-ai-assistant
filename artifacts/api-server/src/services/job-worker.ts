@@ -16,9 +16,12 @@ import {
   completeJob,
   connectorSyncFromPayload,
   continueJob,
+  deferJob,
   enexImportFromPayload,
   failJob,
+  getJobForUser,
   heartbeatJob,
+  listQueuedJobsOfType,
   recoverStaleProcessingJobs,
   type Job,
 } from "./job-queue";
@@ -31,12 +34,29 @@ let tickRunning = false;
 let wakeRequested = false;
 let ticks = 0;
 const requestedJobIds = new Set<string>();
+const scheduledResumeIds = new Set<string>();
 
 const TIMER_SAFE_JOB_TYPES = [JOB_TYPE_ATTACHMENT_EXTRACT] as const;
 
 const workerId = `recall-api:${hostname()}:${process.pid}`;
 
 type JobHandler = (job: Job) => Promise<"continue" | void>;
+
+function scheduleExplicitJobResume(job: Pick<Job, "id" | "availableAt">): void {
+  if (scheduledResumeIds.has(job.id)) return;
+  scheduledResumeIds.add(job.id);
+  const delay = Math.max(0, job.availableAt.getTime() - Date.now()) + 100;
+  const resume = setTimeout(() => {
+    scheduledResumeIds.delete(job.id);
+    nudgeJobWorker(job.id);
+  }, Math.min(delay, 3_600_100));
+  resume.unref?.();
+}
+
+async function resumeQueuedConnectorJobs(): Promise<void> {
+  const queued = await listQueuedJobsOfType(JOB_TYPE_CONNECTOR_SYNC);
+  for (const job of queued) scheduleExplicitJobResume(job);
+}
 
 const handlers: Record<string, JobHandler> = {
   [JOB_TYPE_CAPTURE_EXTRACTION]: async (job) => {
@@ -139,11 +159,33 @@ async function runOneJob(job: Job): Promise<void> {
     const result = await handler(job);
     if (result === "continue") {
       await continueJob(job.id);
+      // Timer polling intentionally claims only local attachment extraction.
+      // A durable multi-slice connector job must explicitly request its own
+      // next slice after continueJob's one-second availability delay.
+      scheduleExplicitJobResume({
+        id: job.id,
+        availableAt: new Date(Date.now() + 1_000),
+      });
     } else {
       await completeJob(job.id);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Job failed";
+    const { EvernoteWatchdogPauseError } = await import("./evernote-watchdog");
+    if (err instanceof EvernoteWatchdogPauseError) {
+      await deferJob(job.id, err.retryAfterMs, message);
+      scheduleExplicitJobResume({
+        id: job.id,
+        availableAt: new Date(
+          Date.now() + Math.min(Math.max(err.retryAfterMs, 1_000), 3_600_000),
+        ),
+      });
+      logger.info(
+        { jobId: job.id, type: job.type, status: err.status },
+        "Background job paused by load watchdog",
+      );
+      return;
+    }
     const retryAfterMs =
       err &&
       typeof err === "object" &&
@@ -152,6 +194,10 @@ async function runOneJob(job: Job): Promise<void> {
         ? err.retryAfterMs
         : undefined;
     const terminal = await failJob(job.id, message, { retryAfterMs });
+    if (!terminal) {
+      const queued = await getJobForUser(job.userId, job.id);
+      if (queued?.status === "queued") scheduleExplicitJobResume(queued);
+    }
     if (terminal && job.type === JOB_TYPE_CONNECTOR_SYNC) {
       const meta = connectorSyncFromPayload(job.payload);
       if (meta) {
@@ -186,6 +232,7 @@ async function pollOnce(): Promise<void> {
       const recovered = await recoverStaleProcessingJobs();
       if (recovered > 0) {
         logger.info({ recovered }, "Re-queued stale processing jobs");
+        await resumeQueuedConnectorJobs();
       }
       try {
         const { expireDueMemories } = await import("./life-memory");
@@ -223,6 +270,9 @@ async function pollOnce(): Promise<void> {
 /** Immediate + periodic drain for durable jobs. */
 export function startJobWorker(): void {
   if (timer) return;
+  void resumeQueuedConnectorJobs().catch((err) =>
+    logger.warn({ err }, "Failed to resume queued connector jobs"),
+  );
   void pollOnce();
   timer = setInterval(() => {
     void pollOnce();

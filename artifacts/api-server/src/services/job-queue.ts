@@ -106,6 +106,18 @@ export async function getJobForUser(userId: string, jobId: string): Promise<Job 
   return rows[0] ?? null;
 }
 
+export async function listQueuedJobsOfType(
+  type: string,
+  limit = 100,
+): Promise<Job[]> {
+  return getDb()
+    .select()
+    .from(jobs)
+    .where(and(eq(jobs.type, type), eq(jobs.status, "queued")))
+    .orderBy(jobs.availableAt, jobs.createdAt)
+    .limit(Math.min(Math.max(limit, 1), 1_000));
+}
+
 /**
  * Atomically claim the next due queued job (Postgres SKIP LOCKED).
  * Returns null when the queue is empty.
@@ -206,6 +218,24 @@ export async function continueJob(jobId: string): Promise<void> {
       lockedAt: null,
       lockedBy: null,
       lastError: null,
+      updatedAt: now,
+    })
+    .where(and(eq(jobs.id, jobId), eq(jobs.status, "processing")));
+}
+
+/** Pause a claimed job without consuming a retry attempt (load watchdog). */
+export async function deferJob(jobId: string, delayMs: number, reason: string): Promise<void> {
+  const now = new Date();
+  const boundedDelay = Math.min(Math.max(delayMs, 1_000), 3_600_000);
+  await getDb()
+    .update(jobs)
+    .set({
+      status: "queued",
+      attempts: sql`greatest(${jobs.attempts} - 1, 0)`,
+      availableAt: new Date(now.getTime() + boundedDelay),
+      lockedAt: null,
+      lockedBy: null,
+      lastError: reason.slice(0, 1_000),
       updatedAt: now,
     })
     .where(and(eq(jobs.id, jobId), eq(jobs.status, "processing")));

@@ -255,6 +255,24 @@ EVERNOTE_OAUTH_REDIRECT_URI=https://recall-app.net/api/connectors/evernote/oauth
 EVERNOTE_MCP_PACE_MS=1000
 EVERNOTE_MCP_MAX_429_RETRIES=2
 EVERNOTE_MCP_BACKFILL_CHUNK_SIZE=25
+EVERNOTE_SYNC_ENABLED=true
+EVERNOTE_INCREMENTAL_SYNC_ENABLED=true
+EVERNOTE_INCREMENTAL_SYNC_MINUTES=15
+EVERNOTE_FULL_RECONCILE_ENABLED=true
+EVERNOTE_FULL_RECONCILE_MINUTES=1440
+EVERNOTE_AUTO_FULL_IMPORT=false
+EVERNOTE_NIGHT_WINDOW_START_HOUR=1
+EVERNOTE_NIGHT_WINDOW_END_HOUR=5
+EVERNOTE_NIGHT_WINDOW_TIMEZONE=America/New_York
+EVERNOTE_WATCHDOG_DB_CONNECTIONS=22
+EVERNOTE_WATCHDOG_MIN_MEM_MB=150
+# Comma-separated sibling-app health endpoints:
+EVERNOTE_WATCHDOG_HEALTH_URLS=
+EVERNOTE_ATTACHMENT_MAX_BYTES=20971520
+EVERNOTE_PDF_PARSE_MAX_BYTES=15728640
+EVERNOTE_TESSERACT_TIMEOUT_MS=30000
+PG_WORKER_POOL_MAX=3
+PG_IMPORT_POOL_MAX=3
 SECRETS_ENCRYPTION_KEY=... # seals access/refresh tokens and DCR client secret
 APP_PUBLIC_URL=https://recall-app.net
 ```
@@ -264,13 +282,20 @@ APP_PUBLIC_URL=https://recall-app.net
    Evernote (MCP)**.
 3. Ernesto completes Evernote's browser OAuth consent. Recall dynamically
    registers the client and seals registration/tokens in connector settings.
-4. Click **Sync Now**. Sync exposes only `search_notes`, `semantic_search`,
-   `get_note`, `search_notebooks`, and `search_tags`; backfill uses the listing
-   and note-read tools sequentially. Calls default to one per second and retry
-   429s at most twice using a bounded Retry-After delay.
-   Changed-note bodies are limited to 25 per Sync Now; additional notes are
-   logged as deferred with `partial_success` so another Sync Now continues
-   backfill without wedging the API process.
+4. Click **Sync Now** to start the first durable full import. Automatic first
+   imports are disabled unless `EVERNOTE_AUTO_FULL_IMPORT=true`. MCP access remains
+   read-only and includes notes, notebooks, tags, Spaces, tasks, and attachment
+   download links. Note bodies are fetched and committed one at a time.
+   Server-side slices continue until complete.
+5. Install `tesseract-ocr` on the worker host before enabling the import.
+   Images at least 20KB use one serialized Tesseract process with a 30s timeout;
+   PDFs up to 15MB use `pdf-parse`. Attachments default to a 20MB limit (50MB
+   hard ceiling); bytes are held only in memory and discarded.
+6. The worker auto-pauses at 22 DB connections, below 150MB available RAM, or
+   when a configured sibling health URL fails. It resumes from its persisted
+   cursor when the gates recover. Incremental sync runs every 15 minutes after
+   the first import. Scheduled full reconciliation and image OCR run only from
+   1–5 AM America/New_York by default and are load-checked before work.
 
 The existing OAuth1/EDAM and personal developer-token implementations remain
 disabled optional fallbacks:
@@ -286,24 +311,9 @@ EVERNOTE_SANDBOX=false
 ```
 
 Evernote sync compares source timestamps/USNs and SHA-256 content hashes.
-Unchanged notes only advance their lightweight sync checkpoint; content, FTS,
-and embeddings are not rewritten. Sync-time embeddings default off, are limited
-to changed notes, and require all three opt-in switches. Once enabled, the
-default is 25 per run (hard maximum 100):
-
-```bash
-RECALL_BACKGROUND_AI_ENABLED=true
-RECALL_EMBEDDING_WARM_ENABLED=true
-RECALL_EVERNOTE_EMBEDDINGS_ENABLED=true
-EVERNOTE_EMBEDDING_MAX_PER_SYNC=25
-EVERNOTE_EMBEDDING_DAILY_CAP=100
-# RECALL_EVERNOTE_ASK_ENABLED=false excludes synced Evernote data from Ask.
-# Any one of the three AI switches set false stops sync-time embeddings.
-```
-
-No summarization or other chat LLM work runs during sync. Keyword-only Ask stays
-local and available when AI is disabled. When Ask AI is allowed, it calls one
-answer LLM on local Postgres top-k retrieval only; it never calls Evernote MCP.
+Unchanged notes only advance their lightweight sync checkpoint. The entire
+import, attachment extraction, completeness report, and connector search path
+is keyword-only: it makes no OpenAI call and creates no embeddings.
 
 Disabling the connector through `PATCH /api/connectors/:id` pauses Sync Now and
 excludes that connector from Ask.

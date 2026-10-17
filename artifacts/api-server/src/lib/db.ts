@@ -46,16 +46,19 @@ export function getDb(): Db {
   }
   if (!db) {
     const connectionString = normalizeDatabaseUrl(url);
+    const workerProcess = process.env.RECALL_ROLE?.trim().toLowerCase() === "worker";
     pool = new pg.Pool({
       connectionString,
       // The DO managed cluster is shared with sibling apps (~25 conn cap total).
       // Keep Recall's slice small; queries queue in-process instead of starving
       // other apps of connection slots.
-      max: envInt("PG_POOL_MAX", 4, 1, 10),
+      max: workerProcess
+        ? envInt("PG_WORKER_POOL_MAX", 3, 1, 3)
+        : envInt("PG_POOL_MAX", 3, 1, 3),
       idleTimeoutMillis: envInt("PG_IDLE_TIMEOUT_MS", 10_000, 1_000, 300_000),
       connectionTimeoutMillis: envInt("PG_CONNECT_TIMEOUT_MS", 15_000, 1_000, 60_000),
       // Identifiable in pg_stat_activity when auditing shared-cluster usage.
-      application_name: "recall-api",
+      application_name: workerProcess ? "recall-worker" : "recall-api",
       ssl: poolSsl(url),
     });
     db = drizzle(pool as never, { schema });

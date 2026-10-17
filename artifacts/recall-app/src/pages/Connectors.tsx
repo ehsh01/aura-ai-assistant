@@ -6,6 +6,7 @@ import {
   deleteConnector,
   testFlipperForceConnector,
   getFinanceSummary,
+  getEvernoteVerification,
   getHomeyWebhookInfo,
   listConnectors,
   listConnectorSyncRuns,
@@ -22,6 +23,7 @@ import {
   testHomeyWebhook,
   type FinanceSummary,
   type ConnectorSyncRun,
+  type EvernoteVerificationReport,
 } from "@/lib/recall-api";
 import {
   createExtensionToken,
@@ -93,6 +95,8 @@ export function Connectors() {
   const [testingEvernote, setTestingEvernote] = useState(false);
   const [evernoteLastRun, setEvernoteLastRun] =
     useState<ConnectorSyncRun | null>(null);
+  const [evernoteVerification, setEvernoteVerification] =
+    useState<EvernoteVerificationReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [summary, setSummary] = useState<{ connectorId: string; data: FinanceSummary } | null>(null);
@@ -131,10 +135,15 @@ export function Connectors() {
       );
       const evernote = preferredEvernoteConnector(res.connectors);
       if (evernote) {
-        const runs = await listConnectorSyncRuns(evernote.id).catch(() => null);
+        const [runs, verification] = await Promise.all([
+          listConnectorSyncRuns(evernote.id).catch(() => null),
+          getEvernoteVerification(evernote.id).catch(() => null),
+        ]);
         setEvernoteLastRun(runs?.runs[0] ?? null);
+        setEvernoteVerification(verification);
       } else {
         setEvernoteLastRun(null);
+        setEvernoteVerification(null);
       }
       const tokenRes = await listExtensionTokens().catch(() => null);
       if (tokenRes) setExtensionTokens(tokenRes.items);
@@ -623,8 +632,9 @@ export function Connectors() {
             <h2 className="text-lg font-semibold">Evernote</h2>
             <p className="mt-2 text-sm text-white/55">
               Connect through Evernote MCP OAuth2 with dynamic client registration—no consumer
-              key or secret required. Sync Now uses paced read tools to index only new or changed
-              notes. Ask stays local to Recall and never calls Evernote MCP.
+              key or secret required. Recall continues paced, resumable sync in the server,
+              checks changes every 15 minutes, and reconciles nightly. Search and import stay
+              local and never call AI.
             </p>
             <button
               type="button"
@@ -762,6 +772,78 @@ export function Connectors() {
                         )}
                     </div>
                   )}
+                {evernoteVerification && (
+                  <div className="w-full overflow-hidden rounded-xl border border-white/10 bg-black/25">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 p-3">
+                      <div>
+                        <p className="text-sm font-medium text-white/85">
+                          Completeness report
+                        </p>
+                        <p className="text-xs text-white/45">
+                          {evernoteVerification.generatedAt
+                            ? `Generated ${new Date(evernoteVerification.generatedAt).toLocaleString()}`
+                            : "Pending first full reconcile"}
+                        </p>
+                      </div>
+                      <span
+                        className={`rounded-full px-2 py-1 text-xs ${
+                          evernoteVerification.pass
+                            ? "bg-emerald-500/15 text-emerald-200"
+                            : "bg-amber-500/15 text-amber-200"
+                        }`}
+                      >
+                        {evernoteVerification.pass ? "PASS · missing 0" : "IN PROGRESS"}
+                      </span>
+                    </div>
+                    {evernoteVerification.totals && (
+                      <div className="grid grid-cols-2 gap-px bg-white/10 sm:grid-cols-4">
+                        {[
+                          ["Evernote / Recall", `${evernoteVerification.totals.evernoteNotes} / ${evernoteVerification.totals.recallNotes}`],
+                          ["Missing", String(evernoteVerification.totals.missing)],
+                          ["Attachments", `${evernoteVerification.totals.attachmentsStored} / ${evernoteVerification.totals.attachmentsExpected}`],
+                          ["Tasks", `${evernoteVerification.totals.tasksStored} / ${evernoteVerification.totals.tasksExpected}`],
+                        ].map(([label, value]) => (
+                          <div key={label} className="bg-[#0a0a0f] p-3">
+                            <p className="text-[10px] uppercase tracking-wider text-white/35">{label}</p>
+                            <p className="mt-1 text-sm text-white/80">{value}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {evernoteVerification.notebooks.length > 0 && (
+                      <div className="max-h-64 overflow-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead className="sticky top-0 bg-[#101017] text-white/40">
+                            <tr>
+                              <th className="px-3 py-2 font-medium">Notebook</th>
+                              <th className="px-3 py-2 font-medium">Evernote</th>
+                              <th className="px-3 py-2 font-medium">Recall</th>
+                              <th className="px-3 py-2 font-medium">Missing</th>
+                              <th className="px-3 py-2 font-medium">Files</th>
+                              <th className="px-3 py-2 font-medium">Tasks</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {evernoteVerification.notebooks.map((notebook) => (
+                              <tr key={notebook.id} className="border-t border-white/5 text-white/65">
+                                <td className="max-w-56 truncate px-3 py-2" title={notebook.notebook}>
+                                  {notebook.notebook}
+                                </td>
+                                <td className="px-3 py-2">{notebook.evernoteNotes}</td>
+                                <td className="px-3 py-2">{notebook.recallNotes}</td>
+                                <td className={`px-3 py-2 ${!notebook.verified || notebook.missing ? "text-amber-300" : "text-emerald-300"}`}>
+                                  {notebook.verified ? notebook.missing : "pending"}
+                                </td>
+                                <td className="px-3 py-2">{notebook.attachmentsStored}/{notebook.attachmentsExpected}</td>
+                                <td className="px-3 py-2">{notebook.tasksStored}/{notebook.tasksExpected}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
