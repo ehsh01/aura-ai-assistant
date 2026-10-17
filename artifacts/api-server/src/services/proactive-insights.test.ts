@@ -16,7 +16,11 @@ describe("proactive insights helpers", () => {
       { payee: "Netflix", date: "2026-05-01", amount: -15.99 },
       { payee: "Coffee Spot", date: "2026-07-10", amount: -4.5 },
     ];
-    expect(findRecurringPayees(txs, { minCount: 3, lookbackDays: 120 })).toEqual([
+    expect(findRecurringPayees(txs, {
+      minCount: 3,
+      lookbackDays: 120,
+      now: new Date("2026-07-15T12:00:00Z"),
+    })).toEqual([
       expect.objectContaining({ payee: "Netflix", count: 3 }),
     ]);
   });
