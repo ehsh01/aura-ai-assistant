@@ -48,8 +48,16 @@ function json(route: Route, body: unknown, status = 200) {
   });
 }
 
-async function mockRecall(page: Page) {
+async function mockRecall(
+  page: Page,
+  options: { graphSourceCount?: number } = {},
+) {
   const items = [...baseItems];
+  let graphMetrics: {
+    sourceCount: number;
+    returnedNodes: number;
+    nextOffset: number | null;
+  } = { sourceCount: items.length, returnedNodes: 0, nextOffset: null };
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -78,35 +86,48 @@ async function mockRecall(page: Page) {
       });
     }
     if (url.pathname === "/api/items/graph") {
-      const graphNodes = items.flatMap((item, index) => [
-        {
-          id: `item-node:${item.id}`,
-          itemId: item.id,
-          type: item.source === "evernote" ? "evernote" : "notes",
-          label: item.title,
-          value: 8 + index,
+      const sourceCount = options.graphSourceCount ?? items.length;
+      const requestedLimit = Math.min(Number(url.searchParams.get("limit") ?? 350), 500);
+      const returnedNodes = Math.min(requestedLimit, sourceCount);
+      const itemCount = Math.max(1, Math.floor(returnedNodes * 0.78));
+      const hubCount = returnedNodes - itemCount;
+      const graphNodes = [
+        ...Array.from({ length: itemCount }, (_, index) => ({
+          id: `item-node:synthetic-${index}`,
+          itemId: items[index % items.length]!.id,
+          type: (["notes", "evernote", "links", "files"] as const)[index % 4],
+          label: `Synthetic item ${index + 1}`,
+          value: 5 + (index % 9),
           hub: false,
-          href: `/everything/${item.id}`,
-        },
-        {
-          id: `tag:${index}`,
+          href: `/everything/${items[index % items.length]!.id}`,
+        })),
+        ...Array.from({ length: hubCount }, (_, index) => ({
+          id: `${index % 2 ? "tags" : "notebooks"}:synthetic-${index}`,
           itemId: null,
-          type: "tags",
-          label: item.tags[0],
-          value: 10,
+          type: index % 2 ? ("tags" as const) : ("notebooks" as const),
+          label: index % 4 < 2 ? "Finance" : "Vehicles",
+          value: 10 + (index % 5),
           hub: true,
-          href: `/everything?tag=${item.tags[0]}`,
-        },
-      ]);
+          href: index % 2 ? "/everything?tag=finance" : "/everything?notebook=Finance",
+        })),
+      ];
+      const firstHub = itemCount;
+      const nextOffset = sourceCount > returnedNodes ? returnedNodes : null;
+      graphMetrics = { sourceCount, returnedNodes: graphNodes.length, nextOffset };
       return json(route, {
         nodes: graphNodes,
-        edges: items.map((item, index) => ({
+        edges: Array.from({ length: itemCount }, (_, index) => ({
           id: `edge-${index}`,
-          source: `item-node:${item.id}`,
-          target: `tag:${index}`,
-          signal: "tag",
+          source: `item-node:synthetic-${index}`,
+          target: graphNodes[firstHub + (index % Math.max(1, hubCount))]?.id,
+          signal: index % 2 ? "tag" : "notebook",
         })),
-        page: { offset: 0, limit: 350, nextOffset: null },
+        page: {
+          offset: 0,
+          limit: requestedLimit,
+          nextOffset,
+          sourceCount,
+        },
       });
     }
     if (url.pathname === "/api/items" && request.method() === "POST") {
@@ -138,6 +159,7 @@ async function mockRecall(page: Page) {
     }
     return json(route, {});
   });
+  return { getGraphMetrics: () => graphMetrics };
 }
 
 test.describe("Everything capture, graph, grid, and search", () => {
@@ -166,5 +188,79 @@ test.describe("Everything capture, graph, grid, and search", () => {
     await expect(page.getByTestId("search-filters")).toBeVisible();
     await page.getByText("Permit revision", { exact: true }).click();
     await expect(page.getByTestId("item-detail")).toContainText("City approval");
+  });
+
+  test("caps a 5,000-item source and remains responsive under 4x mobile CPU throttling", async ({
+    context,
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+    const metrics = await mockRecall(page, { graphSourceCount: 5_000 });
+
+    await page.goto("/");
+    await expect(page.getByTestId("knowledge-graph")).toBeVisible();
+    await expect(page.getByLabel(/R\.E\.C\.A\.L\.L\. ready/i)).toBeVisible();
+    const graphCanvas = page.getByLabel("Interactive knowledge graph");
+    await expect(graphCanvas).toHaveAttribute("data-graph-nodes", "180");
+    await expect
+      .poll(async () => Number((await graphCanvas.getAttribute("data-rendered-labels")) ?? 0))
+      .toBeGreaterThan(0);
+
+    const sample = await page.evaluate(
+      () =>
+        new Promise<{ frames: number; elapsedMs: number; fps: number }>((resolve) => {
+          let frames = 0;
+          const started = performance.now();
+          const step = (now: number) => {
+            frames += 1;
+            const elapsedMs = now - started;
+            if (elapsedMs >= 2_000) {
+              resolve({
+                frames,
+                elapsedMs,
+                fps: (frames * 1_000) / elapsedMs,
+              });
+              return;
+            }
+            requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+        }),
+    );
+    const graphMetrics = metrics.getGraphMetrics();
+    console.info(
+      `[graph-perf] source=${graphMetrics.sourceCount} returned=${graphMetrics.returnedNodes} throttle=4x viewport=390x844 fps=${sample.fps.toFixed(1)} frames=${sample.frames}`,
+    );
+
+    expect(graphMetrics.sourceCount).toBe(5_000);
+    expect(graphMetrics.returnedNodes).toBeLessThanOrEqual(180);
+    expect(graphMetrics.nextOffset).toBe(180);
+    expect(sample.fps).toBeGreaterThanOrEqual(12);
+  });
+
+  test("falls back to the complete grid for reduced motion", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await mockRecall(page, { graphSourceCount: 5_000 });
+    await page.goto("/");
+
+    await expect(page.getByTestId("masonry-grid")).toBeVisible();
+    await expect(page.getByTestId("knowledge-graph")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Graph", exact: true })).toBeDisabled();
+  });
+
+  test("falls back to the grid on a two-core low-end device", async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "hardwareConcurrency", {
+        configurable: true,
+        get: () => 2,
+      });
+    });
+    await mockRecall(page, { graphSourceCount: 5_000 });
+    await page.goto("/");
+
+    await expect(page.getByTestId("masonry-grid")).toBeVisible();
+    await expect(page.getByTestId("knowledge-graph")).toHaveCount(0);
   });
 });

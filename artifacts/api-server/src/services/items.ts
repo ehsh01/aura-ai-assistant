@@ -14,6 +14,9 @@ import { heuristicItemTags } from "./item-tags";
 
 export const ITEM_KINDS = ["note", "link", "image", "pdf", "file"] as const;
 export const ITEM_SOURCES = ["recall", "evernote"] as const;
+export const ITEM_LIST_BODY_MAX_CHARS = 12_000;
+export const ITEM_GRAPH_BODY_MAX_CHARS = 2_000;
+export const ITEM_DETAIL_BODY_MAX_CHARS = 500_000;
 
 export type ItemSearchFilters = {
   q: string;
@@ -25,6 +28,8 @@ export type ItemSearchFilters = {
   notebook: string | null;
   trash: boolean;
   limit: number;
+  /** Maximum body preview returned per row; FTS still runs entirely in Postgres. */
+  bodyTextLimit: number;
 };
 
 export type SavedItemDto = {
@@ -138,6 +143,7 @@ export function parseItemSearchFilters(query: Record<string, unknown>): ItemSear
       typeof query.notebook === "string" ? query.notebook.trim().slice(0, 500) || null : null,
     trash: query.trash === "true" || query.trash === true,
     limit: Number.isFinite(rawLimit) ? Math.min(Math.max(Math.floor(rawLimit), 1), 200) : 100,
+    bodyTextLimit: ITEM_LIST_BODY_MAX_CHARS,
   };
 }
 
@@ -171,7 +177,8 @@ async function listNativeItems(userId: string, filters: ItemSearchFilters): Prom
   const result = await getDb().execute(sql`
     SELECT
       i.id, i.kind, i.state, i.source, i.title, i.description, i.domain,
-      i.source_url, i.body_text, i.media, i.tags, i.notebook, i.deleted_at,
+      i.source_url, left(i.body_text, ${filters.bodyTextLimit}) AS body_text,
+      i.media, i.tags, i.notebook, i.deleted_at,
       i.bumped_at, i.created_at, i.updated_at
     FROM items i
     WHERE ${where}
@@ -208,7 +215,7 @@ async function listNoteItems(userId: string, filters: ItemSearchFilters): Promis
       null::text AS description,
       null::text AS domain,
       null::text AS source_url,
-      n.content AS body_text,
+      left(n.content, ${filters.bodyTextLimit}) AS body_text,
       '{}'::jsonb AS media,
       n.tags,
       nb.name AS notebook,
@@ -291,7 +298,7 @@ async function listEvernoteItems(
       null::text AS description,
       null::text AS domain,
       sr.source_url,
-      coalesce(sr.record_text, '') AS body_text,
+      left(coalesce(sr.record_text, ''), ${filters.bodyTextLimit}) AS body_text,
       '{}'::jsonb AS media,
       CASE
         WHEN jsonb_typeof(sr.record_metadata->'tagNames') = 'array'
@@ -353,7 +360,7 @@ async function getProjectedItem(
         null::text AS description,
         null::text AS domain,
         null::text AS source_url,
-        n.content AS body_text,
+        left(n.content, ${ITEM_DETAIL_BODY_MAX_CHARS}) AS body_text,
         '{}'::jsonb AS media,
         n.tags,
         nb.name AS notebook,
@@ -380,7 +387,7 @@ async function getProjectedItem(
       null::text AS description,
       null::text AS domain,
       sr.source_url,
-      coalesce(sr.record_text, '') AS body_text,
+      left(coalesce(sr.record_text, ''), ${ITEM_DETAIL_BODY_MAX_CHARS}) AS body_text,
       '{}'::jsonb AS media,
       CASE
         WHEN jsonb_typeof(sr.record_metadata->'tagNames') = 'array'
@@ -426,7 +433,24 @@ export async function getItemForUser(userId: string, id: string): Promise<SavedI
     return getProjectedItem(userId, id);
   }
   const rows = await getDb()
-    .select()
+    .select({
+      id: items.id,
+      kind: items.kind,
+      state: items.state,
+      source: items.source,
+      title: items.title,
+      description: items.description,
+      domain: items.domain,
+      sourceUrl: items.sourceUrl,
+      bodyText: sql<string>`left(${items.bodyText}, ${ITEM_DETAIL_BODY_MAX_CHARS})`,
+      media: items.media,
+      tags: items.tags,
+      notebook: items.notebook,
+      deletedAt: items.deletedAt,
+      bumpedAt: items.bumpedAt,
+      createdAt: items.createdAt,
+      updatedAt: items.updatedAt,
+    })
     .from(items)
     .where(and(eq(items.userId, userId), eq(items.id, id)))
     .limit(1);

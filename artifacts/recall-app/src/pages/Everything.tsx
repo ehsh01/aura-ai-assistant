@@ -24,6 +24,7 @@ import {
 import { AppLayout } from "@/components/AppLayout";
 import { KnowledgeGraph } from "@/components/KnowledgeGraph";
 import { toast } from "@/hooks/use-toast";
+import { shouldUseGridFallback } from "@/lib/graph-performance";
 import {
   fetchKnowledgeGraph,
   getSavedItem,
@@ -60,9 +61,11 @@ function useLowMotionFallback(): boolean {
     const device = navigator as Navigator & { deviceMemory?: number };
     const evaluate = () =>
       setFallback(
-        media.matches ||
-          (device.hardwareConcurrency > 0 && device.hardwareConcurrency <= 2) ||
-          (device.deviceMemory != null && device.deviceMemory <= 2),
+        shouldUseGridFallback({
+          reducedMotion: media.matches,
+          hardwareConcurrency: device.hardwareConcurrency,
+          deviceMemory: device.deviceMemory,
+        }),
       );
     evaluate();
     media.addEventListener("change", evaluate);
@@ -580,6 +583,19 @@ export function Everything() {
               <span className="assistant-status">
                 <span className="h-1.5 w-1.5 rounded-full bg-[#7dffd9] shadow-[0_0_8px_#7dffd9]" />
                 {askStatus === "thinking" ? "PROCESSING" : "READY"}
+              </span>
+            </div>
+
+            <div
+              className="assistant-ring-mobile-wrap absolute bottom-[104px] left-3 z-30 flex items-center gap-1.5 sm:hidden"
+              aria-label={`R.E.C.A.L.L. ${askStatus === "thinking" ? "processing" : "ready"}`}
+            >
+              <div className={`assistant-ring-mobile ${askStatus === "thinking" ? "is-thinking" : ""}`}>
+                <span>RECALL</span>
+              </div>
+              <span className="assistant-status assistant-status-mobile">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#7dffd9] shadow-[0_0_8px_#7dffd9]" />
+                {askStatus === "thinking" ? "BUSY" : "READY"}
               </span>
             </div>
 

@@ -5,6 +5,8 @@ import {
   forceLink,
   forceManyBody,
   forceSimulation,
+  forceX,
+  forceY,
   type SimulationLinkDatum,
   type SimulationNodeDatum,
 } from "d3-force";
@@ -20,6 +22,13 @@ type LayoutNode = KnowledgeGraphNode &
     radius: number;
   };
 type LayoutEdge = SimulationLinkDatum<LayoutNode> & KnowledgeGraphEdge;
+type GraphTooltip = {
+  node: KnowledgeGraphNode;
+  x: number;
+  y: number;
+  links: number;
+  touch: boolean;
+};
 
 const COLORS: Record<KnowledgeGraphNodeType, string> = {
   notes: "#75baff",
@@ -29,6 +38,41 @@ const COLORS: Record<KnowledgeGraphNodeType, string> = {
   files: "#ff8f82",
   evernote: "#74e59b",
 };
+
+const TYPE_BADGES: Record<KnowledgeGraphNodeType, string> = {
+  notes: "note",
+  notebooks: "notebook",
+  tags: "tag",
+  links: "link",
+  files: "file",
+  evernote: "evernote",
+};
+
+function stableSeed(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function laneOffset(type: KnowledgeGraphNodeType): { x: number; y: number } {
+  switch (type) {
+    case "notebooks":
+      return { x: -52, y: -42 };
+    case "tags":
+      return { x: 52, y: 42 };
+    case "links":
+      return { x: 36, y: -18 };
+    case "files":
+      return { x: 62, y: 12 };
+    case "evernote":
+      return { x: -62, y: 12 };
+    default:
+      return { x: -20, y: -8 };
+  }
+}
 
 export function KnowledgeGraph({
   nodes,
@@ -59,12 +103,8 @@ export function KnowledgeGraph({
     viewY: number;
     moved: boolean;
   } | null>(null);
-  const [hover, setHover] = useState<{
-    node: KnowledgeGraphNode;
-    x: number;
-    y: number;
-    links: number;
-  } | null>(null);
+  const hoverRef = useRef<GraphTooltip | null>(null);
+  const [hover, setHover] = useState<GraphTooltip | null>(null);
   const [fitVersion, setFitVersion] = useState(0);
   const degree = useMemo(() => {
     const result = new Map<string, number>();
@@ -80,15 +120,25 @@ export function KnowledgeGraph({
     const canvas = canvasRef.current;
     if (!container || !canvas) return;
 
-    const layoutNodes: LayoutNode[] = nodes.map((node) => ({
-      ...node,
-      radius: Math.max(3, Math.min(node.hub ? 13 : 9, node.value)),
-    }));
+    const layoutNodes: LayoutNode[] = nodes.map((node) => {
+      const seed = stableSeed(node.id);
+      const lane = laneOffset(node.type);
+      return {
+        ...node,
+        radius: Math.max(3, Math.min(node.hub ? 13 : 9, node.value)),
+        // Stable seeded positions prevent same-name tag/notebook hubs from
+        // starting on top of each other before collision forces settle.
+        x: lane.x + ((seed % 101) - 50) * 1.8,
+        y: lane.y + (((seed >>> 8) % 101) - 50) * 1.8,
+      };
+    });
     const nodeIds = new Set(layoutNodes.map((node) => node.id));
     const layoutEdges: LayoutEdge[] = edges
       .filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))
       .map((edge) => ({ ...edge }));
     layoutRef.current = { nodes: layoutNodes, edges: layoutEdges };
+    canvas.dataset.graphNodes = String(layoutNodes.length);
+    canvas.dataset.graphHubs = String(layoutNodes.filter((node) => node.hub).length);
 
     let width = container.clientWidth;
     let height = container.clientHeight;
@@ -117,6 +167,7 @@ export function KnowledgeGraph({
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         context.clearRect(0, 0, width, height);
+        canvas.dataset.graphScale = viewRef.current.scale.toFixed(3);
         context.save();
         context.lineWidth = focus ? 0.55 : 0.75;
         for (const edge of layoutEdges) {
@@ -162,17 +213,101 @@ export function KnowledgeGraph({
           context.fill();
           context.shadowBlur = 0;
 
-          if ((node.hub || labels) && viewRef.current.scale > 0.48) {
-            context.globalAlpha = node.hub ? 0.94 : 0.72;
+        }
+
+        if (viewRef.current.scale >= 0.24) {
+          const occupied: Array<{ left: number; top: number; right: number; bottom: number }> = [];
+          const labeledNodes = layoutNodes
+            .filter((node) => node.hub || (labels && viewRef.current.scale > 0.42))
+            .sort((a, b) => Number(b.hub) - Number(a.hub) || b.value - a.value);
+
+          for (const node of labeledNodes) {
+            const point = screenPoint(node);
+            const radius = Math.max(2.2, node.radius * Math.sqrt(viewRef.current.scale));
+            const label = node.label.length > 26 ? `${node.label.slice(0, 24)}…` : node.label;
+            const badge = TYPE_BADGES[node.type];
+            const labelFont = `${node.hub ? 11 : 9}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+            context.font = labelFont;
+            const labelWidth = context.measureText(label).width;
+            context.font = "7px ui-monospace, SFMono-Regular, Menlo, monospace";
+            const badgeWidth = context.measureText(badge.toUpperCase()).width + 8;
+            const totalWidth = labelWidth + badgeWidth + 5;
+            const labelHeight = 14;
+            const above = {
+              left: point.x - totalWidth / 2,
+              top: point.y - radius - labelHeight - 5,
+            };
+            const below = {
+              left: point.x - totalWidth / 2,
+              top: point.y + radius + 5,
+            };
+            const right = {
+              left: point.x + radius + 7,
+              top: point.y - labelHeight / 2,
+            };
+            const left = {
+              left: point.x - radius - totalWidth - 7,
+              top: point.y - labelHeight / 2,
+            };
+            const candidates =
+              node.type === "notebooks"
+                ? [above, left, right, below]
+                : node.type === "tags"
+                  ? [below, right, left, above]
+                  : [below, above, right, left];
+            const expanded = [
+              ...candidates,
+              ...candidates.map((candidate) => ({ ...candidate, top: candidate.top + 10 })),
+              ...candidates.map((candidate) => ({ ...candidate, top: candidate.top - 10 })),
+            ];
+            const box = expanded
+              .map((candidate) => ({
+                ...candidate,
+                right: candidate.left + totalWidth,
+                bottom: candidate.top + labelHeight,
+              }))
+              .find(
+                (candidate) =>
+                  candidate.left >= 4 &&
+                  candidate.top >= 4 &&
+                  candidate.right <= width - 4 &&
+                  candidate.bottom <= height - 4 &&
+                  occupied.every(
+                    (existing) =>
+                      candidate.right + 4 < existing.left ||
+                      candidate.left - 4 > existing.right ||
+                      candidate.bottom + 3 < existing.top ||
+                      candidate.top - 3 > existing.bottom,
+                  ),
+              );
+            if (!box) continue;
+            occupied.push(box);
+
+            const labelY = box.top + labelHeight / 2;
+            context.globalAlpha = node.hub ? 0.94 : 0.76;
+            context.textBaseline = "middle";
+            context.textAlign = "left";
+            context.font = labelFont;
             context.fillStyle = "#dffdf4";
-            context.font = `${node.hub ? 11 : 9}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+            context.fillText(label, box.left, labelY);
+
+            const badgeX = box.left + labelWidth + 5;
+            const badgeY = labelY - 6;
+            context.fillStyle = `${COLORS[node.type]}24`;
+            context.strokeStyle = `${COLORS[node.type]}8f`;
+            context.lineWidth = 0.75;
+            context.beginPath();
+            context.roundRect(badgeX, badgeY, badgeWidth, 12, 6);
+            context.fill();
+            context.stroke();
+            context.fillStyle = COLORS[node.type];
+            context.font = "7px ui-monospace, SFMono-Regular, Menlo, monospace";
             context.textAlign = "center";
-            context.fillText(
-              node.label.length > 26 ? `${node.label.slice(0, 24)}…` : node.label,
-              point.x,
-              point.y + radius + 13,
-            );
+            context.fillText(badge.toUpperCase(), badgeX + badgeWidth / 2, labelY + 0.5);
           }
+          canvas.dataset.renderedLabels = String(occupied.length);
+        } else {
+          canvas.dataset.renderedLabels = "0";
         }
         context.globalAlpha = 1;
         context.restore();
@@ -188,7 +323,24 @@ export function KnowledgeGraph({
           .distance((edge) => (edge.signal === "notebook" ? 54 : 42))
           .strength(0.28),
       )
-      .force("collide", forceCollide<LayoutNode>().radius((node) => node.radius + 5))
+      .force(
+        "collide",
+        forceCollide<LayoutNode>()
+          .radius((node) => (node.hub ? node.radius + 22 : node.radius + (labels ? 12 : 6)))
+          .iterations(2),
+      )
+      .force(
+        "lane-x",
+        forceX<LayoutNode>((node) => laneOffset(node.type).x).strength((node) =>
+          node.hub ? 0.08 : 0.025,
+        ),
+      )
+      .force(
+        "lane-y",
+        forceY<LayoutNode>((node) => laneOffset(node.type).y).strength((node) =>
+          node.hub ? 0.08 : 0.025,
+        ),
+      )
       .force("center", forceCenter(0, 0))
       .alphaDecay(0.035)
       .on("tick", draw);
@@ -230,6 +382,26 @@ export function KnowledgeGraph({
       return nearest;
     };
 
+    const showTooltip = (
+      node: LayoutNode | null,
+      clientX: number,
+      clientY: number,
+      touch: boolean,
+    ) => {
+      const bounds = canvas.getBoundingClientRect();
+      const next = node
+        ? {
+            node,
+            x: clientX - bounds.left,
+            y: clientY - bounds.top,
+            links: degree.get(node.id) ?? 0,
+            touch,
+          }
+        : null;
+      hoverRef.current = next;
+      setHover(next);
+    };
+
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const next = Math.max(0.2, Math.min(3, viewRef.current.scale * Math.exp(-event.deltaY * 0.001)));
@@ -257,18 +429,9 @@ export function KnowledgeGraph({
         draw();
         return;
       }
+      if (event.pointerType === "touch") return;
       const node = findNode(event.clientX, event.clientY);
-      const bounds = canvas.getBoundingClientRect();
-      setHover(
-        node
-          ? {
-              node,
-              x: event.clientX - bounds.left,
-              y: event.clientY - bounds.top,
-              links: degree.get(node.id) ?? 0,
-            }
-          : null,
-      );
+      showTooltip(node, event.clientX, event.clientY, false);
       canvas.style.cursor = node ? "pointer" : "grab";
     };
     const onPointerUp = (event: PointerEvent) => {
@@ -276,7 +439,14 @@ export function KnowledgeGraph({
       dragRef.current = null;
       if (!drag?.moved) {
         const node = findNode(event.clientX, event.clientY);
+        const coarsePointer =
+          event.pointerType === "touch" || window.matchMedia("(pointer: coarse)").matches;
+        if (node && coarsePointer && hoverRef.current?.node.id !== node.id) {
+          showTooltip(node, event.clientX, event.clientY, true);
+          return;
+        }
         if (node) onNodeClick(node);
+        else if (coarsePointer) showTooltip(null, event.clientX, event.clientY, true);
       }
     };
 
@@ -316,13 +486,30 @@ export function KnowledgeGraph({
       {hover && (
         <div
           className="pointer-events-none absolute z-20 max-w-56 rounded-lg border border-cyan-200/20 bg-[#07110f]/95 px-3 py-2 text-xs text-[#dffdf4] shadow-[0_0_24px_rgba(109,255,224,0.16)]"
-          style={{ left: Math.min(hover.x + 14, 260), top: Math.max(10, hover.y - 42) }}
+          style={{
+            left: Math.max(
+              10,
+              Math.min(
+                hover.x + 14,
+                Math.max(10, (containerRef.current?.clientWidth ?? 300) - 230),
+              ),
+            ),
+            top: Math.max(10, hover.y - 42),
+          }}
           role="tooltip"
+          data-testid="graph-tooltip"
         >
-          <p className="truncate font-medium">{hover.node.label}</p>
-          <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-[#8fd8c2]">
-            {hover.node.type} · {hover.links} links
+          <p className="truncate font-medium">
+            {hover.node.label} · {hover.links} links
           </p>
+          <span className="mt-1 inline-flex rounded-full border border-cyan-100/20 px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-[0.12em] text-[#8fd8c2]">
+            {TYPE_BADGES[hover.node.type]}
+          </span>
+          {hover.touch && (
+            <p className="mt-1 font-mono text-[8px] uppercase tracking-[0.1em] text-[#9fb4ab]">
+              Tap again to open
+            </p>
+          )}
         </div>
       )}
     </div>

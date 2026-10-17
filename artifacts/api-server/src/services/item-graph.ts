@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  ITEM_GRAPH_BODY_MAX_CHARS,
   listItemsForUser,
   parseItemSearchFilters,
   type SavedItemDto,
@@ -57,7 +58,7 @@ export function parseGraphQuery(query: Record<string, unknown>): GraphQuery {
       ? Math.min(Math.max(Math.floor(requestedLimit), 1), 500)
       : 350,
     offset: Number.isFinite(requestedOffset)
-      ? Math.min(Math.max(Math.floor(requestedOffset), 0), 5_000)
+      ? Math.min(Math.max(Math.floor(requestedOffset), 0), 1_000)
       : 0,
     types: rawTypes.length ? [...new Set(rawTypes)] : [...GRAPH_NODE_TYPES],
     maxEdgesPerNode: 8,
@@ -203,10 +204,16 @@ export async function getKnowledgeGraphForUser(
   edges: GraphEdge[];
   page: { offset: number; limit: number; nextOffset: number | null };
 }> {
-  const fetchLimit = Math.min(500, query.limit + query.offset + 1);
+  // Page through at most the 1,500 freshest source items. Each response still
+  // contains no more than 500 rendered nodes, keeping DB and client work bounded.
+  const fetchLimit = Math.min(1_501, query.limit + query.offset + 1);
   const rows = await listItemsForUser(
     userId,
-    { ...parseItemSearchFilters({ limit: fetchLimit }), limit: fetchLimit },
+    {
+      ...parseItemSearchFilters({ limit: fetchLimit }),
+      limit: fetchLimit,
+      bodyTextLimit: ITEM_GRAPH_BODY_MAX_CHARS,
+    },
   );
   const pageRows = rows.slice(query.offset, query.offset + query.limit);
   const graph = buildKnowledgeGraph(pageRows, query);
@@ -216,7 +223,8 @@ export async function getKnowledgeGraphForUser(
       offset: query.offset,
       limit: query.limit,
       nextOffset:
-        rows.length > query.offset + pageRows.length
+        rows.length > query.offset + pageRows.length &&
+        query.offset + pageRows.length < 1_500
           ? query.offset + pageRows.length
           : null,
     },

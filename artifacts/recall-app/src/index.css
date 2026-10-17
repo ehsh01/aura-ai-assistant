@@ -599,6 +599,40 @@
     letter-spacing: 0.14em;
     color: #9dffe4;
   }
+  .assistant-ring-mobile {
+    position: relative;
+    display: grid;
+    width: 42px;
+    height: 42px;
+    place-items: center;
+    border: 1px solid rgba(125, 255, 217, 0.58);
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(31, 91, 78, 0.54), rgba(5, 12, 13, 0.96) 68%);
+    box-shadow: 0 0 18px rgba(125, 255, 217, 0.18), inset 0 0 12px rgba(125, 255, 217, 0.1);
+  }
+  .assistant-ring-mobile::before {
+    content: "";
+    position: absolute;
+    inset: 4px;
+    border: 1px dashed rgba(125, 255, 217, 0.52);
+    border-radius: 50%;
+    animation: hud-spin 10s linear infinite;
+  }
+  .assistant-ring-mobile span {
+    position: relative;
+    z-index: 1;
+    font-family: var(--app-font-mono);
+    font-size: 6px;
+    letter-spacing: 0.08em;
+    color: #e8fff7;
+  }
+  .assistant-ring-mobile.is-thinking {
+    animation: hud-breathe 1.4s ease-in-out infinite;
+  }
+  .assistant-status-mobile {
+    margin: 0;
+    padding: 4px 7px;
+  }
 
   @media (max-width: 640px), (prefers-reduced-transparency: reduce) {
     .hud-panel,
@@ -616,7 +650,9 @@
     .hud-ring::before,
     .assistant-ring,
     .assistant-ring::before,
-    .assistant-ring::after {
+    .assistant-ring::after,
+    .assistant-ring-mobile,
+    .assistant-ring-mobile::before {
       animation: none !important;
     }
     .explore-shell::before,

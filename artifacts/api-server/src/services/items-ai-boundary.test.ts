@@ -29,4 +29,20 @@ describe("saved items AI boundary", () => {
     expect(page).toMatch(/<form onSubmit=\{submitAsk\}/);
     expect(page).not.toMatch(/useEffect\([\s\S]{0,300}queryRecallStream/);
   });
+
+  it("bounds rows and body bytes without selecting attachment text into Node", async () => {
+    const [items, graph] = await Promise.all([
+      serviceSource("items.ts"),
+      serviceSource("item-graph.ts"),
+    ]);
+
+    expect(items).toContain("ITEM_LIST_BODY_MAX_CHARS = 12_000");
+    expect(items).toContain("ITEM_GRAPH_BODY_MAX_CHARS = 2_000");
+    expect(items).toContain("ITEM_DETAIL_BODY_MAX_CHARS = 500_000");
+    expect(items).toMatch(/left\(i\.body_text, \$\{filters\.bodyTextLimit\}\)/);
+    expect(items).toMatch(/left\(n\.content, \$\{filters\.bodyTextLimit\}\)/);
+    expect(items).toMatch(/left\(coalesce\(sr\.record_text, ''\), \$\{filters\.bodyTextLimit\}\)/);
+    expect(items).not.toMatch(/note_attachments|extracted_text/);
+    expect(graph).toContain("Math.min(1_501, query.limit + query.offset + 1)");
+  });
 });

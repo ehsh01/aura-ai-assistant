@@ -32,15 +32,16 @@ function item(
 }
 
 describe("knowledge graph caps and filters", () => {
-  it("caps nodes, edge fanout, limit, and offset", () => {
+  it("caps a realistic 5,000-item corpus, edge fanout, limit, and offset", () => {
     const query = parseGraphQuery({ limit: "9999", offset: "-4" });
     expect(query).toMatchObject({ limit: 500, offset: 0, maxEdgesPerNode: 8 });
+    expect(parseGraphQuery({ limit: "500", offset: "9999" }).offset).toBe(1_000);
 
     const graph = buildKnowledgeGraph(
-      Array.from({ length: 700 }, (_, index) => item(String(index))),
+      Array.from({ length: 5_000 }, (_, index) => item(String(index))),
       query,
     );
-    expect(graph.nodes.length).toBeLessThanOrEqual(500);
+    expect(graph.nodes).toHaveLength(500);
     const degree = new Map<string, number>();
     for (const edge of graph.edges) {
       degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1);
@@ -73,5 +74,16 @@ describe("knowledge graph caps and filters", () => {
     expect(
       graph.nodes.every((node) => node.type === "notebooks" || node.type === "tags"),
     ).toBe(true);
+  });
+
+  it("keeps same-name notebook and tag hubs distinct for typed labels", () => {
+    const graph = buildKnowledgeGraph(
+      [item("vehicle", { notebook: "Vehicles", tags: ["vehicles"] })],
+      { limit: 20, offset: 0, types: ["notes", "notebooks", "tags"], maxEdgesPerNode: 8 },
+    );
+    const vehicles = graph.nodes.filter((node) => node.label.toLowerCase() === "vehicles");
+
+    expect(vehicles.map((node) => node.type).sort()).toEqual(["notebooks", "tags"]);
+    expect(new Set(vehicles.map((node) => node.id)).size).toBe(2);
   });
 });
