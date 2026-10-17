@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   backoffMs,
   captureIdFromPayload,
+  connectorSyncFromPayload,
   mapJobRow,
 } from "./job-queue";
 
@@ -49,5 +50,15 @@ describe("job-queue helpers", () => {
     expect(captureIdFromPayload({ captureId: "cap-9" })).toBe("cap-9");
     expect(captureIdFromPayload({})).toBeNull();
     expect(captureIdFromPayload({ captureId: 1 })).toBeNull();
+  });
+
+  it("validates durable connector sync checkpoints", () => {
+    expect(
+      connectorSyncFromPayload({
+        connectorId: "conn-evernote",
+        syncRunId: "sync-1",
+      }),
+    ).toEqual({ connectorId: "conn-evernote", syncRunId: "sync-1" });
+    expect(connectorSyncFromPayload({ connectorId: "conn-evernote" })).toBeNull();
   });
 });

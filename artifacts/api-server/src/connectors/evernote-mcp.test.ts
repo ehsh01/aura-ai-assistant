@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  EVERNOTE_MAX_NOTE_CONTENT_CHARS,
   evernoteMcpFetch,
   evernoteMcpAuthorizationCode,
   fetchEvernoteViaMcp,
   mcpOAuthStateFromSettings,
   mcpSettingsFromOAuthState,
+  streamEvernoteViaMcp,
 } from "./evernote-mcp";
 import {
   openConnectorSettings,
@@ -340,5 +342,196 @@ describe("Evernote MCP read sync", () => {
     expect(noteCalls).toBe(2);
     expect(result.records).toHaveLength(2);
     expect(result.recordsDeferred).toBe(1);
+  });
+
+  it("streams all pages through bounded persistence checkpoints", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE = "10";
+    const total = 55;
+    let noteCalls = 0;
+    const batchSizes: number[] = [];
+    const checkpoints: number[] = [];
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notebooks") {
+          return { structuredContent: { notebooks: [] } };
+        }
+        if (input.name === "search_tags") {
+          return { structuredContent: { tags: [] } };
+        }
+        if (input.name === "search_notes") {
+          const start = Number(input.arguments?.startIndex ?? 0);
+          const max = Number(input.arguments?.maxResults ?? 10);
+          return {
+            structuredContent: {
+              totalResultCount: total,
+              notes: Array.from(
+                { length: Math.min(max, total - start) },
+                (_, offset) => ({
+                  id: `note-${start + offset}`,
+                  updatedAt: "2026-10-17T00:00:00Z",
+                }),
+              ),
+            },
+          };
+        }
+        noteCalls += 1;
+        return {
+          structuredContent: {
+            id: input.arguments?.noteId,
+            title: "Paged note",
+            content: "<en-note>Body</en-note>",
+            updatedAt: "2026-10-17T00:00:00Z",
+          },
+        };
+      },
+    };
+
+    const result = await streamEvernoteViaMcp(client, {
+      syncRunId: "sync-large",
+      loadKnownNotes: async () => new Map(),
+      processBatch: async (batch) => {
+        batchSizes.push(batch.records.length);
+        checkpoints.push(batch.checkpoint.startIndex);
+      },
+    });
+
+    expect(noteCalls).toBe(total);
+    expect(batchSizes).toEqual([10, 10, 10, 10, 10, 5]);
+    expect(checkpoints).toEqual([10, 20, 30, 40, 50, 55]);
+    expect(result).toMatchObject({
+      recordsFetched: total,
+      recordsDeferred: 0,
+      listingComplete: true,
+      authoritativeListing: true,
+      batchesProcessed: 6,
+    });
+  });
+
+  it("resumes a partially committed page and bounds retained note content", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE = "2";
+    const fetched: string[] = [];
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notebooks") {
+          return { structuredContent: { notebooks: [] } };
+        }
+        if (input.name === "search_tags") {
+          return { structuredContent: { tags: [] } };
+        }
+        if (input.name === "search_notes") {
+          return {
+            structuredContent: {
+              totalResultCount: 2,
+              notes: [
+                { id: "already-durable", updatedAt: "2026-10-17T00:00:00Z" },
+                { id: "needs-fetch", updatedAt: "2026-10-17T00:00:00Z" },
+              ],
+            },
+          };
+        }
+        const id = String(input.arguments?.noteId);
+        fetched.push(id);
+        return {
+          structuredContent: {
+            id,
+            title: "Huge note",
+            content: `<en-note>${"x".repeat(
+              EVERNOTE_MAX_NOTE_CONTENT_CHARS * 2,
+            )}</en-note>`,
+            updatedAt: "2026-10-17T00:00:00Z",
+            resources: [{ id: "binary-skipped", data: "not copied" }],
+          },
+        };
+      },
+    };
+    let retainedLength = 0;
+    let seen: string[] = [];
+    await streamEvernoteViaMcp(client, {
+      syncRunId: "resume-run",
+      loadKnownNotes: async () =>
+        new Map([
+          [
+            "already-durable",
+            {
+              updateSequenceNum: null,
+              contentHash: "cached",
+              evernoteSeenSyncRunId: "resume-run",
+              evernoteSeenAtIndex: 0,
+            },
+          ],
+        ]),
+      processBatch: async (batch) => {
+        retainedLength = batch.records[0]?.recordText.length ?? 0;
+        seen = batch.seen.map((item) => item.externalId);
+      },
+    });
+
+    expect(fetched).toEqual(["needs-fetch"]);
+    expect(seen).toEqual(["needs-fetch"]);
+    expect(retainedLength).toBeLessThanOrEqual(
+      EVERNOTE_MAX_NOTE_CONTENT_CHARS + 2_000,
+    );
+  });
+
+  it("yields a worker slice after the configured number of durable batches", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE = "2";
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notebooks") {
+          return { structuredContent: { notebooks: [] } };
+        }
+        if (input.name === "search_tags") {
+          return { structuredContent: { tags: [] } };
+        }
+        if (input.name === "search_notes") {
+          const start = Number(input.arguments?.startIndex ?? 0);
+          return {
+            structuredContent: {
+              totalResultCount: 6,
+              notes: Array.from({ length: Math.min(2, 6 - start) }, (_, offset) => ({
+                id: `yield-${start + offset}`,
+                updatedAt: "2026-10-17T00:00:00Z",
+              })),
+            },
+          };
+        }
+        return {
+          structuredContent: {
+            id: input.arguments?.noteId,
+            content: "<en-note>Body</en-note>",
+            updatedAt: "2026-10-17T00:00:00Z",
+          },
+        };
+      },
+    };
+    const checkpoints: number[] = [];
+    const result = await streamEvernoteViaMcp(client, {
+      syncRunId: "yield-run",
+      loadKnownNotes: async () => new Map(),
+      processBatch: async (batch) => {
+        checkpoints.push(batch.checkpoint.startIndex);
+      },
+      maxBatchesPerInvocation: 2,
+    });
+
+    expect(checkpoints).toEqual([2, 4]);
+    expect(result).toMatchObject({
+      startIndex: 4,
+      recordsDeferred: 2,
+      listingComplete: false,
+      authoritativeListing: false,
+    });
   });
 });

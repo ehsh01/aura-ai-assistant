@@ -93,7 +93,16 @@ const require = createRequire(import.meta.url);
 const Evernote = require("evernote") as EvernoteSdk;
 
 const METADATA_PAGE_SIZE = 250;
-const NOTE_FETCH_CONCURRENCY = 4;
+const NOTE_FETCH_CONCURRENCY = 2;
+const MAX_NOTE_CONTENT_CHARS = 128 * 1024;
+
+function evernoteBackfillBatchSize(): number {
+  const configured = Number(
+    process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE ?? 25,
+  );
+  if (!Number.isFinite(configured)) return 25;
+  return Math.min(Math.max(Math.floor(configured), 1), 100);
+}
 
 export class EvernoteAuthError extends Error {
   status = 401;
@@ -121,6 +130,9 @@ export type EvernoteKnownNote = {
   tagGuids?: string[];
   tagNames?: string[];
   evernoteUpdated?: string | null;
+  /** Durable page marker used to resume a worker after a crash. */
+  evernoteSeenSyncRunId?: string | null;
+  evernoteSeenAtIndex?: number | null;
 };
 
 export type EvernoteRawRecord = {
@@ -525,6 +537,9 @@ export async function fetchEvernoteBundle(
   noteStoreUrl: string,
   options?: {
     knownNotes?: Map<string, EvernoteKnownNote>;
+    loadKnownNotes?: (
+      externalIds: string[],
+    ) => Promise<Map<string, EvernoteKnownNote>>;
     webApiUrlPrefix?: string | null;
     accountId?: string | null;
     /** Test seam; production always builds the official Thrift NoteStore. */
@@ -569,9 +584,20 @@ export async function fetchEvernoteBundle(
     includeLargestResourceSize: true,
   });
 
-  const allMetadata: EvernoteNoteMetadata[] = [];
   let offset = 0;
   let total = Number.POSITIVE_INFINITY;
+  let listingComplete = false;
+  let explicitTotal: number | null = null;
+  let recordsFetched = 0;
+  let unchangedBySequence = 0;
+  let recordsDeferred = 0;
+  let recordsFailed = 0;
+  const records: EvernoteRawRecord[] = [];
+  const errors: string[] = [];
+  const smallListingActiveGuids = new Set<string>();
+  let smallListingAuthoritative = true;
+  const batchLimit = evernoteBackfillBatchSize();
+
   while (offset < total) {
     const page = await withEvernoteRateLimitRetry(() =>
       store.findNotesMetadata(
@@ -582,148 +608,206 @@ export async function fetchEvernoteBundle(
       ),
     );
     const rows = page.notes ?? [];
-    total = page.totalNotes ?? offset + rows.length;
-    allMetadata.push(...rows);
-    if (rows.length === 0) break;
-    offset += rows.length;
-  }
-
-  let unchangedBySequence = 0;
-  const changedMetadata = allMetadata.filter((metadata) => {
-    if (!metadata.guid || metadata.deleted) return false;
-    const known = options?.knownNotes?.get(metadata.guid);
-    const currentNotebookGuid = metadata.notebookGuid ?? null;
-    const currentNotebookName = currentNotebookGuid
-      ? notebooksByGuid.get(currentNotebookGuid) ?? currentNotebookGuid
-      : null;
-    const currentTagGuids = metadata.tagGuids ?? [];
-    const currentTagNames = currentTagGuids.map(
-      (tagGuid) => tagsByGuid.get(tagGuid) ?? tagGuid,
-    );
-    const taxonomyUnchanged =
-      (known?.notebookGuid ?? null) === currentNotebookGuid &&
-      (known?.notebookName ?? null) === currentNotebookName &&
-      JSON.stringify([...(known?.tagGuids ?? [])].sort()) ===
-        JSON.stringify([...currentTagGuids].sort()) &&
-      JSON.stringify([...(known?.tagNames ?? [])].sort()) ===
-        JSON.stringify([...currentTagNames].sort());
-    if (
-      known &&
-      known.updateSequenceNum != null &&
-      metadata.updateSequenceNum != null &&
-      known.updateSequenceNum === metadata.updateSequenceNum &&
-      taxonomyUnchanged
-    ) {
-      unchangedBySequence += 1;
-      return false;
+    const reportedTotal = page.totalNotes;
+    if (reportedTotal != null) {
+      if (explicitTotal != null && explicitTotal !== reportedTotal) {
+        throw new Error(
+          `Evernote note total changed during sync (${explicitTotal} to ${reportedTotal})`,
+        );
+      }
+      explicitTotal = reportedTotal;
+      total = reportedTotal;
+      if (reportedTotal > METADATA_PAGE_SIZE) {
+        smallListingAuthoritative = false;
+        smallListingActiveGuids.clear();
+      }
+    } else {
+      total = offset + rows.length;
+      smallListingAuthoritative = false;
     }
-    return true;
-  });
+    if (rows.length === 0) {
+      listingComplete = explicitTotal == null || offset >= explicitTotal;
+      break;
+    }
 
-  const fetched = await mapWithConcurrency(
-    changedMetadata,
-    NOTE_FETCH_CONCURRENCY,
-    async (metadata): Promise<EvernoteRawRecord> => {
-      const guid = metadata.guid!;
-      // Explicitly omit resource bytes/recognition/alternate data in v1.
-      const note = await withEvernoteRateLimitRetry(() =>
-        store.getNote(guid, true, false, false, false),
-      );
-      const title = (note.title ?? metadata.title ?? "Untitled").trim() || "Untitled";
-      const text = evernoteEnmlToText(note.content ?? "");
-      const notebookGuid = note.notebookGuid ?? metadata.notebookGuid ?? null;
-      const notebookName = notebookGuid
-        ? notebooksByGuid.get(notebookGuid) ?? notebookGuid
+    const activeRows = rows.filter((metadata) => {
+      if (!metadata.guid || metadata.deleted) return false;
+      recordsFetched += 1;
+      if (smallListingAuthoritative) {
+        if (smallListingActiveGuids.has(metadata.guid)) {
+          smallListingAuthoritative = false;
+          smallListingActiveGuids.clear();
+        } else {
+          smallListingActiveGuids.add(metadata.guid);
+        }
+      }
+      return true;
+    });
+    const pageIds = activeRows.map((metadata) => metadata.guid!);
+    const knownNotes = options?.loadKnownNotes
+      ? await options.loadKnownNotes(pageIds)
+      : options?.knownNotes ?? new Map<string, EvernoteKnownNote>();
+    const changedMetadata = activeRows.filter((metadata) => {
+      const known = knownNotes.get(metadata.guid!);
+      const currentNotebookGuid = metadata.notebookGuid ?? null;
+      const currentNotebookName = currentNotebookGuid
+        ? notebooksByGuid.get(currentNotebookGuid) ?? currentNotebookGuid
         : null;
-      const tagGuids = note.tagGuids ?? metadata.tagGuids ?? [];
-      const tagNames = tagGuids.map((tagGuid) => tagsByGuid.get(tagGuid) ?? tagGuid);
-      const externalSourceUrl =
-        note.attributes?.sourceURL?.trim() ||
-        metadata.attributes?.sourceURL?.trim() ||
-        null;
-      const noteUrl = evernoteNoteUrl(
-        options?.webApiUrlPrefix,
-        options?.accountId,
-        guid,
+      const currentTagGuids = metadata.tagGuids ?? [];
+      const currentTagNames = currentTagGuids.map(
+        (tagGuid) => tagsByGuid.get(tagGuid) ?? tagGuid,
       );
-      const sourceUrl = noteUrl ?? externalSourceUrl;
-      const sourceCreatedAt = epochMillisToIso(note.created ?? metadata.created);
-      const sourceUpdatedAt = epochMillisToIso(note.updated ?? metadata.updated);
-      const contentHash = evernoteContentHash({
-        title,
-        text,
-        notebookName,
-        tags: tagNames,
-        sourceUrl,
-      });
-      return {
-        externalId: guid,
-        recordType: "evernote_note",
-        recordTitle: title,
-        recordText: [
-          "Evernote note source=evernote_note",
-          notebookName ? `notebook: ${notebookName}` : null,
-          tagNames.length ? `tags: ${tagNames.join(", ")}` : null,
+      const taxonomyUnchanged =
+        (known?.notebookGuid ?? null) === currentNotebookGuid &&
+        (known?.notebookName ?? null) === currentNotebookName &&
+        JSON.stringify([...(known?.tagGuids ?? [])].sort()) ===
+          JSON.stringify([...currentTagGuids].sort()) &&
+        JSON.stringify([...(known?.tagNames ?? [])].sort()) ===
+          JSON.stringify([...currentTagNames].sort());
+      if (
+        known &&
+        known.updateSequenceNum != null &&
+        metadata.updateSequenceNum != null &&
+        known.updateSequenceNum === metadata.updateSequenceNum &&
+        taxonomyUnchanged
+      ) {
+        unchangedBySequence += 1;
+        return false;
+      }
+      return true;
+    });
+
+    const remaining = Math.max(0, batchLimit - records.length);
+    const toFetch = changedMetadata.slice(0, remaining);
+    recordsDeferred += Math.max(0, changedMetadata.length - toFetch.length);
+    const fetched = await mapWithConcurrency(
+      toFetch,
+      NOTE_FETCH_CONCURRENCY,
+      async (metadata): Promise<EvernoteRawRecord> => {
+        const guid = metadata.guid!;
+        // Explicitly omit resource bytes/recognition/alternate data in v1.
+        const note = await withEvernoteRateLimitRetry(() =>
+          store.getNote(guid, true, false, false, false),
+        );
+        const title =
+          (note.title ?? metadata.title ?? "Untitled").trim() || "Untitled";
+        const rawContent = note.content ?? "";
+        const contentTruncated = rawContent.length > MAX_NOTE_CONTENT_CHARS;
+        const text = evernoteEnmlToText(
+          contentTruncated
+            ? rawContent.slice(0, MAX_NOTE_CONTENT_CHARS)
+            : rawContent,
+        );
+        const notebookGuid =
+          note.notebookGuid ?? metadata.notebookGuid ?? null;
+        const notebookName = notebookGuid
+          ? notebooksByGuid.get(notebookGuid) ?? notebookGuid
+          : null;
+        const tagGuids = note.tagGuids ?? metadata.tagGuids ?? [];
+        const tagNames = tagGuids.map(
+          (tagGuid) => tagsByGuid.get(tagGuid) ?? tagGuid,
+        );
+        const externalSourceUrl =
+          note.attributes?.sourceURL?.trim() ||
+          metadata.attributes?.sourceURL?.trim() ||
+          null;
+        const noteUrl = evernoteNoteUrl(
+          options?.webApiUrlPrefix,
+          options?.accountId,
+          guid,
+        );
+        const sourceUrl = noteUrl ?? externalSourceUrl;
+        const sourceCreatedAt = epochMillisToIso(
+          note.created ?? metadata.created,
+        );
+        const sourceUpdatedAt = epochMillisToIso(
+          note.updated ?? metadata.updated,
+        );
+        const contentHash = evernoteContentHash({
+          title,
           text,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-        sourceUrl,
-        sourceCreatedAt,
-        sourceUpdatedAt,
-        metadata: {
-          contentHash,
-          usn:
-            note.updateSequenceNum ?? metadata.updateSequenceNum ?? null,
-          notebookGuid,
           notebookName,
-          tagGuids,
-          tagNames,
-          evernoteUpdated: sourceUpdatedAt,
-          hasAttachments: Boolean(
-            metadata.largestResourceMime ||
-              (metadata.largestResourceSize ?? 0) > 0,
-          ),
-        },
-      };
-    },
-  );
+          tags: tagNames,
+          sourceUrl,
+        });
+        return {
+          externalId: guid,
+          recordType: "evernote_note",
+          recordTitle: title,
+          recordText: [
+            "Evernote note source=evernote_note",
+            notebookName ? `notebook: ${notebookName}` : null,
+            tagNames.length ? `tags: ${tagNames.join(", ")}` : null,
+            text,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          sourceUrl,
+          sourceCreatedAt,
+          sourceUpdatedAt,
+          metadata: {
+            contentHash,
+            usn:
+              note.updateSequenceNum ?? metadata.updateSequenceNum ?? null,
+            notebookGuid,
+            notebookName,
+            tagGuids,
+            tagNames,
+            evernoteUpdated: sourceUpdatedAt,
+            hasAttachments: Boolean(
+              metadata.largestResourceMime ||
+                (metadata.largestResourceSize ?? 0) > 0,
+            ),
+            contentTruncated,
+          },
+        };
+      },
+    );
+    const exhaustedRateLimit = fetched.find(
+      (result) =>
+        result.status === "rejected" &&
+        result.reason instanceof EvernoteRateLimitError,
+    );
+    if (exhaustedRateLimit?.status === "rejected") {
+      throw exhaustedRateLimit.reason;
+    }
+    for (const result of fetched) {
+      if (result.status === "fulfilled") {
+        records.push(result.value);
+      } else {
+        recordsFailed += 1;
+        errors.push(evernoteErrorMessage(result.reason));
+      }
+    }
 
-  const exhaustedRateLimit = fetched.find(
-    (result) =>
-      result.status === "rejected" &&
-      result.reason instanceof EvernoteRateLimitError,
-  );
-  if (exhaustedRateLimit?.status === "rejected") {
-    throw exhaustedRateLimit.reason;
+    offset += rows.length;
+    if (explicitTotal != null && offset >= explicitTotal) {
+      listingComplete = true;
+    } else if (explicitTotal == null && rows.length < METADATA_PAGE_SIZE) {
+      listingComplete = true;
+      break;
+    }
   }
-
-  const records = fetched
-    .filter(
-      (result): result is PromiseFulfilledResult<EvernoteRawRecord> =>
-        result.status === "fulfilled",
-    )
-    .map((result) => result.value);
-  const recordsFailed = fetched.length - records.length;
-  const errors = fetched
-    .filter(
-      (result): result is PromiseRejectedResult => result.status === "rejected",
-    )
-    .map((result) => evernoteErrorMessage(result.reason));
-  const activeGuids = new Set(
-    allMetadata
-      .filter((metadata) => metadata.guid && !metadata.deleted)
-      .map((metadata) => metadata.guid!),
-  );
-  const deletedExternalIds = options?.knownNotes
-    ? [...options.knownNotes.keys()].filter((guid) => !activeGuids.has(guid))
-    : [];
+  const authoritativeSmallListing =
+    listingComplete &&
+    smallListingAuthoritative &&
+    explicitTotal != null &&
+    explicitTotal <= METADATA_PAGE_SIZE &&
+    recordsFetched === explicitTotal &&
+    smallListingActiveGuids.size === recordsFetched;
+  const deletedExternalIds =
+    authoritativeSmallListing && options?.knownNotes
+      ? [...options.knownNotes.keys()].filter(
+          (guid) => !smallListingActiveGuids.has(guid),
+        )
+      : [];
 
   return {
     records,
-    recordsFetched: allMetadata.filter((metadata) => !metadata.deleted).length,
+    recordsFetched,
     recordsSkipped: unchangedBySequence,
     recordsFailed,
+    recordsDeferred,
     deletedExternalIds,
     errors,
   };

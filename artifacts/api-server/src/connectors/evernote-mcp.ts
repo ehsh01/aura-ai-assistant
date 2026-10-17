@@ -528,33 +528,38 @@ async function callReadTool(
 function idAndName(value: unknown): { id: string; name: string } | null {
   const row = asRecord(value);
   const id =
-    asString(row.id) ??
-    asString(row.guid) ??
-    asString(row.noteId) ??
-    asString(row.notebookId) ??
-    asString(row.tagId);
+    boundedScalar(row.id, 500) ??
+    boundedScalar(row.guid, 500) ??
+    boundedScalar(row.noteId, 500) ??
+    boundedScalar(row.notebookId, 500) ??
+    boundedScalar(row.tagId, 500);
   if (!id) return null;
   return {
     id,
     name:
-      asString(row.name) ??
-      asString(row.label) ??
-      asString(row.title) ??
+      boundedScalar(row.name, 500) ??
+      boundedScalar(row.label, 500) ??
+      boundedScalar(row.title, 1_000) ??
       id,
   };
 }
 
 function noteGuid(value: unknown): string | null {
   const row = asRecord(value);
-  return asString(row.id) ?? asString(row.guid) ?? asString(row.noteId);
+  for (const candidate of [row.id, row.guid, row.noteId]) {
+    if (typeof candidate !== "string") continue;
+    const id = candidate.slice(0, 500).trim();
+    if (id) return id;
+  }
+  return null;
 }
 
 function noteUpdated(value: unknown): string | null {
   const row = asRecord(value);
   return (
-    asString(row.updated) ??
-    asString(row.updatedAt) ??
-    asString(row.updateTime) ??
+    boundedScalar(row.updated, 100) ??
+    boundedScalar(row.updatedAt, 100) ??
+    boundedScalar(row.updateTime, 100) ??
     null
   );
 }
@@ -579,6 +584,74 @@ function deepLink(guid: string, row: JsonRecord): string {
   );
 }
 
+/**
+ * Keep one remote note from dominating the worker heap. Attachments remain
+ * metadata-only; resource bytes are never copied into source records.
+ */
+export const EVERNOTE_MAX_NOTE_CONTENT_CHARS = 128 * 1024;
+
+function boundedText(value: unknown, max = EVERNOTE_MAX_NOTE_CONTENT_CHARS): {
+  text: string;
+  truncated: boolean;
+} {
+  const text = typeof value === "string" ? value : "";
+  return text.length > max
+    ? { text: text.slice(0, max), truncated: true }
+    : { text, truncated: false };
+}
+
+function boundedScalar(value: unknown, max: number): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.slice(0, max).trim();
+  return text || null;
+}
+
+function compactNoteForSync(raw: JsonRecord): JsonRecord {
+  const structured = asRecord(raw.structuredContent);
+  const content = boundedText(raw.content ?? raw.enml ?? raw.body);
+  const compactEntity = (value: unknown): JsonRecord => {
+    const row = asRecord(value);
+    return {
+      id: noteGuid(row),
+      name:
+        boundedScalar(row.name, 500) ?? boundedScalar(row.label, 500) ?? "",
+      title: boundedScalar(row.title, 1_000) ?? "",
+    };
+  };
+  const hasResources =
+    asArray(raw.resources).length > 0 ||
+    asArray(structured.resources).length > 0;
+  return {
+    id: noteGuid(raw),
+    title: boundedScalar(raw.title, 1_000) ?? "Untitled",
+    content: content.text,
+    contentTruncated: content.truncated,
+    notebookId: boundedScalar(raw.notebookId, 500),
+    notebookGuid: boundedScalar(raw.notebookGuid, 500),
+    notebookName: boundedScalar(raw.notebookName, 500),
+    tagIds: asArray(raw.tagIds)
+      .slice(0, 100)
+      .map((tag) => boundedScalar(tag, 500))
+      .filter(Boolean),
+    tags: asArray(raw.tags).slice(0, 100).map(compactEntity),
+    created: raw.created,
+    createdAt: raw.createdAt,
+    updated: raw.updated,
+    updatedAt: raw.updatedAt,
+    usn: raw.usn,
+    version: raw.version,
+    updateSequenceNum: raw.updateSequenceNum,
+    webUrl: boundedScalar(raw.webUrl, 2_000),
+    url: boundedScalar(raw.url, 2_000),
+    deepLink: boundedScalar(raw.deepLink, 2_000),
+    resources: hasResources ? [{}] : [],
+    structuredContent: {
+      notebookId: boundedScalar(structured.notebookId, 500),
+      tags: asArray(structured.tags).slice(0, 100).map(compactEntity),
+    },
+  };
+}
+
 function noteToRaw(
   raw: JsonRecord,
   notebooks: Map<string, string>,
@@ -587,13 +660,10 @@ function noteToRaw(
   const guid = noteGuid(raw);
   if (!guid) throw new Error("Evernote MCP note is missing a GUID");
   const structured = asRecord(raw.structuredContent);
-  const title = asString(raw.title) ?? "Untitled";
-  const enml =
-    asString(raw.content) ??
-    asString(raw.enml) ??
-    asString(raw.body) ??
-    "";
-  const text = evernoteEnmlToText(enml);
+  const title = (asString(raw.title) ?? "Untitled").slice(0, 1_000);
+  const content = boundedText(raw.content ?? raw.enml ?? raw.body);
+  content.truncated ||= raw.contentTruncated === true;
+  const text = evernoteEnmlToText(content.text);
   const notebookGuid =
     asString(raw.notebookId) ??
     asString(raw.notebookGuid) ??
@@ -659,6 +729,7 @@ function noteToRaw(
       tagNames,
       evernoteUpdated: sourceUpdatedAt,
       hasAttachments: resources.length > 0,
+      contentTruncated: content.truncated,
     },
   };
 }
@@ -683,10 +754,70 @@ async function pace(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, delay));
 }
 
-export async function fetchEvernoteViaMcp(
+export type EvernoteMcpSyncCheckpoint = {
+  startIndex: number;
+  expectedTotal: number | null;
+  recordsFetched: number;
+  recordsSkipped: number;
+  recordsFailed: number;
+  batchesProcessed: number;
+  listingAuthoritative: boolean;
+};
+
+export type EvernoteMcpSyncBatch = {
+  records: EvernoteRawRecord[];
+  seen: Array<{ externalId: string; listingIndex: number }>;
+  errors: string[];
+  checkpoint: EvernoteMcpSyncCheckpoint;
+};
+
+type EvernoteMcpStreamOptions = {
+  syncRunId: string;
+  checkpoint?: Partial<EvernoteMcpSyncCheckpoint>;
+  loadKnownNotes: (
+    externalIds: string[],
+  ) => Promise<Map<string, EvernoteKnownNote>>;
+  processBatch: (batch: EvernoteMcpSyncBatch) => Promise<void>;
+  stopAfterOneBatch?: boolean;
+  maxBatchesPerInvocation?: number;
+};
+
+function initialCheckpoint(
+  checkpoint?: Partial<EvernoteMcpSyncCheckpoint>,
+): EvernoteMcpSyncCheckpoint {
+  return {
+    startIndex: Math.max(0, Math.floor(checkpoint?.startIndex ?? 0)),
+    expectedTotal:
+      typeof checkpoint?.expectedTotal === "number" &&
+      Number.isFinite(checkpoint.expectedTotal)
+        ? Math.max(0, Math.floor(checkpoint.expectedTotal))
+        : null,
+    recordsFetched: Math.max(0, Math.floor(checkpoint?.recordsFetched ?? 0)),
+    recordsSkipped: Math.max(0, Math.floor(checkpoint?.recordsSkipped ?? 0)),
+    recordsFailed: Math.max(0, Math.floor(checkpoint?.recordsFailed ?? 0)),
+    batchesProcessed: Math.max(
+      0,
+      Math.floor(checkpoint?.batchesProcessed ?? 0),
+    ),
+    listingAuthoritative: checkpoint?.listingAuthoritative !== false,
+  };
+}
+
+/**
+ * Page through Evernote without retaining the library listing. Every page is
+ * reduced to GUID/update metadata, fetched sequentially, persisted by the
+ * caller, and checkpointed before the next page is requested.
+ */
+export async function streamEvernoteViaMcp(
   client: ToolCaller,
-  knownNotes: Map<string, EvernoteKnownNote>,
-): Promise<EvernoteFetchResult> {
+  options: EvernoteMcpStreamOptions,
+): Promise<
+  EvernoteMcpSyncCheckpoint & {
+    recordsDeferred: number;
+    listingComplete: boolean;
+    authoritativeListing: boolean;
+  }
+> {
   const notebookResult = await callReadTool(client, "search_notebooks", {
     query: "",
     maxResults: 100,
@@ -701,111 +832,216 @@ export async function fetchEvernoteViaMcp(
   await pace();
   const notebooks = new Map(
     firstArray(notebookResult, ["notebooks", "results", "items"])
+      .slice(0, 100)
       .map(idAndName)
       .filter((item): item is { id: string; name: string } => Boolean(item))
       .map((item) => [item.id, item.name] as const),
   );
   const tags = new Map(
     firstArray(tagResult, ["tags", "results", "items"])
+      .slice(0, 100)
       .map(idAndName)
       .filter((item): item is { id: string; name: string } => Boolean(item))
       .map((item) => [item.id, item.name] as const),
   );
 
-  const summaries: unknown[] = [];
-  let startIndex = 0;
-  let total = Number.POSITIVE_INFINITY;
-  let explicitTotal: number | null = null;
+  let checkpoint = initialCheckpoint(options.checkpoint);
   let listingComplete = false;
-  while (startIndex < total) {
+  let invocationBatches = 0;
+  const pageSize = evernoteMcpBackfillChunkSize();
+
+  while (
+    checkpoint.expectedTotal == null ||
+    checkpoint.startIndex < checkpoint.expectedTotal
+  ) {
+    const pageStart = checkpoint.startIndex;
     const result = await callReadTool(client, "search_notes", {
       query: "",
-      maxResults: 100,
-      startIndex,
+      maxResults: pageSize,
+      startIndex: pageStart,
       sortBy: "updated",
       ascending: false,
     });
-    const page = firstArray(result, ["notes", "results", "items"]);
-    summaries.push(...page);
+    const rawPage = firstArray(result, ["notes", "results", "items"]);
     const reportedTotal = asNumber(
       result.totalResultCount ?? result.total ?? result.totalNotes,
     );
     if (reportedTotal != null) {
-      if (explicitTotal != null && explicitTotal !== reportedTotal) {
+      if (
+        checkpoint.expectedTotal != null &&
+        checkpoint.expectedTotal !== reportedTotal
+      ) {
         throw new Error(
-          `Evernote MCP note total changed during sync (${explicitTotal} to ${reportedTotal})`,
+          `Evernote MCP note total changed during sync (${checkpoint.expectedTotal} to ${reportedTotal})`,
         );
       }
-      explicitTotal = reportedTotal;
-      total = reportedTotal;
+      checkpoint = {
+        ...checkpoint,
+        expectedTotal: Math.max(0, Math.floor(reportedTotal)),
+      };
     }
-    if (page.length === 0) {
-      if (explicitTotal != null && startIndex < explicitTotal) {
+
+    if (rawPage.length === 0) {
+      if (
+        checkpoint.expectedTotal != null &&
+        pageStart < checkpoint.expectedTotal
+      ) {
         throw new Error(
-          `Evernote MCP note listing ended early at ${startIndex} of ${explicitTotal}`,
+          `Evernote MCP note listing ended early at ${pageStart} of ${checkpoint.expectedTotal}`,
         );
       }
       listingComplete = true;
       break;
     }
-    startIndex += page.length;
-    if (explicitTotal != null && startIndex >= explicitTotal) {
-      listingComplete = true;
-    } else if (explicitTotal == null && page.length < 100) {
-      listingComplete = true;
+
+    // A non-conforming server must not defeat the configured memory bound.
+    const page = rawPage.slice(0, pageSize);
+    if (rawPage.length > pageSize) {
+      checkpoint = { ...checkpoint, listingAuthoritative: false };
+    }
+    const summaries = page.map((raw, offset) => ({
+      externalId: noteGuid(raw),
+      listingIndex: pageStart + offset,
+      updatedAt: iso(noteUpdated(raw)),
+    }));
+    const ids = summaries
+      .map((summary) => summary.externalId)
+      .filter((id): id is string => Boolean(id));
+    if (ids.length !== summaries.length || new Set(ids).size !== ids.length) {
+      checkpoint = { ...checkpoint, listingAuthoritative: false };
+    }
+    const knownNotes = await options.loadKnownNotes([...new Set(ids)]);
+    const seen: Array<{ externalId: string; listingIndex: number }> = [];
+    const records: EvernoteRawRecord[] = [];
+    const errors: string[] = [];
+    let skipped = 0;
+    let failed = 0;
+
+    for (const summary of summaries) {
+      const guid = summary.externalId;
+      if (!guid) continue;
+      const known = knownNotes.get(guid);
+      if (known?.evernoteSeenSyncRunId === options.syncRunId) {
+        if (known.evernoteSeenAtIndex !== summary.listingIndex) {
+          checkpoint = { ...checkpoint, listingAuthoritative: false };
+        }
+        // This page was partially committed before a worker restart.
+        continue;
+      }
+      seen.push({ externalId: guid, listingIndex: summary.listingIndex });
+      if (
+        known &&
+        summary.updatedAt &&
+        known.evernoteUpdated === summary.updatedAt
+      ) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        const note = compactNoteForSync(
+          await callReadTool(client, "get_note", { noteId: guid }),
+        );
+        const record = noteToRaw(note, notebooks, tags);
+        if (record.externalId !== guid) {
+          throw new Error(
+            `Evernote MCP get_note returned ${record.externalId} for ${guid}`,
+          );
+        }
+        records.push(record);
+      } catch (error) {
+        failed += 1;
+        errors.push(
+          error instanceof Error
+            ? error.message.slice(0, 300)
+            : `Evernote MCP get_note failed for ${guid}`,
+        );
+      }
+      // Concurrency intentionally remains one so MCP pacing is global.
       await pace();
+    }
+
+    const nextStart = pageStart + page.length;
+    checkpoint = {
+      ...checkpoint,
+      startIndex: nextStart,
+      recordsFetched:
+        checkpoint.expectedTotal ?? Math.max(checkpoint.recordsFetched, nextStart),
+      recordsSkipped: checkpoint.recordsSkipped + skipped,
+      recordsFailed: checkpoint.recordsFailed + failed,
+      batchesProcessed: checkpoint.batchesProcessed + 1,
+    };
+    await options.processBatch({ records, seen, errors, checkpoint });
+    invocationBatches += 1;
+
+    if (
+      checkpoint.expectedTotal != null &&
+      nextStart >= checkpoint.expectedTotal
+    ) {
+      listingComplete = true;
       break;
     }
+    if (checkpoint.expectedTotal == null && page.length < pageSize) {
+      listingComplete = true;
+      break;
+    }
+    const maxBatches = options.stopAfterOneBatch
+      ? 1
+      : Math.max(1, Math.floor(options.maxBatchesPerInvocation ?? Infinity));
+    if (invocationBatches >= maxBatches) break;
     await pace();
   }
 
-  const activeGuids = new Set(
-    summaries.map(noteGuid).filter((guid): guid is string => Boolean(guid)),
-  );
-  // Offset listings can shift while notes are concurrently edited. Reconcile
-  // deletions only when every reported row was consumed with no duplicate gap.
+  const recordsDeferred =
+    checkpoint.expectedTotal == null
+      ? listingComplete
+        ? 0
+        : 1
+      : Math.max(0, checkpoint.expectedTotal - checkpoint.startIndex);
   const authoritativeListing =
     listingComplete &&
-    explicitTotal != null &&
-    summaries.length === explicitTotal &&
-    activeGuids.size === explicitTotal;
-  const deletedExternalIds = authoritativeListing
-    ? [...knownNotes.keys()].filter((guid) => !activeGuids.has(guid))
-    : [];
-  const changed = summaries.filter((summary) => {
-    const guid = noteGuid(summary);
-    if (!guid) return false;
-    const known = knownNotes.get(guid);
-    const updated = noteUpdated(summary);
-    return !known || !updated || known.evernoteUpdated !== iso(updated);
-  });
-  const batch = changed.slice(0, evernoteMcpBackfillChunkSize());
-  const recordsDeferred = Math.max(0, changed.length - batch.length);
+    checkpoint.expectedTotal != null &&
+    checkpoint.startIndex === checkpoint.expectedTotal &&
+    checkpoint.listingAuthoritative;
+  return {
+    ...checkpoint,
+    recordsDeferred,
+    listingComplete,
+    authoritativeListing,
+  };
+}
 
+export async function fetchEvernoteViaMcp(
+  client: ToolCaller,
+  knownNotes: Map<string, EvernoteKnownNote>,
+): Promise<EvernoteFetchResult> {
   const records: EvernoteRawRecord[] = [];
   const errors: string[] = [];
-  for (const summary of batch) {
-    const guid = noteGuid(summary);
-    if (!guid) continue;
-    try {
-      const note = await callReadTool(client, "get_note", { noteId: guid });
-      records.push(noteToRaw(note, notebooks, tags));
-    } catch (error) {
-      errors.push(
-        error instanceof Error
-          ? error.message.slice(0, 300)
-          : `Evernote MCP get_note failed for ${guid}`,
-      );
-    }
-    await pace();
-  }
+  const activeGuids = new Set<string>();
+  const result = await streamEvernoteViaMcp(client, {
+    syncRunId: "legacy-fetch",
+    loadKnownNotes: async (ids) =>
+      new Map(
+        ids
+          .filter((id) => knownNotes.has(id))
+          .map((id) => [id, knownNotes.get(id)!] as const),
+      ),
+    processBatch: async (batch) => {
+      records.push(...batch.records);
+      errors.push(...batch.errors);
+      for (const item of batch.seen) activeGuids.add(item.externalId);
+    },
+    stopAfterOneBatch: true,
+  });
+  const deletedExternalIds = result.authoritativeListing
+    ? [...knownNotes.keys()].filter((guid) => !activeGuids.has(guid))
+    : [];
 
   return {
     records,
-    recordsFetched: activeGuids.size,
-    recordsSkipped: activeGuids.size - changed.length,
-    recordsFailed: errors.length,
-    recordsDeferred,
+    recordsFetched: result.recordsFetched,
+    recordsSkipped: result.recordsSkipped,
+    recordsFailed: result.recordsFailed,
+    recordsDeferred: result.recordsDeferred,
     deletedExternalIds,
     errors,
   };

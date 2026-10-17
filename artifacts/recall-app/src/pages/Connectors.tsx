@@ -352,6 +352,14 @@ export function Connectors() {
         connector.id,
         connector.type === "csv_import" && csvText.trim() ? { csvText } : undefined,
       );
+      if (!res.result) {
+        toast({
+          title: res.status === "running" ? "Sync already running" : "Sync queued",
+          description: `${connector.name}: the worker will process and checkpoint bounded batches in the background.`,
+        });
+        await load();
+        return;
+      }
       toast({
         title: "Sync complete",
         description: `${connector.name}: ${res.result.recordsFetched ?? 0} fetched, ${

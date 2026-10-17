@@ -18,6 +18,7 @@ afterEach(() => {
   delete process.env.EVERNOTE_DEVELOPER_TOKEN;
   delete process.env.EVERNOTE_OAUTH_REDIRECT_URI;
   delete process.env.EVERNOTE_SANDBOX;
+  delete process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE;
 });
 
 describe("evernote connector", () => {
@@ -136,6 +137,52 @@ describe("evernote connector", () => {
       },
     });
     expect(result.records[0]?.recordText).toContain("Call inspector");
+  });
+
+  it("pages a large EDAM backfill without retaining or fetching the full library", async () => {
+    process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE = "25";
+    const total = 5_025;
+    let metadataCalls = 0;
+    let noteCalls = 0;
+    const noteStore: EvernoteNoteStore = {
+      listNotebooks: async () => [],
+      listTags: async () => [],
+      findNotesMetadata: async (_filter, offset, maxNotes) => {
+        metadataCalls += 1;
+        return {
+          totalNotes: total,
+          notes: Array.from(
+            { length: Math.min(maxNotes, total - offset) },
+            (_, index) => ({
+              guid: `edam-${offset + index}`,
+              updateSequenceNum: offset + index + 1,
+            }),
+          ),
+        };
+      },
+      getNote: async (guid) => {
+        noteCalls += 1;
+        return {
+          guid,
+          title: guid,
+          content: `<en-note>${"x".repeat(256 * 1024)}</en-note>`,
+          updateSequenceNum: 1,
+        };
+      },
+    };
+
+    const result = await fetchEvernoteBundle("token", "https://note-store", {
+      noteStore,
+      loadKnownNotes: async () => new Map(),
+    });
+
+    expect(metadataCalls).toBe(Math.ceil(total / 250));
+    expect(noteCalls).toBe(25);
+    expect(result.records).toHaveLength(25);
+    expect(result.recordsDeferred).toBe(total - 25);
+    expect(result.records[0]?.metadata.contentTruncated).toBe(true);
+    expect(result.records[0]?.recordText.length).toBeLessThan(140 * 1024);
+    expect(result.deletedExternalIds).toEqual([]);
   });
 
   it("retries EDAM rate limits within the bounded wait", async () => {

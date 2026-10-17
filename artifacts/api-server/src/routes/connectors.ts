@@ -31,6 +31,7 @@ import {
   createEvernoteConnectorFromDeveloperTokenForUser,
   createConnectorForUser,
   deleteConnectorForUser,
+  enqueueEvernoteSyncForUser,
   upsertFlipperForceConnectorForUser,
   testFlipperForceConnectorForUser,
   createGoogleConnectorForUser,
@@ -791,6 +792,22 @@ router.delete("/connectors/:connectorId", async (req, res, next) => {
 router.post("/connectors/:connectorId/sync", async (req, res, next) => {
   try {
     const body = SyncConnectorBody.parse(req.body ?? {});
+    const connector = await getConnectorForUser(
+      req.user!.id,
+      req.params.connectorId,
+    );
+    if (!connector) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Connector not found" });
+      return;
+    }
+    if (connector.type === "evernote") {
+      const queued = await enqueueEvernoteSyncForUser(
+        req.user!.id,
+        req.params.connectorId,
+      );
+      res.status(202).json(queued);
+      return;
+    }
     const result = await syncConnectorForUser(req.user!.id, req.params.connectorId, body);
     res.json(result);
   } catch (err) {

@@ -2001,7 +2001,12 @@ export async function listConnectorSyncRuns(
 export async function syncConnector(
   connectorId: string,
   body?: { csvText?: string },
-): Promise<{ syncRunId: string; result: Record<string, number> }> {
+): Promise<{
+  syncRunId: string;
+  result?: Record<string, number>;
+  jobId?: string;
+  status?: string;
+}> {
   return apiFetch(`/connectors/${connectorId}/sync`, {
     method: "POST",
     body: JSON.stringify(body ?? {}),
