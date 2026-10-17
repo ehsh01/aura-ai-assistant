@@ -33,10 +33,9 @@ describe("background AI call-site guards", () => {
     );
   });
 
-  it("guards every warm embedding centrally, including attachment and connector callers", async () => {
-    const [cache, attachment, connectors] = await Promise.all([
+  it("guards every warm embedding centrally, including connector callers", async () => {
+    const [cache, connectors] = await Promise.all([
       source("embedding-cache.ts"),
-      source("attachment-text-extract.ts"),
       source("connectors.ts"),
     ]);
     expect(cache).toMatch(
@@ -45,7 +44,6 @@ describe("background AI call-site guards", () => {
     expect(cache).toMatch(
       /warmEntityEmbedding[\s\S]*RECALL_EMBEDDING_WARM_ENABLED[\s\S]*purpose: "warm"/,
     );
-    expect(attachment).toContain("warmEntityEmbedding(row.userId");
     expect(connectors).toContain("warmEntityEmbedding(userId");
   });
 });

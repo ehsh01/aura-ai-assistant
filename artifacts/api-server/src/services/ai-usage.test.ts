@@ -361,6 +361,7 @@ describe("explicit attachment AI OCR guard", () => {
   });
 
   it("defaults the AI OCR kill switch to off", async () => {
+    delete process.env.RECALL_ATTACHMENT_OCR_ENABLED;
     await expect(allowAttachmentOcrAi("u1")).resolves.toEqual({
       allowed: false,
       reason: "disabled",
