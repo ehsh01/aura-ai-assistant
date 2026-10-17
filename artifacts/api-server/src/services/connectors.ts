@@ -3476,7 +3476,7 @@ export async function createEvernoteConnectorFromDeveloperTokenForUser(
 export async function testEvernoteConnectorForUser(
   userId: string,
   connectorId: string,
-): Promise<{ ok: true; notebookCount: number; tagCount: number }> {
+): Promise<{ ok: true; notebookCount: number; tagCount: number | null }> {
   const rows = await getDb()
     .select()
     .from(connectors)

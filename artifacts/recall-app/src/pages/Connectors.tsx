@@ -699,7 +699,7 @@ export function Connectors() {
                       );
                       toast({
                         title: "Evernote connection works",
-                        description: `${result.notebookCount} notebook(s) · ${result.tagCount} tag(s)`,
+                        description: `${result.notebookCount} notebook result(s) sampled`,
                       });
                       await load();
                     } catch (err) {

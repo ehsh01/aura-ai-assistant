@@ -67,6 +67,7 @@ import {
 import { nudgeJobWorker } from "../services/job-worker";
 import { todayIso } from "../services/query-utils";
 import { listSubscriptionHeuristicsForUser } from "../services/subscriptions";
+import { connectorTestErrorResponse } from "./connector-test-error";
 import {
   getEvernoteCompletenessReport,
   searchEvernoteRecords,
@@ -831,20 +832,8 @@ router.post("/connectors/:connectorId/test", async (req, res, next) => {
     }
     res.json(result);
   } catch (err) {
-    const status =
-      err && typeof err === "object" && "status" in err && typeof err.status === "number"
-        ? err.status
-        : 502;
-    const responseStatus = status === 401 || status === 429 ? status : 502;
-    res.status(responseStatus).json({
-      error:
-        responseStatus === 401
-          ? "AUTH_FAILED"
-          : responseStatus === 429
-            ? "RATE_LIMITED"
-            : "UPSTREAM_ERROR",
-      message: err instanceof Error ? err.message : "Connector test failed",
-    });
+    const response = connectorTestErrorResponse(err);
+    res.status(response.status).json(response.body);
   }
 });
 
