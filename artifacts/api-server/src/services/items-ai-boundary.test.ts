@@ -38,9 +38,10 @@ describe("saved items AI boundary", () => {
 
     expect(items).toContain("ITEM_LIST_BODY_MAX_CHARS = 12_000");
     expect(items).toContain("ITEM_GRAPH_BODY_MAX_CHARS = 2_000");
-    expect(items).toContain("ITEM_DETAIL_BODY_MAX_CHARS = 500_000");
+    expect(items).toContain("ITEM_DETAIL_BODY_MAX_CHARS = 50_000");
     expect(items).toMatch(/left\(i\.body_text, \$\{filters\.bodyTextLimit\}\)/);
-    expect(items).toMatch(/left\(n\.content, \$\{filters\.bodyTextLimit\}\)/);
+    expect(items).toMatch(/left\(n\.preview, 280\)/);
+    expect(items).not.toMatch(/n\.content AS body_text|left\(n\.content/);
     expect(items).toMatch(/left\(coalesce\(sr\.record_text, ''\), \$\{filters\.bodyTextLimit\}\)/);
     expect(items).not.toMatch(/note_attachments|extracted_text/);
     expect(graph).toContain("Math.min(1_501, query.limit + query.offset + 1)");

@@ -16,7 +16,7 @@ export const ITEM_KINDS = ["note", "link", "image", "pdf", "file"] as const;
 export const ITEM_SOURCES = ["recall", "evernote"] as const;
 export const ITEM_LIST_BODY_MAX_CHARS = 12_000;
 export const ITEM_GRAPH_BODY_MAX_CHARS = 2_000;
-export const ITEM_DETAIL_BODY_MAX_CHARS = 500_000;
+export const ITEM_DETAIL_BODY_MAX_CHARS = 50_000;
 
 export type ItemSearchFilters = {
   q: string;
@@ -215,7 +215,7 @@ async function listNoteItems(userId: string, filters: ItemSearchFilters): Promis
       null::text AS description,
       null::text AS domain,
       null::text AS source_url,
-      left(n.content, ${filters.bodyTextLimit}) AS body_text,
+      left(n.preview, 280) AS body_text,
       '{}'::jsonb AS media,
       n.tags,
       nb.name AS notebook,
@@ -360,7 +360,7 @@ async function getProjectedItem(
         null::text AS description,
         null::text AS domain,
         null::text AS source_url,
-        left(n.content, ${ITEM_DETAIL_BODY_MAX_CHARS}) AS body_text,
+        left(n.preview, 280) AS body_text,
         '{}'::jsonb AS media,
         n.tags,
         nb.name AS notebook,
