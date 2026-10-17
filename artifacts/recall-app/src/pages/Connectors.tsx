@@ -69,6 +69,31 @@ function preferredEvernoteConnector(
   return rows.find((connector) => connector.enabled) ?? rows[0] ?? null;
 }
 
+function evernoteImportProgressLine(
+  run: ConnectorSyncRun | null,
+): string | null {
+  const progress = run?.metadata.evernoteLookupProgress;
+  if (
+    !progress ||
+    typeof progress !== "object" ||
+    Array.isArray(progress)
+  ) {
+    return null;
+  }
+  const value = progress as Record<string, unknown>;
+  const phase = run?.metadata.evernotePhase;
+  if (phase !== "notes" && phase !== "trash") {
+    return null;
+  }
+  const count = (key: string) =>
+    Math.max(0, Math.floor(Number(value[key]) || 0));
+  return `${phase === "trash" ? "Trash" : "Notes"} · ${
+    run?.recordsFetched ?? 0
+  } fetched / ${run?.recordsCreated ?? 0} created · ${count(
+    "cached",
+  )} taxonomy cache hits / ${count("fetched")} fetched`;
+}
+
 export function Connectors() {
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
   const [googleOAuthConfigured, setGoogleOAuthConfigured] = useState(false);
@@ -699,7 +724,7 @@ export function Connectors() {
                       );
                       toast({
                         title: "Evernote connection works",
-                        description: `${result.notebookCount} notebook(s) · ${result.tagCount} tag(s)`,
+                        description: `${result.notebookCount} notebook result(s) sampled`,
                       });
                       await load();
                     } catch (err) {
@@ -759,6 +784,11 @@ export function Connectors() {
                     ? ` · ${evernoteLastRun.status.replace(/_/g, " ")} · ${evernoteLastRun.recordsFetched} fetched / ${evernoteLastRun.recordsCreated} created / ${evernoteLastRun.recordsUpdated} updated / ${evernoteLastRun.recordsSkipped} skipped / ${evernoteLastRun.recordsFailed} failed`
                     : ""}
                 </p>
+                {evernoteImportProgressLine(evernoteLastRun) && (
+                  <p className="w-full text-xs text-sky-200/70">
+                    {evernoteImportProgressLine(evernoteLastRun)}
+                  </p>
+                )}
                 {evernoteLastRun &&
                   (evernoteLastRun.errorMessage ||
                     (Array.isArray(evernoteLastRun.metadata.errors) &&

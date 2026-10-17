@@ -31,6 +31,8 @@ export type EnqueueJobInput = {
 const DEFAULT_MAX_ATTEMPTS = 3;
 /** Re-queue jobs stuck in processing longer than this (API crash mid-run). */
 export const STALE_PROCESSING_MS = 15 * 60 * 1000;
+/** Bound crash/deploy recovery independently from real execution failures. */
+export const MAX_STALE_RECOVERIES = 20;
 
 export function backoffMs(attemptsAfterFail: number): number {
   // 30s, 2m, 8m — capped
@@ -40,6 +42,35 @@ export function backoffMs(attemptsAfterFail: number): number {
 
 export function attemptsAfterDeferredClaim(claimedAttempts: number): number {
   return Math.max(0, Math.floor(claimedAttempts) - 1);
+}
+
+export function evernoteRateLimitDeferral(error: unknown): {
+  retryAfterMs: number;
+} | null {
+  if (!error || typeof error !== "object") return null;
+  const details = error as Record<string, unknown>;
+  const data =
+    details.data && typeof details.data === "object"
+      ? (details.data as Record<string, unknown>)
+      : {};
+  const status = Number(
+    details.status ?? details.statusCode ?? data.status ?? data.statusCode,
+  );
+  const message = error instanceof Error ? error.message : "";
+  if (
+    details.evernoteRateLimited !== true &&
+    status !== 429 &&
+    !/\b429\b|rate.?limit/i.test(message)
+  ) {
+    return null;
+  }
+  const retryAfterMs =
+    typeof details.retryAfterMs === "number"
+      ? details.retryAfterMs
+      : 30_000;
+  return {
+    retryAfterMs: Math.min(Math.max(retryAfterMs, 1_000), 3_600_000),
+  };
 }
 
 export function jobFailureIsTerminal(
@@ -306,15 +337,38 @@ export async function failJob(
 /** Re-queue processing jobs abandoned after a crash / deploy. */
 export async function recoverStaleProcessingJobs(olderThanMs: number = STALE_PROCESSING_MS): Promise<number> {
   const cutoff = new Date(Date.now() - olderThanMs);
+  const staleRecoveries = sql<number>`case
+    when jsonb_typeof(${jobs.payload}->'staleRecoveryCount') = 'number'
+      then greatest((${jobs.payload}->>'staleRecoveryCount')::int, 0)
+    else 0
+  end`;
   const result = await getDb()
     .update(jobs)
     .set({
-      status: "queued",
+      status: sql`case
+        when ${staleRecoveries} + 1 >= ${MAX_STALE_RECOVERIES} then 'failed'
+        else 'queued'
+      end`,
+      // A claim spends one attempt. A dead worker never produced a real
+      // failure, so refund that claim and track recovery separately.
+      attempts: sql`greatest(${jobs.attempts} - 1, 0)`,
+      payload: sql`${jobs.payload} || jsonb_build_object(
+        'staleRecoveryCount',
+        ${staleRecoveries} + 1
+      )`,
       lockedAt: null,
       lockedBy: null,
       availableAt: new Date(),
       updatedAt: new Date(),
-      lastError: "Recovered after stale processing lock",
+      completedAt: sql`case
+        when ${staleRecoveries} + 1 >= ${MAX_STALE_RECOVERIES} then now()
+        else null
+      end`,
+      lastError: sql`case
+        when ${staleRecoveries} + 1 >= ${MAX_STALE_RECOVERIES}
+          then 'Stale processing recovery limit reached'
+        else 'Recovered after stale processing lock'
+      end`,
     })
     .where(and(eq(jobs.status, "processing"), lt(jobs.lockedAt, cutoff)))
     .returning({ id: jobs.id });

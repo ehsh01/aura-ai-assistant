@@ -129,7 +129,12 @@ export type WaitingItemRecord = {
   snoozedUntil: string | null;
   completedAt: string | null;
   dismissedAt: string | null;
-  lastOutcome: "completed" | "revised_delayed" | "still_waiting" | "unclear" | null;
+  lastOutcome:
+    | "completed"
+    | "revised_delayed"
+    | "still_waiting"
+    | "unclear"
+    | null;
   lastReplySourceRecordId: string | null;
   confidence: number;
   threadId: string | null;
@@ -190,7 +195,9 @@ export async function createWaitingItem(input: {
   });
 }
 
-export async function extractWaitingFromSource(sourceRecordId: string): Promise<{
+export async function extractWaitingFromSource(
+  sourceRecordId: string,
+): Promise<{
   created: number;
   items: WaitingItemRecord[];
 }> {
@@ -240,19 +247,27 @@ export async function snoozeWaitingItem(
   return postWaitingAction(id, "snooze", input as Record<string, unknown>);
 }
 
-export async function confirmWaitingCandidate(id: string): Promise<WaitingItemRecord> {
+export async function confirmWaitingCandidate(
+  id: string,
+): Promise<WaitingItemRecord> {
   return postWaitingAction(id, "confirm");
 }
 
-export async function dismissWaitingItem(id: string): Promise<WaitingItemRecord> {
+export async function dismissWaitingItem(
+  id: string,
+): Promise<WaitingItemRecord> {
   return postWaitingAction(id, "dismiss");
 }
 
-export async function reopenWaitingItem(id: string): Promise<WaitingItemRecord> {
+export async function reopenWaitingItem(
+  id: string,
+): Promise<WaitingItemRecord> {
   return postWaitingAction(id, "reopen");
 }
 
-export async function completeWaitingItem(id: string): Promise<WaitingItemRecord> {
+export async function completeWaitingItem(
+  id: string,
+): Promise<WaitingItemRecord> {
   return postWaitingAction(id, "complete");
 }
 
@@ -369,10 +384,17 @@ export type DeadlinesOverview = {
 };
 
 export type AttentionItemDetail = AttentionItemRecord & {
-  audit: { id: string; action: string; metadata: Record<string, unknown>; createdAt: string }[];
+  audit: {
+    id: string;
+    action: string;
+    metadata: Record<string, unknown>;
+    createdAt: string;
+  }[];
 };
 
-export async function listAttention(): Promise<{ items: AttentionItemRecord[] }> {
+export async function listAttention(): Promise<{
+  items: AttentionItemRecord[];
+}> {
   return apiFetch("/attention");
 }
 
@@ -380,7 +402,9 @@ export async function listDeadlines(): Promise<DeadlinesOverview> {
   return apiFetch("/deadlines");
 }
 
-export async function getAttentionItem(id: string): Promise<AttentionItemDetail> {
+export async function getAttentionItem(
+  id: string,
+): Promise<AttentionItemDetail> {
   return apiFetch(`/attention/${encodeURIComponent(id)}`);
 }
 
@@ -409,20 +433,36 @@ export async function patchAttention(
   });
 }
 
-export async function confirmAttention(id: string): Promise<AttentionItemRecord> {
-  return apiFetch(`/attention/${encodeURIComponent(id)}/confirm`, { method: "POST" });
+export async function confirmAttention(
+  id: string,
+): Promise<AttentionItemRecord> {
+  return apiFetch(`/attention/${encodeURIComponent(id)}/confirm`, {
+    method: "POST",
+  });
 }
 
-export async function reopenAttention(id: string): Promise<AttentionItemRecord> {
-  return apiFetch(`/attention/${encodeURIComponent(id)}/reopen`, { method: "POST" });
+export async function reopenAttention(
+  id: string,
+): Promise<AttentionItemRecord> {
+  return apiFetch(`/attention/${encodeURIComponent(id)}/reopen`, {
+    method: "POST",
+  });
 }
 
-export async function markAttentionSeen(id: string): Promise<AttentionItemRecord> {
-  return apiFetch(`/attention/${encodeURIComponent(id)}/seen`, { method: "POST" });
+export async function markAttentionSeen(
+  id: string,
+): Promise<AttentionItemRecord> {
+  return apiFetch(`/attention/${encodeURIComponent(id)}/seen`, {
+    method: "POST",
+  });
 }
 
-export async function dismissAttention(id: string): Promise<AttentionItemRecord> {
-  return apiFetch(`/attention/${encodeURIComponent(id)}/dismiss`, { method: "POST" });
+export async function dismissAttention(
+  id: string,
+): Promise<AttentionItemRecord> {
+  return apiFetch(`/attention/${encodeURIComponent(id)}/dismiss`, {
+    method: "POST",
+  });
 }
 
 export async function snoozeAttention(
@@ -435,11 +475,18 @@ export async function snoozeAttention(
   });
 }
 
-export async function completeAttention(id: string): Promise<AttentionItemRecord> {
-  return apiFetch(`/attention/${encodeURIComponent(id)}/complete`, { method: "POST" });
+export async function completeAttention(
+  id: string,
+): Promise<AttentionItemRecord> {
+  return apiFetch(`/attention/${encodeURIComponent(id)}/complete`, {
+    method: "POST",
+  });
 }
 
-export async function scanAttention(): Promise<{ jobId: string; status: string }> {
+export async function scanAttention(): Promise<{
+  jobId: string;
+  status: string;
+}> {
   return apiFetch("/attention/scan", { method: "POST" });
 }
 
@@ -509,7 +556,9 @@ export type PersonRelated = {
   linkedMemories?: { id: string; title: string; domain: string }[];
 };
 
-export async function getPersonRelated(personId: string): Promise<PersonRelated> {
+export async function getPersonRelated(
+  personId: string,
+): Promise<PersonRelated> {
   return apiFetch(`/people/${encodeURIComponent(personId)}/related`);
 }
 
@@ -584,18 +633,36 @@ export type PersonContext = {
   theyOweYou: ContextItem[];
   youOweThem: ContextItem[];
   deadlines: ContextItem[];
-  recentMessages: { id: string; title: string; from: string | null; at: string; sourceUrl: string | null }[];
+  recentMessages: {
+    id: string;
+    title: string;
+    from: string | null;
+    at: string;
+    sourceUrl: string | null;
+  }[];
   notes: { id: string; title: string; preview: string | null; href: string }[];
   timeline: ContextTimelineItem[];
   linkSuggestions: LinkSuggestion[];
 };
 
-export async function fetchPersonContext(personId: string): Promise<PersonContext> {
+export async function fetchPersonContext(
+  personId: string,
+): Promise<PersonContext> {
   return apiFetch(`/people/${encodeURIComponent(personId)}/context`);
 }
 
-export type ProjectRisk = { severity: "high" | "medium"; label: string; reason: string; href: string };
-export type ProjectLinkedPerson = { id: string | null; name: string; via: string[]; href: string | null };
+export type ProjectRisk = {
+  severity: "high" | "medium";
+  label: string;
+  reason: string;
+  href: string;
+};
+export type ProjectLinkedPerson = {
+  id: string | null;
+  name: string;
+  via: string[];
+  href: string | null;
+};
 export type ProjectDecision = {
   at: string;
   label: string;
@@ -608,7 +675,13 @@ export type ProjectDecision = {
 export type ProjectContext = {
   project: { id: string; name: string; status: string };
   summary: string;
-  stats: { openTasks: number; deadlinesOpen: number; waitingOpen: number; notes: number; captures: number };
+  stats: {
+    openTasks: number;
+    deadlinesOpen: number;
+    waitingOpen: number;
+    notes: number;
+    captures: number;
+  };
   nextBestAction: ContextNextAction | null;
   risks: ProjectRisk[];
   blockers: ContextItem[];
@@ -619,7 +692,9 @@ export type ProjectContext = {
   linkSuggestions: LinkSuggestion[];
 };
 
-export async function fetchProjectContext(projectId: string): Promise<ProjectContext> {
+export async function fetchProjectContext(
+  projectId: string,
+): Promise<ProjectContext> {
   return apiFetch(`/projects/${encodeURIComponent(projectId)}/context`);
 }
 
@@ -629,7 +704,10 @@ export async function confirmLinkSuggestion(input: {
   field: LinkSuggestion["field"];
   value: string;
 }): Promise<{ ok: boolean }> {
-  return apiFetch("/link-suggestions/confirm", { method: "POST", body: JSON.stringify(input) });
+  return apiFetch("/link-suggestions/confirm", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function dismissLinkSuggestion(input: {
@@ -638,7 +716,10 @@ export async function dismissLinkSuggestion(input: {
   entityId: string;
   suggestedName: string;
 }): Promise<{ ok: boolean }> {
-  return apiFetch("/link-suggestions/dismiss", { method: "POST", body: JSON.stringify(input) });
+  return apiFetch("/link-suggestions/dismiss", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function getProjectTimeline(
@@ -698,7 +779,13 @@ export async function unlinkProjectSource(
 
 export async function listPersonOrganizations(
   personId: string,
-): Promise<{ organizations: { organizationId: string; displayName: string; orgType: string }[] }> {
+): Promise<{
+  organizations: {
+    organizationId: string;
+    displayName: string;
+    orgType: string;
+  }[];
+}> {
   return apiFetch(`/people/${encodeURIComponent(personId)}/organizations`);
 }
 
@@ -706,28 +793,39 @@ export async function linkPersonOrganization(
   personId: string,
   organizationId: string,
 ): Promise<{ ok: boolean }> {
-  return apiFetch(`/people/${encodeURIComponent(personId)}/organizations/link`, {
-    method: "POST",
-    body: JSON.stringify({ organizationId }),
-  });
+  return apiFetch(
+    `/people/${encodeURIComponent(personId)}/organizations/link`,
+    {
+      method: "POST",
+      body: JSON.stringify({ organizationId }),
+    },
+  );
 }
 
 export async function unlinkPersonOrganization(
   personId: string,
   organizationId: string,
 ): Promise<{ ok: boolean }> {
-  return apiFetch(`/people/${encodeURIComponent(personId)}/organizations/unlink`, {
-    method: "POST",
-    body: JSON.stringify({ organizationId }),
-  });
+  return apiFetch(
+    `/people/${encodeURIComponent(personId)}/organizations/unlink`,
+    {
+      method: "POST",
+      body: JSON.stringify({ organizationId }),
+    },
+  );
 }
 
-export async function listOrganizationPeople(
-  organizationId: string,
-): Promise<{
-  people: { personId: string; displayName: string; email: string | null; role: string | null }[];
+export async function listOrganizationPeople(organizationId: string): Promise<{
+  people: {
+    personId: string;
+    displayName: string;
+    email: string | null;
+    role: string | null;
+  }[];
 }> {
-  return apiFetch(`/organizations/${encodeURIComponent(organizationId)}/people`);
+  return apiFetch(
+    `/organizations/${encodeURIComponent(organizationId)}/people`,
+  );
 }
 
 export type SubjectSpendResponse = {
@@ -829,17 +927,22 @@ export async function suggestReceiptMatches(documentId: string): Promise<{
     reasons: string[];
   }[];
 }> {
-  return apiFetch(`/documents/${encodeURIComponent(documentId)}/receipt-matches`);
+  return apiFetch(
+    `/documents/${encodeURIComponent(documentId)}/receipt-matches`,
+  );
 }
 
 export async function confirmReceiptMatch(
   documentId: string,
   sourceRecordId: string,
 ): Promise<{ ok: boolean }> {
-  return apiFetch(`/documents/${encodeURIComponent(documentId)}/receipt-matches/confirm`, {
-    method: "POST",
-    body: JSON.stringify({ sourceRecordId }),
-  });
+  return apiFetch(
+    `/documents/${encodeURIComponent(documentId)}/receipt-matches/confirm`,
+    {
+      method: "POST",
+      body: JSON.stringify({ sourceRecordId }),
+    },
+  );
 }
 
 export async function listFinanceSubscriptions(): Promise<{
@@ -891,7 +994,9 @@ export async function updateVehicle(
 }
 
 export async function deleteVehicle(vehicleId: string): Promise<void> {
-  await apiFetch(`/vehicles/${encodeURIComponent(vehicleId)}`, { method: "DELETE" });
+  await apiFetch(`/vehicles/${encodeURIComponent(vehicleId)}`, {
+    method: "DELETE",
+  });
 }
 
 export async function listHomes(): Promise<{ homes: HomeRecord[] }> {
@@ -932,7 +1037,9 @@ export async function deleteHome(homeId: string): Promise<void> {
   await apiFetch(`/homes/${encodeURIComponent(homeId)}`, { method: "DELETE" });
 }
 
-export async function listWarranties(): Promise<{ warranties: WarrantyRecord[] }> {
+export async function listWarranties(): Promise<{
+  warranties: WarrantyRecord[];
+}> {
   return apiFetch("/warranties");
 }
 
@@ -944,7 +1051,10 @@ export async function createWarranty(input: {
   expiresAt?: string | null;
   notes?: string | null;
 }): Promise<WarrantyRecord> {
-  return apiFetch("/warranties", { method: "POST", body: JSON.stringify(input) });
+  return apiFetch("/warranties", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function updateWarranty(
@@ -965,7 +1075,9 @@ export async function updateWarranty(
 }
 
 export async function deleteWarranty(warrantyId: string): Promise<void> {
-  await apiFetch(`/warranties/${encodeURIComponent(warrantyId)}`, { method: "DELETE" });
+  await apiFetch(`/warranties/${encodeURIComponent(warrantyId)}`, {
+    method: "DELETE",
+  });
 }
 
 export type OrganizationRecord = {
@@ -995,7 +1107,9 @@ export type InvoiceRecord = {
   updatedAt: string;
 };
 
-export async function listOrganizations(): Promise<{ organizations: OrganizationRecord[] }> {
+export async function listOrganizations(): Promise<{
+  organizations: OrganizationRecord[];
+}> {
   return apiFetch("/organizations");
 }
 
@@ -1007,7 +1121,10 @@ export async function createOrganization(input: {
   website?: string | null;
   notes?: string | null;
 }): Promise<OrganizationRecord> {
-  return apiFetch("/organizations", { method: "POST", body: JSON.stringify(input) });
+  return apiFetch("/organizations", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function updateOrganization(
@@ -1027,7 +1144,9 @@ export async function updateOrganization(
   });
 }
 
-export async function deleteOrganization(organizationId: string): Promise<void> {
+export async function deleteOrganization(
+  organizationId: string,
+): Promise<void> {
   await apiFetch(`/organizations/${encodeURIComponent(organizationId)}`, {
     method: "DELETE",
   });
@@ -1070,7 +1189,9 @@ export async function updateInvoice(
 }
 
 export async function deleteInvoice(invoiceId: string): Promise<void> {
-  await apiFetch(`/invoices/${encodeURIComponent(invoiceId)}`, { method: "DELETE" });
+  await apiFetch(`/invoices/${encodeURIComponent(invoiceId)}`, {
+    method: "DELETE",
+  });
 }
 
 export interface HomeBriefingItem {
@@ -1097,7 +1218,12 @@ export interface BriefingReview {
   items: ReviewQueueItem[];
 }
 
-export type BriefingActionKind = "deadline" | "appointment" | "waiting" | "task" | "capture";
+export type BriefingActionKind =
+  | "deadline"
+  | "appointment"
+  | "waiting"
+  | "task"
+  | "capture";
 
 export interface BriefingAction {
   kind: BriefingActionKind;
@@ -1231,7 +1357,13 @@ export interface HomeBriefingResponse {
     projectName: string | null;
     updatedAt: string | null;
   };
-  whatChanged?: { id: string; kind: string; title: string; detail: string; href: string }[];
+  whatChanged?: {
+    id: string;
+    kind: string;
+    title: string;
+    detail: string;
+    href: string;
+  }[];
   meetingPrep?: {
     eventId: string;
     title: string;
@@ -1309,7 +1441,11 @@ export async function fetchHome(): Promise<HomeBriefingResponse> {
 }
 
 /** Pull latest MyFamilyBudget transactions into Recall (app open / manual refresh). */
-export async function refreshFinance(): Promise<{ ok: boolean; synced: boolean; skipped: boolean }> {
+export async function refreshFinance(): Promise<{
+  ok: boolean;
+  synced: boolean;
+  skipped: boolean;
+}> {
   return apiFetch("/finance/refresh", { method: "POST", body: "{}" });
 }
 
@@ -1356,6 +1492,16 @@ export type QueryRecallStreamMeta = {
   privacy?: QueryRecallResult["privacy"];
   sourcesConsulted?: SourceConsulted[];
 };
+
+export type AskAiAvailability = {
+  allowed: boolean;
+  model: string | null;
+  reason: "disabled" | "unavailable" | "daily_limit" | null;
+};
+
+export async function getAskAiAvailability(): Promise<AskAiAvailability> {
+  return apiFetch("/ai/query/availability");
+}
 
 export async function queryRecall(
   question: string,
@@ -1467,7 +1613,12 @@ export async function planAskInput(
 export async function transcribeUtterance(
   blob: Blob,
   options?: { locale?: string; filename?: string },
-): Promise<{ text: string; provider: string; model: string; durationMs: number }> {
+): Promise<{
+  text: string;
+  provider: string;
+  model: string;
+  durationMs: number;
+}> {
   const form = new FormData();
   const filename = options?.filename ?? "utterance.webm";
   form.append("audio", blob, filename);
@@ -1511,7 +1662,9 @@ export async function confirmAskAction(input: {
   });
 }
 
-export async function cancelAskAction(proposalId: string): Promise<{ ok: boolean }> {
+export async function cancelAskAction(
+  proposalId: string,
+): Promise<{ ok: boolean }> {
   return apiFetch("/ai/actions/cancel", {
     method: "POST",
     body: JSON.stringify({ proposalId }),
@@ -1549,7 +1702,10 @@ export async function queryRecallStream(
 ): Promise<QueryRecallResult> {
   const res = await fetch(`${API_BASE}/ai/query/stream`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
     credentials: "include",
     body: JSON.stringify({ question, threadId: options.threadId ?? undefined }),
     signal: options.signal,
@@ -1602,7 +1758,8 @@ export async function queryRecallStream(
       const dataLines: string[] = [];
       for (const line of frame.split("\n")) {
         if (line.startsWith("event:")) event = line.slice(6).trim();
-        else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+        else if (line.startsWith("data:"))
+          dataLines.push(line.slice(5).replace(/^ /, ""));
       }
       if (dataLines.length > 0) handleEvent(event, dataLines.join("\n"));
     }
@@ -1620,10 +1777,12 @@ export async function queryRecallStream(
     confidence: doneResult?.confidence ?? 0.6,
     caveats: doneResult?.caveats ?? null,
     evidence: doneResult?.evidence ?? metaResult?.evidence ?? [],
-    relatedRecords: doneResult?.relatedRecords ?? metaResult?.relatedRecords ?? [],
+    relatedRecords:
+      doneResult?.relatedRecords ?? metaResult?.relatedRecords ?? [],
     images: doneResult?.images ?? metaResult?.images ?? [],
     suggestedNextAction: doneResult?.suggestedNextAction ?? null,
-    threadId: doneResult?.threadId ?? metaResult?.threadId ?? options.threadId ?? null,
+    threadId:
+      doneResult?.threadId ?? metaResult?.threadId ?? options.threadId ?? null,
     assistantMessageId: doneResult?.assistantMessageId ?? null,
     privacy: doneResult?.privacy ?? metaResult?.privacy,
   };
@@ -1663,7 +1822,10 @@ export async function listUserRules(): Promise<{ rules: UserRuleRecord[] }> {
 }
 
 export async function createUserRule(body: string): Promise<UserRuleRecord> {
-  return apiFetch("/user-rules", { method: "POST", body: JSON.stringify({ body }) });
+  return apiFetch("/user-rules", {
+    method: "POST",
+    body: JSON.stringify({ body }),
+  });
 }
 
 export async function updateUserRule(
@@ -1677,7 +1839,9 @@ export async function updateUserRule(
 }
 
 export async function deleteUserRule(ruleId: string): Promise<void> {
-  await apiFetch(`/user-rules/${encodeURIComponent(ruleId)}`, { method: "DELETE" });
+  await apiFetch(`/user-rules/${encodeURIComponent(ruleId)}`, {
+    method: "DELETE",
+  });
 }
 
 export type NotificationSettings = {
@@ -1796,7 +1960,9 @@ export type AskMessageRecord = {
   createdAt: string;
 };
 
-export async function listAskThreads(): Promise<{ threads: AskThreadRecord[] }> {
+export async function listAskThreads(): Promise<{
+  threads: AskThreadRecord[];
+}> {
   return apiFetch("/ai/threads");
 }
 
@@ -1895,25 +2061,33 @@ export async function connectEvernoteDeveloperToken(): Promise<{
 export async function getHomeyWebhookInfo(
   connectorId: string,
 ): Promise<{ url: string; secret: string; connectorId: string }> {
-  return apiFetch(`/connectors/${encodeURIComponent(connectorId)}/homey-webhook`);
+  return apiFetch(
+    `/connectors/${encodeURIComponent(connectorId)}/homey-webhook`,
+  );
 }
 
 export async function rotateHomeyWebhookSecret(
   connectorId: string,
 ): Promise<{ url: string; secret: string; connectorId: string }> {
-  return apiFetch(`/connectors/${encodeURIComponent(connectorId)}/homey-webhook/rotate`, {
-    method: "POST",
-    body: "{}",
-  });
+  return apiFetch(
+    `/connectors/${encodeURIComponent(connectorId)}/homey-webhook/rotate`,
+    {
+      method: "POST",
+      body: "{}",
+    },
+  );
 }
 
 export async function testHomeyWebhook(
   connectorId: string,
 ): Promise<{ ok: boolean; result: unknown }> {
-  return apiFetch(`/connectors/${encodeURIComponent(connectorId)}/homey-webhook/test`, {
-    method: "POST",
-    body: "{}",
-  });
+  return apiFetch(
+    `/connectors/${encodeURIComponent(connectorId)}/homey-webhook/test`,
+    {
+      method: "POST",
+      body: "{}",
+    },
+  );
 }
 
 export async function listHomeyAlerts(): Promise<{
@@ -1942,7 +2116,9 @@ export async function createConnector(input: {
   });
 }
 
-export async function deleteConnector(connectorId: string): Promise<{ ok: boolean }> {
+export async function deleteConnector(
+  connectorId: string,
+): Promise<{ ok: boolean }> {
   return apiFetch(`/connectors/${encodeURIComponent(connectorId)}`, {
     method: "DELETE",
   });
@@ -1959,17 +2135,37 @@ export async function testFlipperForceConnector(
 
 export async function testEvernoteConnector(
   connectorId: string,
-): Promise<{ ok: true; notebookCount: number; tagCount: number }> {
-  return apiFetch(`/connectors/${encodeURIComponent(connectorId)}/test`, {
-    method: "POST",
-    body: "{}",
-  });
+): Promise<{ ok: true; notebookCount: number; tagCount: number | null }> {
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), 20_000);
+  try {
+    return await apiFetch(`/connectors/${encodeURIComponent(connectorId)}/test`, {
+      method: "POST",
+      body: "{}",
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("Evernote didn't respond — reconnect Evernote", {
+        cause: error,
+      });
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
 }
 
 export async function patchConnector(
   connectorId: string,
   patch: { enabled?: boolean; name?: string },
-): Promise<{ id: string; name: string; type: string; syncStatus: string; enabled: boolean }> {
+): Promise<{
+  id: string;
+  name: string;
+  type: string;
+  syncStatus: string;
+  enabled: boolean;
+}> {
   return apiFetch(`/connectors/${encodeURIComponent(connectorId)}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
@@ -1993,9 +2189,7 @@ export type ConnectorSyncRun = {
 export async function listConnectorSyncRuns(
   connectorId: string,
 ): Promise<{ runs: ConnectorSyncRun[] }> {
-  return apiFetch(
-    `/connectors/${encodeURIComponent(connectorId)}/sync-runs`,
-  );
+  return apiFetch(`/connectors/${encodeURIComponent(connectorId)}/sync-runs`);
 }
 
 export type EvernoteVerificationReport = {
@@ -2095,7 +2289,9 @@ export type DocumentRecord = {
   updatedAt: string;
 };
 
-export async function listDocuments(): Promise<{ documents: DocumentRecord[] }> {
+export async function listDocuments(): Promise<{
+  documents: DocumentRecord[];
+}> {
   return apiFetch("/documents");
 }
 
@@ -2106,7 +2302,10 @@ export async function createDocument(input: {
   summary?: string | null;
   metadata?: Record<string, unknown>;
 }): Promise<DocumentRecord> {
-  return apiFetch("/documents", { method: "POST", body: JSON.stringify(input) });
+  return apiFetch("/documents", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 // Note: the standalone Knowledge browse/create UI was folded into Notes
@@ -2236,14 +2435,18 @@ export async function supersedeMemory(
   });
 }
 
-export async function archiveMemory(memoryId: string): Promise<LifeMemoryRecord> {
+export async function archiveMemory(
+  memoryId: string,
+): Promise<LifeMemoryRecord> {
   return apiFetch(`/memory/${encodeURIComponent(memoryId)}/archive`, {
     method: "POST",
   });
 }
 
 export async function deleteMemory(memoryId: string): Promise<void> {
-  await apiFetch(`/memory/${encodeURIComponent(memoryId)}`, { method: "DELETE" });
+  await apiFetch(`/memory/${encodeURIComponent(memoryId)}`, {
+    method: "DELETE",
+  });
 }
 
 export async function classifyMemory(
@@ -2375,20 +2578,26 @@ export async function listSavedItems(
 ): Promise<{ items: SavedItemRecord[] }> {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(input)) {
-    if (value != null && value !== "" && value !== false) params.set(key, String(value));
+    if (value != null && value !== "" && value !== false)
+      params.set(key, String(value));
   }
   const query = params.toString();
   return apiFetch(`/items${query ? `?${query}` : ""}`);
 }
 
-export async function getSavedItem(id: string): Promise<{ item: SavedItemRecord }> {
+export async function getSavedItem(
+  id: string,
+): Promise<{ item: SavedItemRecord }> {
   return apiFetch(`/items/${encodeURIComponent(id)}`);
 }
 
 export async function saveTextItem(
   value: string,
 ): Promise<{ item: SavedItemRecord; existing: boolean }> {
-  return apiFetch("/items", { method: "POST", body: JSON.stringify({ value }) });
+  return apiFetch("/items", {
+    method: "POST",
+    body: JSON.stringify({ value }),
+  });
 }
 
 export async function saveImageItem(
@@ -2403,13 +2612,21 @@ export async function saveImageItem(
     signal: AbortSignal.timeout(60_000),
   });
   if (!response.ok) {
-    const error = (await response.json().catch(() => ({}))) as { message?: string };
+    const error = (await response.json().catch(() => ({}))) as {
+      message?: string;
+    };
     throw new Error(error.message ?? `Upload failed (${response.status})`);
   }
-  return response.json() as Promise<{ item: SavedItemRecord; existing: boolean }>;
+  return response.json() as Promise<{
+    item: SavedItemRecord;
+    existing: boolean;
+  }>;
 }
 
-export async function listItemFacets(): Promise<{ tags: string[]; notebooks: string[] }> {
+export async function listItemFacets(): Promise<{
+  tags: string[];
+  notebooks: string[];
+}> {
   return apiFetch("/items/facets");
 }
 

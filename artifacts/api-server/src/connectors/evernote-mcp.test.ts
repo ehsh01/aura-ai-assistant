@@ -1,25 +1,292 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  Client,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EVERNOTE_MAX_NOTE_CONTENT_CHARS,
+  EvernoteReadOnlyViolation,
+  createEvernoteReadOnlyCaller,
   enumerateEvernoteTaxonomy,
   evernoteMcpFetch,
+  evernoteRateLimitBackoffMs,
   evernoteMcpAuthorizationCode,
   fetchEvernoteViaMcp,
   mcpOAuthStateFromSettings,
   mcpSettingsFromOAuthState,
   streamEvernoteViaMcp,
+  testEvernoteMcpConnection,
+  type EvernoteTaxonomyCheckpoint,
 } from "./evernote-mcp";
 import {
   openConnectorSettings,
   sealConnectorSettings,
 } from "../lib/secret-box";
+import { connectorTestErrorResponse } from "../routes/connector-test-error";
 
 afterEach(() => {
   delete process.env.SECRETS_ENCRYPTION_KEY;
   delete process.env.EVERNOTE_MCP_PACE_MS;
   delete process.env.EVERNOTE_MCP_MAX_429_RETRIES;
   delete process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE;
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("Evernote MCP read-only boundary", () => {
+  it("passes every read-only tool-name shape through to the SDK client", async () => {
+    const callTool = vi.fn(async (input: { name: string }) => ({
+      tool: input.name,
+    }));
+    const client = createEvernoteReadOnlyCaller({ callTool });
+    const allowed = [
+      "search_notes",
+      "search_future_resource",
+      "get_note",
+      "get_future_resource",
+      "semantic_search",
+      "get_attachment",
+    ];
+
+    for (const name of allowed) {
+      await expect(client.callTool({ name })).resolves.toEqual({ tool: name });
+    }
+    expect(callTool).toHaveBeenCalledTimes(allowed.length);
+  });
+
+  it("blocks write families, unknown names, and an empty name before SDK dispatch", async () => {
+    const callTool = vi.fn(async () => ({}));
+    const client = createEvernoteReadOnlyCaller({ callTool });
+    const rejected = [
+      "create_note",
+      "edit_note",
+      "delete_note",
+      "move_notes",
+      "rename_notebook",
+      "update_note",
+      "restore_note",
+      "start_attachment_upload",
+      "finalize_attachment",
+      "list_notebooks",
+      "do_something",
+      "",
+    ];
+
+    for (const name of rejected) {
+      await expect(client.callTool({ name })).rejects.toBeInstanceOf(
+        EvernoteReadOnlyViolation,
+      );
+    }
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
+  it("dispatches the validated tool name instead of the caller's mutable input", async () => {
+    const dispatched: string[] = [];
+    const client = createEvernoteReadOnlyCaller({
+      async callTool(input) {
+        dispatched.push(input.name);
+        return {};
+      },
+    });
+    let reads = 0;
+    const input = {
+      get name() {
+        reads += 1;
+        return reads === 1 ? "search_notes" : "delete_note";
+      },
+    };
+
+    await client.callTool(input);
+
+    expect(reads).toBe(1);
+    expect(dispatched).toEqual(["search_notes"]);
+  });
+
+  it("keeps direct SDK callTool dispatch inside the guarded wrapper", () => {
+    const srcRoot = fileURLToPath(new URL("../", import.meta.url));
+    const sourceFiles: string[] = [];
+    const visit = (directory: string) => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) {
+          visit(path);
+        } else if (
+          /\.(?:ts|tsx)$/.test(entry.name) &&
+          !/\.(?:test|spec)\.(?:ts|tsx)$/.test(entry.name)
+        ) {
+          sourceFiles.push(path);
+        }
+      }
+    };
+    visit(srcRoot);
+
+    const mcpPath = join(srcRoot, "connectors", "evernote-mcp.ts");
+    const mcpSource = readFileSync(mcpPath, "utf8");
+    const wrapperStart = mcpSource.indexOf(
+      "export function createEvernoteReadOnlyCaller",
+    );
+    const wrapperEnd = mcpSource.indexOf("\n}\n\nfunction invokeTool", wrapperStart);
+    expect(wrapperStart).toBeGreaterThanOrEqual(0);
+    expect(wrapperEnd).toBeGreaterThan(wrapperStart);
+
+    const violations = sourceFiles.flatMap((path) => {
+      let source = readFileSync(path, "utf8");
+      if (path === mcpPath) {
+        source =
+          source.slice(0, wrapperStart) +
+          source.slice(wrapperEnd + "\n}\n".length);
+      }
+      return source.includes(".callTool(") ? [relative(srcRoot, path)] : [];
+    });
+    expect(violations).toEqual([]);
+    expect(
+      mcpSource.slice(wrapperStart, wrapperEnd).match(/\.callTool\(/g),
+    ).toHaveLength(1);
+  });
+});
+
+describe("Evernote MCP connection probe", () => {
+  const settings = {
+    authTransport: "mcp",
+    mcpOAuthState: "test-state",
+    mcpClientInformation: { client_id: "test-client" },
+    accessToken: "test-access-token",
+  };
+
+  it("makes exactly one small search_notebooks call", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "10000";
+    vi.spyOn(Client.prototype, "connect").mockResolvedValue(undefined);
+    const callTool = vi
+      .spyOn(Client.prototype, "callTool")
+      .mockResolvedValue({
+        structuredContent: {
+          notebooks: [{ id: "notebook-1", name: "Projects" }],
+        },
+      } as never);
+
+    const result = await testEvernoteMcpConnection(settings, undefined, {
+      timeoutMs: 100,
+    });
+
+    expect(result.notebookCount).toBe(1);
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledWith({
+      name: "search_notebooks",
+      arguments: { query: "", maxResults: 1 },
+    });
+  });
+
+  it("maps a tool-level invalid_grant response to AUTH_FAILED without retrying", async () => {
+    vi.spyOn(Client.prototype, "connect").mockResolvedValue(undefined);
+    const callTool = vi
+      .spyOn(Client.prototype, "callTool")
+      .mockResolvedValue({
+        isError: true,
+        structuredContent: { status: 401, code: "invalid_grant" },
+        content: [{ type: "text", text: "invalid_grant" }],
+      } as never);
+    let error: unknown;
+
+    try {
+      await testEvernoteMcpConnection(settings, undefined, {
+        timeoutMs: 100,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(connectorTestErrorResponse(error)).toEqual({
+      status: 401,
+      body: {
+        error: "AUTH_FAILED",
+        message: "Evernote didn't respond — reconnect Evernote",
+      },
+    });
+  });
+
+  it("does not retry a tool-level 429 during the connection probe", async () => {
+    vi.spyOn(Client.prototype, "connect").mockResolvedValue(undefined);
+    const callTool = vi
+      .spyOn(Client.prototype, "callTool")
+      .mockResolvedValue({
+        isError: true,
+        structuredContent: { status: 429, retryAfter: 60 },
+        content: [{ type: "text", text: "rate limit" }],
+      } as never);
+
+    await expect(
+      testEvernoteMcpConnection(settings, undefined, {
+        timeoutMs: 100,
+      }),
+    ).rejects.toMatchObject({ status: 429 });
+    expect(callTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("times out a fetch that never resolves and closes the transport", async () => {
+    const close = vi.spyOn(
+      StreamableHTTPClientTransport.prototype,
+      "close",
+    );
+    const fetchFn = vi.fn(
+      () => new Promise<Response>(() => undefined),
+    );
+
+    let error: unknown;
+    try {
+      await testEvernoteMcpConnection(settings, undefined, {
+        timeoutMs: 25,
+        fetchFn,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toMatchObject({
+      status: 504,
+      message: "Evernote didn't respond — reconnect Evernote",
+    });
+    expect(connectorTestErrorResponse(error)).toMatchObject({
+      status: 504,
+      body: { error: "UPSTREAM_TIMEOUT" },
+    });
+    expect(fetchFn).toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("turns an HTTP 401 into the reconnect error used by AUTH_FAILED", async () => {
+    const fetchFn = vi.fn(async () =>
+      new Response("Unauthorized", {
+        status: 401,
+        headers: { "WWW-Authenticate": "Bearer" },
+      }),
+    );
+    let error: unknown;
+    try {
+      await testEvernoteMcpConnection(settings, undefined, {
+        timeoutMs: 250,
+        fetchFn,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toMatchObject({
+      status: 401,
+      message: "Evernote didn't respond — reconnect Evernote",
+    });
+    expect(connectorTestErrorResponse(error)).toEqual({
+      status: 401,
+      body: {
+        error: "AUTH_FAILED",
+        message: "Evernote didn't respond — reconnect Evernote",
+      },
+    });
+  });
 });
 
 describe("Evernote MCP auth persistence", () => {
@@ -74,7 +341,17 @@ describe("Evernote MCP auth persistence", () => {
 });
 
 describe("Evernote MCP HTTP pacing", () => {
+  it("uses exponential jitter while honoring longer Retry-After values", () => {
+    expect(evernoteRateLimitBackoffMs(0, null, 0.5)).toBe(1_125);
+    expect(evernoteRateLimitBackoffMs(2, 12_000, 0)).toBe(12_000);
+    expect(evernoteRateLimitBackoffMs(10, 90_000, 1)).toBe(105_000);
+  });
+
   it("retries HTTP 429 using Retry-After before the SDK consumes headers", async () => {
+    vi.stubGlobal("setTimeout", (callback: () => void) => {
+      callback();
+      return 0;
+    });
     let calls = 0;
     vi.stubGlobal(
       "fetch",
@@ -93,8 +370,35 @@ describe("Evernote MCP HTTP pacing", () => {
     expect(calls).toBe(2);
   });
 
+  it("clones Request bodies before each HTTP retry", async () => {
+    const bodies: string[] = [];
+    const fetchFn = vi.fn(async (input: string | URL | Request) => {
+      bodies.push(await (input as Request).text());
+      return bodies.length === 1
+        ? new Response("limited", {
+            status: 429,
+            headers: { "Retry-After": "0" },
+          })
+        : new Response("ok", { status: 200 });
+    });
+    const request = new Request("https://mcp.evernote.com/mcp", {
+      method: "POST",
+      body: '{"probe":true}',
+    });
+
+    const response = await evernoteMcpFetch(request, undefined, { fetchFn });
+
+    expect(response.status).toBe(200);
+    expect(bodies).toEqual(['{"probe":true}', '{"probe":true}']);
+  });
+
   it("marks exhausted HTTP retries so tool retries cannot multiply them", async () => {
     process.env.EVERNOTE_MCP_MAX_429_RETRIES = "2";
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.stubGlobal("setTimeout", (callback: () => void) => {
+      callback();
+      return 0;
+    });
     let calls = 0;
     vi.stubGlobal(
       "fetch",
@@ -112,7 +416,8 @@ describe("Evernote MCP HTTP pacing", () => {
       expect.objectContaining({
         status: 429,
         mcpRetriesExhausted: true,
-        retryAfterMs: 0,
+        retryAfterMs: 4_000,
+        evernoteRateLimited: true,
       }),
     );
     expect(calls).toBe(3);
@@ -274,12 +579,17 @@ describe("Evernote MCP read sync", () => {
 
   it("retries bounded MCP 429 responses", async () => {
     process.env.EVERNOTE_MCP_PACE_MS = "0";
-    let notebookCalls = 0;
+    let noteSearchCalls = 0;
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.stubGlobal("setTimeout", (callback: () => void) => {
+      callback();
+      return 0;
+    });
     const client = {
       async callTool(input: { name: string }): Promise<unknown> {
-        if (input.name === "search_notebooks") {
-          notebookCalls += 1;
-          if (notebookCalls === 1) {
+        if (input.name === "search_notes") {
+          noteSearchCalls += 1;
+          if (noteSearchCalls === 1) {
             return {
               isError: true,
               structuredContent: { status: 429, retryAfter: 0 },
@@ -291,15 +601,6 @@ describe("Evernote MCP read sync", () => {
               ],
             };
           }
-          return { structuredContent: { notebooks: [] } };
-        }
-        if (input.name === "search_tags") {
-          return { structuredContent: { tags: [] } };
-        }
-        if (input.name === "search_spaces") {
-          return { structuredContent: { spaces: [] } };
-        }
-        if (input.name === "search_notes") {
           return {
             structuredContent: { totalResultCount: 0, notes: [] },
           };
@@ -308,13 +609,14 @@ describe("Evernote MCP read sync", () => {
       },
     };
     const result = await fetchEvernoteViaMcp(client, new Map());
-    expect(notebookCalls).toBe(2);
+    expect(noteSearchCalls).toBe(2);
     expect(result.recordsFetched).toBe(0);
   });
 
   it("propagates exhausted body rate limits to the durable job retry", async () => {
     process.env.EVERNOTE_MCP_PACE_MS = "0";
     process.env.EVERNOTE_MCP_MAX_429_RETRIES = "0";
+    vi.spyOn(Math, "random").mockReturnValue(0);
     const client = {
       async callTool(input: {
         name: string;
@@ -356,18 +658,19 @@ describe("Evernote MCP read sync", () => {
     );
   });
 
-  it("enumerates notebooks and tags beyond the MCP result cap", async () => {
+  it("bounds best-effort taxonomy against substring-matching searches", async () => {
     process.env.EVERNOTE_MCP_PACE_MS = "0";
-    const notebooks = Array.from({ length: 284 }, (_, index) => ({
+    const notebooks = Array.from({ length: 1 }, (_, index) => ({
       id: `nb-${index}`,
-      name: index < 100 ? `A ${index}` : `Z ${index}`,
+      name: `Notebook ${index}`,
       stack: index % 2 ? "Personal" : null,
     }));
     const tags = Array.from({ length: 520 }, (_, index) => ({
       id: `tag-${index}`,
-      name: index < 100 ? `A ${index}` : `Z ${index}`,
+      name: `shared tag ${index}`,
       parentId: index > 0 ? "tag-0" : null,
     }));
+    let searches = 0;
     const client = {
       async callTool(input: {
         name: string;
@@ -375,7 +678,10 @@ describe("Evernote MCP read sync", () => {
       }): Promise<unknown> {
         const query = String(input.arguments?.query ?? "").toLowerCase();
         if (input.name === "search_notebooks") {
-          const matches = query === "" ? notebooks : query === "z" ? notebooks.slice(100) : [];
+          searches += 1;
+          const matches = notebooks.filter((item) =>
+            item.name.toLowerCase().includes(query),
+          );
           return {
             structuredContent: {
               totalResultCount: matches.length,
@@ -384,7 +690,336 @@ describe("Evernote MCP read sync", () => {
           };
         }
         if (input.name === "search_tags") {
-          const matches = query === "" ? tags : query === "z" ? tags.slice(100) : [];
+          searches += 1;
+          const matches = tags.filter((item) =>
+            item.name.toLowerCase().includes(query),
+          );
+          return {
+            structuredContent: {
+              totalResultCount: matches.length,
+              tags: matches.slice(0, 100),
+            },
+          };
+        }
+        if (input.name === "search_spaces") {
+          searches += 1;
+          return {
+            structuredContent: {
+              spaces: [{ id: "space-1", name: "Home" }],
+            },
+          };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+    const checkpoints: EvernoteTaxonomyCheckpoint[] = [];
+    const taxonomy = await enumerateEvernoteTaxonomy(client, {
+      maxSearches: 64,
+      onCheckpoint: async (checkpoint) => {
+        checkpoints.push(structuredClone(checkpoint));
+      },
+    });
+    expect(searches).toBeLessThanOrEqual(64);
+    expect(checkpoints.at(-1)?.stage).toBe("complete");
+    expect(taxonomy.notebooks).toHaveLength(1);
+    expect(taxonomy.tags.length).toBeGreaterThan(100);
+    expect(taxonomy.tags.length).toBeLessThanOrEqual(520);
+  });
+
+  it("lists notes immediately and durably caches lazy taxonomy lookups by ID", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const tags = [
+      { id: "tag-519", name: "Shared label 519" },
+      ...Array.from({ length: 519 }, (_, index) => ({
+        id: `tag-${index}`,
+        name: `Shared label ${index}`,
+      })),
+    ];
+    const notebooks = [
+      { id: "nb-target", name: "Projects" },
+      ...Array.from({ length: 283 }, (_, index) => ({
+        id: `nb-${index}`,
+        name: `Notebook ${index}`,
+      })),
+    ];
+    const taxonomyQueries: string[] = [];
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        const query = String(input.arguments?.query ?? "").toLowerCase();
+        if (input.name === "search_notes") {
+          return {
+            structuredContent: {
+              totalResultCount: 1,
+              notes: [{ id: "note-1", updatedAt: "2026-10-17T00:00:00Z" }],
+            },
+          };
+        }
+        if (input.name === "get_note") {
+          return {
+            structuredContent: {
+              id: "note-1",
+              title: "Mapped note",
+              content: "<en-note>Body</en-note>",
+              notebookId: "nb-target",
+              tagIds: ["tag-519"],
+              updatedAt: "2026-10-17T00:00:00Z",
+            },
+          };
+        }
+        if (input.name === "search_notebooks") {
+          taxonomyQueries.push(`notebook:${query}`);
+          const matches = notebooks.filter((item) =>
+            item.name.toLowerCase().includes(query),
+          );
+          return {
+            structuredContent: {
+              totalResultCount: matches.length,
+              notebooks: matches.slice(0, 100),
+            },
+          };
+        }
+        if (input.name === "search_tags") {
+          taxonomyQueries.push(`tag:${query}`);
+          const matches = tags.filter((item) =>
+            item.name.toLowerCase().includes(query),
+          );
+          return {
+            structuredContent: {
+              totalResultCount: matches.length,
+              tags: matches.slice(0, 100),
+            },
+          };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+    const persisted: {
+      notebooks: Map<string, (typeof notebooks)[number]>;
+      tags: Map<string, (typeof tags)[number]>;
+    } = {
+      notebooks: new Map(),
+      tags: new Map(),
+    };
+    const records: Array<{ metadata: Record<string, unknown> }> = [];
+    const taxonomy = () => ({
+      notebooks: [...persisted.notebooks.values()].map((entity) => ({
+        ...entity,
+        parentId: null,
+        stack: null,
+        spaceId: null,
+        access: null,
+        metadata: {},
+      })),
+      tags: [...persisted.tags.values()].map((entity) => ({
+        ...entity,
+        parentId: null,
+        stack: null,
+        spaceId: null,
+        access: null,
+        metadata: {},
+      })),
+      spaces: [],
+    });
+    const run = async (syncRunId: string) =>
+      streamEvernoteViaMcp(client, {
+        syncRunId,
+        taxonomy: taxonomy(),
+        loadKnownNotes: async () => new Map(),
+        onTaxonomyEntities: async (resolved) => {
+          for (const entity of resolved.notebooks) {
+            persisted.notebooks.set(entity.id, entity);
+          }
+          for (const entity of resolved.tags) {
+            persisted.tags.set(entity.id, entity);
+          }
+        },
+        processBatch: async (batch) => {
+          records.push(
+            ...batch.records.map((record) => ({
+              metadata: record.metadata,
+            })),
+          );
+        },
+      });
+
+    const first = await run("lazy-1");
+    const second = await run("lazy-2");
+
+    expect(taxonomyQueries).toEqual(["notebook:", "tag:"]);
+    expect(first.taxonomyLookups).toEqual({ cached: 0, fetched: 2 });
+    expect(second.taxonomyLookups).toEqual({ cached: 2, fetched: 0 });
+    expect(records).toHaveLength(2);
+    for (const record of records) {
+      expect(record.metadata).toMatchObject({
+        notebookName: "Projects",
+        tagNames: ["Shared label 519"],
+      });
+    }
+  });
+
+  it("persists each successful lazy lookup before a later rate-limit deferral", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    process.env.EVERNOTE_MCP_MAX_429_RETRIES = "0";
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const persistedIds: string[] = [];
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notes") {
+          return {
+            structuredContent: {
+              totalResultCount: 1,
+              notes: [{ id: "note-limited", updatedAt: "2026-10-17T00:00:00Z" }],
+            },
+          };
+        }
+        if (input.name === "get_note") {
+          return {
+            structuredContent: {
+              id: "note-limited",
+              notebookId: "nb-resolved",
+              tagIds: ["tag-limited"],
+              content: "<en-note>Body</en-note>",
+            },
+          };
+        }
+        if (input.name === "search_notebooks") {
+          return {
+            structuredContent: {
+              notebooks: [{ id: "nb-resolved", name: "Resolved notebook" }],
+            },
+          };
+        }
+        if (input.name === "search_tags") {
+          return {
+            isError: true,
+            structuredContent: { status: 429, retryAfterMs: 12_000 },
+            content: [{ type: "text", text: "rate limit" }],
+          };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+
+    await expect(
+      streamEvernoteViaMcp(client, {
+        syncRunId: "lazy-limited",
+        taxonomy: { notebooks: [], tags: [], spaces: [] },
+        loadKnownNotes: async () => new Map(),
+        onTaxonomyEntities: async (resolved) => {
+          persistedIds.push(
+            ...resolved.notebooks.map((entity) => entity.id),
+            ...resolved.tags.map((entity) => entity.id),
+          );
+        },
+        processBatch: async () => {
+          throw new Error("batch should not commit while rate limited");
+        },
+      }),
+    ).rejects.toMatchObject({
+      status: 429,
+      retryAfterMs: 12_000,
+      evernoteRateLimited: true,
+    });
+    expect(persistedIds).toEqual(["nb-resolved"]);
+  });
+
+  it("does not checkpoint a note when a lazy taxonomy lookup fails transiently", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const processBatch = vi.fn();
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notes") {
+          return {
+            structuredContent: {
+              totalResultCount: 1,
+              notes: [{ id: "note-retry", updatedAt: "2026-10-17T00:00:00Z" }],
+            },
+          };
+        }
+        if (input.name === "get_note") {
+          return {
+            structuredContent: {
+              id: "note-retry",
+              notebookId: "nb-retry",
+              content: "<en-note>Body</en-note>",
+            },
+          };
+        }
+        if (input.name === "search_notebooks") {
+          throw new Error("temporary MCP outage");
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+
+    await expect(
+      streamEvernoteViaMcp(client, {
+        syncRunId: "lazy-retry",
+        taxonomy: { notebooks: [], tags: [], spaces: [] },
+        loadKnownNotes: async () => new Map(),
+        processBatch,
+      }),
+    ).rejects.toMatchObject({
+      message: "temporary MCP outage",
+      evernoteTaxonomyLookupRetryable: true,
+    });
+    expect(processBatch).not.toHaveBeenCalled();
+  });
+
+  it("resumes taxonomy from its durable frontier with identical results and progress", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const notebooks = [
+      ...Array.from({ length: 60 }, (_, index) => ({
+        id: `nb-a-${index}`,
+        name: `a notebook ${index}`,
+      })),
+      ...Array.from({ length: 60 }, (_, index) => ({
+        id: `nb-z-${index}`,
+        name: `z notebook ${index}`,
+      })),
+    ];
+    const tags = [
+      ...Array.from({ length: 55 }, (_, index) => ({
+        id: `tag-b-${index}`,
+        name: `b tag ${index}`,
+      })),
+      ...Array.from({ length: 70 }, (_, index) => ({
+        id: `tag-y-${index}`,
+        name: `y tag ${index}`,
+      })),
+    ];
+    const calls: string[] = [];
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        const query = String(input.arguments?.query ?? "").toLowerCase();
+        calls.push(`${input.name}:${query}`);
+        if (input.name === "search_notebooks") {
+          const matches = query
+            ? notebooks.filter((item) => item.name.startsWith(query))
+            : notebooks;
+          return {
+            structuredContent: {
+              totalResultCount: matches.length,
+              notebooks: matches.slice(0, 100),
+            },
+          };
+        }
+        if (input.name === "search_tags") {
+          const matches = query
+            ? tags.filter((item) => item.name.startsWith(query))
+            : tags;
           return {
             structuredContent: {
               totalResultCount: matches.length,
@@ -395,22 +1030,61 @@ describe("Evernote MCP read sync", () => {
         if (input.name === "search_spaces") {
           return {
             structuredContent: {
-              spaces: [{ id: "space-1", name: "Home" }],
+              spaces: [{ id: "space-home", name: "Home" }],
             },
           };
         }
         throw new Error(`Unexpected tool ${input.name}`);
       },
     };
-    const taxonomy = await enumerateEvernoteTaxonomy(client);
-    // The synthetic saturated "z" bucket keeps refining to zz/zzz, so this
-    // verifies union/dedupe beyond the first 100 rather than exact mock totals.
-    expect(taxonomy.notebooks.length).toBeGreaterThan(100);
-    expect(taxonomy.tags.length).toBeGreaterThan(100);
-    expect(taxonomy.spaces).toHaveLength(1);
-    expect(new Set(taxonomy.notebooks.map((item) => item.id)).size).toBe(
-      taxonomy.notebooks.length,
-    );
+
+    let durableCheckpoint: EvernoteTaxonomyCheckpoint | undefined;
+    await expect(
+      enumerateEvernoteTaxonomy(client, {
+        checkpointEverySearches: 10,
+        onCheckpoint: async (checkpoint, progress) => {
+          durableCheckpoint = structuredClone(checkpoint);
+          expect(progress).toMatchObject({
+            searchesDone: 10,
+            notebooksFound: 100,
+            tagsFound: 0,
+          });
+          throw new Error("simulated worker interruption");
+        },
+      }),
+    ).rejects.toThrow("simulated worker interruption");
+    expect(durableCheckpoint).toBeDefined();
+
+    const resumedProgress: Array<{
+      stage: string;
+      searchesDone: number;
+      prefixesQueued: number;
+      notebooksFound: number;
+      tagsFound: number;
+    }> = [];
+    const resumed = await enumerateEvernoteTaxonomy(client, {
+      checkpoint: durableCheckpoint,
+      checkpointEverySearches: 10,
+      onCheckpoint: async (_checkpoint, progress) => {
+        resumedProgress.push(progress);
+      },
+    });
+    const baseline = await enumerateEvernoteTaxonomy(client);
+
+    expect(resumed).toEqual(baseline);
+    expect(calls.filter((call) => call === "search_notebooks:")).toHaveLength(2);
+    expect(resumedProgress.at(-1)).toMatchObject({
+      stage: "complete",
+      notebooksFound: 120,
+      tagsFound: 125,
+    });
+    expect(
+      resumedProgress.every(
+        (progress) =>
+          progress.searchesDone >= 10 &&
+          progress.prefixesQueued >= 0,
+      ),
+    ).toBe(true);
   });
 
   it("chunks changed-note backfill and reports deferred work", async () => {

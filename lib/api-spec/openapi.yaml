@@ -483,6 +483,12 @@ paths:
           description: Opaque cursor returned by the previous page.
           schema:
             type: string
+        - name: q
+          in: query
+          description: Full-text search across note titles, bodies, tags, and attachment text.
+          schema:
+            type: string
+            maxLength: 300
       responses:
         "200":
           description: Notes
@@ -1971,7 +1977,19 @@ components:
           description: When true, save the capture as a permanent life memory instead of a note.
         memoryDomain:
           type: string
-          enum: [family, vehicles, home, health, work, finance, people, preferences, procedures, other]
+          enum:
+            [
+              family,
+              vehicles,
+              home,
+              health,
+              work,
+              finance,
+              people,
+              preferences,
+              procedures,
+              other,
+            ]
           description: Life domain when saveAsMemory is true (auto-classified if omitted).
     AcceptCaptureResponse:
       type: object
@@ -1999,7 +2017,19 @@ components:
           type: string
         domain:
           type: string
-          enum: [family, vehicles, home, health, work, finance, people, preferences, procedures, other]
+          enum:
+            [
+              family,
+              vehicles,
+              home,
+              health,
+              work,
+              finance,
+              people,
+              preferences,
+              procedures,
+              other,
+            ]
         title:
           type: string
         content:
@@ -2063,7 +2093,19 @@ components:
           type: string
         domain:
           type: string
-          enum: [family, vehicles, home, health, work, finance, people, preferences, procedures, other]
+          enum:
+            [
+              family,
+              vehicles,
+              home,
+              health,
+              work,
+              finance,
+              people,
+              preferences,
+              procedures,
+              other,
+            ]
           nullable: true
         tags:
           type: array
@@ -2094,7 +2136,19 @@ components:
           type: string
         domain:
           type: string
-          enum: [family, vehicles, home, health, work, finance, people, preferences, procedures, other]
+          enum:
+            [
+              family,
+              vehicles,
+              home,
+              health,
+              work,
+              finance,
+              people,
+              preferences,
+              procedures,
+              other,
+            ]
           nullable: true
         tags:
           type: array
@@ -2120,7 +2174,19 @@ components:
       properties:
         domain:
           type: string
-          enum: [family, vehicles, home, health, work, finance, people, preferences, procedures, other]
+          enum:
+            [
+              family,
+              vehicles,
+              home,
+              health,
+              work,
+              finance,
+              people,
+              preferences,
+              procedures,
+              other,
+            ]
         title:
           type: string
         degraded:

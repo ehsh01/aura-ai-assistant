@@ -1,4 +1,10 @@
-import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import {
+  Router,
+  type IRouter,
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
 import { mkdir } from "node:fs/promises";
 import multer from "multer";
 import {
@@ -28,10 +34,7 @@ import {
   ensureUserUploadDir,
   importEnexFileForUser,
 } from "../services/enex-import-runner";
-import {
-  ensureImportJob,
-  startImportJob,
-} from "../services/enex-import-jobs";
+import { ensureImportJob, startImportJob } from "../services/enex-import-jobs";
 import {
   findOrCreateEvernoteNotebook,
   getNotebookForUser,
@@ -75,6 +78,7 @@ router.get("/notes", async (req, res, next) => {
       .object({
         limit: z.coerce.number().int().positive().max(200).optional(),
         cursor: z.string().trim().min(1).max(1000).optional(),
+        q: z.string().trim().max(300).optional(),
       })
       .parse(req.query);
     const page = await listNoteMetadataPageForUser(req.user!.id, query);
@@ -128,14 +132,19 @@ router.post("/notes/import/enex", async (req, res, next) => {
       return;
     }
 
-    const notebook = await findOrCreateEvernoteNotebook(req.user!.id, body.fileName);
+    const notebook = await findOrCreateEvernoteNotebook(
+      req.user!.id,
+      body.fileName,
+    );
     const parsedWithNotebook = parsed.map((n) => ({
       ...n,
       notebookId: notebook.id,
     }));
 
     const existingIds = await listNoteIdsForUser(req.user!.id);
-    const toSend = parsedWithNotebook.filter((n) => n.id && !existingIds.has(n.id));
+    const toSend = parsedWithNotebook.filter(
+      (n) => n.id && !existingIds.has(n.id),
+    );
     const skipped = parsed.length - toSend.length;
 
     const CHUNK = 40;
@@ -174,7 +183,9 @@ router.get("/notes/import/enex/status/:jobId", async (req, res, next) => {
   try {
     const job = await ensureImportJob(req.params.jobId, req.user!.id);
     if (!job) {
-      res.status(404).json({ error: "NOT_FOUND", message: "Import job not found" });
+      res
+        .status(404)
+        .json({ error: "NOT_FOUND", message: "Import job not found" });
       return;
     }
 
@@ -230,7 +241,9 @@ router.post(
           res.json(ImportEnexNotesResponse.parse(result));
         } catch (err) {
           const message = err instanceof Error ? err.message : "Import failed";
-          res.status(400).json({ error: "IMPORT_FAILED", message, errors: [message] });
+          res
+            .status(400)
+            .json({ error: "IMPORT_FAILED", message, errors: [message] });
         } finally {
           await cleanupUploadFile(uploaded.path);
         }
@@ -272,7 +285,9 @@ router.post(
       const chunk = req.file;
 
       if (!chunk?.buffer?.length) {
-        res.status(400).json({ error: "NO_CHUNK", message: "Missing chunk data" });
+        res
+          .status(400)
+          .json({ error: "NO_CHUNK", message: "Missing chunk data" });
         return;
       }
 
@@ -333,11 +348,7 @@ router.get("/notes/:noteId", async (req, res, next) => {
 router.patch("/notes/:noteId", async (req, res, next) => {
   try {
     const body = UpdateNoteBody.parse(req.body);
-    const note = await updateNoteForUser(
-      req.user!.id,
-      req.params.noteId,
-      body,
-    );
+    const note = await updateNoteForUser(req.user!.id, req.params.noteId, body);
     if (!note) {
       res.status(404).json({ error: "NOT_FOUND", message: "Note not found" });
       return;

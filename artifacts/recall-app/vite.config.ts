@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { execFileSync } from "node:child_process";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
@@ -27,8 +28,26 @@ if (!basePath) {
   );
 }
 
+function resolveBuildId(): string {
+  const configured = process.env.RECALL_BUILD_ID?.trim();
+  if (configured) return configured;
+  try {
+    return execFileSync("git", ["rev-parse", "--short=12", "HEAD"], {
+      cwd: path.resolve(import.meta.dirname, "../.."),
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    return `local-${Date.now().toString(36)}`;
+  }
+}
+
+const buildId = resolveBuildId();
+
 export default defineConfig({
   base: basePath,
+  define: {
+    __RECALL_BUILD_ID__: JSON.stringify(buildId),
+  },
   plugins: [
     react(),
     tailwindcss(),
@@ -94,37 +113,21 @@ export default defineConfig({
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2,webmanifest}"],
         navigateFallback: "index.html",
         navigateFallbackDenylist: [/^\/api/],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: "CacheFirst",
-            options: {
-              cacheName: "google-fonts-stylesheets",
-              expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 365,
-              },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-          {
-            urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-            handler: "CacheFirst",
-            options: {
-              cacheName: "google-fonts-webfonts",
-              expiration: {
-                maxEntries: 20,
-                maxAgeSeconds: 60 * 60 * 24 * 365,
-              },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
       },
       devOptions: {
         enabled: false,
       },
     }),
+    {
+      name: "recall-build-metadata",
+      generateBundle() {
+        this.emitFile({
+          type: "asset",
+          fileName: "build.json",
+          source: `${JSON.stringify({ buildId })}\n`,
+        });
+      },
+    },
     runtimeErrorOverlay(),
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined
@@ -143,7 +146,12 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "src"),
-      "@assets": path.resolve(import.meta.dirname, "..", "..", "attached_assets"),
+      "@assets": path.resolve(
+        import.meta.dirname,
+        "..",
+        "..",
+        "attached_assets",
+      ),
     },
     dedupe: ["react", "react-dom"],
   },

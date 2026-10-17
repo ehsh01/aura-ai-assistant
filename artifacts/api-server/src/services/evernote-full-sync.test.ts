@@ -10,7 +10,10 @@ import {
   evernoteScheduleDecision,
   scheduledEvernoteLoadIsSafe,
 } from "./evernote-sync-scheduler";
-import { processEvernoteSyncJob } from "./connectors";
+import {
+  processEvernoteSyncJob,
+  withEvernoteLookupProgress,
+} from "./connectors";
 
 describe("Evernote completeness report", () => {
   it("calculates per-notebook and total missing counts", () => {
@@ -216,5 +219,28 @@ describe("Evernote import AI boundary", () => {
     const implementation = processEvernoteSyncJob.toString();
     expect(implementation).toContain("evernoteScheduled");
     expect(implementation).toContain("isEvernoteNightWindow");
+  });
+});
+
+describe("Evernote lazy taxonomy sync-run progress", () => {
+  it("persists the notes phase and durable lookup counters in metadata", () => {
+    const metadata = withEvernoteLookupProgress(
+      { evernoteSyncMode: "full" },
+      {
+        cached: 42,
+        fetched: 3,
+      },
+      new Date("2026-10-17T21:00:00.000Z"),
+    );
+
+    expect(metadata).toMatchObject({
+      evernoteSyncMode: "full",
+      evernotePhase: "notes",
+      evernoteLookupProgress: {
+        cached: 42,
+        fetched: 3,
+        updatedAt: "2026-10-17T21:00:00.000Z",
+      },
+    });
   });
 });

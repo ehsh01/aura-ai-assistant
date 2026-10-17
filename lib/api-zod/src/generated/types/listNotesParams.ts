@@ -16,4 +16,9 @@ limit?: number;
  * Opaque cursor returned by the previous page.
  */
 cursor?: string;
+/**
+ * Full-text search across note titles, bodies, tags, and attachment text.
+ * @maxLength 300
+ */
+q?: string;
 };

@@ -292,8 +292,9 @@ function metadataCacheKey(
   userId: string,
   limit: number,
   cursor?: string,
+  query?: string,
 ): string {
-  return `${userId}:${limit}:${cursor ?? ""}`;
+  return `${userId}:${limit}:${cursor ?? ""}:${query ?? ""}`;
 }
 
 export function invalidateNoteMetadataCache(userId: string): void {
@@ -304,7 +305,7 @@ export function invalidateNoteMetadataCache(userId: string): void {
 
 async function loadNoteMetadataPage(
   userId: string,
-  options: { limit?: number; cursor?: string } = {},
+  options: { limit?: number; cursor?: string; q?: string } = {},
 ): Promise<NoteMetadataPage> {
   const limit = Math.min(
     Math.max(Math.trunc(options.limit ?? DEFAULT_NOTE_PAGE_SIZE), 1),
@@ -319,14 +320,22 @@ async function loadNoteMetadataPage(
           and(eq(notes.updatedAt, cursorDate), lt(notes.id, cursor.id)),
         )
       : undefined;
+  const query = options.q?.trim();
+  const searchFilter = query
+    ? or(
+        sql`${notes.searchTsv} @@ websearch_to_tsquery('simple', ${query})`,
+        ilike(notes.title, `%${query}%`),
+      )
+    : undefined;
+  const filters = [
+    eq(notes.userId, userId),
+    ...(cursorFilter ? [cursorFilter] : []),
+    ...(searchFilter ? [searchFilter] : []),
+  ];
   const rows = (await getDb()
     .select(NOTE_METADATA_SELECT)
     .from(notes)
-    .where(
-      cursorFilter
-        ? and(eq(notes.userId, userId), cursorFilter)
-        : eq(notes.userId, userId),
-    )
+    .where(and(...filters))
     .orderBy(desc(notes.updatedAt), desc(notes.id))
     .limit(limit + 1)) as NoteMetadataRow[];
   const hasMore = rows.length > limit;
@@ -355,24 +364,27 @@ async function loadNoteMetadataPage(
 
 export function listNoteMetadataPageForUser(
   userId: string,
-  options: { limit?: number; cursor?: string } = {},
+  options: { limit?: number; cursor?: string; q?: string } = {},
 ): Promise<NoteMetadataPage> {
   const limit = Math.min(
     Math.max(Math.trunc(options.limit ?? DEFAULT_NOTE_PAGE_SIZE), 1),
     MAX_NOTE_PAGE_SIZE,
   );
-  const key = metadataCacheKey(userId, limit, options.cursor);
+  const query = options.q?.trim() || undefined;
+  const key = metadataCacheKey(userId, limit, options.cursor, query);
   const now = Date.now();
   const cached = metadataCache.get(key);
   if (cached && cached.expiresAt > now) return cached.value;
   if (cached) metadataCache.delete(key);
 
-  const value = loadNoteMetadataPage(userId, { ...options, limit }).catch(
-    (err) => {
-      metadataCache.delete(key);
-      throw err;
-    },
-  );
+  const value = loadNoteMetadataPage(userId, {
+    ...options,
+    q: query,
+    limit,
+  }).catch((err) => {
+    metadataCache.delete(key);
+    throw err;
+  });
   metadataCache.set(key, { expiresAt: now + METADATA_CACHE_TTL_MS, value });
   const cleanup = setTimeout(() => {
     if (metadataCache.get(key)?.value === value) metadataCache.delete(key);

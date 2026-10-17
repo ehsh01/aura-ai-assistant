@@ -1,9 +1,10 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 const now = "2026-10-17T12:00:00.000Z";
-const localFeatureTarget = /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/i.test(
-  process.env.E2E_BASE_URL?.replace(/\/$/, "") ?? "",
-);
+const localFeatureTarget =
+  /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/i.test(
+    process.env.E2E_BASE_URL?.replace(/\/$/, "") ?? "",
+  );
 const baseItems = [
   {
     id: "item-permit",
@@ -53,9 +54,10 @@ function json(route: Route, body: unknown, status = 200) {
 
 async function mockRecall(
   page: Page,
-  options: { graphSourceCount?: number } = {},
+  options: { graphSourceCount?: number; askAiAllowed?: boolean } = {},
 ) {
   const items = [...baseItems];
+  const calls = { ai: 0, itemSearch: 0 };
   let graphMetrics: {
     sourceCount: number;
     returnedNodes: number;
@@ -77,8 +79,29 @@ async function mockRecall(
     }
     if (url.pathname === "/api/notes") return json(route, { notes: [] });
     if (url.pathname === "/api/tasks") return json(route, { tasks: [] });
-    if (url.pathname === "/api/notebooks") return json(route, { notebooks: [] });
+    if (url.pathname === "/api/notebooks")
+      return json(route, { notebooks: [] });
     if (url.pathname === "/api/home") return json(route, { review: {} });
+    if (url.pathname === "/api/ai/query/availability") {
+      return json(route, {
+        allowed: options.askAiAllowed !== false,
+        model: options.askAiAllowed === false ? null : "gpt-4.1-mini",
+        reason: options.askAiAllowed === false ? "disabled" : null,
+      });
+    }
+    if (url.pathname === "/api/ai/query/stream") {
+      calls.ai += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: [
+          'event: meta\ndata: {"threadId":"thread-1","evidence":[],"relatedRecords":[{"entityType":"item","entityId":"item-permit","title":"Permit revision"}]}\n\n',
+          'event: token\ndata: {"delta":"**Permit approved.** "}\n\n',
+          'event: token\ndata: {"delta":"The revision is ready."}\n\n',
+          'event: done\ndata: {"answer":"**Permit approved.** The revision is ready.","confidence":0.9,"caveats":null,"evidence":[],"relatedRecords":[{"entityType":"item","entityId":"item-permit","title":"Permit revision"}],"images":[],"suggestedNextAction":null,"threadId":"thread-1"}\n\n',
+        ].join(""),
+      });
+    }
     if (url.pathname === "/api/finance/refresh") {
       return json(route, { ok: true, synced: false, skipped: true });
     }
@@ -90,7 +113,10 @@ async function mockRecall(
     }
     if (url.pathname === "/api/items/graph") {
       const sourceCount = options.graphSourceCount ?? items.length;
-      const requestedLimit = Math.min(Number(url.searchParams.get("limit") ?? 350), 500);
+      const requestedLimit = Math.min(
+        Number(url.searchParams.get("limit") ?? 350),
+        500,
+      );
       const returnedNodes = Math.min(requestedLimit, sourceCount);
       const itemCount = Math.max(1, Math.floor(returnedNodes * 0.78));
       const hubCount = returnedNodes - itemCount;
@@ -111,12 +137,19 @@ async function mockRecall(
           label: index % 4 < 2 ? "Finance" : "Vehicles",
           value: 10 + (index % 5),
           hub: true,
-          href: index % 2 ? "/everything?tag=finance" : "/everything?notebook=Finance",
+          href:
+            index % 2
+              ? "/everything?tag=finance"
+              : "/everything?notebook=Finance",
         })),
       ];
       const firstHub = itemCount;
       const nextOffset = sourceCount > returnedNodes ? returnedNodes : null;
-      graphMetrics = { sourceCount, returnedNodes: graphNodes.length, nextOffset };
+      graphMetrics = {
+        sourceCount,
+        returnedNodes: graphNodes.length,
+        nextOffset,
+      };
       return json(route, {
         nodes: graphNodes,
         edges: Array.from({ length: itemCount }, (_, index) => ({
@@ -146,6 +179,7 @@ async function mockRecall(
       return json(route, { item: created, existing: false }, 201);
     }
     if (url.pathname === "/api/items" && request.method() === "GET") {
+      calls.itemSearch += 1;
       const q = url.searchParams.get("q")?.toLowerCase();
       return json(route, {
         items: q
@@ -158,11 +192,13 @@ async function mockRecall(
     if (url.pathname.startsWith("/api/items/")) {
       const id = decodeURIComponent(url.pathname.slice("/api/items/".length));
       const item = items.find((candidate) => candidate.id === id);
-      return item ? json(route, { item }) : json(route, { message: "Not found" }, 404);
+      return item
+        ? json(route, { item })
+        : json(route, { message: "Not found" }, 404);
     }
     return json(route, {});
   });
-  return { getGraphMetrics: () => graphMetrics };
+  return { getGraphMetrics: () => graphMetrics, calls };
 }
 
 test.describe("Everything capture, graph, grid, and search", () => {
@@ -171,7 +207,9 @@ test.describe("Everything capture, graph, grid, and search", () => {
     "Everything feature tests require the checked-out PR frontend, not deployed production",
   );
 
-  test("saves a note, browses masonry, filters instantly, and opens detail", async ({ page }) => {
+  test("saves a note, browses masonry, filters instantly, and opens detail", async ({
+    page,
+  }) => {
     await mockRecall(page);
     await page.goto("/");
 
@@ -180,22 +218,32 @@ test.describe("Everything capture, graph, grid, and search", () => {
 
     await page.getByLabel("Save anything").fill("Contractor callback");
     await page.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(page.getByText("Saved to Recall", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Saved to Recall", { exact: true }),
+    ).toBeVisible();
 
     await page.getByRole("button", { name: "Grid", exact: true }).click();
     await expect(page.getByTestId("masonry-grid")).toBeVisible();
     await expect(
-      page.getByTestId("masonry-grid").getByText("Contractor callback", { exact: true }),
+      page
+        .getByTestId("masonry-grid")
+        .getByText("Contractor callback", { exact: true }),
     ).toBeVisible();
 
     await page.getByTestId("item-search").fill("permit");
-    await expect(page.getByText("Permit revision", { exact: true })).toBeVisible();
-    await expect(page.getByText("Sales meeting notes", { exact: true })).toBeHidden();
+    await expect(
+      page.getByText("Permit revision", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Sales meeting notes", { exact: true }),
+    ).toBeHidden();
 
     await page.getByRole("button", { name: "Filters", exact: true }).click();
     await expect(page.getByTestId("search-filters")).toBeVisible();
     await page.getByText("Permit revision", { exact: true }).click();
-    await expect(page.getByTestId("item-detail")).toContainText("City approval");
+    await expect(page.getByTestId("item-detail")).toContainText(
+      "City approval",
+    );
   });
 
   test("caps a 5,000-item source and remains responsive under 4x mobile CPU throttling", async ({
@@ -213,29 +261,33 @@ test.describe("Everything capture, graph, grid, and search", () => {
     const graphCanvas = page.getByLabel("Interactive knowledge graph");
     await expect(graphCanvas).toHaveAttribute("data-graph-nodes", "180");
     await expect
-      .poll(async () => Number((await graphCanvas.getAttribute("data-rendered-labels")) ?? 0))
+      .poll(async () =>
+        Number((await graphCanvas.getAttribute("data-rendered-labels")) ?? 0),
+      )
       .toBeGreaterThan(0);
 
     const sample = await page.evaluate(
       () =>
-        new Promise<{ frames: number; elapsedMs: number; fps: number }>((resolve) => {
-          let frames = 0;
-          const started = performance.now();
-          const step = (now: number) => {
-            frames += 1;
-            const elapsedMs = now - started;
-            if (elapsedMs >= 2_000) {
-              resolve({
-                frames,
-                elapsedMs,
-                fps: (frames * 1_000) / elapsedMs,
-              });
-              return;
-            }
+        new Promise<{ frames: number; elapsedMs: number; fps: number }>(
+          (resolve) => {
+            let frames = 0;
+            const started = performance.now();
+            const step = (now: number) => {
+              frames += 1;
+              const elapsedMs = now - started;
+              if (elapsedMs >= 2_000) {
+                resolve({
+                  frames,
+                  elapsedMs,
+                  fps: (frames * 1_000) / elapsedMs,
+                });
+                return;
+              }
+              requestAnimationFrame(step);
+            };
             requestAnimationFrame(step);
-          };
-          requestAnimationFrame(step);
-        }),
+          },
+        ),
     );
     const graphMetrics = metrics.getGraphMetrics();
     console.info(
@@ -248,17 +300,23 @@ test.describe("Everything capture, graph, grid, and search", () => {
     expect(sample.fps).toBeGreaterThanOrEqual(12);
   });
 
-  test("falls back to the complete grid for reduced motion", async ({ page }) => {
+  test("falls back to the complete grid for reduced motion", async ({
+    page,
+  }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await mockRecall(page, { graphSourceCount: 5_000 });
     await page.goto("/");
 
     await expect(page.getByTestId("masonry-grid")).toBeVisible();
     await expect(page.getByTestId("knowledge-graph")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Graph", exact: true })).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "Graph", exact: true }),
+    ).toBeDisabled();
   });
 
-  test("falls back to the grid on a two-core low-end device", async ({ page }) => {
+  test("falls back to the grid on a two-core low-end device", async ({
+    page,
+  }) => {
     await page.addInitScript(() => {
       Object.defineProperty(navigator, "hardwareConcurrency", {
         configurable: true,
@@ -270,5 +328,118 @@ test.describe("Everything capture, graph, grid, and search", () => {
 
     await expect(page.getByTestId("masonry-grid")).toBeVisible();
     await expect(page.getByTestId("knowledge-graph")).toHaveCount(0);
+  });
+
+  test("keeps capture and grid search panels from intersecting at desktop and mobile", async ({
+    page,
+  }) => {
+    await mockRecall(page);
+    for (const viewport of [
+      { width: 1280, height: 800 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/");
+      await page.getByRole("button", { name: "Grid", exact: true }).click();
+      const capture = await page.getByTestId("capture-box").boundingBox();
+      const search = await page.getByTestId("item-search").boundingBox();
+      expect(capture).not.toBeNull();
+      expect(search).not.toBeNull();
+      expect(capture!.y + capture!.height).toBeLessThanOrEqual(search!.y);
+    }
+  });
+
+  test("keeps the Ask input usable while item detail is open", async ({
+    page,
+  }) => {
+    await mockRecall(page);
+    for (const viewport of [
+      { width: 1280, height: 800 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/everything/item-permit");
+      await expect(page.getByTestId("item-detail")).toBeVisible();
+      const ask = page.getByLabel("Ask Recall");
+      await ask.click();
+      await ask.fill("");
+      await ask.pressSequentially("permit status");
+      await expect(ask).toHaveValue("permit status");
+    }
+  });
+
+  test("Enter performs free keyword search while Ask AI streams exactly once", async ({
+    page,
+  }) => {
+    const mock = await mockRecall(page);
+    await page.goto("/");
+    const ask = page.getByLabel("Ask Recall");
+
+    await ask.fill("permit");
+    await ask.press("Enter");
+    await expect(page.getByTestId("keyword-results")).toContainText(
+      "Permit revision",
+    );
+    expect(mock.calls.ai).toBe(0);
+
+    await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+    await expect(page.getByTestId("ask-output-panel")).toContainText(
+      "Permit approved.",
+    );
+    await expect(page.getByTestId("ask-output-panel")).toContainText(
+      "Permit revision",
+    );
+    expect(mock.calls.ai).toBe(1);
+  });
+
+  test("disables Ask AI when the server kill switch is off", async ({
+    page,
+  }) => {
+    await mockRecall(page, { askAiAllowed: false });
+    await page.goto("/");
+    await page.getByLabel("Ask Recall").fill("permit");
+    const askAi = page.getByRole("button", { name: "Ask AI", exact: true });
+    await expect(askAi).toBeDisabled();
+    await expect(askAi).toHaveAttribute("title", "Ask AI is disabled");
+  });
+
+  test("reloads once per activated build and never reloads while typing", async ({
+    page,
+  }) => {
+    await mockRecall(page);
+    let nextBuild = "e2e-new-build-1";
+    let documentRequests = 0;
+    page.on("request", (request) => {
+      if (request.resourceType() === "document") documentRequests += 1;
+    });
+    await page.route("**/build.json", (route) =>
+      json(route, { buildId: nextBuild }),
+    );
+
+    await page.goto("/");
+    expect(documentRequests).toBe(1);
+    await page.evaluate(() => {
+      navigator.serviceWorker.dispatchEvent(new Event("controllerchange"));
+    });
+    await expect.poll(() => documentRequests).toBe(2);
+
+    await page.evaluate(() => {
+      navigator.serviceWorker.dispatchEvent(new Event("controllerchange"));
+    });
+    await page.waitForTimeout(400);
+    expect(documentRequests).toBe(2);
+
+    nextBuild = "e2e-new-build-2";
+    const input = page.getByLabel("Ask Recall");
+    await input.fill("unsent question");
+    await page.evaluate(() => {
+      navigator.serviceWorker.dispatchEvent(new Event("controllerchange"));
+    });
+    await page.waitForTimeout(400);
+    expect(documentRequests).toBe(2);
+    await expect(input).toHaveValue("unsent question");
+    await expect(page.locator("[data-recall-update-toast]")).toContainText(
+      "New version ready",
+    );
   });
 });

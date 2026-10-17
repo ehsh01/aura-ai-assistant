@@ -99,6 +99,23 @@ describe("bounded note metadata for /notes and /home", () => {
     );
     await db.exec(migration);
     await expect(db.exec(migration)).resolves.toBeDefined();
+    await db.exec(`
+      INSERT INTO notes (
+        id, user_id, title, content, preview, search_document, created_at, updated_at
+      ) VALUES (
+        'note-oil-change',
+        '${USER_ID}',
+        'Subaru service history',
+        'Completed an oil change with synthetic oil and replaced the filter.',
+        'Vehicle maintenance from last winter.',
+        '',
+        '2025-01-01T00:00:00Z',
+        '2025-01-01T00:00:00Z'
+      );
+      UPDATE notes
+      SET search_tsv = to_tsvector('simple', concat_ws(' ', title, content, preview))
+      WHERE id = 'note-oil-change';
+    `);
   }, 120_000);
 
   afterAll(async () => {
@@ -165,5 +182,21 @@ describe("bounded note metadata for /notes and /home", () => {
       new Set([...first.notes, ...second.notes].map((note) => note.id)).size,
     ).toBe(200);
     expect(Buffer.byteLength(JSON.stringify(second))).toBeLessThan(100_000);
+  });
+
+  it("finds a body-only multi-word match beyond the first unfiltered page", async () => {
+    const first = await listNoteMetadataPageForUser(USER_ID, { limit: 100 });
+    expect(first.notes.some((note) => note.id === "note-oil-change")).toBe(
+      false,
+    );
+    expect(first.hasMore).toBe(true);
+
+    const result = await listNoteMetadataPageForUser(USER_ID, {
+      limit: 100,
+      q: "oil change",
+    });
+
+    expect(result.notes.map((note) => note.id)).toEqual(["note-oil-change"]);
+    expect(result.notes[0]).not.toHaveProperty("content");
   });
 });

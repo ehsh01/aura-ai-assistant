@@ -18,6 +18,7 @@ import {
   continueJob,
   deferJob,
   enexImportFromPayload,
+  evernoteRateLimitDeferral,
   failJob,
   getJobForUser,
   heartbeatJob,
@@ -171,6 +172,22 @@ async function runOneJob(job: Job): Promise<void> {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Job failed";
+    const rateLimit =
+      job.type === JOB_TYPE_CONNECTOR_SYNC
+        ? evernoteRateLimitDeferral(err)
+        : null;
+    if (rateLimit) {
+      await deferJob(job.id, rateLimit.retryAfterMs, message);
+      scheduleExplicitJobResume({
+        id: job.id,
+        availableAt: new Date(Date.now() + rateLimit.retryAfterMs),
+      });
+      logger.info(
+        { jobId: job.id, type: job.type, retryAfterMs: rateLimit.retryAfterMs },
+        "Background job paused by Evernote rate limit",
+      );
+      return;
+    }
     const { EvernoteWatchdogPauseError } = await import("./evernote-watchdog");
     if (err instanceof EvernoteWatchdogPauseError) {
       await deferJob(job.id, err.retryAfterMs, message);
