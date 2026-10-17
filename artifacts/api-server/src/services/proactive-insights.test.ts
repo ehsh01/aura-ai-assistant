@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   extractWarrantyHint,
   findProjectChangeSignals,
@@ -10,20 +10,28 @@ import type { RecallTaskDto } from "./tasks";
 
 describe("proactive insights helpers", () => {
   it("finds recurring payees in the lookback window", () => {
-    const txs = [
-      { payee: "Netflix", date: "2026-07-01", amount: -15.99 },
-      { payee: "Netflix", date: "2026-06-01", amount: -15.99 },
-      { payee: "Netflix", date: "2026-05-01", amount: -15.99 },
-      { payee: "Coffee Spot", date: "2026-07-10", amount: -4.5 },
-    ];
-    expect(findRecurringPayees(txs, { minCount: 3, lookbackDays: 120 })).toEqual([
-      expect.objectContaining({ payee: "Netflix", count: 3 }),
-    ]);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-15T12:00:00Z"));
+    try {
+      const txs = [
+        { payee: "Netflix", date: "2026-07-01", amount: -15.99 },
+        { payee: "Netflix", date: "2026-06-01", amount: -15.99 },
+        { payee: "Netflix", date: "2026-05-01", amount: -15.99 },
+        { payee: "Coffee Spot", date: "2026-07-10", amount: -4.5 },
+      ];
+      expect(
+        findRecurringPayees(txs, { minCount: 3, lookbackDays: 120 }),
+      ).toEqual([expect.objectContaining({ payee: "Netflix", count: 3 })]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("requires a date token for warranty hints", () => {
     expect(extractWarrantyHint("Roof warranty", "covers leaks")).toBeNull();
-    expect(extractWarrantyHint("Roof warranty", "Valid until Dec 15, 2027")).toEqual({
+    expect(
+      extractWarrantyHint("Roof warranty", "Valid until Dec 15, 2027"),
+    ).toEqual({
       summary: "Roof warranty",
       dateToken: "Dec 15, 2027",
     });

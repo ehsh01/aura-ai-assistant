@@ -27,14 +27,9 @@ export function isIosDevice(): boolean {
   );
 }
 
-export function isStandalonePwa(): boolean {
-  if (typeof window === "undefined") return false;
-  const nav = window.navigator as Navigator & { standalone?: boolean };
-  return (
-    window.matchMedia("(display-mode: standalone)").matches ||
-    nav.standalone === true
-  );
-}
+import { isStandalonePwa } from "./pwa-env";
+
+export { isStandalonePwa } from "./pwa-env";
 
 /** Apple blocks Web Speech in home-screen PWAs — API exists but never returns results. */
 export function getSpeechBlockReason(): SpeechInputError | null {
