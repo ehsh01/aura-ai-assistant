@@ -5,6 +5,7 @@ import {
   JOB_TYPE_ATTACHMENT_EXTRACT,
   JOB_TYPE_ATTENTION_SCAN,
   JOB_TYPE_CAPTURE_EXTRACTION,
+  JOB_TYPE_CONNECTOR_SYNC,
   JOB_TYPE_DIGEST_REGEN,
   JOB_TYPE_ENEX_IMPORT,
   JOB_TYPE_WAITING_SCAN,
@@ -13,8 +14,11 @@ import {
   claimJobById,
   claimNextJobOfTypes,
   completeJob,
+  connectorSyncFromPayload,
+  continueJob,
   enexImportFromPayload,
   failJob,
+  heartbeatJob,
   recoverStaleProcessingJobs,
   type Job,
 } from "./job-queue";
@@ -32,7 +36,7 @@ const TIMER_SAFE_JOB_TYPES = [JOB_TYPE_ATTACHMENT_EXTRACT] as const;
 
 const workerId = `recall-api:${hostname()}:${process.pid}`;
 
-type JobHandler = (job: Job) => Promise<void>;
+type JobHandler = (job: Job) => Promise<"continue" | void>;
 
 const handlers: Record<string, JobHandler> = {
   [JOB_TYPE_CAPTURE_EXTRACTION]: async (job) => {
@@ -100,6 +104,28 @@ const handlers: Record<string, JobHandler> = {
     const taskCandidates = await scanTaskWaitingCandidates(job.userId);
     logger.info({ userId: job.userId, ...scan, ...outcomes, taskCandidates }, "Waiting scan complete");
   },
+  [JOB_TYPE_CONNECTOR_SYNC]: async (job) => {
+    const meta = connectorSyncFromPayload(job.payload);
+    if (!meta) {
+      throw new Error("connector_sync job missing connectorId/syncRunId");
+    }
+    const { processEvernoteSyncJob } = await import("./connectors");
+    const lease = setInterval(() => {
+      void heartbeatJob(job.id).catch(() => undefined);
+    }, 60_000);
+    lease.unref?.();
+    try {
+      const complete = await processEvernoteSyncJob(
+        job.userId,
+        meta.connectorId,
+        meta.syncRunId,
+        () => heartbeatJob(job.id),
+      );
+      return complete ? undefined : "continue";
+    } finally {
+      clearInterval(lease);
+    }
+  },
 };
 
 async function runOneJob(job: Job): Promise<void> {
@@ -110,11 +136,31 @@ async function runOneJob(job: Job): Promise<void> {
   }
 
   try {
-    await handler(job);
-    await completeJob(job.id);
+    const result = await handler(job);
+    if (result === "continue") {
+      await continueJob(job.id);
+    } else {
+      await completeJob(job.id);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Job failed";
-    const terminal = await failJob(job.id, message);
+    const retryAfterMs =
+      err &&
+      typeof err === "object" &&
+      "retryAfterMs" in err &&
+      typeof err.retryAfterMs === "number"
+        ? err.retryAfterMs
+        : undefined;
+    const terminal = await failJob(job.id, message, { retryAfterMs });
+    if (terminal && job.type === JOB_TYPE_CONNECTOR_SYNC) {
+      const meta = connectorSyncFromPayload(job.payload);
+      if (meta) {
+        const { failEvernoteSyncRun } = await import("./connectors");
+        await failEvernoteSyncRun(job.userId, meta.syncRunId, message).catch(
+          () => undefined,
+        );
+      }
+    }
     if (terminal && job.type === JOB_TYPE_CAPTURE_EXTRACTION) {
       const captureId = captureIdFromPayload(job.payload);
       if (captureId) {

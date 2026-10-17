@@ -1,0 +1,1169 @@
+import {
+  Client,
+  StreamableHTTPClientTransport,
+  auth,
+  type OAuthClientInformationContext,
+  type OAuthClientMetadata,
+  type OAuthClientProvider,
+  type OAuthDiscoveryState,
+  type FetchLike,
+  type StoredOAuthClientInformation,
+  type StoredOAuthTokens,
+} from "@modelcontextprotocol/client";
+import {
+  evernoteContentHash,
+  evernoteEnmlToText,
+  type EvernoteFetchResult,
+  type EvernoteKnownNote,
+  type EvernoteRawRecord,
+} from "./evernote";
+
+export const EVERNOTE_MCP_URL = "https://mcp.evernote.com/mcp";
+const READ_TOOLS = new Set([
+  "search_notes",
+  "semantic_search",
+  "get_note",
+  "search_notebooks",
+  "search_tags",
+]);
+
+type JsonRecord = Record<string, unknown>;
+
+export type EvernoteMcpOAuthState = {
+  oauthState: string;
+  clientInformation?: StoredOAuthClientInformation;
+  clientSecret?: string | null;
+  accessToken?: string | null;
+  refreshToken?: string | null;
+  tokenMetadata?: Omit<StoredOAuthTokens, "access_token" | "refresh_token">;
+  codeVerifier?: string | null;
+  discoveryState?: OAuthDiscoveryState;
+};
+
+export type EvernoteMcpConnectorSettings = {
+  authTransport: "mcp";
+  mcpServerUrl: string;
+  mcpOAuthState: string;
+  mcpClientInformation?: StoredOAuthClientInformation;
+  clientSecret?: string | null;
+  accessToken?: string | null;
+  refreshToken?: string | null;
+  mcpTokenMetadata?: Omit<StoredOAuthTokens, "access_token" | "refresh_token">;
+  token?: string | null;
+  mcpDiscoveryState?: OAuthDiscoveryState;
+};
+
+function asRecord(value: unknown): JsonRecord {
+  return value && typeof value === "object" ? (value as JsonRecord) : {};
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function asNumber(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function max429Retries(): number {
+  const configured = Number(
+    process.env.EVERNOTE_MCP_MAX_429_RETRIES ?? 2,
+  );
+  return Number.isFinite(configured)
+    ? Math.min(Math.max(Math.floor(configured), 0), 4)
+    : 2;
+}
+
+function retryAfterHeaderMs(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1_000);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
+
+export const evernoteMcpFetch: FetchLike = async (input, init) => {
+  const retries = max429Retries();
+  for (let attempt = 0; ; attempt++) {
+    const request = input instanceof Request ? input.clone() : input;
+    const response = await fetch(request, init);
+    if (response.status !== 429) return response;
+    const retryAfterMs = Math.min(
+      retryAfterHeaderMs(response.headers.get("retry-after")) ?? 1_000,
+      60_000,
+    );
+    if (attempt >= retries) {
+      const error = new Error(
+        `Evernote MCP HTTP 429 after ${attempt + 1} request(s)`,
+      ) as Error & {
+        status: number;
+        mcpRetriesExhausted: boolean;
+        retryAfterMs: number;
+      };
+      error.status = 429;
+      error.mcpRetriesExhausted = true;
+      error.retryAfterMs = retryAfterMs;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
+  }
+};
+
+function firstArray(root: JsonRecord, keys: string[]): unknown[] {
+  for (const key of keys) {
+    if (Array.isArray(root[key])) return root[key] as unknown[];
+  }
+  const data = asRecord(root.data);
+  for (const key of keys) {
+    if (Array.isArray(data[key])) return data[key] as unknown[];
+  }
+  return [];
+}
+
+function stripClientSecret(
+  value: StoredOAuthClientInformation,
+): {
+  information: StoredOAuthClientInformation;
+  secret: string | null;
+} {
+  const row = { ...value } as StoredOAuthClientInformation & {
+    client_secret?: string;
+  };
+  const secret = row.client_secret ?? null;
+  delete row.client_secret;
+  return { information: row, secret };
+}
+
+function stripTokens(value: StoredOAuthTokens): {
+  accessToken: string;
+  refreshToken: string | null;
+  metadata: Omit<StoredOAuthTokens, "access_token" | "refresh_token">;
+} {
+  const row = { ...value } as Record<string, unknown>;
+  const accessToken = String(row.access_token ?? "");
+  const refreshToken = asString(row.refresh_token);
+  delete row.access_token;
+  delete row.refresh_token;
+  // Recall does not use identity tokens; never retain one in unsealed metadata.
+  delete row.id_token;
+  return {
+    accessToken,
+    refreshToken: refreshToken ?? null,
+    metadata: row as Omit<
+      StoredOAuthTokens,
+      "access_token" | "refresh_token"
+    >,
+  };
+}
+
+export function mcpOAuthStateFromSettings(
+  settings: Record<string, unknown>,
+): EvernoteMcpOAuthState {
+  const clientInformation = asRecord(
+    settings.mcpClientInformation,
+  ) as StoredOAuthClientInformation;
+  const clientId = asString(clientInformation.client_id);
+  const clientSecret = asString(settings.clientSecret);
+  return {
+    oauthState: asString(settings.mcpOAuthState) ?? "",
+    clientInformation: clientId
+      ? ({
+          ...clientInformation,
+          ...(clientSecret ? { client_secret: clientSecret } : {}),
+        } as StoredOAuthClientInformation)
+      : undefined,
+    clientSecret,
+    accessToken: asString(settings.accessToken),
+    refreshToken: asString(settings.refreshToken),
+    tokenMetadata: asRecord(
+      settings.mcpTokenMetadata,
+    ) as EvernoteMcpOAuthState["tokenMetadata"],
+    codeVerifier: asString(settings.token),
+    discoveryState: Object.keys(asRecord(settings.mcpDiscoveryState)).length
+      ? (settings.mcpDiscoveryState as OAuthDiscoveryState)
+      : undefined,
+  };
+}
+
+export function mcpSettingsFromOAuthState(
+  state: EvernoteMcpOAuthState,
+): EvernoteMcpConnectorSettings {
+  const client = state.clientInformation
+    ? stripClientSecret(state.clientInformation)
+    : null;
+  return {
+    authTransport: "mcp",
+    mcpServerUrl: EVERNOTE_MCP_URL,
+    mcpOAuthState: state.oauthState,
+    mcpClientInformation: client?.information,
+    clientSecret: client?.secret ?? state.clientSecret ?? null,
+    accessToken: state.accessToken ?? null,
+    refreshToken: state.refreshToken ?? null,
+    mcpTokenMetadata: state.tokenMetadata,
+    token: state.codeVerifier ?? null,
+    mcpDiscoveryState: state.discoveryState,
+  };
+}
+
+class RecallEvernoteMcpOAuthProvider implements OAuthClientProvider {
+  authorizationUrl: URL | null = null;
+
+  constructor(
+    private readonly stateValue: EvernoteMcpOAuthState,
+    private readonly callbackUrl: string,
+    private readonly onStateChanged?: (
+      settings: EvernoteMcpConnectorSettings,
+    ) => Promise<void>,
+  ) {}
+
+  private async persist(): Promise<void> {
+    await this.onStateChanged?.(mcpSettingsFromOAuthState(this.stateValue));
+  }
+
+  get redirectUrl(): string {
+    return this.callbackUrl;
+  }
+
+  get clientMetadata(): OAuthClientMetadata {
+    return {
+      client_name: "Recall",
+      client_uri: "https://recall-app.net",
+      redirect_uris: [this.callbackUrl],
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      token_endpoint_auth_method: "none",
+      scope: "read",
+    };
+  }
+
+  state(): string {
+    return this.stateValue.oauthState;
+  }
+
+  clientInformation(
+    _ctx?: OAuthClientInformationContext,
+  ): StoredOAuthClientInformation | undefined {
+    return this.stateValue.clientInformation;
+  }
+
+  async saveClientInformation(
+    information: StoredOAuthClientInformation,
+    _ctx?: OAuthClientInformationContext,
+  ): Promise<void> {
+    const split = stripClientSecret(information);
+    this.stateValue.clientInformation = {
+      ...split.information,
+      ...(split.secret ? { client_secret: split.secret } : {}),
+    } as StoredOAuthClientInformation;
+    this.stateValue.clientSecret = split.secret;
+    await this.persist();
+  }
+
+  tokens(_ctx?: OAuthClientInformationContext): StoredOAuthTokens | undefined {
+    if (!this.stateValue.accessToken) return undefined;
+    return {
+      ...(this.stateValue.tokenMetadata ?? {}),
+      access_token: this.stateValue.accessToken,
+      ...(this.stateValue.refreshToken
+        ? { refresh_token: this.stateValue.refreshToken }
+        : {}),
+    } as StoredOAuthTokens;
+  }
+
+  async saveTokens(
+    tokens: StoredOAuthTokens,
+    _ctx?: OAuthClientInformationContext,
+  ): Promise<void> {
+    const split = stripTokens(tokens);
+    this.stateValue.accessToken = split.accessToken;
+    this.stateValue.refreshToken = split.refreshToken;
+    this.stateValue.tokenMetadata = split.metadata;
+    await this.persist();
+  }
+
+  redirectToAuthorization(url: URL): void {
+    this.authorizationUrl = url;
+  }
+
+  async saveCodeVerifier(codeVerifier: string): Promise<void> {
+    this.stateValue.codeVerifier = codeVerifier;
+    await this.persist();
+  }
+
+  codeVerifier(): string {
+    if (!this.stateValue.codeVerifier) {
+      throw new Error("Evernote MCP OAuth code verifier is missing");
+    }
+    return this.stateValue.codeVerifier;
+  }
+
+  async saveDiscoveryState(state: OAuthDiscoveryState): Promise<void> {
+    this.stateValue.discoveryState = state;
+    await this.persist();
+  }
+
+  discoveryState(): OAuthDiscoveryState | undefined {
+    return this.stateValue.discoveryState;
+  }
+}
+
+function callbackUrl(): string {
+  return (
+    process.env.EVERNOTE_OAUTH_REDIRECT_URI?.trim() ||
+    "https://recall-app.net/api/connectors/evernote/oauth/callback"
+  );
+}
+
+function mcpServerUrl(): URL {
+  const configured = process.env.EVERNOTE_MCP_URL?.trim() || EVERNOTE_MCP_URL;
+  const url = new URL(configured);
+  if (url.protocol !== "https:") {
+    throw new Error("EVERNOTE_MCP_URL must use HTTPS");
+  }
+  return url;
+}
+
+export async function beginEvernoteMcpOAuth(
+  oauthState: string,
+  existingSettings?: Record<string, unknown>,
+): Promise<{
+  authorizeUrl: string;
+  settings: EvernoteMcpConnectorSettings;
+}> {
+  const state: EvernoteMcpOAuthState = existingSettings
+    ? mcpOAuthStateFromSettings(existingSettings)
+    : { oauthState };
+  state.oauthState = oauthState;
+  const provider = new RecallEvernoteMcpOAuthProvider(state, callbackUrl());
+  const result = await auth(provider, {
+    serverUrl: mcpServerUrl(),
+    scope: "read",
+    forceReauthorization: true,
+    fetchFn: evernoteMcpFetch,
+  });
+  if (result !== "REDIRECT") {
+    throw new Error("Evernote MCP OAuth unexpectedly completed without consent");
+  }
+  if (!provider.authorizationUrl) {
+    throw new Error("Evernote MCP did not start OAuth authorization");
+  }
+  return {
+    authorizeUrl: provider.authorizationUrl.toString(),
+    settings: mcpSettingsFromOAuthState(state),
+  };
+}
+
+export async function finishEvernoteMcpOAuth(
+  settings: Record<string, unknown>,
+  callbackParams: URLSearchParams,
+  onStateChanged?: (
+    settings: EvernoteMcpConnectorSettings,
+  ) => Promise<void>,
+): Promise<EvernoteMcpConnectorSettings> {
+  const state = mcpOAuthStateFromSettings(settings);
+  const provider = new RecallEvernoteMcpOAuthProvider(
+    state,
+    callbackUrl(),
+    onStateChanged,
+  );
+  const authorizationCode = evernoteMcpAuthorizationCode(callbackParams);
+  await auth(provider, {
+    serverUrl: mcpServerUrl(),
+    authorizationCode,
+    iss: callbackParams.get("iss") ?? undefined,
+    scope: "read",
+    fetchFn: evernoteMcpFetch,
+  });
+  return mcpSettingsFromOAuthState(state);
+}
+
+export function evernoteMcpAuthorizationCode(
+  callbackParams: URLSearchParams,
+): string {
+  const authorizationCode = callbackParams.get("code");
+  if (!authorizationCode) {
+    const oauthError =
+      callbackParams.get("error_description") ??
+      callbackParams.get("error") ??
+      "Evernote MCP OAuth callback is missing code";
+    throw new Error(oauthError.slice(0, 300));
+  }
+  return authorizationCode;
+}
+
+type ToolCaller = {
+  callTool(input: {
+    name: string;
+    arguments?: Record<string, unknown>;
+  }): Promise<unknown>;
+};
+
+async function callReadTool(
+  client: ToolCaller,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<JsonRecord> {
+  if (!READ_TOOLS.has(name)) {
+    throw new Error(`Evernote MCP write/non-sync tool blocked: ${name}`);
+  }
+  const maxRetries = max429Retries();
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const raw = asRecord(await client.callTool({ name, arguments: args }));
+      const text = asArray(raw.content)
+        .map((part) => asRecord(part))
+        .find(
+          (part) => part.type === "text" && typeof part.text === "string",
+        )?.text;
+      if (raw.isError === true) {
+        const structuredError = asRecord(raw.structuredContent);
+        const error = new Error(
+          typeof text === "string"
+            ? text.slice(0, 300)
+            : `Evernote MCP ${name} failed`,
+        ) as Error & { status?: number; retryAfterMs?: number };
+        const structuredStatus = asNumber(
+          structuredError.status ?? structuredError.statusCode,
+        );
+        if (
+          structuredStatus === 429 ||
+          /\b429\b|rate.?limit/i.test(error.message)
+        ) {
+          error.status = 429;
+          const retryMs = asNumber(
+            structuredError.retryAfterMs ??
+              structuredError.retry_after_ms,
+          );
+          const retrySeconds = asNumber(
+            structuredError.retryAfter ??
+              structuredError.retry_after,
+          );
+          error.retryAfterMs =
+            retryMs ?? (retrySeconds != null ? retrySeconds * 1_000 : undefined);
+        }
+        throw error;
+      }
+      if (raw.structuredContent !== undefined) {
+        return asRecord(raw.structuredContent);
+      }
+      if (typeof text !== "string") return raw;
+      try {
+        return asRecord(JSON.parse(text));
+      } catch {
+        return { text };
+      }
+    } catch (error) {
+      const row = asRecord(error);
+      const data = asRecord(row.data);
+      const status = asNumber(
+        row.status ?? row.statusCode ?? data.status ?? data.statusCode,
+      );
+      const message = error instanceof Error ? error.message : "";
+      const rateLimited =
+        status === 429 || /\b429\b|rate.?limit/i.test(message);
+      if (
+        !rateLimited ||
+        row.mcpRetriesExhausted === true ||
+        attempt >= maxRetries
+      ) {
+        throw error;
+      }
+      const headersValue = row.headers ?? data.headers;
+      const headerRetryAfter =
+        headersValue instanceof Headers
+          ? headersValue.get("retry-after")
+          : asString(
+              asRecord(headersValue)["retry-after"] ??
+                asRecord(headersValue)["Retry-After"],
+            );
+      const headerSeconds = headerRetryAfter
+        ? Number(headerRetryAfter)
+        : Number.NaN;
+      const headerDate = headerRetryAfter
+        ? Date.parse(headerRetryAfter)
+        : Number.NaN;
+      const headerDelay = Number.isFinite(headerSeconds)
+        ? headerSeconds * 1_000
+        : Number.isFinite(headerDate)
+          ? Math.max(0, headerDate - Date.now())
+          : null;
+      const messageMatch = message.match(
+        /retry after\s+(\d+)\s*(ms|milliseconds?|s|sec|seconds?|m|min|minutes?)?/i,
+      );
+      const messageAmount = Number(messageMatch?.[1] ?? Number.NaN);
+      const messageUnit = (messageMatch?.[2] ?? "seconds").toLowerCase();
+      const messageDelay = Number.isFinite(messageAmount)
+        ? messageAmount *
+          (messageUnit.startsWith("m") && !messageUnit.startsWith("ms")
+            ? 60_000
+            : messageUnit.startsWith("ms")
+              ? 1
+              : 1_000)
+        : null;
+      const retryValue =
+        asNumber(
+          row.retryAfterMs ??
+            row.retry_after_ms ??
+            data.retryAfterMs ??
+            data.retry_after_ms,
+        ) ??
+        (headerDelay ?? messageDelay) ??
+        ((asNumber(
+          row.retryAfter ??
+            row.retry_after ??
+            data.retryAfter ??
+            data.retry_after,
+        ) ??
+          1) *
+          1_000);
+      const boundedDelay = Math.min(
+        Math.max(retryValue, 0),
+        60_000,
+      );
+      await new Promise((resolve) => setTimeout(resolve, boundedDelay));
+    }
+  }
+}
+
+function isMcpRateLimitError(error: unknown): boolean {
+  const row = asRecord(error);
+  const data = asRecord(row.data);
+  const status = asNumber(
+    row.status ?? row.statusCode ?? data.status ?? data.statusCode,
+  );
+  const message = error instanceof Error ? error.message : "";
+  return status === 429 || /\b429\b|rate.?limit/i.test(message);
+}
+
+function idAndName(value: unknown): { id: string; name: string } | null {
+  const row = asRecord(value);
+  const id =
+    boundedScalar(row.id, 500) ??
+    boundedScalar(row.guid, 500) ??
+    boundedScalar(row.noteId, 500) ??
+    boundedScalar(row.notebookId, 500) ??
+    boundedScalar(row.tagId, 500);
+  if (!id) return null;
+  return {
+    id,
+    name:
+      boundedScalar(row.name, 500) ??
+      boundedScalar(row.label, 500) ??
+      boundedScalar(row.title, 1_000) ??
+      id,
+  };
+}
+
+function noteGuid(value: unknown): string | null {
+  const row = asRecord(value);
+  for (const candidate of [row.id, row.guid, row.noteId]) {
+    if (typeof candidate !== "string") continue;
+    const id = candidate.slice(0, 500).trim();
+    if (id) return id;
+  }
+  return null;
+}
+
+function noteUpdated(value: unknown): string | null {
+  const row = asRecord(value);
+  return (
+    boundedScalar(row.updated, 100) ??
+    boundedScalar(row.updatedAt, 100) ??
+    boundedScalar(row.updateTime, 100) ??
+    null
+  );
+}
+
+function iso(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const millis = value < 10_000_000_000 ? value * 1_000 : value;
+    return new Date(millis).toISOString();
+  }
+  const text = asString(value);
+  if (!text) return null;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? text : parsed.toISOString();
+}
+
+function deepLink(guid: string, row: JsonRecord): string {
+  return (
+    asString(row.webUrl) ??
+    asString(row.url) ??
+    asString(row.deepLink) ??
+    `https://www.evernote.com/client/web#?an=true&n=${encodeURIComponent(guid)}`
+  );
+}
+
+/**
+ * Keep one remote note from dominating the worker heap. Attachments remain
+ * metadata-only; resource bytes are never copied into source records.
+ */
+export const EVERNOTE_MAX_NOTE_CONTENT_CHARS = 128 * 1024;
+
+function boundedText(value: unknown, max = EVERNOTE_MAX_NOTE_CONTENT_CHARS): {
+  text: string;
+  truncated: boolean;
+} {
+  const text = typeof value === "string" ? value : "";
+  return text.length > max
+    ? { text: text.slice(0, max), truncated: true }
+    : { text, truncated: false };
+}
+
+function firstNoteContent(raw: JsonRecord): string {
+  for (const value of [raw.content, raw.enml, raw.body]) {
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return "";
+}
+
+function boundedScalar(value: unknown, max: number): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.slice(0, max).trim();
+  return text || null;
+}
+
+function compactNoteForSync(raw: JsonRecord): JsonRecord {
+  const structured = asRecord(raw.structuredContent);
+  const content = boundedText(firstNoteContent(raw));
+  const compactEntity = (value: unknown): JsonRecord => {
+    const row = asRecord(value);
+    return {
+      id: noteGuid(row),
+      name:
+        boundedScalar(row.name, 500) ?? boundedScalar(row.label, 500) ?? "",
+      title: boundedScalar(row.title, 1_000) ?? "",
+    };
+  };
+  const hasResources =
+    asArray(raw.resources).length > 0 ||
+    asArray(structured.resources).length > 0;
+  return {
+    id: noteGuid(raw),
+    title: boundedScalar(raw.title, 1_000) ?? "Untitled",
+    content: content.text,
+    contentTruncated: content.truncated,
+    notebookId: boundedScalar(raw.notebookId, 500),
+    notebookGuid: boundedScalar(raw.notebookGuid, 500),
+    notebookName: boundedScalar(raw.notebookName, 500),
+    tagIds: asArray(raw.tagIds)
+      .slice(0, 100)
+      .map((tag) => boundedScalar(tag, 500))
+      .filter(Boolean),
+    tags: asArray(raw.tags).slice(0, 100).map(compactEntity),
+    created: raw.created,
+    createdAt: raw.createdAt,
+    updated: raw.updated,
+    updatedAt: raw.updatedAt,
+    usn: raw.usn,
+    version: raw.version,
+    updateSequenceNum: raw.updateSequenceNum,
+    webUrl: boundedScalar(raw.webUrl, 2_000),
+    url: boundedScalar(raw.url, 2_000),
+    deepLink: boundedScalar(raw.deepLink, 2_000),
+    resources: hasResources ? [{}] : [],
+    structuredContent: {
+      notebookId: boundedScalar(structured.notebookId, 500),
+      tags: asArray(structured.tags).slice(0, 100).map(compactEntity),
+    },
+  };
+}
+
+function noteToRaw(
+  raw: JsonRecord,
+  notebooks: Map<string, string>,
+  tags: Map<string, string>,
+): EvernoteRawRecord {
+  const guid = noteGuid(raw);
+  if (!guid) throw new Error("Evernote MCP note is missing a GUID");
+  const structured = asRecord(raw.structuredContent);
+  const title = (asString(raw.title) ?? "Untitled").slice(0, 1_000);
+  const content = boundedText(firstNoteContent(raw));
+  content.truncated ||= raw.contentTruncated === true;
+  const text = evernoteEnmlToText(content.text);
+  const notebookGuid =
+    asString(raw.notebookId) ??
+    asString(raw.notebookGuid) ??
+    asString(structured.notebookId);
+  const notebookName =
+    asString(raw.notebookName) ??
+    (notebookGuid ? notebooks.get(notebookGuid) ?? notebookGuid : null);
+  const tagRows = [
+    ...asArray(raw.tags),
+    ...asArray(structured.tags),
+  ];
+  const parsedTags = tagRows
+    .map(idAndName)
+    .filter((tag): tag is { id: string; name: string } => Boolean(tag));
+  const tagGuids =
+    parsedTags.length > 0
+      ? parsedTags.map((tag) => tag.id)
+      : asArray(raw.tagIds)
+          .map(asString)
+          .filter((tag): tag is string => Boolean(tag));
+  const tagNames = tagGuids.map(
+    (tagGuid) =>
+      parsedTags.find((tag) => tag.id === tagGuid)?.name ??
+      tags.get(tagGuid) ??
+      tagGuid,
+  );
+  const resources = [
+    ...asArray(raw.resources),
+    ...asArray(structured.resources),
+  ];
+  const sourceCreatedAt = iso(raw.created ?? raw.createdAt);
+  const sourceUpdatedAt = iso(raw.updated ?? raw.updatedAt);
+  const sourceUrl = deepLink(guid, raw);
+  const contentHash = evernoteContentHash({
+    title,
+    text,
+    notebookName,
+    tags: tagNames,
+    sourceUrl,
+  });
+  return {
+    externalId: guid,
+    recordType: "evernote_note",
+    recordTitle: title,
+    recordText: [
+      "Evernote note source=evernote_note transport=mcp",
+      notebookName ? `notebook: ${notebookName}` : null,
+      tagNames.length ? `tags: ${tagNames.join(", ")}` : null,
+      text,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    sourceUrl,
+    sourceCreatedAt,
+    sourceUpdatedAt,
+    metadata: {
+      contentHash,
+      usn:
+        asNumber(raw.usn ?? raw.version ?? raw.updateSequenceNum) ?? null,
+      notebookGuid,
+      notebookName,
+      tagGuids,
+      tagNames,
+      evernoteUpdated: sourceUpdatedAt,
+      hasAttachments: resources.length > 0,
+      contentTruncated: content.truncated,
+    },
+  };
+}
+
+function paceMs(): number {
+  const configured = Number(process.env.EVERNOTE_MCP_PACE_MS ?? 1_000);
+  if (!Number.isFinite(configured)) return 1_000;
+  return Math.min(Math.max(Math.floor(configured), 0), 10_000);
+}
+
+export function evernoteMcpBackfillChunkSize(): number {
+  const configured = Number(
+    process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE ?? 25,
+  );
+  if (!Number.isFinite(configured)) return 25;
+  return Math.min(Math.max(Math.floor(configured), 1), 100);
+}
+
+async function pace(): Promise<void> {
+  const delay = paceMs();
+  if (delay <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+export type EvernoteMcpSyncCheckpoint = {
+  startIndex: number;
+  expectedTotal: number | null;
+  recordsFetched: number;
+  recordsSkipped: number;
+  recordsFailed: number;
+  batchesProcessed: number;
+  listingAuthoritative: boolean;
+};
+
+export type EvernoteMcpSyncBatch = {
+  records: EvernoteRawRecord[];
+  seen: Array<{ externalId: string; listingIndex: number }>;
+  replayExternalIds: string[];
+  errors: string[];
+  checkpoint: EvernoteMcpSyncCheckpoint;
+};
+
+type EvernoteMcpStreamOptions = {
+  syncRunId: string;
+  checkpoint?: Partial<EvernoteMcpSyncCheckpoint>;
+  loadKnownNotes: (
+    externalIds: string[],
+  ) => Promise<Map<string, EvernoteKnownNote>>;
+  processBatch: (batch: EvernoteMcpSyncBatch) => Promise<void>;
+  stopAfterOneBatch?: boolean;
+  maxBatchesPerInvocation?: number;
+};
+
+function initialCheckpoint(
+  checkpoint?: Partial<EvernoteMcpSyncCheckpoint>,
+): EvernoteMcpSyncCheckpoint {
+  return {
+    startIndex: Math.max(0, Math.floor(checkpoint?.startIndex ?? 0)),
+    expectedTotal:
+      typeof checkpoint?.expectedTotal === "number" &&
+      Number.isFinite(checkpoint.expectedTotal)
+        ? Math.max(0, Math.floor(checkpoint.expectedTotal))
+        : null,
+    recordsFetched: Math.max(0, Math.floor(checkpoint?.recordsFetched ?? 0)),
+    recordsSkipped: Math.max(0, Math.floor(checkpoint?.recordsSkipped ?? 0)),
+    recordsFailed: Math.max(0, Math.floor(checkpoint?.recordsFailed ?? 0)),
+    batchesProcessed: Math.max(
+      0,
+      Math.floor(checkpoint?.batchesProcessed ?? 0),
+    ),
+    listingAuthoritative: checkpoint?.listingAuthoritative !== false,
+  };
+}
+
+/**
+ * Page through Evernote without retaining the library listing. Every page is
+ * reduced to GUID/update metadata, fetched sequentially, persisted by the
+ * caller, and checkpointed before the next page is requested.
+ */
+export async function streamEvernoteViaMcp(
+  client: ToolCaller,
+  options: EvernoteMcpStreamOptions,
+): Promise<
+  EvernoteMcpSyncCheckpoint & {
+    recordsDeferred: number;
+    listingComplete: boolean;
+    authoritativeListing: boolean;
+  }
+> {
+  const notebookResult = await callReadTool(client, "search_notebooks", {
+    query: "",
+    maxResults: 100,
+    sortBy: "name",
+  });
+  await pace();
+  const tagResult = await callReadTool(client, "search_tags", {
+    query: "",
+    maxResults: 100,
+    sortBy: "name",
+  });
+  await pace();
+  const notebooks = new Map(
+    firstArray(notebookResult, ["notebooks", "results", "items"])
+      .slice(0, 100)
+      .map(idAndName)
+      .filter((item): item is { id: string; name: string } => Boolean(item))
+      .map((item) => [item.id, item.name] as const),
+  );
+  const tags = new Map(
+    firstArray(tagResult, ["tags", "results", "items"])
+      .slice(0, 100)
+      .map(idAndName)
+      .filter((item): item is { id: string; name: string } => Boolean(item))
+      .map((item) => [item.id, item.name] as const),
+  );
+
+  let checkpoint = initialCheckpoint(options.checkpoint);
+  let listingComplete =
+    checkpoint.expectedTotal != null &&
+    checkpoint.startIndex >= checkpoint.expectedTotal;
+  let invocationBatches = 0;
+  const pageSize = evernoteMcpBackfillChunkSize();
+
+  while (
+    checkpoint.expectedTotal == null ||
+    checkpoint.startIndex < checkpoint.expectedTotal
+  ) {
+    const pageStart = checkpoint.startIndex;
+    const result = await callReadTool(client, "search_notes", {
+      query: "",
+      maxResults: pageSize,
+      startIndex: pageStart,
+      sortBy: "updated",
+      ascending: false,
+    });
+    // Keep the same global pacing before either a body fetch or the next page.
+    await pace();
+    const rawPage = firstArray(result, ["notes", "results", "items"]);
+    const reportedTotal = asNumber(
+      result.totalResultCount ?? result.total ?? result.totalNotes,
+    );
+    if (reportedTotal != null) {
+      if (
+        checkpoint.expectedTotal != null &&
+        checkpoint.expectedTotal !== reportedTotal
+      ) {
+        // Offset pagination is no longer authoritative after a concurrent
+        // library change. Restart from zero and retain the no-delete guard.
+        checkpoint = {
+          ...checkpoint,
+          startIndex: 0,
+          expectedTotal: Math.max(0, Math.floor(reportedTotal)),
+          listingAuthoritative: false,
+        };
+        await options.processBatch({
+          records: [],
+          seen: [],
+          replayExternalIds: [],
+          errors: [],
+          checkpoint,
+        });
+        if (checkpoint.expectedTotal === 0) {
+          listingComplete = true;
+        }
+        break;
+      }
+      checkpoint = {
+        ...checkpoint,
+        expectedTotal: Math.max(0, Math.floor(reportedTotal)),
+      };
+    }
+
+    if (rawPage.length === 0) {
+      if (
+        checkpoint.expectedTotal != null &&
+        pageStart < checkpoint.expectedTotal
+      ) {
+        throw new Error(
+          `Evernote MCP note listing ended early at ${pageStart} of ${checkpoint.expectedTotal}`,
+        );
+      }
+      listingComplete = true;
+      break;
+    }
+
+    // A non-conforming server must not defeat the configured memory bound.
+    const page = rawPage.slice(0, pageSize);
+    if (rawPage.length > pageSize) {
+      checkpoint = { ...checkpoint, listingAuthoritative: false };
+    }
+    const summaries = page.map((raw, offset) => ({
+      externalId: noteGuid(raw),
+      listingIndex: pageStart + offset,
+      updatedAt: iso(noteUpdated(raw)),
+    }));
+    const ids = summaries
+      .map((summary) => summary.externalId)
+      .filter((id): id is string => Boolean(id));
+    if (ids.length !== summaries.length || new Set(ids).size !== ids.length) {
+      checkpoint = { ...checkpoint, listingAuthoritative: false };
+    }
+    const knownNotes = await options.loadKnownNotes([...new Set(ids)]);
+    const seen: Array<{ externalId: string; listingIndex: number }> = [];
+    const records: EvernoteRawRecord[] = [];
+    const replayExternalIds: string[] = [];
+    const errors: string[] = [];
+    let skipped = 0;
+    let failed = 0;
+
+    for (const summary of summaries) {
+      const guid = summary.externalId;
+      if (!guid) continue;
+      const known = knownNotes.get(guid);
+      const processedHere =
+        known?.evernoteProcessedSyncRunId === options.syncRunId &&
+        known.evernoteProcessedAtIndex === summary.listingIndex;
+      if (processedHere) {
+        continue;
+      }
+      const seenHere =
+        known?.evernoteSeenSyncRunId === options.syncRunId &&
+        known.evernoteSeenAtIndex === summary.listingIndex;
+      if (
+        (known?.evernoteSeenSyncRunId === options.syncRunId && !seenHere) ||
+        (known?.evernoteProcessedSyncRunId === options.syncRunId &&
+          !processedHere)
+      ) {
+        checkpoint = { ...checkpoint, listingAuthoritative: false };
+      }
+      seen.push({ externalId: guid, listingIndex: summary.listingIndex });
+      if (seenHere) replayExternalIds.push(guid);
+      if (
+        !seenHere &&
+        known &&
+        summary.updatedAt &&
+        known.evernoteUpdated === summary.updatedAt
+      ) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        const note = compactNoteForSync(
+          await callReadTool(client, "get_note", { noteId: guid }),
+        );
+        const record = noteToRaw(note, notebooks, tags);
+        if (record.externalId !== guid) {
+          throw new Error(
+            `Evernote MCP get_note returned ${record.externalId} for ${guid}`,
+          );
+        }
+        records.push(record);
+      } catch (error) {
+        if (isMcpRateLimitError(error)) throw error;
+        failed += 1;
+        errors.push(
+          error instanceof Error
+            ? error.message.slice(0, 300)
+            : `Evernote MCP get_note failed for ${guid}`,
+        );
+      }
+      // Concurrency intentionally remains one so MCP pacing is global.
+      await pace();
+    }
+
+    const nextStart = pageStart + page.length;
+    checkpoint = {
+      ...checkpoint,
+      startIndex: nextStart,
+      recordsFetched: Math.max(checkpoint.recordsFetched, nextStart),
+      recordsSkipped: checkpoint.recordsSkipped + skipped,
+      recordsFailed: checkpoint.recordsFailed + failed,
+      batchesProcessed: checkpoint.batchesProcessed + 1,
+    };
+    await options.processBatch({
+      records,
+      seen,
+      replayExternalIds,
+      errors,
+      checkpoint,
+    });
+    invocationBatches += 1;
+
+    if (
+      checkpoint.expectedTotal != null &&
+      nextStart >= checkpoint.expectedTotal
+    ) {
+      listingComplete = true;
+      break;
+    }
+    if (checkpoint.expectedTotal == null && page.length < pageSize) {
+      listingComplete = true;
+      break;
+    }
+    const maxBatches = options.stopAfterOneBatch
+      ? 1
+      : Math.max(1, Math.floor(options.maxBatchesPerInvocation ?? Infinity));
+    if (invocationBatches >= maxBatches) break;
+  }
+
+  const recordsDeferred =
+    checkpoint.expectedTotal == null
+      ? listingComplete
+        ? 0
+        : 1
+      : Math.max(0, checkpoint.expectedTotal - checkpoint.startIndex);
+  const authoritativeListing =
+    listingComplete &&
+    checkpoint.expectedTotal != null &&
+    checkpoint.startIndex === checkpoint.expectedTotal &&
+    checkpoint.listingAuthoritative;
+  return {
+    ...checkpoint,
+    recordsDeferred,
+    listingComplete,
+    authoritativeListing,
+  };
+}
+
+export async function fetchEvernoteViaMcp(
+  client: ToolCaller,
+  knownNotes: Map<string, EvernoteKnownNote>,
+): Promise<EvernoteFetchResult> {
+  const records: EvernoteRawRecord[] = [];
+  const errors: string[] = [];
+  const activeGuids = new Set<string>();
+  const result = await streamEvernoteViaMcp(client, {
+    syncRunId: "legacy-fetch",
+    loadKnownNotes: async (ids) =>
+      new Map(
+        ids
+          .filter((id) => knownNotes.has(id))
+          .map((id) => [id, knownNotes.get(id)!] as const),
+      ),
+    processBatch: async (batch) => {
+      records.push(...batch.records);
+      errors.push(...batch.errors);
+      for (const item of batch.seen) activeGuids.add(item.externalId);
+    },
+    stopAfterOneBatch: true,
+  });
+  const deletedExternalIds = result.authoritativeListing
+    ? [...knownNotes.keys()].filter((guid) => !activeGuids.has(guid))
+    : [];
+
+  return {
+    records,
+    recordsFetched: result.recordsFetched,
+    recordsSkipped: result.recordsSkipped,
+    recordsFailed: result.recordsFailed,
+    recordsDeferred: result.recordsDeferred,
+    deletedExternalIds,
+    errors,
+  };
+}
+
+export async function withEvernoteMcpClient<T>(
+  settings: Record<string, unknown>,
+  operation: (client: ToolCaller) => Promise<T>,
+  onStateChanged?: (
+    settings: EvernoteMcpConnectorSettings,
+  ) => Promise<void>,
+): Promise<{
+  value: T;
+  settings: EvernoteMcpConnectorSettings;
+}> {
+  const state = mcpOAuthStateFromSettings(settings);
+  const provider = new RecallEvernoteMcpOAuthProvider(
+    state,
+    callbackUrl(),
+    onStateChanged,
+  );
+  const transport = new StreamableHTTPClientTransport(mcpServerUrl(), {
+    authProvider: provider,
+    fetch: evernoteMcpFetch,
+  });
+  const client = new Client({ name: "Recall", version: "1.0.0" });
+  try {
+    await client.connect(transport);
+    const value = await operation(client);
+    return { value, settings: mcpSettingsFromOAuthState(state) };
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+}
+
+export async function testEvernoteMcpConnection(
+  settings: Record<string, unknown>,
+  onStateChanged?: (
+    settings: EvernoteMcpConnectorSettings,
+  ) => Promise<void>,
+): Promise<{
+  notebookCount: number;
+  tagCount: number;
+  settings: EvernoteMcpConnectorSettings;
+}> {
+  const result = await withEvernoteMcpClient(settings, async (client) => {
+    const notebooks = await callReadTool(client, "search_notebooks", {
+      query: "",
+      maxResults: 100,
+      sortBy: "name",
+    });
+    await pace();
+    const tags = await callReadTool(client, "search_tags", {
+      query: "",
+      maxResults: 100,
+      sortBy: "name",
+    });
+    return {
+      notebookCount: firstArray(notebooks, ["notebooks", "results", "items"])
+        .length,
+      tagCount: firstArray(tags, ["tags", "results", "items"]).length,
+    };
+  }, onStateChanged);
+  return { ...result.value, settings: result.settings };
+}

@@ -1,0 +1,25 @@
+import { readFile } from "node:fs/promises";
+import { describe, expect, it } from "vitest";
+
+describe("Evernote worker boundary", () => {
+  it("claims only the explicit Sync Now job while timer polling stays local-only", async () => {
+    const [routes, worker] = await Promise.all([
+      readFile(new URL("../routes/connectors.ts", import.meta.url), "utf8"),
+      readFile(new URL("./job-worker.ts", import.meta.url), "utf8"),
+    ]);
+
+    expect(routes).toMatch(
+      /connector\.type === "evernote"[\s\S]*enqueueEvernoteSyncForUser/,
+    );
+    expect(routes).toMatch(/nudgeJobWorker\(queued\.jobId\)/);
+    expect(worker).toMatch(
+      /JOB_TYPE_CONNECTOR_SYNC[\s\S]*processEvernoteSyncJob/,
+    );
+    expect(worker).toMatch(
+      /TIMER_SAFE_JOB_TYPES\s*=\s*\[JOB_TYPE_ATTACHMENT_EXTRACT\]/,
+    );
+    expect(worker).toMatch(
+      /claimNextJobOfTypes\(workerId,\s*TIMER_SAFE_JOB_TYPES\)/,
+    );
+  });
+});

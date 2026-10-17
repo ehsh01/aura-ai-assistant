@@ -602,3 +602,12 @@ export function clearEmbeddingCacheForTests(): void {
   queryCache.clear();
   warmQueues.clear();
 }
+
+/** Invalidate an entity after its source content changes. */
+export function evictEntityEmbedding(
+  userId: string,
+  entityType: string,
+  entityId: string,
+): void {
+  cache.delete(cacheKey(userId, entityType, entityId));
+}

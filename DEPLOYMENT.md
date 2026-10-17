@@ -64,7 +64,8 @@ apt-get update
 apt-get install -y tesseract-ocr
 
 cp artifacts/api-server/.env.example artifacts/api-server/.env
-# Edit .env — at minimum PORT/API_PORT=5008; add DATABASE_URL when schema exists
+# Edit .env — at minimum PORT/API_PORT=5008 and DATABASE_URL pointing to
+# DigitalOcean managed Postgres
 
 pnpm install
 pnpm run build:prod
@@ -240,6 +241,76 @@ SECRETS_ENCRYPTION_KEY=...   # required so tokens + webhook secret are encrypted
 
 4. Restart `recall-api`. On `/connectors`, click **Connect Homey**, then **Sync** and **Show webhook**.
 5. In Homey Flows, add an HTTP POST (Logic / HTTP request cards) to the webhook URL with `Authorization: Bearer <secret>` and JSON body — see `docs/Homey_Flow_Cookbook.md`.
+
+## Evernote connector (MCP OAuth2+DCR, read-only)
+
+The primary transport is Evernote's Streamable HTTP MCP endpoint. OAuth2
+Dynamic Client Registration means Recall does **not** need a pre-provisioned
+Evernote consumer key or secret.
+
+```bash
+# Defaults shown; only the callback must stay exact.
+EVERNOTE_MCP_URL=https://mcp.evernote.com/mcp
+EVERNOTE_OAUTH_REDIRECT_URI=https://recall-app.net/api/connectors/evernote/oauth/callback
+EVERNOTE_MCP_PACE_MS=1000
+EVERNOTE_MCP_MAX_429_RETRIES=2
+EVERNOTE_MCP_BACKFILL_CHUNK_SIZE=25
+SECRETS_ENCRYPTION_KEY=... # seals access/refresh tokens and DCR client secret
+APP_PUBLIC_URL=https://recall-app.net
+```
+
+1. Restart both Recall processes with updated env.
+2. Confirm Ernesto's Evernote account has a paid plan, then click **Connect
+   Evernote (MCP)**.
+3. Ernesto completes Evernote's browser OAuth consent. Recall dynamically
+   registers the client and seals registration/tokens in connector settings.
+4. Click **Sync Now**. Sync exposes only `search_notes`, `semantic_search`,
+   `get_note`, `search_notebooks`, and `search_tags`; backfill uses the listing
+   and note-read tools sequentially. Calls default to one per second and retry
+   429s at most twice using a bounded Retry-After delay.
+   Changed-note bodies are limited to 25 per Sync Now; additional notes are
+   logged as deferred with `partial_success` so another Sync Now continues
+   backfill without wedging the API process.
+
+The existing OAuth1/EDAM and personal developer-token implementations remain
+disabled optional fallbacks:
+
+```bash
+EVERNOTE_EDAM_FALLBACK_ENABLED=true
+EVERNOTE_CONSUMER_KEY=...
+EVERNOTE_CONSUMER_SECRET=...
+EVERNOTE_EDAM_OAUTH_REDIRECT_URI=https://recall-app.net/api/connectors/evernote/edam/oauth/callback
+EVERNOTE_SANDBOX=false
+# Or, single-user fallback:
+# EVERNOTE_DEVELOPER_TOKEN=...
+```
+
+Evernote sync compares source timestamps/USNs and SHA-256 content hashes.
+Unchanged notes only advance their lightweight sync checkpoint; content, FTS,
+and embeddings are not rewritten. Sync-time embeddings default off, are limited
+to changed notes, and require all three opt-in switches. Once enabled, the
+default is 25 per run (hard maximum 100):
+
+```bash
+RECALL_BACKGROUND_AI_ENABLED=true
+RECALL_EMBEDDING_WARM_ENABLED=true
+RECALL_EVERNOTE_EMBEDDINGS_ENABLED=true
+EVERNOTE_EMBEDDING_MAX_PER_SYNC=25
+EVERNOTE_EMBEDDING_DAILY_CAP=100
+# RECALL_EVERNOTE_ASK_ENABLED=false excludes synced Evernote data from Ask.
+# Any one of the three AI switches set false stops sync-time embeddings.
+```
+
+No summarization or other chat LLM work runs during sync. Keyword-only Ask stays
+local and available when AI is disabled. When Ask AI is allowed, it calls one
+answer LLM on local Postgres top-k retrieval only; it never calls Evernote MCP.
+
+Disabling the connector through `PATCH /api/connectors/:id` pauses Sync Now and
+excludes that connector from Ask.
+
+**Smoke blockers:** no static Evernote credentials are needed for MCP. Ernesto
+must have an eligible paid Evernote plan and complete the accounts.evernote.com
+browser consent before the live Connect → Sync Now → Ask flow can be verified.
 
 ## Database backups
 

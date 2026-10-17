@@ -115,7 +115,7 @@ export async function ingestHomeyAlertForUser(
   }
 
   const normalized = normalizeHomeyAlert(payload, { connectorId });
-  const sourceRecordId = await upsertSourceRecord(userId, connectorId, {
+  const sourceRecord = await upsertSourceRecord(userId, connectorId, {
     externalId: normalized.externalId,
     recordType: normalized.recordType,
     recordTitle: normalized.recordTitle,
@@ -124,6 +124,7 @@ export async function ingestHomeyAlertForUser(
     sourceUrl: null,
     sourceCreatedAt: normalized.sourceCreatedAt ?? null,
   });
+  const sourceRecordId = sourceRecord.id;
 
   await upsertEvidenceForSourceRecord(userId, {
     entityType: "source_record",
