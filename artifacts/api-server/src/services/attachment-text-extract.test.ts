@@ -11,6 +11,7 @@ import {
 import { evernoteDeferredError } from "./evernote-watchdog";
 
 afterEach(() => {
+  delete process.env.RECALL_UPLOAD_TESSERACT_ENABLED;
   delete process.env.RECALL_ATTACHMENT_OCR_ENABLED;
   delete process.env.TESSERACT_OCR_TIMEOUT_MS;
 });
@@ -74,7 +75,6 @@ describe("attachment extraction safeguards", () => {
   });
 
   it("keeps missing-Tesseract failures retryable", async () => {
-    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
     const missing = Object.assign(new Error("spawn tesseract ENOENT"), {
       code: "ENOENT",
     });
@@ -88,16 +88,16 @@ describe("attachment extraction safeguards", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("keeps the OCR kill switch and defers without spawning", async () => {
+  it("uses a separate local OCR kill switch and skips cleanly", async () => {
+    process.env.RECALL_UPLOAD_TESSERACT_ENABLED = "false";
     const run = vi.fn();
     await expect(
       extractImageTextWithTesseract("/tmp/disabled.png", 3_000, run),
-    ).rejects.toMatchObject({ name: "EvernoteWatchdogPauseError" });
+    ).resolves.toBe("");
     expect(run).not.toHaveBeenCalled();
   });
 
   it("defers image OCR outside 1–5 AM New York without dropping it", async () => {
-    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
     const run = vi.fn();
     await expect(
       extractImageTextWithTesseract("/tmp/daytime.png", 3_000, run, {
@@ -109,7 +109,6 @@ describe("attachment extraction safeguards", () => {
   });
 
   it("propagates upload-image deferral instead of persisting empty text", async () => {
-    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-17T15:00:00Z"));
     try {
@@ -127,7 +126,6 @@ describe("attachment extraction safeguards", () => {
   });
 
   it("defers on the load check without invoking Tesseract", async () => {
-    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
     const run = vi.fn();
     await expect(
       extractImageTextWithTesseract("/tmp/loaded.png", 8 * 1024 * 1024, run, {
@@ -141,7 +139,7 @@ describe("attachment extraction safeguards", () => {
   });
 
   it("runs under nice, flock, one OMP thread, and the configured timeout", async () => {
-    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
+    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "false";
     const run = vi.fn().mockResolvedValue({ stdout: "recognized" });
     await expect(
       extractImageTextWithTesseract("/tmp/night.png", 3_000, run, {

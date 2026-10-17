@@ -175,6 +175,9 @@ OPENAI_PLANNER_MODEL=gpt-4.1-nano
 # It is off by default and capped per user per UTC day.
 RECALL_ATTACHMENT_OCR_ENABLED=false
 RECALL_ATTACHMENT_OCR_AI_DAILY_LIMIT=20
+# Free upload OCR remains independent of the paid AI switch:
+RECALL_UPLOAD_TESSERACT_ENABLED=true
+TESSERACT_OCR_TIMEOUT_MS=30000
 ```
 
 Image uploads use the system `tesseract` CLI locally (one subprocess at a time,

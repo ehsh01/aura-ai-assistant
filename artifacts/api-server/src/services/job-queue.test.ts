@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   backoffMs,
+  attemptsAfterDeferredClaim,
   captureIdFromPayload,
   connectorSyncFromPayload,
+  jobFailureIsTerminal,
   mapJobRow,
 } from "./job-queue";
 
@@ -12,6 +14,18 @@ describe("job-queue helpers", () => {
     expect(backoffMs(2)).toBe(120_000);
     expect(backoffMs(3)).toBe(480_000);
     expect(backoffMs(10)).toBe(30 * 60_000);
+  });
+
+  it("refunds deferred claims without creating negative attempts", () => {
+    expect(attemptsAfterDeferredClaim(1)).toBe(0);
+    expect(attemptsAfterDeferredClaim(3)).toBe(2);
+    expect(attemptsAfterDeferredClaim(0)).toBe(0);
+  });
+
+  it("makes only the third real Tesseract failure terminal", () => {
+    expect(jobFailureIsTerminal(1, 3)).toBe(false);
+    expect(jobFailureIsTerminal(2, 3)).toBe(false);
+    expect(jobFailureIsTerminal(3, 3)).toBe(true);
   });
 
   it("maps snake_case claim rows onto Job", () => {

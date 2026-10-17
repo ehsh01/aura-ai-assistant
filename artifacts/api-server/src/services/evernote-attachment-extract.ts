@@ -167,7 +167,7 @@ export async function extractImageTextInMemory(
   return serializedTesseract(
     async () => {
       await (options?.loadCheck ?? defaultLoadCheck)(data.length);
-      return new Promise<string>((resolve) => {
+      return new Promise<string>((resolve, reject) => {
         let child: ChildProcessWithoutNullStreams;
         try {
           // Reuse PR #9's host-wide flock while feeding bytes over stdin, so
@@ -193,7 +193,7 @@ export async function extractImageTextInMemory(
           );
         } catch (error) {
           logger.warn({ error }, "Could not start Tesseract");
-          resolve("");
+          reject(error);
           return;
         }
         const stdout: Buffer[] = [];
@@ -206,9 +206,15 @@ export async function extractImageTextInMemory(
           clearTimeout(timeout);
           resolve(cleanText(text));
         };
+        const fail = (error: Error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          reject(error);
+        };
         const timeout = setTimeout(() => {
           child.kill("SIGKILL");
-          finish("");
+          fail(new Error("Evernote Tesseract timed out"));
         }, evernoteTesseractTimeoutMs());
         timeout.unref?.();
         child.stdout.on("data", (chunk: Buffer) => {
@@ -230,17 +236,21 @@ export async function extractImageTextInMemory(
               "flock/tesseract is unavailable; Evernote image OCR is disabled",
             );
           }
-          finish("");
+          fail(error);
         });
         child.on("close", (code) => {
           if (code !== 0) {
             logger.warn({ code, stderr }, "Tesseract could not read Evernote attachment");
-            finish("");
+            fail(
+              new Error(
+                `Evernote Tesseract exited ${code}: ${stderr.slice(-500)}`,
+              ),
+            );
             return;
           }
           finish(Buffer.concat(stdout, stdoutBytes).toString("utf8"));
         });
-        child.stdin.on("error", () => undefined);
+        child.stdin.on("error", (error) => fail(error));
         child.stdin.end(data);
       });
     },

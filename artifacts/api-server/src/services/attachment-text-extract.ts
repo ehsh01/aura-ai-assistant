@@ -111,9 +111,7 @@ export async function extractImageTextWithTesseract(
   },
 ): Promise<string> {
   if (sizeBytes < MIN_IMAGE_BYTES_FOR_OCR || sizeBytes > maxImageBytes()) return "";
-  if (!isEnabled("RECALL_ATTACHMENT_OCR_ENABLED", false)) {
-    throw evernoteDeferredError("upload OCR is disabled", 60 * 60_000);
-  }
+  if (!isEnabled("RECALL_UPLOAD_TESSERACT_ENABLED", true)) return "";
   if (!isEvernoteNightWindow(options?.now)) {
     throw evernoteDeferredError(
       "upload OCR is outside the configured night window",
