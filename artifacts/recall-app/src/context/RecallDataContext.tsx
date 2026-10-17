@@ -36,6 +36,8 @@ interface RecallDataContextValue {
   notebooks: RecallNotebook[];
   tasks: RecallTask[];
   isReady: boolean;
+  notesHasMore: boolean;
+  isLoadingMoreNotes: boolean;
   addNote: (partial?: Partial<RecallNote>) => RecallNote;
   updateNote: (id: string, patch: Partial<RecallNote>) => void;
   deleteNote: (id: string) => void;
@@ -57,6 +59,7 @@ interface RecallDataContextValue {
     notebookId: string | null;
   }>;
   reloadNotes: () => Promise<void>;
+  loadMoreNotes: () => Promise<void>;
   reloadNotebooks: () => Promise<void>;
   reloadTasks: () => Promise<void>;
   loadNote: (id: string) => Promise<RecallNote | null>;
@@ -73,6 +76,9 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
   const [notebooks, setNotebooks] = useState<RecallNotebook[]>([]);
   const [tasks, setTasks] = useState<RecallTask[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const [notesCursor, setNotesCursor] = useState<string | null>(null);
+  const [notesHasMore, setNotesHasMore] = useState(false);
+  const [isLoadingMoreNotes, setIsLoadingMoreNotes] = useState(false);
   const notePatchTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const pendingNotePatches = useRef<Map<string, Partial<RecallNote>>>(new Map());
 
@@ -82,6 +88,8 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
       setNotebooks([]);
       setTasks([]);
       setIsReady(false);
+      setNotesCursor(null);
+      setNotesHasMore(false);
       return;
     }
 
@@ -91,7 +99,7 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
       setIsReady(false);
       try {
         const [notesRes, tasksRes, notebooksRes] = await Promise.all([
-          listNotes(),
+          listNotes({ limit: 100 }),
           listTasks(),
           listNotebooks(),
         ]);
@@ -139,6 +147,8 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
 
         if (!cancelled) {
           setNotes(serverNotes);
+          setNotesCursor(notesRes.nextCursor ?? null);
+          setNotesHasMore(Boolean(notesRes.hasMore && notesRes.nextCursor));
           setNotebooks(serverNotebooks);
           setTasks(serverTasks);
           setIsReady(true);
@@ -147,6 +157,8 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
         const local = loadUserData(user.id);
         if (!cancelled) {
           setNotes(local.notes);
+          setNotesCursor(null);
+          setNotesHasMore(false);
           setNotebooks([]);
           setTasks(local.tasks);
           setIsReady(true);
@@ -333,7 +345,7 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
   }, []);
 
   const reloadNotes = useCallback(async () => {
-    const res = await listNotes();
+    const res = await listNotes({ limit: 100 });
     setNotes((prev) => {
       const contentById = new Map(prev.map((n) => [n.id, n.content]));
       return (res.notes as RecallNote[]).map((n) => ({
@@ -341,12 +353,41 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
         content: contentById.get(n.id) ?? n.content ?? "",
       }));
     });
+    setNotesCursor(res.nextCursor ?? null);
+    setNotesHasMore(Boolean(res.hasMore && res.nextCursor));
   }, []);
+
+  const loadMoreNotes = useCallback(async () => {
+    if (!notesCursor || !notesHasMore || isLoadingMoreNotes) return;
+    setIsLoadingMoreNotes(true);
+    try {
+      const res = await listNotes({ limit: 100, cursor: notesCursor });
+      setNotes((prev) => {
+        const byId = new Map(prev.map((note) => [note.id, note]));
+        for (const note of res.notes as RecallNote[]) {
+          const prior = byId.get(note.id);
+          byId.set(note.id, {
+            ...note,
+            content: prior?.content ?? note.content ?? "",
+          });
+        }
+        return [...byId.values()];
+      });
+      setNotesCursor(res.nextCursor ?? null);
+      setNotesHasMore(Boolean(res.hasMore && res.nextCursor));
+    } finally {
+      setIsLoadingMoreNotes(false);
+    }
+  }, [isLoadingMoreNotes, notesCursor, notesHasMore]);
 
   const loadNote = useCallback(async (id: string): Promise<RecallNote | null> => {
     try {
       const note = (await apiGetNote(encodeURIComponent(id))) as RecallNote;
-      setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, ...note } : n)));
+      setNotes((prev) =>
+        prev.some((n) => n.id === id)
+          ? prev.map((n) => (n.id === id ? { ...n, ...note } : n))
+          : [note, ...prev],
+      );
       return note;
     } catch {
       return null;
@@ -426,6 +467,8 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
     setNotes([]);
     setNotebooks([]);
     setTasks([]);
+    setNotesCursor(null);
+    setNotesHasMore(false);
   }, [user]);
 
   const value = useMemo(
@@ -434,6 +477,8 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
       notebooks,
       tasks,
       isReady,
+      notesHasMore,
+      isLoadingMoreNotes,
       addNote,
       updateNote,
       deleteNote,
@@ -444,6 +489,7 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
       importNotes,
       importEnexUpload,
       reloadNotes,
+      loadMoreNotes,
       reloadNotebooks,
       reloadTasks,
       loadNote,
@@ -454,6 +500,8 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
       notebooks,
       tasks,
       isReady,
+      notesHasMore,
+      isLoadingMoreNotes,
       addNote,
       updateNote,
       deleteNote,
@@ -464,6 +512,7 @@ export function RecallDataProvider({ children }: { children: React.ReactNode }) 
       importNotes,
       importEnexUpload,
       reloadNotes,
+      loadMoreNotes,
       reloadNotebooks,
       reloadTasks,
       loadNote,

@@ -69,7 +69,7 @@ export async function listProjectSourcesForUser(
     linkType: PROJECT_SOURCE_LINK,
     toEntityType: "source_record",
   });
-  const ids = links.map((l) => l.toEntityId);
+  const ids = links.slice(0, 200).map((l) => l.toEntityId);
   if (ids.length === 0) return { mail: [], transactions: [] };
 
   const rows = await getDb()
@@ -77,7 +77,7 @@ export async function listProjectSourcesForUser(
       id: sourceRecords.id,
       recordType: sourceRecords.recordType,
       recordTitle: sourceRecords.recordTitle,
-      recordText: sourceRecords.recordText,
+      recordText: sql<string | null>`left(${sourceRecords.recordText}, 4000)`,
       sourceCreatedAt: sourceRecords.sourceCreatedAt,
       recordMetadata: sourceRecords.recordMetadata,
     })
@@ -113,7 +113,7 @@ export async function searchSourcesForProjectLink(
       id: sourceRecords.id,
       recordType: sourceRecords.recordType,
       recordTitle: sourceRecords.recordTitle,
-      recordText: sourceRecords.recordText,
+      recordText: sql<string | null>`left(${sourceRecords.recordText}, 2000)`,
       sourceCreatedAt: sourceRecords.sourceCreatedAt,
       recordMetadata: sourceRecords.recordMetadata,
     })
@@ -130,7 +130,7 @@ export async function searchSourcesForProjectLink(
       ),
     )
     .orderBy(desc(sql`coalesce(${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`))
-    .limit(limit);
+    .limit(Math.min(Math.max(limit, 1), 50));
 
   return rows.map(toSourceDto);
 }

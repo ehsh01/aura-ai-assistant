@@ -47,7 +47,19 @@ export function Notes() {
   const searchString = useSearch();
   const { user } = useAuth();
   const userName = firstName(user?.name);
-  const { notes, notebooks, tasks, addNote, updateNote, importEnexUpload, isReady, loadNote } = useRecallData();
+  const {
+    notes,
+    notebooks,
+    tasks,
+    addNote,
+    updateNote,
+    importEnexUpload,
+    isReady,
+    loadNote,
+    notesHasMore,
+    isLoadingMoreNotes,
+    loadMoreNotes,
+  } = useRecallData();
   const [activeTag, setActiveTag] = useState("All");
   const [activeNotebook, setActiveNotebook] = useState<NotebookFilter>("all");
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
@@ -131,8 +143,16 @@ export function Notes() {
       if (!isReady) return;
       const hit = notes.find((n) => n.id === noteId);
       if (!hit) {
-        pendingNoteIdRef.current = null;
-        appliedSearchRef.current = fullSearch;
+        void loadNote(noteId).then((loaded) => {
+          pendingNoteIdRef.current = null;
+          appliedSearchRef.current = fullSearch;
+          if (loaded) {
+            setActiveNoteId(noteId);
+            if (!notebookParam && loaded.notebookId) {
+              setActiveNotebook(loaded.notebookId);
+            }
+          }
+        });
         return;
       }
       appliedSearchRef.current = fullSearch;
@@ -155,7 +175,7 @@ export function Notes() {
 
     appliedSearchRef.current = fullSearch;
     pendingNoteIdRef.current = null;
-  }, [location, searchString, notes, addNote, isReady]);
+  }, [location, searchString, notes, addNote, isReady, loadNote]);
 
   useEffect(() => {
     if (!isReady) return;
@@ -347,7 +367,7 @@ export function Notes() {
                   <p className="text-xs text-white/30 mt-0.5">
                     {activeNotebookMeta
                       ? `${activeNotebookMeta.noteCount} note${activeNotebookMeta.noteCount === 1 ? "" : "s"} in ${activeNotebookMeta.name}`
-                      : `${notes.length} note${notes.length === 1 ? "" : "s"}`}
+                      : `${notes.length}${notesHasMore ? "+" : ""} note${notes.length === 1 ? "" : "s"}`}
                   </p>
                 )}
               </div>
@@ -605,6 +625,18 @@ export function Notes() {
                   ))}
                 </div>
               </div>
+            )}
+
+            {isReady && notesHasMore && (
+              <button
+                type="button"
+                onClick={() => void loadMoreNotes()}
+                disabled={isLoadingMoreNotes}
+                className="mx-auto flex items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-4 py-2 text-xs text-white/60 hover:bg-white/[0.08] disabled:opacity-50"
+              >
+                {isLoadingMoreNotes && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Load more notes
+              </button>
             )}
           </div>
         </div>

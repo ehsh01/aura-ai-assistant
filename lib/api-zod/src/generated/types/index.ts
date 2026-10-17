@@ -69,6 +69,7 @@ export * from './lifeMemorySourceType';
 export * from './lifeMemoryStatus';
 export * from './listExtensionTokensResponse';
 export * from './listMemoriesParams';
+export * from './listNotesParams';
 export * from './listRawCaptures200';
 export * from './listRawCapturesParams';
 export * from './loginRequest';

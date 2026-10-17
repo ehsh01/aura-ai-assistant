@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { noteAttachments } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { config } from "../lib/config";
@@ -366,21 +366,25 @@ export async function attachmentSearchTextForNotes(
   const attRows = await getDb()
     .select({
       noteId: noteAttachments.noteId,
-      fileName: noteAttachments.fileName,
-      extractedText: noteAttachments.extractedText,
+      text: sql<string>`left(
+        string_agg(
+          concat_ws(
+            E'\n',
+            coalesce(${noteAttachments.fileName}, ''),
+            coalesce(${noteAttachments.extractedText}, '')
+          ),
+          E'\n'
+          order by ${noteAttachments.id}
+        ),
+        ${maxCharsPerNote}
+      )`,
     })
     .from(noteAttachments)
-    .where(inArray(noteAttachments.noteId, noteIds));
+    .where(inArray(noteAttachments.noteId, noteIds))
+    .groupBy(noteAttachments.noteId);
 
   for (const row of attRows) {
-    const parts: string[] = [];
-    if (row.fileName?.trim()) parts.push(row.fileName.trim());
-    if (row.extractedText?.trim()) parts.push(row.extractedText.trim());
-    if (parts.length === 0) continue;
-    const chunk = parts.join("\n");
-    const prev = out.get(row.noteId) ?? "";
-    const next = prev ? `${prev}\n${chunk}` : chunk;
-    out.set(row.noteId, next.length > maxCharsPerNote ? next.slice(0, maxCharsPerNote) : next);
+    if (row.text?.trim()) out.set(row.noteId, row.text.trim());
   }
 
   return out;

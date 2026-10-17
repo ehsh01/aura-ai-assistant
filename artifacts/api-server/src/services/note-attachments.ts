@@ -60,6 +60,16 @@ function isImageMime(mime: string): boolean {
   return mime.startsWith("image/");
 }
 
+const ATTACHMENT_METADATA_SELECT = {
+  id: noteAttachments.id,
+  noteId: noteAttachments.noteId,
+  fileName: noteAttachments.fileName,
+  mimeType: noteAttachments.mimeType,
+  sizeBytes: noteAttachments.sizeBytes,
+  hasExtractedText: sql<boolean>`coalesce(length(${noteAttachments.extractedText}) > 0, false)`,
+  aiOcrProcessed: sql<boolean>`${noteAttachments.aiOcrAt} is not null`,
+} as const;
+
 export type PendingNoteAttachment = {
   id: string;
   noteId: string;
@@ -171,7 +181,7 @@ export async function saveNoteAttachment(opts: {
 
 export async function listAttachmentsForNote(userId: string, noteId: string): Promise<NoteAttachmentDto[]> {
   const rows = await getDb()
-    .select()
+    .select(ATTACHMENT_METADATA_SELECT)
     .from(noteAttachments)
     .where(and(eq(noteAttachments.userId, userId), eq(noteAttachments.noteId, noteId)));
 
@@ -182,8 +192,8 @@ export async function listAttachmentsForNote(userId: string, noteId: string): Pr
     mimeType: row.mimeType,
     sizeBytes: row.sizeBytes,
     isImage: isImageMime(row.mimeType),
-    hasExtractedText: Boolean(row.extractedText?.trim()),
-    aiOcrProcessed: Boolean(row.aiOcrAt),
+    hasExtractedText: row.hasExtractedText,
+    aiOcrProcessed: row.aiOcrProcessed,
   }));
 }
 
@@ -195,7 +205,7 @@ export async function listImageAttachmentsForNotes(
 ): Promise<NoteAttachmentDto[]> {
   if (noteIds.length === 0 || limit <= 0) return [];
   const rows = await getDb()
-    .select()
+    .select(ATTACHMENT_METADATA_SELECT)
     .from(noteAttachments)
     .where(and(eq(noteAttachments.userId, userId), inArray(noteAttachments.noteId, noteIds)));
 
@@ -211,8 +221,8 @@ export async function listImageAttachmentsForNotes(
       mimeType: row.mimeType,
       sizeBytes: row.sizeBytes,
       isImage: true,
-      hasExtractedText: Boolean(row.extractedText?.trim()),
-      aiOcrProcessed: Boolean(row.aiOcrAt),
+      hasExtractedText: row.hasExtractedText,
+      aiOcrProcessed: row.aiOcrProcessed,
     }));
 }
 

@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { documents, type Document } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newDocumentId } from "../lib/recall-format";
@@ -19,7 +19,22 @@ export type DocumentDto = {
   updatedAt: string;
 };
 
-function toDto(row: Document): DocumentDto {
+function toDto(
+  row: Pick<
+    Document,
+    | "id"
+    | "fileName"
+    | "fileType"
+    | "storagePath"
+    | "sourceCaptureId"
+    | "extractedText"
+    | "summary"
+    | "metadata"
+    | "uploadedAt"
+    | "createdAt"
+    | "updatedAt"
+  >,
+): DocumentDto {
   return {
     id: row.id,
     fileName: row.fileName,
@@ -39,12 +54,25 @@ export async function listDocumentsForUser(
   userId: string,
   options: { limit?: number } = {},
 ): Promise<DocumentDto[]> {
-  const query = getDb()
-    .select()
+  const limit = Math.min(Math.max(options.limit ?? 100, 1), 200);
+  const rows = await getDb()
+    .select({
+      id: documents.id,
+      fileName: documents.fileName,
+      fileType: documents.fileType,
+      storagePath: documents.storagePath,
+      sourceCaptureId: documents.sourceCaptureId,
+      extractedText: sql<string | null>`left(${documents.extractedText}, 1000)`,
+      summary: documents.summary,
+      metadata: documents.metadata,
+      uploadedAt: documents.uploadedAt,
+      createdAt: documents.createdAt,
+      updatedAt: documents.updatedAt,
+    })
     .from(documents)
     .where(eq(documents.userId, userId))
-    .orderBy(desc(documents.uploadedAt));
-  const rows = await (options.limit ? query.limit(options.limit) : query);
+    .orderBy(desc(documents.uploadedAt))
+    .limit(limit);
   return rows.map(toDto);
 }
 

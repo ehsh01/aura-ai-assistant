@@ -1257,12 +1257,23 @@ export async function searchEvernoteRecords(
       )`,
     );
   }
+  const boundedText = tsQuery
+    ? sql<string>`left(
+        ts_headline(
+          'simple',
+          ${sourceRecords.searchDocument},
+          to_tsquery('simple', ${tsQuery}),
+          'MaxWords=80, MinWords=20, ShortWord=2, HighlightAll=false'
+        ),
+        1200
+      )`
+    : sql<string>`left(${sourceRecords.recordText}, 4000)`;
   return getDb()
     .select({
       id: sourceRecords.id,
       externalId: sourceRecords.externalId,
       title: sourceRecords.recordTitle,
-      text: sourceRecords.recordText,
+      text: boundedText,
       sourceUrl: sourceRecords.sourceUrl,
       sourceCreatedAt: sourceRecords.sourceCreatedAt,
       sourceUpdatedAt: sourceRecords.sourceUpdatedAt,

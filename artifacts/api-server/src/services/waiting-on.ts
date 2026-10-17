@@ -147,7 +147,7 @@ export async function listWaitingOnForUser(
   const minAgeDays = opts.minAgeDays ?? 0;
 
   const [notes, knowledge, people, tasks, aliases] = await Promise.all([
-    listNoteMetadataForUser(userId),
+    listNoteMetadataForUser(userId, { limit: 200 }),
     listKnowledgeForUser(userId),
     listPeopleForUser(userId),
     listTasksForUser(userId),
@@ -267,7 +267,7 @@ export async function listWaitingOnForUser(
     .select({
       id: sourceRecords.id,
       recordTitle: sourceRecords.recordTitle,
-      recordText: sourceRecords.recordText,
+      recordText: sql<string>`left(${sourceRecords.recordText}, 4000)`,
       sourceCreatedAt: sourceRecords.sourceCreatedAt,
       updatedAt: sourceRecords.updatedAt,
       metadata: sourceRecords.recordMetadata,
@@ -481,7 +481,7 @@ export async function resolveWaitingItemForFollowUp(
       .select({
         id: sourceRecords.id,
         recordTitle: sourceRecords.recordTitle,
-        recordText: sourceRecords.recordText,
+        recordText: sql<string>`left(${sourceRecords.recordText}, 4000)`,
         sourceCreatedAt: sourceRecords.sourceCreatedAt,
         updatedAt: sourceRecords.updatedAt,
       })

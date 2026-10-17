@@ -9,4 +9,6 @@ import type { RecallNoteMetadata } from './recallNoteMetadata';
 
 export interface NoteListResponse {
   notes: RecallNoteMetadata[];
+  nextCursor?: string | null;
+  hasMore?: boolean;
 }

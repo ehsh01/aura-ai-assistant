@@ -11,7 +11,7 @@ import { getDb } from "../lib/db";
 import { newProjectId, noteDateLabel } from "../lib/recall-format";
 import type { RecallCaptureItemDto } from "./capture-items";
 import { captureConfidenceLabel } from "./capture-classify";
-import type { RecallNoteMetadataDto } from "./notes";
+import { NOTE_METADATA_SELECT, type RecallNoteMetadataDto } from "./notes";
 import type { RecallTaskDto } from "./tasks";
 
 export type RecallProjectDto = {
@@ -190,10 +190,11 @@ export async function getProjectDetailForUser(
 
   const [noteRows, taskRows, captureRows] = await Promise.all([
     getDb()
-      .select()
+      .select(NOTE_METADATA_SELECT)
       .from(notes)
       .where(and(eq(notes.userId, userId), eq(notes.projectId, projectId)))
-      .orderBy(desc(notes.updatedAt)),
+      .orderBy(desc(notes.updatedAt), desc(notes.id))
+      .limit(200),
     getDb()
       .select()
       .from(tasks)
@@ -212,8 +213,6 @@ export async function getProjectDetailForUser(
       id: note.id,
       title: note.title,
       preview: note.preview,
-      summary: note.summary ?? null,
-      factBullets: Array.isArray(note.factBullets) ? note.factBullets : [],
       tags: note.tags ?? [],
       date: noteDateLabel(note.updatedAt),
       pinned: note.pinned,
@@ -222,7 +221,7 @@ export async function getProjectDetailForUser(
       primaryPersonId: note.primaryPersonId ?? null,
       primaryPersonName: null,
       contentFormat: note.contentFormat === "html" ? "html" : "plain",
-      attachmentCount: 0,
+      attachmentCount: note.attachmentCount ?? 0,
       createdAt: note.createdAt.toISOString(),
       updatedAt: note.updatedAt.toISOString(),
     })),

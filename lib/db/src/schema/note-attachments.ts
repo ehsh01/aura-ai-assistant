@@ -1,8 +1,18 @@
-import { integer, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import {
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+  varchar,
+} from "drizzle-orm/pg-core";
 import { notes } from "./notes";
 import { users } from "./users";
 
-export const noteAttachments = pgTable("note_attachments", {
+export const noteAttachments = pgTable(
+  "note_attachments",
+  {
   id: varchar("id", { length: 128 }).primaryKey(),
   userId: uuid("user_id")
     .notNull()
@@ -10,9 +20,15 @@ export const noteAttachments = pgTable("note_attachments", {
   noteId: varchar("note_id", { length: 64 })
     .notNull()
     .references(() => notes.id, { onDelete: "cascade" }),
-  resourceHash: varchar("resource_hash", { length: 64 }).notNull().default(""),
-  fileName: varchar("file_name", { length: 500 }).notNull().default("attachment"),
-  mimeType: varchar("mime_type", { length: 128 }).notNull().default("application/octet-stream"),
+    resourceHash: varchar("resource_hash", { length: 64 })
+      .notNull()
+      .default(""),
+    fileName: varchar("file_name", { length: 500 })
+      .notNull()
+      .default("attachment"),
+    mimeType: varchar("mime_type", { length: 128 })
+      .notNull()
+      .default("application/octet-stream"),
   sizeBytes: integer("size_bytes").notNull().default(0),
   storagePath: varchar("storage_path", { length: 1024 }).notNull(),
   /** OCR / PDF / plain-text extracted for Notes search. */
@@ -22,8 +38,12 @@ export const noteAttachments = pgTable("note_attachments", {
   contentHash: varchar("content_hash", { length: 64 }),
   /** Set only after the explicit, user-triggered OpenAI vision path is processed. */
   aiOcrAt: timestamp("ai_ocr_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [index("note_attachments_note_id_idx").on(table.noteId)],
+);
 
 export type NoteAttachment = typeof noteAttachments.$inferSelect;
 export type NewNoteAttachment = typeof noteAttachments.$inferInsert;

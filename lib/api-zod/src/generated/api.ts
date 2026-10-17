@@ -474,6 +474,16 @@ export const ListNotebooksResponse = zod.object({
 /**
  * @summary List notes for the current user
  */
+export const listNotesQueryLimitDefault = 100;
+export const listNotesQueryLimitMax = 200;
+
+
+
+export const ListNotesQueryParams = zod.object({
+  "limit": zod.coerce.number().min(1).max(listNotesQueryLimitMax).default(listNotesQueryLimitDefault),
+  "cursor": zod.coerce.string().optional().describe('Opaque cursor returned by the previous page.')
+})
+
 export const ListNotesResponse = zod.object({
   "notes": zod.array(zod.object({
   "id": zod.string(),
@@ -488,10 +498,11 @@ export const ListNotesResponse = zod.object({
   "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
-  "attachmentText": zod.string().optional().describe('Capped searchable text extracted from attached images, PDFs, and documents.'),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
-}))
+})),
+  "nextCursor": zod.string().nullish(),
+  "hasMore": zod.boolean().optional()
 })
 
 
@@ -546,10 +557,11 @@ export const BulkUpsertNotesResponse = zod.object({
   "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
-  "attachmentText": zod.string().optional().describe('Capped searchable text extracted from attached images, PDFs, and documents.'),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
-}))
+})),
+  "nextCursor": zod.string().nullish(),
+  "hasMore": zod.boolean().optional()
 })
 
 
@@ -1083,7 +1095,6 @@ export const GetProjectResponse = zod.object({
   "primaryPersonName": zod.string().nullish().describe('Display name for primaryPersonId when resolved.'),
   "contentFormat": zod.enum(['plain', 'html']),
   "attachmentCount": zod.number(),
-  "attachmentText": zod.string().optional().describe('Capped searchable text extracted from attached images, PDFs, and documents.'),
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })),

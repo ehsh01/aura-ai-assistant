@@ -75,13 +75,18 @@ async function loadLinkedSourceItems(
       id: sourceRecords.id,
       recordType: sourceRecords.recordType,
       recordTitle: sourceRecords.recordTitle,
-      recordText: sourceRecords.recordText,
+      recordText: sql<string | null>`left(${sourceRecords.recordText}, 200)`,
       sourceCreatedAt: sourceRecords.sourceCreatedAt,
       updatedAt: sourceRecords.updatedAt,
       recordMetadata: sourceRecords.recordMetadata,
     })
     .from(sourceRecords)
-    .where(and(eq(sourceRecords.userId, userId), inArray(sourceRecords.id, sourceIds)));
+    .where(
+      and(
+        eq(sourceRecords.userId, userId),
+        inArray(sourceRecords.id, sourceIds.slice(0, 200)),
+      ),
+    );
 
   return rows.map((row) => {
     const meta = row.recordMetadata ?? {};

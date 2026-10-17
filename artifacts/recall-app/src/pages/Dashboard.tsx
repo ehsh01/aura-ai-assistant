@@ -397,7 +397,7 @@ export function Dashboard() {
         requesterPersonId: t.requesterPersonId,
         projectId: t.projectId,
       })),
-      notes: notes.map((n) => ({
+      notes: notes.slice(0, 200).map((n) => ({
         id: n.id,
         title: n.title,
         primaryPersonId: n.primaryPersonId,
