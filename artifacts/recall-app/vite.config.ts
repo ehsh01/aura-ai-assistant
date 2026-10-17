@@ -54,15 +54,15 @@ export default defineConfig({
         short_name: "Recall",
         description:
           "Capture, organize, and recall notes, tasks, projects, and AI inbox items.",
-        theme_color: "#060610",
-        background_color: "#060610",
+        theme_color: "#05070a",
+        background_color: "#05070a",
         display: "standalone",
         orientation: "portrait-primary",
         scope: basePath,
         start_url: basePath,
         categories: ["productivity", "utilities"],
         share_target: {
-          action: `${basePath}today`,
+          action: basePath,
           method: "GET",
           params: {
             title: "title",

@@ -12,6 +12,7 @@ import {
   LayoutGrid,
   LogOut,
   Menu,
+  Network,
   Plus,
   Search,
   Settings,
@@ -48,9 +49,9 @@ type TabItem = {
 const primaryTabs: TabItem[] = [
   {
     href: "/",
-    label: "Today",
-    icon: <LayoutGrid size={22} strokeWidth={1.8} />,
-    match: (path) => path === "/" || path === "/today",
+    label: "Explore",
+    icon: <Network size={22} strokeWidth={1.8} />,
+    match: (path) => path === "/" || path.startsWith("/everything"),
   },
   {
     href: "/ask",
@@ -95,11 +96,11 @@ export function MobileBottomNav({
               href={tab.href}
               className="flex flex-col items-center justify-center gap-1 py-2 no-underline"
             >
-              <span className={active ? "text-indigo-400" : "text-white/40"}>
+              <span className={active ? "text-[#7dffd9]" : "text-white/45"}>
                 {tab.icon}
               </span>
               <span
-                className={`text-[10px] font-medium ${active ? "text-indigo-300" : "text-white/40"}`}
+                className={`text-[10px] font-medium ${active ? "text-[#9dffe4]" : "text-white/45"}`}
               >
                 {tab.label}
               </span>
@@ -111,7 +112,7 @@ export function MobileBottomNav({
           <button
             type="button"
             onClick={onCapture}
-            className="flex h-14 w-14 -translate-y-3 items-center justify-center rounded-full bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 active:scale-95 transition-transform"
+            className="flex h-14 w-14 -translate-y-3 items-center justify-center rounded-full bg-[#7dffd9] text-[#04100d] shadow-lg shadow-cyan-300/25 active:scale-95 transition-transform"
             aria-label={
               queuedCaptures > 0
                 ? `Capture (${queuedCaptures} waiting to sync)`
@@ -131,11 +132,11 @@ export function MobileBottomNav({
           href={primaryTabs[2]!.href}
           className="flex flex-col items-center justify-center gap-1 py-2 no-underline"
         >
-          <span className={primaryTabs[2]!.match(location) ? "text-indigo-400" : "text-white/40"}>
+          <span className={primaryTabs[2]!.match(location) ? "text-[#7dffd9]" : "text-white/45"}>
             {primaryTabs[2]!.icon}
           </span>
           <span
-            className={`text-[10px] font-medium ${primaryTabs[2]!.match(location) ? "text-indigo-300" : "text-white/40"}`}
+            className={`text-[10px] font-medium ${primaryTabs[2]!.match(location) ? "text-[#9dffe4]" : "text-white/45"}`}
           >
             {primaryTabs[2]!.label}
           </span>
@@ -147,11 +148,11 @@ export function MobileBottomNav({
           className="flex flex-col items-center justify-center gap-1 py-2"
           aria-label="More"
         >
-          <span className={moreActive ? "text-indigo-400" : "text-white/40"}>
+          <span className={moreActive ? "text-[#7dffd9]" : "text-white/45"}>
             <Menu size={22} strokeWidth={1.8} />
           </span>
           <span
-            className={`text-[10px] font-medium ${moreActive ? "text-indigo-300" : "text-white/40"}`}
+            className={`text-[10px] font-medium ${moreActive ? "text-[#9dffe4]" : "text-white/45"}`}
           >
             More
           </span>
@@ -213,7 +214,11 @@ export function MobileMoreSheet({
           <p className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
             Ask
           </p>
-          <Link href="/" onClick={close} className={linkClass(location === "/" || location === "/today")}>
+          <Link href="/" onClick={close} className={linkClass(location === "/" || location.startsWith("/everything"))}>
+            <Network size={18} />
+            <span className="flex-1 text-sm font-medium">Explore</span>
+          </Link>
+          <Link href="/today" onClick={close} className={linkClass(location === "/today" || location.startsWith("/today/"))}>
             <LayoutGrid size={18} />
             <span className="flex-1 text-sm font-medium">Today</span>
           </Link>

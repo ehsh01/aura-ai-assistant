@@ -8,6 +8,7 @@ import { AuthProvider } from "@/context/AuthContext";
 import { RequireAuth } from "@/components/RequireAuth";
 import { Dashboard } from "@/pages/Dashboard";
 import { Today } from "@/pages/Today";
+import { Everything } from "@/pages/Everything";
 import { Notes } from "@/pages/Notes";
 import { Tasks } from "@/pages/Tasks";
 import { Canvas } from "@/pages/Canvas";
@@ -89,8 +90,10 @@ function AuthedRoutes() {
   return (
     <RequireAuth>
       <Switch>
-        {/* Today is the default landing; Ask lives at /ask as the full-screen workspace. */}
-        <Route path="/" component={Today} />
+        {/* Explore is the graph-first home; Today remains available at /today. */}
+        <Route path="/" component={Everything} />
+        <Route path="/everything/:itemId" component={Everything} />
+        <Route path="/everything" component={Everything} />
         <Route path="/today/:category" component={Today} />
         <Route path="/today" component={Today} />
         <Route path="/ask" component={Dashboard} />
