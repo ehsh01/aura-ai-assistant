@@ -844,13 +844,6 @@ export async function syncEvernoteReminderFlags(
     ) {
       break;
     }
-    const paceMs = Math.min(
-      10_000,
-      Math.max(0, Number(process.env.EVERNOTE_MCP_PACE_MS ?? 1_000) || 0),
-    );
-    if (paceMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, paceMs));
-    }
   }
   await getDb()
     .update(sourceRecords)

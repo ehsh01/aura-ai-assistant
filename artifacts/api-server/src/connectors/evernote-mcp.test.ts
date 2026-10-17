@@ -12,12 +12,14 @@ import {
   createEvernoteReadOnlyCaller,
   enumerateEvernoteTaxonomy,
   evernoteMcpFetch,
+  evernoteRateLimitBackoffMs,
   evernoteMcpAuthorizationCode,
   fetchEvernoteViaMcp,
   mcpOAuthStateFromSettings,
   mcpSettingsFromOAuthState,
   streamEvernoteViaMcp,
   testEvernoteMcpConnection,
+  type EvernoteTaxonomyCheckpoint,
 } from "./evernote-mcp";
 import {
   openConnectorSettings,
@@ -32,6 +34,7 @@ afterEach(() => {
   delete process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("Evernote MCP read-only boundary", () => {
@@ -338,7 +341,17 @@ describe("Evernote MCP auth persistence", () => {
 });
 
 describe("Evernote MCP HTTP pacing", () => {
+  it("uses exponential jitter while honoring longer Retry-After values", () => {
+    expect(evernoteRateLimitBackoffMs(0, null, 0.5)).toBe(1_125);
+    expect(evernoteRateLimitBackoffMs(2, 12_000, 0)).toBe(12_000);
+    expect(evernoteRateLimitBackoffMs(10, 90_000, 1)).toBe(105_000);
+  });
+
   it("retries HTTP 429 using Retry-After before the SDK consumes headers", async () => {
+    vi.stubGlobal("setTimeout", (callback: () => void) => {
+      callback();
+      return 0;
+    });
     let calls = 0;
     vi.stubGlobal(
       "fetch",
@@ -381,6 +394,11 @@ describe("Evernote MCP HTTP pacing", () => {
 
   it("marks exhausted HTTP retries so tool retries cannot multiply them", async () => {
     process.env.EVERNOTE_MCP_MAX_429_RETRIES = "2";
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.stubGlobal("setTimeout", (callback: () => void) => {
+      callback();
+      return 0;
+    });
     let calls = 0;
     vi.stubGlobal(
       "fetch",
@@ -398,7 +416,8 @@ describe("Evernote MCP HTTP pacing", () => {
       expect.objectContaining({
         status: 429,
         mcpRetriesExhausted: true,
-        retryAfterMs: 0,
+        retryAfterMs: 4_000,
+        evernoteRateLimited: true,
       }),
     );
     expect(calls).toBe(3);
@@ -560,12 +579,17 @@ describe("Evernote MCP read sync", () => {
 
   it("retries bounded MCP 429 responses", async () => {
     process.env.EVERNOTE_MCP_PACE_MS = "0";
-    let notebookCalls = 0;
+    let noteSearchCalls = 0;
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.stubGlobal("setTimeout", (callback: () => void) => {
+      callback();
+      return 0;
+    });
     const client = {
       async callTool(input: { name: string }): Promise<unknown> {
-        if (input.name === "search_notebooks") {
-          notebookCalls += 1;
-          if (notebookCalls === 1) {
+        if (input.name === "search_notes") {
+          noteSearchCalls += 1;
+          if (noteSearchCalls === 1) {
             return {
               isError: true,
               structuredContent: { status: 429, retryAfter: 0 },
@@ -577,15 +601,6 @@ describe("Evernote MCP read sync", () => {
               ],
             };
           }
-          return { structuredContent: { notebooks: [] } };
-        }
-        if (input.name === "search_tags") {
-          return { structuredContent: { tags: [] } };
-        }
-        if (input.name === "search_spaces") {
-          return { structuredContent: { spaces: [] } };
-        }
-        if (input.name === "search_notes") {
           return {
             structuredContent: { totalResultCount: 0, notes: [] },
           };
@@ -594,13 +609,14 @@ describe("Evernote MCP read sync", () => {
       },
     };
     const result = await fetchEvernoteViaMcp(client, new Map());
-    expect(notebookCalls).toBe(2);
+    expect(noteSearchCalls).toBe(2);
     expect(result.recordsFetched).toBe(0);
   });
 
   it("propagates exhausted body rate limits to the durable job retry", async () => {
     process.env.EVERNOTE_MCP_PACE_MS = "0";
     process.env.EVERNOTE_MCP_MAX_429_RETRIES = "0";
+    vi.spyOn(Math, "random").mockReturnValue(0);
     const client = {
       async callTool(input: {
         name: string;
@@ -642,18 +658,19 @@ describe("Evernote MCP read sync", () => {
     );
   });
 
-  it("enumerates notebooks and tags beyond the MCP result cap", async () => {
+  it("bounds best-effort taxonomy against substring-matching searches", async () => {
     process.env.EVERNOTE_MCP_PACE_MS = "0";
-    const notebooks = Array.from({ length: 284 }, (_, index) => ({
+    const notebooks = Array.from({ length: 1 }, (_, index) => ({
       id: `nb-${index}`,
-      name: index < 100 ? `A ${index}` : `Z ${index}`,
+      name: `Notebook ${index}`,
       stack: index % 2 ? "Personal" : null,
     }));
     const tags = Array.from({ length: 520 }, (_, index) => ({
       id: `tag-${index}`,
-      name: index < 100 ? `A ${index}` : `Z ${index}`,
+      name: `shared tag ${index}`,
       parentId: index > 0 ? "tag-0" : null,
     }));
+    let searches = 0;
     const client = {
       async callTool(input: {
         name: string;
@@ -661,7 +678,10 @@ describe("Evernote MCP read sync", () => {
       }): Promise<unknown> {
         const query = String(input.arguments?.query ?? "").toLowerCase();
         if (input.name === "search_notebooks") {
-          const matches = query === "" ? notebooks : query === "z" ? notebooks.slice(100) : [];
+          searches += 1;
+          const matches = notebooks.filter((item) =>
+            item.name.toLowerCase().includes(query),
+          );
           return {
             structuredContent: {
               totalResultCount: matches.length,
@@ -670,7 +690,336 @@ describe("Evernote MCP read sync", () => {
           };
         }
         if (input.name === "search_tags") {
-          const matches = query === "" ? tags : query === "z" ? tags.slice(100) : [];
+          searches += 1;
+          const matches = tags.filter((item) =>
+            item.name.toLowerCase().includes(query),
+          );
+          return {
+            structuredContent: {
+              totalResultCount: matches.length,
+              tags: matches.slice(0, 100),
+            },
+          };
+        }
+        if (input.name === "search_spaces") {
+          searches += 1;
+          return {
+            structuredContent: {
+              spaces: [{ id: "space-1", name: "Home" }],
+            },
+          };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+    const checkpoints: EvernoteTaxonomyCheckpoint[] = [];
+    const taxonomy = await enumerateEvernoteTaxonomy(client, {
+      maxSearches: 64,
+      onCheckpoint: async (checkpoint) => {
+        checkpoints.push(structuredClone(checkpoint));
+      },
+    });
+    expect(searches).toBeLessThanOrEqual(64);
+    expect(checkpoints.at(-1)?.stage).toBe("complete");
+    expect(taxonomy.notebooks).toHaveLength(1);
+    expect(taxonomy.tags.length).toBeGreaterThan(100);
+    expect(taxonomy.tags.length).toBeLessThanOrEqual(520);
+  });
+
+  it("lists notes immediately and durably caches lazy taxonomy lookups by ID", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const tags = [
+      { id: "tag-519", name: "Shared label 519" },
+      ...Array.from({ length: 519 }, (_, index) => ({
+        id: `tag-${index}`,
+        name: `Shared label ${index}`,
+      })),
+    ];
+    const notebooks = [
+      { id: "nb-target", name: "Projects" },
+      ...Array.from({ length: 283 }, (_, index) => ({
+        id: `nb-${index}`,
+        name: `Notebook ${index}`,
+      })),
+    ];
+    const taxonomyQueries: string[] = [];
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        const query = String(input.arguments?.query ?? "").toLowerCase();
+        if (input.name === "search_notes") {
+          return {
+            structuredContent: {
+              totalResultCount: 1,
+              notes: [{ id: "note-1", updatedAt: "2026-10-17T00:00:00Z" }],
+            },
+          };
+        }
+        if (input.name === "get_note") {
+          return {
+            structuredContent: {
+              id: "note-1",
+              title: "Mapped note",
+              content: "<en-note>Body</en-note>",
+              notebookId: "nb-target",
+              tagIds: ["tag-519"],
+              updatedAt: "2026-10-17T00:00:00Z",
+            },
+          };
+        }
+        if (input.name === "search_notebooks") {
+          taxonomyQueries.push(`notebook:${query}`);
+          const matches = notebooks.filter((item) =>
+            item.name.toLowerCase().includes(query),
+          );
+          return {
+            structuredContent: {
+              totalResultCount: matches.length,
+              notebooks: matches.slice(0, 100),
+            },
+          };
+        }
+        if (input.name === "search_tags") {
+          taxonomyQueries.push(`tag:${query}`);
+          const matches = tags.filter((item) =>
+            item.name.toLowerCase().includes(query),
+          );
+          return {
+            structuredContent: {
+              totalResultCount: matches.length,
+              tags: matches.slice(0, 100),
+            },
+          };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+    const persisted: {
+      notebooks: Map<string, (typeof notebooks)[number]>;
+      tags: Map<string, (typeof tags)[number]>;
+    } = {
+      notebooks: new Map(),
+      tags: new Map(),
+    };
+    const records: Array<{ metadata: Record<string, unknown> }> = [];
+    const taxonomy = () => ({
+      notebooks: [...persisted.notebooks.values()].map((entity) => ({
+        ...entity,
+        parentId: null,
+        stack: null,
+        spaceId: null,
+        access: null,
+        metadata: {},
+      })),
+      tags: [...persisted.tags.values()].map((entity) => ({
+        ...entity,
+        parentId: null,
+        stack: null,
+        spaceId: null,
+        access: null,
+        metadata: {},
+      })),
+      spaces: [],
+    });
+    const run = async (syncRunId: string) =>
+      streamEvernoteViaMcp(client, {
+        syncRunId,
+        taxonomy: taxonomy(),
+        loadKnownNotes: async () => new Map(),
+        onTaxonomyEntities: async (resolved) => {
+          for (const entity of resolved.notebooks) {
+            persisted.notebooks.set(entity.id, entity);
+          }
+          for (const entity of resolved.tags) {
+            persisted.tags.set(entity.id, entity);
+          }
+        },
+        processBatch: async (batch) => {
+          records.push(
+            ...batch.records.map((record) => ({
+              metadata: record.metadata,
+            })),
+          );
+        },
+      });
+
+    const first = await run("lazy-1");
+    const second = await run("lazy-2");
+
+    expect(taxonomyQueries).toEqual(["notebook:", "tag:"]);
+    expect(first.taxonomyLookups).toEqual({ cached: 0, fetched: 2 });
+    expect(second.taxonomyLookups).toEqual({ cached: 2, fetched: 0 });
+    expect(records).toHaveLength(2);
+    for (const record of records) {
+      expect(record.metadata).toMatchObject({
+        notebookName: "Projects",
+        tagNames: ["Shared label 519"],
+      });
+    }
+  });
+
+  it("persists each successful lazy lookup before a later rate-limit deferral", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    process.env.EVERNOTE_MCP_MAX_429_RETRIES = "0";
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const persistedIds: string[] = [];
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notes") {
+          return {
+            structuredContent: {
+              totalResultCount: 1,
+              notes: [{ id: "note-limited", updatedAt: "2026-10-17T00:00:00Z" }],
+            },
+          };
+        }
+        if (input.name === "get_note") {
+          return {
+            structuredContent: {
+              id: "note-limited",
+              notebookId: "nb-resolved",
+              tagIds: ["tag-limited"],
+              content: "<en-note>Body</en-note>",
+            },
+          };
+        }
+        if (input.name === "search_notebooks") {
+          return {
+            structuredContent: {
+              notebooks: [{ id: "nb-resolved", name: "Resolved notebook" }],
+            },
+          };
+        }
+        if (input.name === "search_tags") {
+          return {
+            isError: true,
+            structuredContent: { status: 429, retryAfterMs: 12_000 },
+            content: [{ type: "text", text: "rate limit" }],
+          };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+
+    await expect(
+      streamEvernoteViaMcp(client, {
+        syncRunId: "lazy-limited",
+        taxonomy: { notebooks: [], tags: [], spaces: [] },
+        loadKnownNotes: async () => new Map(),
+        onTaxonomyEntities: async (resolved) => {
+          persistedIds.push(
+            ...resolved.notebooks.map((entity) => entity.id),
+            ...resolved.tags.map((entity) => entity.id),
+          );
+        },
+        processBatch: async () => {
+          throw new Error("batch should not commit while rate limited");
+        },
+      }),
+    ).rejects.toMatchObject({
+      status: 429,
+      retryAfterMs: 12_000,
+      evernoteRateLimited: true,
+    });
+    expect(persistedIds).toEqual(["nb-resolved"]);
+  });
+
+  it("does not checkpoint a note when a lazy taxonomy lookup fails transiently", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const processBatch = vi.fn();
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notes") {
+          return {
+            structuredContent: {
+              totalResultCount: 1,
+              notes: [{ id: "note-retry", updatedAt: "2026-10-17T00:00:00Z" }],
+            },
+          };
+        }
+        if (input.name === "get_note") {
+          return {
+            structuredContent: {
+              id: "note-retry",
+              notebookId: "nb-retry",
+              content: "<en-note>Body</en-note>",
+            },
+          };
+        }
+        if (input.name === "search_notebooks") {
+          throw new Error("temporary MCP outage");
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+
+    await expect(
+      streamEvernoteViaMcp(client, {
+        syncRunId: "lazy-retry",
+        taxonomy: { notebooks: [], tags: [], spaces: [] },
+        loadKnownNotes: async () => new Map(),
+        processBatch,
+      }),
+    ).rejects.toMatchObject({
+      message: "temporary MCP outage",
+      evernoteTaxonomyLookupRetryable: true,
+    });
+    expect(processBatch).not.toHaveBeenCalled();
+  });
+
+  it("resumes taxonomy from its durable frontier with identical results and progress", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const notebooks = [
+      ...Array.from({ length: 60 }, (_, index) => ({
+        id: `nb-a-${index}`,
+        name: `a notebook ${index}`,
+      })),
+      ...Array.from({ length: 60 }, (_, index) => ({
+        id: `nb-z-${index}`,
+        name: `z notebook ${index}`,
+      })),
+    ];
+    const tags = [
+      ...Array.from({ length: 55 }, (_, index) => ({
+        id: `tag-b-${index}`,
+        name: `b tag ${index}`,
+      })),
+      ...Array.from({ length: 70 }, (_, index) => ({
+        id: `tag-y-${index}`,
+        name: `y tag ${index}`,
+      })),
+    ];
+    const calls: string[] = [];
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        const query = String(input.arguments?.query ?? "").toLowerCase();
+        calls.push(`${input.name}:${query}`);
+        if (input.name === "search_notebooks") {
+          const matches = query
+            ? notebooks.filter((item) => item.name.startsWith(query))
+            : notebooks;
+          return {
+            structuredContent: {
+              totalResultCount: matches.length,
+              notebooks: matches.slice(0, 100),
+            },
+          };
+        }
+        if (input.name === "search_tags") {
+          const matches = query
+            ? tags.filter((item) => item.name.startsWith(query))
+            : tags;
           return {
             structuredContent: {
               totalResultCount: matches.length,
@@ -681,22 +1030,61 @@ describe("Evernote MCP read sync", () => {
         if (input.name === "search_spaces") {
           return {
             structuredContent: {
-              spaces: [{ id: "space-1", name: "Home" }],
+              spaces: [{ id: "space-home", name: "Home" }],
             },
           };
         }
         throw new Error(`Unexpected tool ${input.name}`);
       },
     };
-    const taxonomy = await enumerateEvernoteTaxonomy(client);
-    // The synthetic saturated "z" bucket keeps refining to zz/zzz, so this
-    // verifies union/dedupe beyond the first 100 rather than exact mock totals.
-    expect(taxonomy.notebooks.length).toBeGreaterThan(100);
-    expect(taxonomy.tags.length).toBeGreaterThan(100);
-    expect(taxonomy.spaces).toHaveLength(1);
-    expect(new Set(taxonomy.notebooks.map((item) => item.id)).size).toBe(
-      taxonomy.notebooks.length,
-    );
+
+    let durableCheckpoint: EvernoteTaxonomyCheckpoint | undefined;
+    await expect(
+      enumerateEvernoteTaxonomy(client, {
+        checkpointEverySearches: 10,
+        onCheckpoint: async (checkpoint, progress) => {
+          durableCheckpoint = structuredClone(checkpoint);
+          expect(progress).toMatchObject({
+            searchesDone: 10,
+            notebooksFound: 100,
+            tagsFound: 0,
+          });
+          throw new Error("simulated worker interruption");
+        },
+      }),
+    ).rejects.toThrow("simulated worker interruption");
+    expect(durableCheckpoint).toBeDefined();
+
+    const resumedProgress: Array<{
+      stage: string;
+      searchesDone: number;
+      prefixesQueued: number;
+      notebooksFound: number;
+      tagsFound: number;
+    }> = [];
+    const resumed = await enumerateEvernoteTaxonomy(client, {
+      checkpoint: durableCheckpoint,
+      checkpointEverySearches: 10,
+      onCheckpoint: async (_checkpoint, progress) => {
+        resumedProgress.push(progress);
+      },
+    });
+    const baseline = await enumerateEvernoteTaxonomy(client);
+
+    expect(resumed).toEqual(baseline);
+    expect(calls.filter((call) => call === "search_notebooks:")).toHaveLength(2);
+    expect(resumedProgress.at(-1)).toMatchObject({
+      stage: "complete",
+      notebooksFound: 120,
+      tagsFound: 125,
+    });
+    expect(
+      resumedProgress.every(
+        (progress) =>
+          progress.searchesDone >= 10 &&
+          progress.prefixesQueued >= 0,
+      ),
+    ).toBe(true);
   });
 
   it("chunks changed-note backfill and reports deferred work", async () => {

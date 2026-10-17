@@ -10,6 +10,7 @@ import {
   type Connector,
 } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
+import { logger } from "../lib/logger";
 import { newConnectorId, newSourceRecordId, newSyncRunId } from "../lib/recall-format";
 import { csvImportConnector, parseCsvText } from "../connectors/csv-import";
 import {
@@ -1979,7 +1980,8 @@ export async function enqueueEvernoteSyncForUser(
       metadata: {
         evernoteSyncMode: mode,
         evernoteScheduled: options?.scheduled === true,
-        evernotePhase: "active",
+        evernotePhase: "notes",
+        evernoteLookupProgress: { cached: 0, fetched: 0 },
         evernoteCheckpoint: {
           startIndex: 0,
           expectedTotal: null,
@@ -2015,6 +2017,25 @@ export async function enqueueEvernoteSyncForUser(
     return { syncRunId, jobId: syncRunId, status: "queued" };
   });
   return queued;
+}
+
+export function withEvernoteLookupProgress(
+  metadata: Record<string, unknown>,
+  progress: {
+    cached: number;
+    fetched: number;
+  },
+  updatedAt = new Date(),
+  phase: "notes" | "trash" = "notes",
+): Record<string, unknown> {
+  return {
+    ...metadata,
+    evernotePhase: phase,
+    evernoteLookupProgress: {
+      ...progress,
+      updatedAt: updatedAt.toISOString(),
+    },
+  };
 }
 
 export async function processEvernoteSyncJob(
@@ -2355,11 +2376,25 @@ export async function processEvernoteSyncJob(
     return true;
   }
 
-  const refreshTaxonomy =
-    syncMode === "full" && metadata.evernoteTaxonomyRefreshed !== true;
-  const taxonomy = refreshTaxonomy
-    ? null
-    : await loadEvernoteTaxonomy(connectorId);
+  const taxonomy =
+    (await loadEvernoteTaxonomy(connectorId)) ?? {
+      notebooks: [],
+      tags: [],
+      spaces: [],
+    };
+  const taxonomyMetadata = { ...metadata };
+  delete taxonomyMetadata.evernoteTaxonomyCheckpoint;
+  metadata = {
+    ...taxonomyMetadata,
+    evernotePhase: phase === "trash" ? "trash" : "notes",
+    evernoteTaxonomyMode: "lazy",
+  };
+  if (phase !== "trash") {
+    await getDb()
+      .update(syncRuns)
+      .set({ metadata })
+      .where(eq(syncRuns.id, syncRunId));
+  }
   const trashPhase = phase === "trash";
   const streamed = await withEvernoteMcpClient(
     settings,
@@ -2376,14 +2411,15 @@ export async function processEvernoteSyncJob(
         query: trashPhase ? "intrash:true" : "",
         forceTrashed: trashPhase,
         stopAtFirstUnchanged: syncMode === "incremental" && !trashPhase,
-        taxonomy: taxonomy ?? undefined,
-        onTaxonomy: async (value) => {
+        taxonomy,
+        taxonomyLookupProgress:
+          metadata.evernoteLookupProgress &&
+          typeof metadata.evernoteLookupProgress === "object"
+            ? (metadata.evernoteLookupProgress as Record<string, number>)
+            : undefined,
+        onTaxonomyEntities: async (value) => {
           await persistEvernoteTaxonomy(userId, connectorId, value);
-          metadata = { ...metadata, evernoteTaxonomyRefreshed: true };
-          await getDb()
-            .update(syncRuns)
-            .set({ metadata })
-            .where(eq(syncRuns.id, syncRunId));
+          await heartbeat?.();
         },
         loadKnownNotes: (externalIds) =>
           loadEvernoteKnownNotes(connectorId, externalIds),
@@ -2480,19 +2516,23 @@ export async function processEvernoteSyncJob(
                 embeddingReserved,
             ) || 0;
           errors = [...errors, ...batch.errors].slice(-100);
-          metadata = {
-            ...(currentRun[0]?.metadata ?? metadata),
-            ...(trashPhase
-              ? { evernoteTrashCheckpoint: batch.checkpoint }
-              : { evernoteCheckpoint: batch.checkpoint }),
-            evernotePhase: trashPhase ? "trash" : "active",
-            contentHashSkipped,
-            processingFailures,
-            recordsDeleted,
-            recordsEmbedded,
-            evernoteEmbeddingReserved: embeddingReserved,
-            errors,
-          };
+          metadata = withEvernoteLookupProgress(
+            {
+              ...(currentRun[0]?.metadata ?? metadata),
+              ...(trashPhase
+                ? { evernoteTrashCheckpoint: batch.checkpoint }
+                : { evernoteCheckpoint: batch.checkpoint }),
+              contentHashSkipped,
+              processingFailures,
+              recordsDeleted,
+              recordsEmbedded,
+              evernoteEmbeddingReserved: embeddingReserved,
+              errors,
+            },
+            batch.taxonomyLookups,
+            new Date(),
+            trashPhase ? "trash" : "notes",
+          );
           await getDb()
             .update(syncRuns)
             .set({
@@ -2518,6 +2558,18 @@ export async function processEvernoteSyncJob(
             })
             .where(eq(syncRuns.id, syncRunId));
           await heartbeat?.();
+          logger.info(
+            {
+              syncRunId,
+              connectorId,
+              phase: trashPhase ? "trash" : "notes",
+              notesFetched: batch.checkpoint.recordsFetched,
+              notesCreated: recordsCreated,
+              lookupsCached: batch.taxonomyLookups.cached,
+              lookupsFetched: batch.taxonomyLookups.fetched,
+            },
+            "Evernote import progress",
+          );
         },
         // Yield the shared worker regularly while keeping each page durable.
         maxBatchesPerInvocation: 4,
