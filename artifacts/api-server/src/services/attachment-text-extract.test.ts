@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeFile, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -8,6 +8,12 @@ import {
   extractTextFromAttachmentFile,
   extractWithContentHashCache,
 } from "./attachment-text-extract";
+import { evernoteDeferredError } from "./evernote-watchdog";
+
+afterEach(() => {
+  delete process.env.RECALL_ATTACHMENT_OCR_ENABLED;
+  delete process.env.TESSERACT_OCR_TIMEOUT_MS;
+});
 
 describe("attachmentContentHash", () => {
   it("returns a stable SHA-256 digest of the file bytes", () => {
@@ -67,12 +73,99 @@ describe("attachment extraction safeguards", () => {
     expect(extract).not.toHaveBeenCalled();
   });
 
-  it("degrades gracefully when the tesseract binary is missing", async () => {
+  it("keeps missing-Tesseract failures retryable", async () => {
+    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
     const missing = Object.assign(new Error("spawn tesseract ENOENT"), {
       code: "ENOENT",
     });
     const run = vi.fn().mockRejectedValue(missing);
 
-    await expect(extractImageTextWithTesseract("/tmp/missing.png", 3_000, run)).resolves.toBe("");
+    await expect(
+      extractImageTextWithTesseract("/tmp/missing.png", 3_000, run, {
+        now: new Date("2026-10-17T06:00:00Z"),
+        loadCheck: async () => undefined,
+      }),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps the OCR kill switch and defers without spawning", async () => {
+    const run = vi.fn();
+    await expect(
+      extractImageTextWithTesseract("/tmp/disabled.png", 3_000, run),
+    ).rejects.toMatchObject({ name: "EvernoteWatchdogPauseError" });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("defers image OCR outside 1–5 AM New York without dropping it", async () => {
+    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
+    const run = vi.fn();
+    await expect(
+      extractImageTextWithTesseract("/tmp/daytime.png", 3_000, run, {
+        now: new Date("2026-10-17T15:00:00Z"),
+        loadCheck: async () => undefined,
+      }),
+    ).rejects.toMatchObject({ name: "EvernoteWatchdogPauseError" });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("propagates upload-image deferral instead of persisting empty text", async () => {
+    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-17T15:00:00Z"));
+    try {
+      await expect(
+        extractTextFromAttachmentFile({
+          absPath: "/tmp/not-read-before-night.png",
+          mimeType: "image/png",
+          fileName: "queued.png",
+          sizeBytes: 3_000,
+        }),
+      ).rejects.toMatchObject({ name: "EvernoteWatchdogPauseError" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defers on the load check without invoking Tesseract", async () => {
+    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
+    const run = vi.fn();
+    await expect(
+      extractImageTextWithTesseract("/tmp/loaded.png", 8 * 1024 * 1024, run, {
+        now: new Date("2026-10-17T06:00:00Z"),
+        loadCheck: async () => {
+          throw evernoteDeferredError("not enough memory");
+        },
+      }),
+    ).rejects.toMatchObject({ name: "EvernoteWatchdogPauseError" });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("runs under nice, flock, one OMP thread, and the configured timeout", async () => {
+    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
+    const run = vi.fn().mockResolvedValue({ stdout: "recognized" });
+    await expect(
+      extractImageTextWithTesseract("/tmp/night.png", 3_000, run, {
+        now: new Date("2026-10-17T06:00:00Z"),
+        loadCheck: async () => undefined,
+      }),
+    ).resolves.toBe("recognized");
+    expect(run).toHaveBeenCalledWith(
+      "nice",
+      [
+        "-n",
+        "19",
+        "flock",
+        "-x",
+        "-F",
+        "/tmp/recall-tesseract.lock",
+        "tesseract",
+        "/tmp/night.png",
+        "stdout",
+      ],
+      expect.objectContaining({
+        timeout: 30_000,
+        env: expect.objectContaining({ OMP_THREAD_LIMIT: "1" }),
+      }),
+    );
   });
 });

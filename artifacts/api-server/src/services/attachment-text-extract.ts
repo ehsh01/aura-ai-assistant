@@ -8,6 +8,13 @@ import { noteAttachments } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { config } from "../lib/config";
 import { logger } from "../lib/logger";
+import { isEnabled } from "../lib/feature-flags";
+import { isEvernoteNightWindow } from "./evernote-runtime-policy";
+import {
+  assertEvernoteImportSafe,
+  evernoteDeferredError,
+  requiredMemoryMbForBytes,
+} from "./evernote-watchdog";
 
 const MAX_EXTRACTED_CHARS = 12_000;
 const MIN_IMAGE_BYTES_FOR_OCR = 2_500;
@@ -98,17 +105,53 @@ export async function extractImageTextWithTesseract(
   absPath: string,
   sizeBytes: number,
   run: typeof execFileAsync = execFileAsync,
+  options?: {
+    now?: Date;
+    loadCheck?: (sizeBytes: number) => Promise<void>;
+  },
 ): Promise<string> {
   if (sizeBytes < MIN_IMAGE_BYTES_FOR_OCR || sizeBytes > maxImageBytes()) return "";
+  if (!isEnabled("RECALL_ATTACHMENT_OCR_ENABLED", false)) {
+    throw evernoteDeferredError("upload OCR is disabled", 60 * 60_000);
+  }
+  if (!isEvernoteNightWindow(options?.now)) {
+    throw evernoteDeferredError(
+      "upload OCR is outside the configured night window",
+      60 * 60_000,
+    );
+  }
 
   return serializeTesseract(async () => {
+    await (
+      options?.loadCheck ??
+      (async (bytes: number) =>
+        assertEvernoteImportSafe({
+          minimumMemoryMb: requiredMemoryMbForBytes(bytes),
+          requireMemoryMeasurement: true,
+        }))
+    )(sizeBytes);
     try {
       // `flock` makes the concurrency cap host-wide across API/worker PM2
       // processes; the in-process queue avoids needless lock contention.
-      const { stdout } = await run("flock", ["-x", "-F", "/tmp/recall-tesseract.lock", "tesseract", absPath, "stdout"], {
-        timeout: tesseractTimeoutMs(),
-        maxBuffer: 2 * 1024 * 1024,
-      });
+      const { stdout } = await run(
+        "nice",
+        [
+          "-n",
+          "19",
+          "flock",
+          "-x",
+          "-F",
+          "/tmp/recall-tesseract.lock",
+          "tesseract",
+          absPath,
+          "stdout",
+        ],
+        {
+          timeout: tesseractTimeoutMs(),
+          maxBuffer: 2 * 1024 * 1024,
+          env: { ...process.env, OMP_THREAD_LIMIT: "1" },
+        },
+      );
       return truncate(String(stdout));
     } catch (err) {
       if (isMissingExecutable(err)) {
@@ -116,10 +159,10 @@ export async function extractImageTextWithTesseract(
           loggedMissingTesseract = true;
           logger.warn("tesseract binary is unavailable; image attachment text extraction is disabled");
         }
-        return "";
+        throw err;
       }
       logger.warn({ err, absPath }, "Tesseract attachment extraction failed");
-      return "";
+      throw err;
     }
   });
 }
@@ -147,6 +190,11 @@ export async function extractTextFromAttachmentFile(opts: {
 }): Promise<string> {
   const mime = (opts.mimeType || "").toLowerCase();
   const name = (opts.fileName || "").toLowerCase();
+  if (mime.startsWith("image/") || /\.(jpe?g|png|gif|webp|bmp)$/i.test(name)) {
+    // Let night/load deferrals propagate to the durable job. Persisting an
+    // empty extraction here would permanently drop the queued upload OCR.
+    return extractImageTextWithTesseract(opts.absPath, opts.sizeBytes);
+  }
 
   let data: Buffer;
   try {
@@ -172,9 +220,6 @@ export async function extractTextFromAttachmentFile(opts: {
     }
     if (mime.includes("wordprocessingml") || mime === "application/msword" || name.endsWith(".docx")) {
       return await extractDocxText(opts.absPath);
-    }
-    if (mime.startsWith("image/") || /\.(jpe?g|png|gif|webp|bmp)$/i.test(name)) {
-      return await extractImageTextWithTesseract(opts.absPath, data.length);
     }
   } catch (err) {
     logger.warn({ err, fileName: opts.fileName, mimeType: opts.mimeType }, "Attachment text extraction failed");
