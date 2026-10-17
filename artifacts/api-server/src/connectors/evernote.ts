@@ -133,6 +133,9 @@ export type EvernoteKnownNote = {
   /** Durable page marker used to resume a worker after a crash. */
   evernoteSeenSyncRunId?: string | null;
   evernoteSeenAtIndex?: number | null;
+  /** Set only after source, evidence, and embedding work for the page finishes. */
+  evernoteProcessedSyncRunId?: string | null;
+  evernoteProcessedAtIndex?: number | null;
 };
 
 export type EvernoteRawRecord = {

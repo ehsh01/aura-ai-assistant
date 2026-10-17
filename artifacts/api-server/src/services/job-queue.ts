@@ -185,7 +185,11 @@ export async function continueJob(jobId: string): Promise<void> {
  * Mark failure. If attempts remain, re-queue with backoff.
  * @returns whether the job is terminally failed
  */
-export async function failJob(jobId: string, error: string): Promise<boolean> {
+export async function failJob(
+  jobId: string,
+  error: string,
+  options?: { retryAfterMs?: number },
+): Promise<boolean> {
   const rows = await getDb().select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
   const job = rows[0];
   if (!job) return true;
@@ -208,7 +212,12 @@ export async function failJob(jobId: string, error: string): Promise<boolean> {
     return true;
   }
 
-  const delay = backoffMs(job.attempts);
+  const retryAfterMs =
+    typeof options?.retryAfterMs === "number" &&
+    Number.isFinite(options.retryAfterMs)
+      ? Math.min(Math.max(options.retryAfterMs, 0), 60_000)
+      : 0;
+  const delay = Math.max(backoffMs(job.attempts), retryAfterMs);
   await getDb()
     .update(jobs)
     .set({

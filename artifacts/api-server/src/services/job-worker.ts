@@ -119,13 +119,21 @@ const handlers: Record<string, JobHandler> = {
       throw new Error("connector_sync job missing connectorId/syncRunId");
     }
     const { processEvernoteSyncJob } = await import("./connectors");
-    const complete = await processEvernoteSyncJob(
-      job.userId,
-      meta.connectorId,
-      meta.syncRunId,
-      () => heartbeatJob(job.id),
-    );
-    return complete ? undefined : "continue";
+    const lease = setInterval(() => {
+      void heartbeatJob(job.id).catch(() => undefined);
+    }, 60_000);
+    lease.unref?.();
+    try {
+      const complete = await processEvernoteSyncJob(
+        job.userId,
+        meta.connectorId,
+        meta.syncRunId,
+        () => heartbeatJob(job.id),
+      );
+      return complete ? undefined : "continue";
+    } finally {
+      clearInterval(lease);
+    }
   },
 };
 
@@ -145,7 +153,14 @@ async function runOneJob(job: Job): Promise<void> {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Job failed";
-    const terminal = await failJob(job.id, message);
+    const retryAfterMs =
+      err &&
+      typeof err === "object" &&
+      "retryAfterMs" in err &&
+      typeof err.retryAfterMs === "number"
+        ? err.retryAfterMs
+        : undefined;
+    const terminal = await failJob(job.id, message, { retryAfterMs });
     if (terminal && job.type === JOB_TYPE_CONNECTOR_SYNC) {
       const meta = connectorSyncFromPayload(job.payload);
       if (meta) {

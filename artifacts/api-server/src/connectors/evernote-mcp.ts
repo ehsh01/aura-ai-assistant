@@ -93,19 +93,24 @@ export const evernoteMcpFetch: FetchLike = async (input, init) => {
     const request = input instanceof Request ? input.clone() : input;
     const response = await fetch(request, init);
     if (response.status !== 429) return response;
-    if (attempt >= retries) {
-      const error = new Error(
-        `Evernote MCP HTTP 429 after ${attempt + 1} request(s)`,
-      ) as Error & { status: number; mcpRetriesExhausted: boolean };
-      error.status = 429;
-      error.mcpRetriesExhausted = true;
-      throw error;
-    }
-    const delay = Math.min(
+    const retryAfterMs = Math.min(
       retryAfterHeaderMs(response.headers.get("retry-after")) ?? 1_000,
       60_000,
     );
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    if (attempt >= retries) {
+      const error = new Error(
+        `Evernote MCP HTTP 429 after ${attempt + 1} request(s)`,
+      ) as Error & {
+        status: number;
+        mcpRetriesExhausted: boolean;
+        retryAfterMs: number;
+      };
+      error.status = 429;
+      error.mcpRetriesExhausted = true;
+      error.retryAfterMs = retryAfterMs;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
   }
 };
 
@@ -525,6 +530,16 @@ async function callReadTool(
   }
 }
 
+function isMcpRateLimitError(error: unknown): boolean {
+  const row = asRecord(error);
+  const data = asRecord(row.data);
+  const status = asNumber(
+    row.status ?? row.statusCode ?? data.status ?? data.statusCode,
+  );
+  const message = error instanceof Error ? error.message : "";
+  return status === 429 || /\b429\b|rate.?limit/i.test(message);
+}
+
 function idAndName(value: unknown): { id: string; name: string } | null {
   const row = asRecord(value);
   const id =
@@ -600,6 +615,13 @@ function boundedText(value: unknown, max = EVERNOTE_MAX_NOTE_CONTENT_CHARS): {
     : { text, truncated: false };
 }
 
+function firstNoteContent(raw: JsonRecord): string {
+  for (const value of [raw.content, raw.enml, raw.body]) {
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return "";
+}
+
 function boundedScalar(value: unknown, max: number): string | null {
   if (typeof value !== "string") return null;
   const text = value.slice(0, max).trim();
@@ -608,7 +630,7 @@ function boundedScalar(value: unknown, max: number): string | null {
 
 function compactNoteForSync(raw: JsonRecord): JsonRecord {
   const structured = asRecord(raw.structuredContent);
-  const content = boundedText(raw.content ?? raw.enml ?? raw.body);
+  const content = boundedText(firstNoteContent(raw));
   const compactEntity = (value: unknown): JsonRecord => {
     const row = asRecord(value);
     return {
@@ -661,7 +683,7 @@ function noteToRaw(
   if (!guid) throw new Error("Evernote MCP note is missing a GUID");
   const structured = asRecord(raw.structuredContent);
   const title = (asString(raw.title) ?? "Untitled").slice(0, 1_000);
-  const content = boundedText(raw.content ?? raw.enml ?? raw.body);
+  const content = boundedText(firstNoteContent(raw));
   content.truncated ||= raw.contentTruncated === true;
   const text = evernoteEnmlToText(content.text);
   const notebookGuid =
@@ -767,6 +789,7 @@ export type EvernoteMcpSyncCheckpoint = {
 export type EvernoteMcpSyncBatch = {
   records: EvernoteRawRecord[];
   seen: Array<{ externalId: string; listingIndex: number }>;
+  replayExternalIds: string[];
   errors: string[];
   checkpoint: EvernoteMcpSyncCheckpoint;
 };
@@ -846,7 +869,9 @@ export async function streamEvernoteViaMcp(
   );
 
   let checkpoint = initialCheckpoint(options.checkpoint);
-  let listingComplete = false;
+  let listingComplete =
+    checkpoint.expectedTotal != null &&
+    checkpoint.startIndex >= checkpoint.expectedTotal;
   let invocationBatches = 0;
   const pageSize = evernoteMcpBackfillChunkSize();
 
@@ -862,6 +887,8 @@ export async function streamEvernoteViaMcp(
       sortBy: "updated",
       ascending: false,
     });
+    // Keep the same global pacing before either a body fetch or the next page.
+    await pace();
     const rawPage = firstArray(result, ["notes", "results", "items"]);
     const reportedTotal = asNumber(
       result.totalResultCount ?? result.total ?? result.totalNotes,
@@ -871,9 +898,25 @@ export async function streamEvernoteViaMcp(
         checkpoint.expectedTotal != null &&
         checkpoint.expectedTotal !== reportedTotal
       ) {
-        throw new Error(
-          `Evernote MCP note total changed during sync (${checkpoint.expectedTotal} to ${reportedTotal})`,
-        );
+        // Offset pagination is no longer authoritative after a concurrent
+        // library change. Restart from zero and retain the no-delete guard.
+        checkpoint = {
+          ...checkpoint,
+          startIndex: 0,
+          expectedTotal: Math.max(0, Math.floor(reportedTotal)),
+          listingAuthoritative: false,
+        };
+        await options.processBatch({
+          records: [],
+          seen: [],
+          replayExternalIds: [],
+          errors: [],
+          checkpoint,
+        });
+        if (checkpoint.expectedTotal === 0) {
+          listingComplete = true;
+        }
+        break;
       }
       checkpoint = {
         ...checkpoint,
@@ -913,6 +956,7 @@ export async function streamEvernoteViaMcp(
     const knownNotes = await options.loadKnownNotes([...new Set(ids)]);
     const seen: Array<{ externalId: string; listingIndex: number }> = [];
     const records: EvernoteRawRecord[] = [];
+    const replayExternalIds: string[] = [];
     const errors: string[] = [];
     let skipped = 0;
     let failed = 0;
@@ -921,15 +965,26 @@ export async function streamEvernoteViaMcp(
       const guid = summary.externalId;
       if (!guid) continue;
       const known = knownNotes.get(guid);
-      if (known?.evernoteSeenSyncRunId === options.syncRunId) {
-        if (known.evernoteSeenAtIndex !== summary.listingIndex) {
-          checkpoint = { ...checkpoint, listingAuthoritative: false };
-        }
-        // This page was partially committed before a worker restart.
+      const processedHere =
+        known?.evernoteProcessedSyncRunId === options.syncRunId &&
+        known.evernoteProcessedAtIndex === summary.listingIndex;
+      if (processedHere) {
         continue;
       }
-      seen.push({ externalId: guid, listingIndex: summary.listingIndex });
+      const seenHere =
+        known?.evernoteSeenSyncRunId === options.syncRunId &&
+        known.evernoteSeenAtIndex === summary.listingIndex;
       if (
+        (known?.evernoteSeenSyncRunId === options.syncRunId && !seenHere) ||
+        (known?.evernoteProcessedSyncRunId === options.syncRunId &&
+          !processedHere)
+      ) {
+        checkpoint = { ...checkpoint, listingAuthoritative: false };
+      }
+      seen.push({ externalId: guid, listingIndex: summary.listingIndex });
+      if (seenHere) replayExternalIds.push(guid);
+      if (
+        !seenHere &&
         known &&
         summary.updatedAt &&
         known.evernoteUpdated === summary.updatedAt
@@ -949,6 +1004,7 @@ export async function streamEvernoteViaMcp(
         }
         records.push(record);
       } catch (error) {
+        if (isMcpRateLimitError(error)) throw error;
         failed += 1;
         errors.push(
           error instanceof Error
@@ -964,13 +1020,18 @@ export async function streamEvernoteViaMcp(
     checkpoint = {
       ...checkpoint,
       startIndex: nextStart,
-      recordsFetched:
-        checkpoint.expectedTotal ?? Math.max(checkpoint.recordsFetched, nextStart),
+      recordsFetched: Math.max(checkpoint.recordsFetched, nextStart),
       recordsSkipped: checkpoint.recordsSkipped + skipped,
       recordsFailed: checkpoint.recordsFailed + failed,
       batchesProcessed: checkpoint.batchesProcessed + 1,
     };
-    await options.processBatch({ records, seen, errors, checkpoint });
+    await options.processBatch({
+      records,
+      seen,
+      replayExternalIds,
+      errors,
+      checkpoint,
+    });
     invocationBatches += 1;
 
     if (
@@ -988,7 +1049,6 @@ export async function streamEvernoteViaMcp(
       ? 1
       : Math.max(1, Math.floor(options.maxBatchesPerInvocation ?? Infinity));
     if (invocationBatches >= maxBatches) break;
-    await pace();
   }
 
   const recordsDeferred =

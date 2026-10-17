@@ -51,7 +51,11 @@ import {
 import type { RecallConnector } from "../connectors/types";
 import { upsertEvidenceForSourceRecord } from "./evidence";
 import { writeAuditLog } from "./audit";
-import { warmEntityEmbedding } from "./embedding-cache";
+import {
+  embedItemsCached,
+  evictEntityEmbedding,
+  warmEntityEmbedding,
+} from "./embedding-cache";
 import { heuristicDigest, withSourceDigest } from "./digests";
 import { openConnectorSettings, sealConnectorSettings } from "../lib/secret-box";
 import { matchHomeyName, type HomeyAskPlan } from "./nl-homey-query";
@@ -79,7 +83,6 @@ import {
   type EvernoteFetchResult,
   type EvernoteKnownNote,
 } from "../connectors/evernote";
-import { embedItemsCached } from "./embedding-cache";
 import { embeddingTextForContextRecord } from "./embedding-text";
 
 const CONNECTOR_IMPLS: Record<string, RecallConnector> = {
@@ -1644,6 +1647,7 @@ export async function upsertSourceRecord(
           ),
         );
     });
+    evictEntityEmbedding(userId, "source_record", existing[0].id);
     return { id: existing[0].id, action: "updated" };
   }
 
@@ -1795,15 +1799,8 @@ async function warmChangedEvernoteEmbeddings(
   const limit = evernoteEmbeddingSyncLimit();
   if (limit === 0 || changedIds.length === 0) return 0;
   const remaining = Math.max(0, limit - alreadyReserved);
-  const requested = Math.min([...new Set(changedIds)].length, remaining);
-  const reserved = await reserveEvernoteEmbeddingSlots(
-    userId,
-    syncRunId,
-    requested,
-    remaining,
-  );
-  if (reserved === 0) return 0;
-  const ids = [...new Set(changedIds)].slice(0, reserved);
+  if (remaining === 0) return 0;
+  const ids = [...new Set(changedIds)];
   const rows = await getDb()
     .select({
       id: sourceRecords.id,
@@ -1818,9 +1815,7 @@ async function warmChangedEvernoteEmbeddings(
         inArray(sourceRecords.id, ids),
       ),
     );
-  const vectors = await embedItemsCached(
-    userId,
-    rows.map((row) => ({
+  const items = rows.map((row) => ({
       entityType: "source_record",
       entityId: row.id,
       text: embeddingTextForContextRecord({
@@ -1832,9 +1827,27 @@ async function warmChangedEvernoteEmbeddings(
             ? row.metadata.digest
             : null,
       }),
-    })),
+    }));
+  const cached = await embedItemsCached(userId, items, {
+    generateMissing: false,
+  });
+  if (cached === null) return 0;
+  const missing = items.filter(
+    (item) => !cached.has(`${item.entityType}:${item.entityId}`),
   );
-  return vectors?.size ?? 0;
+  const requested = Math.min(missing.length, remaining);
+  const reserved = await reserveEvernoteEmbeddingSlots(
+    userId,
+    syncRunId,
+    requested,
+    remaining,
+  );
+  if (reserved === 0) return 0;
+  const generated = await embedItemsCached(
+    userId,
+    missing.slice(0, reserved),
+  );
+  return generated?.size ?? 0;
 }
 
 type EvernoteWorkerCheckpoint = {
@@ -1915,6 +1928,14 @@ async function loadEvernoteKnownNotes(
         typeof metadata.evernoteSeenAtIndex === "number"
           ? metadata.evernoteSeenAtIndex
           : null,
+      evernoteProcessedSyncRunId:
+        typeof metadata.evernoteProcessedSyncRunId === "string"
+          ? metadata.evernoteProcessedSyncRunId
+          : null,
+      evernoteProcessedAtIndex:
+        typeof metadata.evernoteProcessedAtIndex === "number"
+          ? metadata.evernoteProcessedAtIndex
+          : null,
     });
   }
   return notes;
@@ -1929,6 +1950,31 @@ async function markEvernoteRecordsSeen(
     const marker = JSON.stringify({
       evernoteSeenSyncRunId: syncRunId,
       evernoteSeenAtIndex: item.listingIndex,
+    });
+    await getDb()
+      .update(sourceRecords)
+      .set({
+        recordMetadata: sql`coalesce(${sourceRecords.recordMetadata}, '{}'::jsonb) || ${marker}::jsonb`,
+        lastSyncedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(sourceRecords.connectorId, connectorId),
+          eq(sourceRecords.externalId, item.externalId),
+        ),
+      );
+  }
+}
+
+async function markEvernoteRecordsProcessed(
+  connectorId: string,
+  syncRunId: string,
+  seen: Array<{ externalId: string; listingIndex: number }>,
+): Promise<void> {
+  for (const item of seen) {
+    const marker = JSON.stringify({
+      evernoteProcessedSyncRunId: syncRunId,
+      evernoteProcessedAtIndex: item.listingIndex,
     });
     await getDb()
       .update(sourceRecords)
@@ -2155,14 +2201,12 @@ export async function processEvernoteSyncJob(
         loadKnownNotes: (externalIds) =>
           loadEvernoteKnownNotes(connectorId, externalIds),
         processBatch: async (batch) => {
-          const fetchedIds = new Set(
-            batch.records.map((record) => record.externalId),
-          );
           await markEvernoteRecordsSeen(
             connectorId,
             syncRunId,
-            batch.seen.filter((item) => !fetchedIds.has(item.externalId)),
+            batch.seen,
           );
+          const replayIds = new Set(batch.replayExternalIds);
           const indexById = new Map(
             batch.seen.map((item) => [item.externalId, item.listingIndex]),
           );
@@ -2192,7 +2236,10 @@ export async function processEvernoteSyncJob(
                 changedIds.push(upsert.id);
               } else {
                 contentHashSkipped += 1;
-                continue;
+                if (!replayIds.has(record.externalId)) continue;
+                // The source row committed before a crash, but evidence and
+                // embedding work for this page did not finish.
+                changedIds.push(upsert.id);
               }
               for (const ev of evernoteConnector.mapEvidence(record)) {
                 await upsertEvidenceForSourceRecord(userId, {
@@ -2229,6 +2276,11 @@ export async function processEvernoteSyncJob(
                 : "Embedding warmup failed",
             );
           }
+          await markEvernoteRecordsProcessed(
+            connectorId,
+            syncRunId,
+            batch.seen,
+          );
           const currentRun = await getDb()
             .select({ metadata: syncRuns.metadata })
             .from(syncRuns)

@@ -111,6 +111,7 @@ describe("Evernote MCP HTTP pacing", () => {
       expect.objectContaining({
         status: 429,
         mcpRetriesExhausted: true,
+        retryAfterMs: 0,
       }),
     );
     expect(calls).toBe(3);
@@ -301,6 +302,47 @@ describe("Evernote MCP read sync", () => {
     expect(result.recordsFetched).toBe(0);
   });
 
+  it("propagates exhausted body rate limits to the durable job retry", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    process.env.EVERNOTE_MCP_MAX_429_RETRIES = "0";
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notebooks") {
+          return { structuredContent: { notebooks: [] } };
+        }
+        if (input.name === "search_tags") {
+          return { structuredContent: { tags: [] } };
+        }
+        if (input.name === "search_notes") {
+          return {
+            structuredContent: {
+              totalResultCount: 1,
+              notes: [{ id: "limited-note", updatedAt: "2026-10-17T00:00:00Z" }],
+            },
+          };
+        }
+        return {
+          isError: true,
+          structuredContent: { status: 429, retryAfterMs: 12_000 },
+          content: [{ type: "text", text: "rate limit" }],
+        };
+      },
+    };
+
+    await expect(
+      streamEvernoteViaMcp(client, {
+        syncRunId: "limited-run",
+        loadKnownNotes: async () => new Map(),
+        processBatch: async () => undefined,
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({ status: 429, retryAfterMs: 12_000 }),
+    );
+  });
+
   it("chunks changed-note backfill and reports deferred work", async () => {
     process.env.EVERNOTE_MCP_PACE_MS = "0";
     process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE = "2";
@@ -454,6 +496,7 @@ describe("Evernote MCP read sync", () => {
     };
     let retainedLength = 0;
     let seen: string[] = [];
+    let replayed: string[] = [];
     await streamEvernoteViaMcp(client, {
       syncRunId: "resume-run",
       loadKnownNotes: async () =>
@@ -471,11 +514,13 @@ describe("Evernote MCP read sync", () => {
       processBatch: async (batch) => {
         retainedLength = batch.records[0]?.recordText.length ?? 0;
         seen = batch.seen.map((item) => item.externalId);
+        replayed = batch.replayExternalIds;
       },
     });
 
-    expect(fetched).toEqual(["needs-fetch"]);
-    expect(seen).toEqual(["needs-fetch"]);
+    expect(fetched).toEqual(["already-durable", "needs-fetch"]);
+    expect(seen).toEqual(["already-durable", "needs-fetch"]);
+    expect(replayed).toEqual(["already-durable"]);
     expect(retainedLength).toBeLessThanOrEqual(
       EVERNOTE_MAX_NOTE_CONTENT_CHARS + 2_000,
     );
@@ -532,6 +577,40 @@ describe("Evernote MCP read sync", () => {
       recordsDeferred: 2,
       listingComplete: false,
       authoritativeListing: false,
+    });
+  });
+
+  it("finishes reconciliation from a checkpoint committed after the final page", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const client = {
+      async callTool(input: { name: string }): Promise<unknown> {
+        if (input.name === "search_notebooks") {
+          return { structuredContent: { notebooks: [] } };
+        }
+        if (input.name === "search_tags") {
+          return { structuredContent: { tags: [] } };
+        }
+        throw new Error(`Unexpected listing call ${input.name}`);
+      },
+    };
+    const processBatch = vi.fn();
+    const result = await streamEvernoteViaMcp(client, {
+      syncRunId: "final-page-run",
+      checkpoint: {
+        startIndex: 50,
+        expectedTotal: 50,
+        recordsFetched: 50,
+        listingAuthoritative: true,
+      },
+      loadKnownNotes: async () => new Map(),
+      processBatch,
+    });
+
+    expect(processBatch).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      listingComplete: true,
+      authoritativeListing: true,
+      recordsDeferred: 0,
     });
   });
 });
