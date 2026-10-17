@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "hello": "tsx ./src/hello.ts",
+    "measure:notes-heap": "node --expose-gc --import tsx ./measure-notes-metadata-heap.ts legacy && node --expose-gc --import tsx ./measure-notes-metadata-heap.ts bounded",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {

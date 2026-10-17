@@ -1,4 +1,4 @@
-import { and, eq, gt, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import {
   knowledgeItems,
   lifeMemories,
@@ -6,7 +6,6 @@ import {
   tasks,
 } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
-import { attachmentSearchTextForNotes } from "./attachment-text-extract";
 import {
   linkedEntityKeySet,
   listEntitiesLinkedToPeople,
@@ -52,7 +51,7 @@ export async function loadLinkedContextRecordsForPeople(
   const memoryIds = idsForType(missing, "memory").slice(0, limit);
   const taskIds = idsForType(missing, "task").slice(0, limit);
 
-  const [noteRows, knowledgeRows, memoryRows, taskRows, attachmentText] =
+  const [noteRows, knowledgeRows, memoryRows, taskRows] =
     await Promise.all([
       noteIds.length === 0
         ? Promise.resolve([])
@@ -60,10 +59,11 @@ export async function loadLinkedContextRecordsForPeople(
             .select({
               id: notes.id,
               title: notes.title,
-              content: notes.content,
+              content: sql<string>`left(${notes.content}, 4000)`,
               preview: notes.preview,
               tags: notes.tags,
               primaryPersonId: notes.primaryPersonId,
+              boundedSearchText: sql<string>`left(${notes.searchDocument}, 6000)`,
             })
             .from(notes)
             .where(and(eq(notes.userId, userId), inArray(notes.id, noteIds))),
@@ -120,9 +120,6 @@ export async function loadLinkedContextRecordsForPeople(
             })
             .from(tasks)
             .where(and(eq(tasks.userId, userId), inArray(tasks.id, taskIds))),
-      noteIds.length === 0
-        ? Promise.resolve(new Map<string, string>())
-        : attachmentSearchTextForNotes(noteIds),
     ]);
 
   const personNameIds = [
@@ -146,7 +143,7 @@ export async function loadLinkedContextRecordsForPeople(
         content: n.content,
         preview: n.preview,
         tags: n.tags,
-        attachmentText: attachmentText.get(n.id) ?? "",
+        attachmentText: n.boundedSearchText,
         primaryPersonId: n.primaryPersonId,
         primaryPersonName: personName,
       }),

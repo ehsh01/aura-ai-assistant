@@ -632,7 +632,7 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
         id: sourceRecords.id,
         recordType: sourceRecords.recordType,
         recordTitle: sourceRecords.recordTitle,
-        recordText: sourceRecords.recordText,
+        recordText: sql<string>`left(${sourceRecords.recordText}, 4000)`,
         updatedAt: sourceRecords.updatedAt,
         sourceCreatedAt: sourceRecords.sourceCreatedAt,
         metadata: sourceRecords.recordMetadata,
@@ -664,7 +664,7 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
         id: sourceRecords.id,
         recordType: sourceRecords.recordType,
         recordTitle: sourceRecords.recordTitle,
-        recordText: sourceRecords.recordText,
+        recordText: sql<string>`left(${sourceRecords.recordText}, 4000)`,
         updatedAt: sourceRecords.updatedAt,
         sourceCreatedAt: sourceRecords.sourceCreatedAt,
         connectorId: sourceRecords.connectorId,
@@ -706,7 +706,7 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
       externalId: sourceRecords.externalId,
       recordType: sourceRecords.recordType,
       recordTitle: sourceRecords.recordTitle,
-      recordText: sourceRecords.recordText,
+      recordText: sql<string>`left(${sourceRecords.recordText}, 4000)`,
       updatedAt: sourceRecords.updatedAt,
       sourceCreatedAt: sourceRecords.sourceCreatedAt,
       sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
@@ -793,7 +793,15 @@ export async function searchEvernoteSourceRecordsForUser(
       externalId: sourceRecords.externalId,
       recordType: sourceRecords.recordType,
       recordTitle: sourceRecords.recordTitle,
-      recordText: sourceRecords.recordText,
+      recordText: sql<string>`left(
+        ts_headline(
+          'simple',
+          ${sourceRecords.searchDocument},
+          to_tsquery('simple', ${tsQuery}),
+          'MaxWords=80, MinWords=20, ShortWord=2, HighlightAll=false'
+        ),
+        1200
+      )`,
       updatedAt: sourceRecords.updatedAt,
       sourceCreatedAt: sourceRecords.sourceCreatedAt,
       sourceUpdatedAt: sourceRecords.sourceUpdatedAt,

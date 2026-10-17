@@ -37,6 +37,8 @@ node_modules
 /.sass-cache
 /connect.lock
 /coverage
+/e2e/test-results/
+/e2e/playwright-report/
 /libpeerconnection.log
 npm-debug.log
 yarn-error.log

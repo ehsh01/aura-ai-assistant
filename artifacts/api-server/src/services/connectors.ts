@@ -1593,7 +1593,12 @@ export async function upsertSourceRecord(
   record: Awaited<ReturnType<RecallConnector["normalize"]>>[number],
 ): Promise<{ id: string; action: "created" | "updated" | "skipped" }> {
   const existing = await getDb()
-    .select()
+    .select({
+      id: sourceRecords.id,
+      recordMetadata: sourceRecords.recordMetadata,
+      sourceCreatedAt: sourceRecords.sourceCreatedAt,
+      sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
+    })
     .from(sourceRecords)
     .where(
       and(

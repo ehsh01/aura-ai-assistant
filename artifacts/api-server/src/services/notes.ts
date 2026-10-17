@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, lt, or, sql } from "drizzle-orm";
 import { noteAttachments, notes, type Note } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import {
@@ -45,7 +45,100 @@ export type RecallNoteDto = {
   updatedAt: string;
 };
 
-export type RecallNoteMetadataDto = Omit<RecallNoteDto, "content">;
+export type RecallNoteMetadataDto = Omit<
+  RecallNoteDto,
+  "content" | "summary" | "factBullets" | "attachmentText"
+>;
+
+export type NoteMetadataPage = {
+  notes: RecallNoteMetadataDto[];
+  nextCursor: string | null;
+  hasMore: boolean;
+};
+
+export const DEFAULT_NOTE_PAGE_SIZE = 100;
+export const MAX_NOTE_PAGE_SIZE = 200;
+export const HOME_RECENT_NOTES_LIMIT = 100;
+const METADATA_CACHE_TTL_MS = 2_000;
+const NOTE_SEARCH_CONTENT_CHARS = 8_000;
+const NOTE_SEARCH_MATCH_CHARS = 2_000;
+
+type NoteDtoRow = Pick<
+  Note,
+  | "id"
+  | "title"
+  | "content"
+  | "preview"
+  | "summary"
+  | "factBullets"
+  | "contentFormat"
+  | "tags"
+  | "pinned"
+  | "notebookId"
+  | "projectId"
+  | "primaryPersonId"
+  | "createdAt"
+  | "updatedAt"
+>;
+
+export const NOTE_DETAIL_SELECT = {
+  id: notes.id,
+  title: notes.title,
+  content: sql<string>`left(${notes.content}, ${NOTE_SEARCH_CONTENT_CHARS})`,
+  preview: notes.preview,
+  summary: notes.summary,
+  factBullets: notes.factBullets,
+  contentFormat: notes.contentFormat,
+  tags: notes.tags,
+  pinned: notes.pinned,
+  notebookId: notes.notebookId,
+  projectId: notes.projectId,
+  primaryPersonId: notes.primaryPersonId,
+  createdAt: notes.createdAt,
+  updatedAt: notes.updatedAt,
+} as const;
+
+/** Metadata endpoints must never select note bodies, search documents, or OCR text. */
+export const NOTE_METADATA_SELECT = {
+  id: notes.id,
+  title: notes.title,
+  preview: sql<string>`left(${notes.preview}, 280)`,
+  contentFormat: notes.contentFormat,
+  tags: notes.tags,
+  pinned: notes.pinned,
+  notebookId: notes.notebookId,
+  projectId: notes.projectId,
+  primaryPersonId: notes.primaryPersonId,
+  attachmentCount: sql<number>`(
+    select cast(count(*) as int)
+    from ${noteAttachments}
+    where ${noteAttachments.noteId} = ${notes.id}
+  )`,
+  createdAt: notes.createdAt,
+  updatedAt: notes.updatedAt,
+} as const;
+
+type NoteMetadataRow = {
+  id: string;
+  title: string;
+  preview: string;
+  contentFormat: string;
+  tags: string[];
+  pinned: boolean;
+  notebookId: string | null;
+  projectId: string | null;
+  primaryPersonId: string | null;
+  attachmentCount: number;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type MetadataCacheEntry = {
+  expiresAt: number;
+  value: Promise<NoteMetadataPage>;
+};
+
+const metadataCache = new Map<string, MetadataCacheEntry>();
 
 export type CreateNoteInput = {
   id?: string;
@@ -72,7 +165,7 @@ export type UpdateNoteInput = {
 };
 
 function toDto(
-  row: Note,
+  row: NoteDtoRow,
   attachmentCount = 0,
   personName: string | null = null,
   attachmentText = "",
@@ -100,12 +193,31 @@ function toDto(
   };
 }
 
-function toMetadata(dto: RecallNoteDto): RecallNoteMetadataDto {
-  const { content: _content, ...meta } = dto;
-  return meta;
+function toMetadataDto(
+  row: NoteMetadataRow,
+  personName: string | null,
+): RecallNoteMetadataDto {
+  return {
+    id: row.id,
+    title: row.title,
+    preview: row.preview,
+    contentFormat: row.contentFormat === "html" ? "html" : "plain",
+    tags: row.tags ?? [],
+    date: noteDateLabel(row.updatedAt),
+    pinned: row.pinned,
+    notebookId: row.notebookId ?? null,
+    projectId: row.projectId ?? null,
+    primaryPersonId: row.primaryPersonId ?? null,
+    primaryPersonName: personName,
+    attachmentCount: row.attachmentCount ?? 0,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
 }
 
-async function attachmentCountsForNotes(noteIds: string[]): Promise<Map<string, number>> {
+async function attachmentCountsForNotes(
+  noteIds: string[],
+): Promise<Map<string, number>> {
   if (noteIds.length === 0) return new Map();
   const rows = await getDb()
     .select({
@@ -123,32 +235,157 @@ export async function listNotesForUser(
   options: { limit?: number } = {},
 ): Promise<RecallNoteDto[]> {
   const db = getDb();
-  const query = db
-    .select()
+  const limit = Math.min(Math.max(options.limit ?? 250, 1), 250);
+  const rows = await db
+    .select(NOTE_DETAIL_SELECT)
     .from(notes)
     .where(eq(notes.userId, userId))
-    .orderBy(desc(notes.updatedAt));
-  const rows = await (options.limit ? query.limit(options.limit) : query);
+    .orderBy(desc(notes.updatedAt), desc(notes.id))
+    .limit(limit);
   const noteIds = rows.map((row) => row.id);
   const counts = await attachmentCountsForNotes(noteIds);
-  const attachmentTexts = await attachmentSearchTextForNotes(noteIds);
   const names = await personNamesById(
     userId,
-    rows.map((r) => r.primaryPersonId).filter((id): id is string => Boolean(id)),
+    rows
+      .map((r) => r.primaryPersonId)
+      .filter((id): id is string => Boolean(id)),
   );
   return rows.map((row) =>
     toDto(
       row,
       counts.get(row.id) ?? 0,
-      row.primaryPersonId ? names.get(row.primaryPersonId) ?? null : null,
-      attachmentTexts.get(row.id) ?? "",
+      row.primaryPersonId ? (names.get(row.primaryPersonId) ?? null) : null,
     ),
   );
 }
 
-export async function listNoteMetadataForUser(userId: string): Promise<RecallNoteMetadataDto[]> {
-  const all = await listNotesForUser(userId);
-  return all.map(toMetadata);
+type NoteCursor = { updatedAt: string; id: string };
+
+function encodeNoteCursor(
+  row: Pick<NoteMetadataRow, "updatedAt" | "id">,
+): string {
+  return Buffer.from(
+    JSON.stringify({
+      updatedAt: row.updatedAt.toISOString(),
+      id: row.id,
+    } satisfies NoteCursor),
+  ).toString("base64url");
+}
+
+function decodeNoteCursor(value: string): NoteCursor {
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(value, "base64url").toString("utf8"),
+    ) as NoteCursor;
+    const date = new Date(parsed.updatedAt);
+    if (!parsed.id || !Number.isFinite(date.getTime()))
+      throw new Error("invalid cursor");
+    return { updatedAt: date.toISOString(), id: parsed.id };
+  } catch {
+    const err = new Error("Invalid notes cursor");
+    Object.assign(err, { status: 400 });
+    throw err;
+  }
+}
+
+function metadataCacheKey(
+  userId: string,
+  limit: number,
+  cursor?: string,
+): string {
+  return `${userId}:${limit}:${cursor ?? ""}`;
+}
+
+export function invalidateNoteMetadataCache(userId: string): void {
+  for (const key of metadataCache.keys()) {
+    if (key.startsWith(`${userId}:`)) metadataCache.delete(key);
+  }
+}
+
+async function loadNoteMetadataPage(
+  userId: string,
+  options: { limit?: number; cursor?: string } = {},
+): Promise<NoteMetadataPage> {
+  const limit = Math.min(
+    Math.max(Math.trunc(options.limit ?? DEFAULT_NOTE_PAGE_SIZE), 1),
+    MAX_NOTE_PAGE_SIZE,
+  );
+  const cursor = options.cursor ? decodeNoteCursor(options.cursor) : null;
+  const cursorDate = cursor ? new Date(cursor.updatedAt) : null;
+  const cursorFilter =
+    cursor && cursorDate
+      ? or(
+          lt(notes.updatedAt, cursorDate),
+          and(eq(notes.updatedAt, cursorDate), lt(notes.id, cursor.id)),
+        )
+      : undefined;
+  const rows = (await getDb()
+    .select(NOTE_METADATA_SELECT)
+    .from(notes)
+    .where(
+      cursorFilter
+        ? and(eq(notes.userId, userId), cursorFilter)
+        : eq(notes.userId, userId),
+    )
+    .orderBy(desc(notes.updatedAt), desc(notes.id))
+    .limit(limit + 1)) as NoteMetadataRow[];
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const names = await personNamesById(
+    userId,
+    pageRows
+      .map((row) => row.primaryPersonId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const pageNotes = pageRows.map((row) =>
+    toMetadataDto(
+      row,
+      row.primaryPersonId ? (names.get(row.primaryPersonId) ?? null) : null,
+    ),
+  );
+  return {
+    notes: pageNotes,
+    nextCursor:
+      hasMore && pageRows.length > 0
+        ? encodeNoteCursor(pageRows[pageRows.length - 1]!)
+        : null,
+    hasMore,
+  };
+}
+
+export function listNoteMetadataPageForUser(
+  userId: string,
+  options: { limit?: number; cursor?: string } = {},
+): Promise<NoteMetadataPage> {
+  const limit = Math.min(
+    Math.max(Math.trunc(options.limit ?? DEFAULT_NOTE_PAGE_SIZE), 1),
+    MAX_NOTE_PAGE_SIZE,
+  );
+  const key = metadataCacheKey(userId, limit, options.cursor);
+  const now = Date.now();
+  const cached = metadataCache.get(key);
+  if (cached && cached.expiresAt > now) return cached.value;
+  if (cached) metadataCache.delete(key);
+
+  const value = loadNoteMetadataPage(userId, { ...options, limit }).catch(
+    (err) => {
+      metadataCache.delete(key);
+      throw err;
+    },
+  );
+  metadataCache.set(key, { expiresAt: now + METADATA_CACHE_TTL_MS, value });
+  const cleanup = setTimeout(() => {
+    if (metadataCache.get(key)?.value === value) metadataCache.delete(key);
+  }, METADATA_CACHE_TTL_MS);
+  cleanup.unref();
+  return value;
+}
+
+export async function listNoteMetadataForUser(
+  userId: string,
+  options: { limit?: number } = {},
+): Promise<RecallNoteMetadataDto[]> {
+  return (await listNoteMetadataPageForUser(userId, options)).notes;
 }
 
 function extractSearchTerms(query: string): string[] {
@@ -208,31 +445,47 @@ export async function searchNotesForUser(
 
   const db = getDb();
   const ftsMatch = sql`${notes.searchTsv} @@ to_tsquery('simple', ${tsQuery})`;
-  const whereMatch = terms.includes("vin") ? or(ftsMatch, vinHeuristicMatch()) : ftsMatch;
+  const whereMatch = terms.includes("vin")
+    ? or(ftsMatch, vinHeuristicMatch())
+    : ftsMatch;
 
+  const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 50);
   const rows = await db
-    .select()
+    .select({
+      ...NOTE_DETAIL_SELECT,
+      content: sql<string>`left(${notes.content}, ${NOTE_SEARCH_CONTENT_CHARS})`,
+      matchText: sql<string>`left(
+        ts_headline(
+          'simple',
+          ${notes.searchDocument},
+          to_tsquery('simple', ${tsQuery}),
+          'MaxWords=80, MinWords=20, ShortWord=2, HighlightAll=false'
+        ),
+        ${NOTE_SEARCH_MATCH_CHARS}
+      )`,
+    })
     .from(notes)
     .where(and(eq(notes.userId, userId), whereMatch))
     .orderBy(
       sql`ts_rank_cd(coalesce(${notes.searchTsv}, ''::tsvector), to_tsquery('simple', ${tsQuery})) DESC`,
       desc(notes.updatedAt),
     )
-    .limit(limit);
+    .limit(safeLimit);
 
   const noteIds = rows.map((row) => row.id);
   const counts = await attachmentCountsForNotes(noteIds);
-  const attachmentTexts = await attachmentSearchTextForNotes(noteIds);
   const names = await personNamesById(
     userId,
-    rows.map((r) => r.primaryPersonId).filter((id): id is string => Boolean(id)),
+    rows
+      .map((r) => r.primaryPersonId)
+      .filter((id): id is string => Boolean(id)),
   );
   return rows.map((row) =>
     toDto(
       row,
       counts.get(row.id) ?? 0,
-      row.primaryPersonId ? names.get(row.primaryPersonId) ?? null : null,
-      attachmentTexts.get(row.id) ?? "",
+      row.primaryPersonId ? (names.get(row.primaryPersonId) ?? null) : null,
+      row.matchText ?? "",
     ),
   );
 }
@@ -310,6 +563,7 @@ export async function createNoteForUser(
     })
     .returning();
 
+  invalidateNoteMetadataCache(userId);
   const dto = toDto(row!, 0, personName);
   await writeAuditLog({
     userId,
@@ -373,7 +627,12 @@ export async function bulkInsertNotesForUser(
     };
   });
 
-  const inserted = await db.insert(notes).values(values).onConflictDoNothing().returning();
+  const inserted = await db
+    .insert(notes)
+    .values(values)
+    .onConflictDoNothing()
+    .returning();
+  if (inserted.length > 0) invalidateNoteMetadataCache(userId);
   return inserted.map((row) => toDto(row, 0));
 }
 
@@ -493,23 +752,32 @@ export async function updateNoteForUser(
   }
 
   const nextContent = input.content ?? existing[0].content;
-  const nextFormat = input.contentFormat ?? existing[0].contentFormat ?? "plain";
+  const nextFormat =
+    input.contentFormat ?? existing[0].contentFormat ?? "plain";
   const [row] = await db
     .update(notes)
     .set({
-      ...(input.title !== undefined ? { title: input.title.trim() || "Untitled" } : {}),
+      ...(input.title !== undefined
+        ? { title: input.title.trim() || "Untitled" }
+        : {}),
       ...(input.content !== undefined ? { content: nextContent } : {}),
-      ...(input.contentFormat !== undefined ? { contentFormat: nextFormat } : {}),
+      ...(input.contentFormat !== undefined
+        ? { contentFormat: nextFormat }
+        : {}),
       ...(input.content !== undefined || input.contentFormat !== undefined
         ? {
             preview: previewFromContent(
-              nextFormat === "html" ? nextContent.replace(/<[^>]+>/g, " ") : nextContent,
+              nextFormat === "html"
+                ? nextContent.replace(/<[^>]+>/g, " ")
+                : nextContent,
             ),
           }
         : {}),
       ...(tagsToWrite !== undefined ? { tags: tagsToWrite } : {}),
       ...(input.pinned !== undefined ? { pinned: input.pinned } : {}),
-      ...(input.notebookId !== undefined ? { notebookId: input.notebookId } : {}),
+      ...(input.notebookId !== undefined
+        ? { notebookId: input.notebookId }
+        : {}),
       ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
       ...(primaryPersonIdToWrite !== undefined
         ? { primaryPersonId: primaryPersonIdToWrite }
@@ -520,6 +788,7 @@ export async function updateNoteForUser(
     .returning();
 
   if (!row) return null;
+  invalidateNoteMetadataCache(userId);
   const counts = await attachmentCountsForNotes([row.id]);
   let personName: string | null = null;
   if (row.primaryPersonId) {
@@ -548,9 +817,17 @@ export async function updateNoteForUser(
     scheduleDigestRegen({ userId, entityType: "note", entityId: dto.id });
     if (input.title !== undefined || input.content !== undefined) {
       const { scheduleNoteDeadlineScan } = await import("./attention-extract");
-      void scheduleNoteDeadlineScan(userId, dto.id, `${dto.title}\n${dto.content}`);
+      void scheduleNoteDeadlineScan(
+        userId,
+        dto.id,
+        `${dto.title}\n${dto.content}`,
+      );
       const { scheduleNoteWaitingScan } = await import("./waiting-candidates");
-      void scheduleNoteWaitingScan(userId, dto.id, `${dto.title}\n${dto.content}`);
+      void scheduleNoteWaitingScan(
+        userId,
+        dto.id,
+        `${dto.title}\n${dto.content}`,
+      );
     }
   }
   if (primaryPersonIdToWrite !== undefined) {
@@ -568,5 +845,6 @@ export async function deleteNoteForUser(
     .delete(notes)
     .where(and(eq(notes.id, noteId), eq(notes.userId, userId)))
     .returning({ id: notes.id });
+  if (deleted.length > 0) invalidateNoteMetadataCache(userId);
   return deleted.length > 0;
 }

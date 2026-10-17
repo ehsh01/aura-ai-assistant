@@ -17,8 +17,8 @@ import {
   createNoteForUser,
   deleteNoteForUser,
   getNoteForUser,
-  listNoteMetadataForUser,
-  listNotesForUser,
+  listNoteIdsForUser,
+  listNoteMetadataPageForUser,
   updateNoteForUser,
 } from "../services/notes";
 import { parseEnexXml } from "../services/enex-import";
@@ -40,6 +40,7 @@ import {
   ImportEnexNotesBody,
   ImportEnexNotesResponse,
 } from "@workspace/api-zod";
+import { z } from "zod";
 
 const router: IRouter = Router();
 
@@ -70,8 +71,14 @@ function handleMulterError(
 
 router.get("/notes", async (req, res, next) => {
   try {
-    const notes = await listNoteMetadataForUser(req.user!.id);
-    res.json(ListNotesResponse.parse({ notes }));
+    const query = z
+      .object({
+        limit: z.coerce.number().int().positive().max(200).optional(),
+        cursor: z.string().trim().min(1).max(1000).optional(),
+      })
+      .parse(req.query);
+    const page = await listNoteMetadataPageForUser(req.user!.id, query);
+    res.json(ListNotesResponse.parse(page));
   } catch (err) {
     next(err);
   }
@@ -127,8 +134,7 @@ router.post("/notes/import/enex", async (req, res, next) => {
       notebookId: notebook.id,
     }));
 
-    const existing = await listNotesForUser(req.user!.id);
-    const existingIds = new Set(existing.map((n) => n.id));
+    const existingIds = await listNoteIdsForUser(req.user!.id);
     const toSend = parsedWithNotebook.filter((n) => n.id && !existingIds.has(n.id));
     const skipped = parsed.length - toSend.length;
 

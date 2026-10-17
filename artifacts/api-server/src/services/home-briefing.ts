@@ -13,7 +13,11 @@
  * including ready-to-use hrefs, so the frontend can render them directly.
  */
 import { listCaptureInboxForUser, type RecallCaptureItemDto } from "./capture-items";
-import { listNoteMetadataForUser, type RecallNoteMetadataDto } from "./notes";
+import {
+  HOME_RECENT_NOTES_LIMIT,
+  listNoteMetadataForUser,
+  type RecallNoteMetadataDto,
+} from "./notes";
 import { listProjectsForUser, type RecallProjectDto } from "./projects";
 import { listTasksForUser, type RecallTaskDto } from "./tasks";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
@@ -673,7 +677,9 @@ export async function buildHomeBriefing(
   const [tasks, notes, captures, projects, finance, homeyAlerts, waitingAll, attentionDue, briefingPrefs] =
     await Promise.all([
       listTasksForUser(userId),
-      listNoteMetadataForUser(userId),
+      // Same bounded first page as /notes. The short-lived metadata cache
+      // coalesces parallel login/page-load requests for this user.
+      listNoteMetadataForUser(userId, { limit: HOME_RECENT_NOTES_LIMIT }),
       listCaptureInboxForUser(userId),
       listProjectsForUser(userId),
       buildFinanceSnapshot(userId, today),

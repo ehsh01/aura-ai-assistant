@@ -153,7 +153,6 @@ export async function getSubjectSpendForUser(
       id: sourceRecords.id,
       recordMetadata: sourceRecords.recordMetadata,
       sourceCreatedAt: sourceRecords.sourceCreatedAt,
-      recordText: sourceRecords.recordText,
     })
     .from(sourceRecords)
     .where(
@@ -240,7 +239,7 @@ export async function suggestSubjectSpendForUser(
       id: sourceRecords.id,
       recordMetadata: sourceRecords.recordMetadata,
       sourceCreatedAt: sourceRecords.sourceCreatedAt,
-      recordText: sourceRecords.recordText,
+      recordText: sql<string | null>`left(${sourceRecords.recordText}, 1000)`,
       recordTitle: sourceRecords.recordTitle,
     })
     .from(sourceRecords)

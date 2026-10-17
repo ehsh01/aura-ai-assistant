@@ -22,8 +22,6 @@ export interface RecallNoteMetadata {
   primaryPersonName?: string | null;
   contentFormat: RecallNoteMetadataContentFormat;
   attachmentCount: number;
-  /** Capped searchable text extracted from attached images, PDFs, and documents. */
-  attachmentText?: string;
   createdAt: string;
   updatedAt: string;
 }

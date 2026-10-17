@@ -54,6 +54,7 @@ import type {
   LifeMemoryListResponse,
   ListExtensionTokensResponse,
   ListMemoriesParams,
+  ListNotesParams,
   ListRawCaptures200,
   ListRawCapturesParams,
   LoginRequest,
@@ -1713,20 +1714,27 @@ export function useListNotebooks<TData = Awaited<ReturnType<typeof listNotebooks
 
 
 
-export const getListNotesUrl = () => {
+export const getListNotesUrl = (params?: ListNotesParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
 
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
 
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/api/notes`
+  return stringifiedParams.length > 0 ? `/api/notes?${stringifiedParams}` : `/api/notes`
 }
 
 /**
  * @summary List notes for the current user
  */
-export const listNotes = async ( options?: RequestInit): Promise<NoteListResponse> => {
+export const listNotes = async (params?: ListNotesParams, options?: RequestInit): Promise<NoteListResponse> => {
 
-  return customFetch<NoteListResponse>(getListNotesUrl(),
+  return customFetch<NoteListResponse>(getListNotesUrl(params),
   {
     ...options,
     method: 'GET'
@@ -1739,23 +1747,23 @@ export const listNotes = async ( options?: RequestInit): Promise<NoteListRespons
 
 
 
-export const getListNotesQueryKey = () => {
+export const getListNotesQueryKey = (params?: ListNotesParams,) => {
     return [
-    `/api/notes`
+    `/api/notes`, ...(params ? [params] : [])
     ] as const;
     }
 
 
-export const getListNotesQueryOptions = <TData = Awaited<ReturnType<typeof listNotes>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listNotes>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getListNotesQueryOptions = <TData = Awaited<ReturnType<typeof listNotes>>, TError = ErrorType<unknown>>(params?: ListNotesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listNotes>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getListNotesQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getListNotesQueryKey(params);
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listNotes>>> = ({ signal }) => listNotes({ signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listNotes>>> = ({ signal }) => listNotes(params, { signal, ...requestOptions });
 
 
 
@@ -1773,11 +1781,11 @@ export type ListNotesQueryError = ErrorType<unknown>
  */
 
 export function useListNotes<TData = Awaited<ReturnType<typeof listNotes>>, TError = ErrorType<unknown>>(
-  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listNotes>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+ params?: ListNotesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listNotes>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
-  const queryOptions = getListNotesQueryOptions(options)
+  const queryOptions = getListNotesQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

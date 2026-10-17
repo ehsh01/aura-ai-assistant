@@ -409,8 +409,6 @@ export interface RecallNoteMetadata {
   primaryPersonName?: string | null;
   contentFormat: RecallNoteMetadataContentFormat;
   attachmentCount: number;
-  /** Capped searchable text extracted from attached images, PDFs, and documents. */
-  attachmentText?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -849,6 +847,8 @@ export interface NotebookListResponse {
 
 export interface NoteListResponse {
   notes: RecallNoteMetadata[];
+  nextCursor?: string | null;
+  hasMore?: boolean;
 }
 
 export type CreateNoteRequestContentFormat = typeof CreateNoteRequestContentFormat[keyof typeof CreateNoteRequestContentFormat];
@@ -994,6 +994,18 @@ export const RetryRawCaptureExtraction202Status = {
 export type RetryRawCaptureExtraction202 = {
   jobId: string;
   status: RetryRawCaptureExtraction202Status;
+};
+
+export type ListNotesParams = {
+/**
+ * @minimum 1
+ * @maximum 200
+ */
+limit?: number;
+/**
+ * Opaque cursor returned by the previous page.
+ */
+cursor?: string;
 };
 
 export type ListMemoriesParams = {
