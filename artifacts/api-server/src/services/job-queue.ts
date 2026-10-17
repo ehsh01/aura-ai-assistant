@@ -44,6 +44,35 @@ export function attemptsAfterDeferredClaim(claimedAttempts: number): number {
   return Math.max(0, Math.floor(claimedAttempts) - 1);
 }
 
+export function evernoteRateLimitDeferral(error: unknown): {
+  retryAfterMs: number;
+} | null {
+  if (!error || typeof error !== "object") return null;
+  const details = error as Record<string, unknown>;
+  const data =
+    details.data && typeof details.data === "object"
+      ? (details.data as Record<string, unknown>)
+      : {};
+  const status = Number(
+    details.status ?? details.statusCode ?? data.status ?? data.statusCode,
+  );
+  const message = error instanceof Error ? error.message : "";
+  if (
+    details.evernoteRateLimited !== true &&
+    status !== 429 &&
+    !/\b429\b|rate.?limit/i.test(message)
+  ) {
+    return null;
+  }
+  const retryAfterMs =
+    typeof details.retryAfterMs === "number"
+      ? details.retryAfterMs
+      : 30_000;
+  return {
+    retryAfterMs: Math.min(Math.max(retryAfterMs, 1_000), 3_600_000),
+  };
+}
+
 export function jobFailureIsTerminal(
   attempts: number,
   maxAttempts: number,

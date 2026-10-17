@@ -4,6 +4,7 @@ import {
   attemptsAfterDeferredClaim,
   captureIdFromPayload,
   connectorSyncFromPayload,
+  evernoteRateLimitDeferral,
   jobFailureIsTerminal,
   mapJobRow,
 } from "./job-queue";
@@ -20,6 +21,22 @@ describe("job-queue helpers", () => {
     expect(attemptsAfterDeferredClaim(1)).toBe(0);
     expect(attemptsAfterDeferredClaim(3)).toBe(2);
     expect(attemptsAfterDeferredClaim(0)).toBe(0);
+  });
+
+  it("detects marked, HTTP, and MCP-text rate limits for attempt-free deferral", () => {
+    expect(
+      evernoteRateLimitDeferral({
+        evernoteRateLimited: true,
+        retryAfterMs: 12_000,
+      }),
+    ).toEqual({ retryAfterMs: 12_000 });
+    expect(evernoteRateLimitDeferral({ status: 429 })).toEqual({
+      retryAfterMs: 30_000,
+    });
+    expect(
+      evernoteRateLimitDeferral(new Error("MCP rate limit exceeded")),
+    ).toEqual({ retryAfterMs: 30_000 });
+    expect(evernoteRateLimitDeferral(new Error("ordinary failure"))).toBeNull();
   });
 
   it("makes only the third real Tesseract failure terminal", () => {

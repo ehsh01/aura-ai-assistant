@@ -12,7 +12,7 @@ import {
 } from "./evernote-sync-scheduler";
 import {
   processEvernoteSyncJob,
-  withEvernoteTaxonomyProgress,
+  withEvernoteLookupProgress,
 } from "./connectors";
 
 describe("Evernote completeness report", () => {
@@ -222,40 +222,23 @@ describe("Evernote import AI boundary", () => {
   });
 });
 
-describe("Evernote taxonomy sync-run progress", () => {
-  it("persists the phase, checkpoint, counters, and elapsed time in metadata", () => {
-    const checkpoint = {
-      version: 1,
-      stage: "tags",
-      frontier: ["a", "b"],
-    };
-    const metadata = withEvernoteTaxonomyProgress(
+describe("Evernote lazy taxonomy sync-run progress", () => {
+  it("persists the notes phase and durable lookup counters in metadata", () => {
+    const metadata = withEvernoteLookupProgress(
       { evernoteSyncMode: "full" },
-      checkpoint,
       {
-        stage: "tags",
-        searchesDone: 42,
-        prefixesQueued: 2,
-        notebooksFound: 18,
-        tagsFound: 75,
-        spacesFound: 0,
-        elapsedMs: 63_000,
+        cached: 42,
+        fetched: 3,
       },
       new Date("2026-10-17T21:00:00.000Z"),
     );
 
     expect(metadata).toMatchObject({
       evernoteSyncMode: "full",
-      evernotePhase: "taxonomy",
-      evernoteTaxonomyCheckpoint: checkpoint,
-      evernoteTaxonomyProgress: {
-        stage: "tags",
-        searchesDone: 42,
-        prefixesQueued: 2,
-        notebooksFound: 18,
-        tagsFound: 75,
-        spacesFound: 0,
-        elapsedMs: 63_000,
+      evernotePhase: "notes",
+      evernoteLookupProgress: {
+        cached: 42,
+        fetched: 3,
         updatedAt: "2026-10-17T21:00:00.000Z",
       },
     });

@@ -69,10 +69,10 @@ function preferredEvernoteConnector(
   return rows.find((connector) => connector.enabled) ?? rows[0] ?? null;
 }
 
-function evernoteTaxonomyProgressLine(
+function evernoteImportProgressLine(
   run: ConnectorSyncRun | null,
 ): string | null {
-  const progress = run?.metadata.evernoteTaxonomyProgress;
+  const progress = run?.metadata.evernoteLookupProgress;
   if (
     !progress ||
     typeof progress !== "object" ||
@@ -81,17 +81,17 @@ function evernoteTaxonomyProgressLine(
     return null;
   }
   const value = progress as Record<string, unknown>;
-  if (run?.metadata.evernotePhase !== "taxonomy") {
+  const phase = run?.metadata.evernotePhase;
+  if (phase !== "notes" && phase !== "trash") {
     return null;
   }
   const count = (key: string) =>
     Math.max(0, Math.floor(Number(value[key]) || 0));
-  const elapsedSeconds = Math.floor(count("elapsedMs") / 1_000);
-  return `Taxonomy ${String(value.stage ?? "starting")} · ${count(
-    "searchesDone",
-  )} searches · ${count("prefixesQueued")} prefixes queued · ${count(
-    "notebooksFound",
-  )} notebooks / ${count("tagsFound")} tags · ${elapsedSeconds}s elapsed`;
+  return `${phase === "trash" ? "Trash" : "Notes"} · ${
+    run?.recordsFetched ?? 0
+  } fetched / ${run?.recordsCreated ?? 0} created · ${count(
+    "cached",
+  )} taxonomy cache hits / ${count("fetched")} fetched`;
 }
 
 export function Connectors() {
@@ -784,9 +784,9 @@ export function Connectors() {
                     ? ` · ${evernoteLastRun.status.replace(/_/g, " ")} · ${evernoteLastRun.recordsFetched} fetched / ${evernoteLastRun.recordsCreated} created / ${evernoteLastRun.recordsUpdated} updated / ${evernoteLastRun.recordsSkipped} skipped / ${evernoteLastRun.recordsFailed} failed`
                     : ""}
                 </p>
-                {evernoteTaxonomyProgressLine(evernoteLastRun) && (
+                {evernoteImportProgressLine(evernoteLastRun) && (
                   <p className="w-full text-xs text-sky-200/70">
-                    {evernoteTaxonomyProgressLine(evernoteLastRun)}
+                    {evernoteImportProgressLine(evernoteLastRun)}
                   </p>
                 )}
                 {evernoteLastRun &&

@@ -18,6 +18,7 @@ vi.mock("../lib/db", () => ({ getDb: () => pgliteDb }));
 const {
   MAX_STALE_RECOVERIES,
   claimNextJob,
+  deferJob,
   failJob,
   recoverStaleProcessingJobs,
 } = await import("./job-queue");
@@ -114,5 +115,29 @@ describe("stale job recovery", () => {
       attempts: 0,
       recoveries: MAX_STALE_RECOVERIES,
     });
+  });
+
+  it("refunds the claim when a rate-limited job is deferred", async () => {
+    await db.exec(`
+      INSERT INTO jobs (
+        id, user_id, type, payload, status, attempts, max_attempts,
+        locked_at, locked_by
+      ) VALUES (
+        'limited-job', '${USER_ID}', 'connector_sync',
+        '{"connectorId":"evernote","syncRunId":"sync-3"}'::jsonb,
+        'processing', 1, 3, now(), 'limited-worker'
+      )
+    `);
+
+    await deferJob("limited-job", 12_000, "Evernote MCP rate limit");
+    const result = await db.query<{
+      status: string;
+      attempts: number;
+    }>(`
+      SELECT status, attempts
+      FROM jobs
+      WHERE id = 'limited-job'
+    `);
+    expect(result.rows[0]).toEqual({ status: "queued", attempts: 0 });
   });
 });
