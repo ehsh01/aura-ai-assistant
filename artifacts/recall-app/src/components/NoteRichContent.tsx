@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   attachmentUrl,
+  extractAttachmentTextWithAi,
   fetchAttachmentBlob,
   fetchNoteAttachments,
   type NoteAttachmentMeta,
@@ -13,25 +14,11 @@ type Props = {
   contentFormat?: "plain" | "html";
 };
 
-const BLOCKED_TAGS = new Set([
-  "script",
-  "iframe",
-  "object",
-  "embed",
-  "form",
-  "input",
-  "button",
-  "textarea",
-  "select",
-]);
+const BLOCKED_TAGS = new Set(["script", "iframe", "object", "embed", "form", "input", "button", "textarea", "select"]);
 
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp|svg|heic|heif)$/i;
 
-function isImageAttachment(
-  id: string,
-  attachmentMap: Map<string, NoteAttachmentMeta>,
-  label?: string | null,
-): boolean {
+function isImageAttachment(id: string, attachmentMap: Map<string, NoteAttachmentMeta>, label?: string | null): boolean {
   const meta = attachmentMap.get(id);
   if (meta?.isImage) return true;
   if (meta && !meta.mimeType.startsWith("image/")) return false;
@@ -55,10 +42,7 @@ function sanitizeNoteHtml(html: string): string {
         const name = attr.name.toLowerCase();
         if (name.startsWith("on")) {
           child.removeAttribute(attr.name);
-        } else if (
-          (name === "href" || name === "src") &&
-          attr.value.trim().toLowerCase().startsWith("javascript:")
-        ) {
+        } else if ((name === "href" || name === "src") && attr.value.trim().toLowerCase().startsWith("javascript:")) {
           child.removeAttribute(attr.name);
         } else if (name === "href") {
           const rewritten = rewriteEvernoteHref(attr.value);
@@ -84,9 +68,7 @@ function rewriteEvernoteHref(href: string): string | null {
   if (!lower.startsWith("evernote:") && !lower.includes("evernote.com")) {
     return null;
   }
-  const uuidMatch = raw.match(
-    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
-  );
+  const uuidMatch = raw.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi);
   const guid = uuidMatch?.[uuidMatch.length - 1];
   if (!guid) return null;
   return `/notes?note=${encodeURIComponent(`note-en-${guid}`)}`;
@@ -209,13 +191,7 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
-function AttachmentBlock({
-  att,
-  onOpen,
-}: {
-  att: NoteAttachmentMeta;
-  onOpen?: (src: string, alt: string) => void;
-}) {
+function AttachmentBlock({ att, onOpen }: { att: NoteAttachmentMeta; onOpen?: (src: string, alt: string) => void }) {
   if (att.isImage) {
     return <AuthenticatedImage attachmentId={att.id} alt={att.fileName} onOpen={onOpen} />;
   }
@@ -248,6 +224,50 @@ function NoteImageGallery({
           <AuthenticatedImage key={att.id} attachmentId={att.id} alt={att.fileName} onOpen={onOpen} />
         ))}
       </div>
+    </div>
+  );
+}
+
+function ImageOcrActions({
+  images,
+  onProcessed,
+}: {
+  images: NoteAttachmentMeta[];
+  onProcessed: (id: string, hasText: boolean) => void;
+}) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  if (images.length === 0) return null;
+
+  const extract = async (att: NoteAttachmentMeta) => {
+    setBusyId(att.id);
+    setError(null);
+    try {
+      const result = await extractAttachmentTextWithAi(att.id);
+      onProcessed(att.id, Boolean(result.text?.trim()));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not extract text with AI");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="mt-4 space-y-2" aria-label="Image text extraction">
+      {images.map((att) => (
+        <div key={att.id} className="flex items-center justify-between gap-3 text-xs text-white/55">
+          <span className="min-w-0 truncate">{att.fileName}</span>
+          <button
+            type="button"
+            disabled={busyId !== null || att.aiOcrProcessed}
+            onClick={() => void extract(att)}
+            className="shrink-0 rounded-lg border border-indigo-400/30 px-3 py-1.5 text-indigo-200 hover:bg-indigo-400/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {att.aiOcrProcessed ? "AI text extracted" : busyId === att.id ? "Extracting…" : "Extract text with AI"}
+          </button>
+        </div>
+      ))}
+      {error && <p className="text-xs text-red-300">{error}</p>}
     </div>
   );
 }
@@ -313,8 +333,7 @@ async function hydrateAttachmentElements(
       const iframe = document.createElement("iframe");
       iframe.src = url;
       iframe.title = meta.fileName;
-      iframe.className =
-        "w-full h-[min(70vh,720px)] rounded-lg border border-white/10 bg-white";
+      iframe.className = "w-full h-[min(70vh,720px)] rounded-lg border border-white/10 bg-white";
       wrapper.appendChild(iframe);
 
       link.replaceWith(wrapper);
@@ -322,13 +341,7 @@ async function hydrateAttachmentElements(
   }
 }
 
-function HtmlNoteBody({
-  content,
-  attachmentMap,
-}: {
-  content: string;
-  attachmentMap: Map<string, NoteAttachmentMeta>;
-}) {
+function HtmlNoteBody({ content, attachmentMap }: { content: string; attachmentMap: Map<string, NoteAttachmentMeta> }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sanitized = useMemo(() => sanitizeNoteHtml(content), [content]);
 
@@ -358,17 +371,15 @@ function HtmlNoteBody({
     };
   }, [sanitized, attachmentMap]);
 
-  return (
-    <div
-      ref={containerRef}
-      className="note-rich-content-evernote text-base text-white/80 leading-relaxed"
-    />
-  );
+  return <div ref={containerRef} className="note-rich-content-evernote text-base text-white/80 leading-relaxed" />;
 }
 
 export function NoteRichContent({ noteId, content, contentFormat }: Props) {
   const [attachments, setAttachments] = useState<NoteAttachmentMeta[]>([]);
-  const [lightbox, setLightbox] = useState<{ images: LightboxImage[]; index: number } | null>(null);
+  const [lightbox, setLightbox] = useState<{
+    images: LightboxImage[];
+    index: number;
+  } | null>(null);
   const noteContentRef = useRef<HTMLDivElement>(null);
   const isHtml =
     contentFormat === "html" ||
@@ -379,10 +390,7 @@ export function NoteRichContent({ noteId, content, contentFormat }: Props) {
     void fetchNoteAttachments(noteId).then(setAttachments);
   }, [noteId]);
 
-  const attachmentMap = useMemo(
-    () => new Map(attachments.map((a) => [a.id, a])),
-    [attachments],
-  );
+  const attachmentMap = useMemo(() => new Map(attachments.map((a) => [a.id, a])), [attachments]);
 
   const imageAttachments = attachments.filter((a) => a.isImage);
   const nonImageAttachments = attachments.filter((a) => !a.isImage);
@@ -416,6 +424,12 @@ export function NoteRichContent({ noteId, content, contentFormat }: Props) {
     [openLightbox],
   );
 
+  const markAiOcrProcessed = useCallback((id: string, hasText: boolean) => {
+    setAttachments((current) =>
+      current.map((att) => (att.id === id ? { ...att, aiOcrProcessed: true, hasExtractedText: hasText } : att)),
+    );
+  }, []);
+
   const contentShell = (children: React.ReactNode) => (
     <>
       <div ref={noteContentRef} className="note-rich-content" onClick={handleContentClick}>
@@ -436,9 +450,7 @@ export function NoteRichContent({ noteId, content, contentFormat }: Props) {
     return contentShell(
       <>
         <NoteImageGallery images={showImageGallery ? imageAttachments : []} onOpen={openLightbox} />
-        <div className="whitespace-pre-wrap text-base text-white/80 leading-relaxed">
-          {content}
-        </div>
+        <div className="whitespace-pre-wrap text-base text-white/80 leading-relaxed">{content}</div>
         {attachments.length > 0 && (
           <div className="mt-6 pt-4 border-t border-white/10">
             {nonImageAttachments.length > 0 && (
@@ -451,6 +463,7 @@ export function NoteRichContent({ noteId, content, contentFormat }: Props) {
                 </div>
               </>
             )}
+            <ImageOcrActions images={imageAttachments} onProcessed={markAiOcrProcessed} />
           </div>
         )}
       </>,
@@ -461,6 +474,7 @@ export function NoteRichContent({ noteId, content, contentFormat }: Props) {
     <>
       <NoteImageGallery images={showImageGallery ? imageAttachments : []} onOpen={openLightbox} />
       <HtmlNoteBody content={content} attachmentMap={attachmentMap} />
+      <ImageOcrActions images={imageAttachments} onProcessed={markAiOcrProcessed} />
 
       {unusedNonImageAttachments.length > 0 && (
         <div className="mt-6 pt-4 border-t border-white/10">

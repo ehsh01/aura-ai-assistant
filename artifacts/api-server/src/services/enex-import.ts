@@ -269,6 +269,8 @@ async function extractResources(
         mimeType: att.mimeType,
         sizeBytes: att.sizeBytes,
         isImage: att.mimeType.startsWith("image/"),
+        hasExtractedText: false,
+        aiOcrProcessed: false,
       });
       if (resourceHash) hashToId.set(resourceHash, att.id);
     }

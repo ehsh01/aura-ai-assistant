@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { writeFile, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import {
   attachmentContentHash,
+  extractImageTextWithTesseract,
   extractTextFromAttachmentFile,
+  extractWithContentHashCache,
 } from "./attachment-text-extract";
 
 describe("attachmentContentHash", () => {
@@ -50,5 +52,27 @@ describe("extractTextFromAttachmentFile", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("attachment extraction safeguards", () => {
+  it("skips extraction when the content hash was already processed", async () => {
+    const extract = vi.fn().mockResolvedValue("should not run");
+    const result = await extractWithContentHashCache({
+      findCached: async () => ({ processed: true, text: "cached text" }),
+      extract,
+    });
+
+    expect(result).toEqual({ text: "cached text", cached: true });
+    expect(extract).not.toHaveBeenCalled();
+  });
+
+  it("degrades gracefully when the tesseract binary is missing", async () => {
+    const missing = Object.assign(new Error("spawn tesseract ENOENT"), {
+      code: "ENOENT",
+    });
+    const run = vi.fn().mockRejectedValue(missing);
+
+    await expect(extractImageTextWithTesseract("/tmp/missing.png", 3_000, run)).resolves.toBe("");
   });
 });

@@ -3,11 +3,11 @@ import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { noteAttachments } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { config } from "../lib/config";
-import { queueAttachmentTextExtraction } from "./attachment-text-extract";
+import { attachmentContentHash, queueAttachmentTextExtraction } from "./attachment-text-extract";
 
 export type NoteAttachmentDto = {
   id: string;
@@ -16,6 +16,8 @@ export type NoteAttachmentDto = {
   mimeType: string;
   sizeBytes: number;
   isImage: boolean;
+  hasExtractedText: boolean;
+  aiOcrProcessed: boolean;
 };
 
 function extFromMime(mime: string, fileName?: string): string {
@@ -37,12 +39,19 @@ function extFromMime(mime: string, fileName?: string): string {
   if (map[mime]) return map[mime]!;
   const fromName = fileName?.match(/\.([a-zA-Z0-9]{1,8})$/)?.[1];
   if (fromName) return fromName.toLowerCase();
-  const sub = mime.split("/")[1]?.replace(/[^a-z0-9]/gi, "").slice(0, 8);
+  const sub = mime
+    .split("/")[1]
+    ?.replace(/[^a-z0-9]/gi, "")
+    .slice(0, 8);
   return sub || "bin";
 }
 
 function attachmentIdFor(noteId: string, resourceHash: string): string {
-  const hash = resourceHash.replace(/[^a-fA-F0-9]/g, "").toLowerCase().slice(0, 32) || "nohash";
+  const hash =
+    resourceHash
+      .replace(/[^a-fA-F0-9]/g, "")
+      .toLowerCase()
+      .slice(0, 32) || "nohash";
   const noteKey = noteId.replace(/[^a-zA-Z0-9-]/g, "").slice(-24);
   return `att-${noteKey}-${hash}`;
 }
@@ -59,6 +68,7 @@ export type PendingNoteAttachment = {
   mimeType: string;
   sizeBytes: number;
   storagePath: string;
+  contentHash: string;
 };
 
 export async function writeAttachmentFile(opts: {
@@ -92,13 +102,11 @@ export async function writeAttachmentFile(opts: {
     mimeType: opts.mimeType,
     sizeBytes: opts.data.length,
     storagePath,
+    contentHash: attachmentContentHash(opts.data),
   };
 }
 
-export async function registerNoteAttachments(
-  userId: string,
-  items: PendingNoteAttachment[],
-): Promise<void> {
+export async function registerNoteAttachments(userId: string, items: PendingNoteAttachment[]): Promise<void> {
   if (items.length === 0) return;
 
   const db = getDb();
@@ -115,6 +123,7 @@ export async function registerNoteAttachments(
         mimeType: item.mimeType,
         sizeBytes: item.sizeBytes,
         storagePath: item.storagePath,
+        contentHash: item.contentHash,
       })
       .onConflictDoUpdate({
         target: noteAttachments.id,
@@ -123,9 +132,11 @@ export async function registerNoteAttachments(
           mimeType: item.mimeType,
           sizeBytes: item.sizeBytes,
           storagePath: item.storagePath,
-          // Re-extract when file bytes change on re-import.
-          extractedText: null,
-          extractedAt: null,
+          contentHash: item.contentHash,
+          // Preserve completed extraction when an identical file is re-imported.
+          extractedText: sql`CASE WHEN ${noteAttachments.contentHash} IS DISTINCT FROM ${item.contentHash} THEN NULL ELSE ${noteAttachments.extractedText} END`,
+          extractedAt: sql`CASE WHEN ${noteAttachments.contentHash} IS DISTINCT FROM ${item.contentHash} THEN NULL ELSE ${noteAttachments.extractedAt} END`,
+          aiOcrAt: sql`CASE WHEN ${noteAttachments.contentHash} IS DISTINCT FROM ${item.contentHash} THEN NULL ELSE ${noteAttachments.aiOcrAt} END`,
         },
       });
     ids.push(item.id);
@@ -153,13 +164,12 @@ export async function saveNoteAttachment(opts: {
     mimeType: pending.mimeType,
     sizeBytes: pending.sizeBytes,
     isImage: isImageMime(pending.mimeType),
+    hasExtractedText: false,
+    aiOcrProcessed: false,
   };
 }
 
-export async function listAttachmentsForNote(
-  userId: string,
-  noteId: string,
-): Promise<NoteAttachmentDto[]> {
+export async function listAttachmentsForNote(userId: string, noteId: string): Promise<NoteAttachmentDto[]> {
   const rows = await getDb()
     .select()
     .from(noteAttachments)
@@ -172,6 +182,8 @@ export async function listAttachmentsForNote(
     mimeType: row.mimeType,
     sizeBytes: row.sizeBytes,
     isImage: isImageMime(row.mimeType),
+    hasExtractedText: Boolean(row.extractedText?.trim()),
+    aiOcrProcessed: Boolean(row.aiOcrAt),
   }));
 }
 
@@ -199,13 +211,18 @@ export async function listImageAttachmentsForNotes(
       mimeType: row.mimeType,
       sizeBytes: row.sizeBytes,
       isImage: true,
+      hasExtractedText: Boolean(row.extractedText?.trim()),
+      aiOcrProcessed: Boolean(row.aiOcrAt),
     }));
 }
 
 export async function getAttachmentForUser(
   userId: string,
   attachmentId: string,
-): Promise<{ row: typeof noteAttachments.$inferSelect; absPath: string } | null> {
+): Promise<{
+  row: typeof noteAttachments.$inferSelect;
+  absPath: string;
+} | null> {
   const rows = await getDb()
     .select()
     .from(noteAttachments)

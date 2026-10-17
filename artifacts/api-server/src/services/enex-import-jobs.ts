@@ -163,14 +163,14 @@ export async function startImportJob(
   await createImportJob(userId, jobId, { filePath, fileName });
   const { enqueueJob, JOB_TYPE_ENEX_IMPORT } = await import("./job-queue");
   const { nudgeJobWorker } = await import("./job-worker");
-  await enqueueJob({
+  const job = await enqueueJob({
     id: jobId,
     userId,
     type: JOB_TYPE_ENEX_IMPORT,
     payload: { filePath, fileName },
     maxAttempts: 2,
   });
-  nudgeJobWorker();
+  nudgeJobWorker(job.id);
 }
 
 /** Load job status; re-enqueue interrupted imports after a server restart when possible. */
@@ -202,7 +202,7 @@ export async function ensureImportJob(
     const { nudgeJobWorker } = await import("./job-worker");
     const resumeId = `${safeJobId(jobId)}-resume`.slice(0, 64);
     try {
-      await enqueueJob({
+      const resumeJob = await enqueueJob({
         id: resumeId,
         userId,
         type: JOB_TYPE_ENEX_IMPORT,
@@ -215,7 +215,7 @@ export async function ensureImportJob(
       });
       // Refresh stamp so we don't keep re-enqueuing every STALE window while queued.
       await persistJob(userId, jobId, { ...job, updatedAt: Date.now() });
-      nudgeJobWorker();
+      nudgeJobWorker(resumeJob.id);
     } catch {
       // Job id already queued/running — fine.
     }

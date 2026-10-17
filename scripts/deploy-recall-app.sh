@@ -21,6 +21,10 @@ else
   cd "$DEPLOY_PATH"
 fi
 
+echo "==> System OCR dependency"
+apt-get update
+apt-get install -y tesseract-ocr
+
 echo "==> Install & build"
 command -v pnpm >/dev/null || npm install -g pnpm@9
 pnpm install

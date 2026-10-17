@@ -98,7 +98,7 @@ router.post("/waiting-items/scan", async (req, res, next) => {
       payload: {},
       id: `wait-scan-${req.user!.id}-${Date.now()}`,
     });
-    nudgeJobWorker();
+    nudgeJobWorker(job.id);
     res.status(202).json({ jobId: job.id, status: job.status });
   } catch (err) {
     next(err);

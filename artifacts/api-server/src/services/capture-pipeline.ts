@@ -37,13 +37,13 @@ export async function queueCaptureExtraction(
   captureId: string,
 ): Promise<{ jobId: string }> {
   const jobId = newExtractionJobId();
-  await enqueueJob({
+  const job = await enqueueJob({
     id: jobId,
     userId,
     type: JOB_TYPE_CAPTURE_EXTRACTION,
     payload: { captureId },
   });
-  nudgeJobWorker();
+  nudgeJobWorker(job.id);
   return { jobId };
 }
 
