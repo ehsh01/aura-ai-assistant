@@ -2,12 +2,22 @@ import { createRoot } from "react-dom/client";
 import { registerSW } from "virtual:pwa-register";
 import App from "./App";
 import { normalizeBrowserPath } from "./lib/app-path";
+import { startServiceWorkerUpdateCoordinator } from "./lib/service-worker-update";
+import "@fontsource/inter/400.css";
+import "@fontsource/inter/500.css";
+import "@fontsource/inter/600.css";
+import "@fontsource/inter/700.css";
 import "./index.css";
 
 normalizeBrowserPath();
 
-// Bump when app chrome changes so stale PWAs pick up the new bundle faster.
-const RECALL_UI_BUILD = "explore-graph-2026-10-17";
+startServiceWorkerUpdateCoordinator({
+  currentBuildId: __RECALL_BUILD_ID__,
+  buildMetadataUrl: new URL(
+    `${import.meta.env.BASE_URL}build.json`,
+    window.location.origin,
+  ).toString(),
+});
 
 const updateSW = registerSW({
   immediate: true,
@@ -17,23 +27,17 @@ const updateSW = registerSW({
   },
   onRegisteredSW(_url, registration) {
     if (!registration) return;
-    // Check for a new SW shortly after load (covers tabs left open across deploys).
+    const checkForUpdate = () => {
+      void registration.update().catch(() => {});
+    };
     window.setTimeout(() => {
-      void registration.update();
+      checkForUpdate();
     }, 5_000);
+    window.setInterval(checkForUpdate, 30 * 60 * 1_000);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") checkForUpdate();
+    });
   },
 });
-
-try {
-  if (typeof sessionStorage !== "undefined") {
-    const prev = sessionStorage.getItem("recall-ui-build");
-    if (prev && prev !== RECALL_UI_BUILD) {
-      void updateSW(true);
-    }
-    sessionStorage.setItem("recall-ui-build", RECALL_UI_BUILD);
-  }
-} catch {
-  // Ignore private-mode / blocked storage.
-}
 
 createRoot(document.getElementById("root")!).render(<App />);

@@ -8,7 +8,9 @@ async function serviceSource(name: string): Promise<string> {
 describe("saved items AI boundary", () => {
   it("keeps capture, metadata, tags, and graph generation deterministic", async () => {
     const sources = await Promise.all(
-      ["items.ts", "item-graph.ts", "item-tags.ts", "link-metadata.ts"].map(serviceSource),
+      ["items.ts", "item-graph.ts", "item-tags.ts", "link-metadata.ts"].map(
+        serviceSource,
+      ),
     );
     const combined = sources.join("\n");
 
@@ -17,16 +19,20 @@ describe("saved items AI boundary", () => {
     );
   });
 
-  it("invokes Ask only from the explicit Explore submit handler", async () => {
+  it("keeps Enter keyword-only and invokes AI only from the explicit button handler", async () => {
     const page = await readFile(
       new URL("../../../recall-app/src/pages/Everything.tsx", import.meta.url),
       "utf8",
     );
 
     expect(page).toMatch(
-      /const submitAsk = async \(event: FormEvent\)[\s\S]*queryRecallStream\(question/,
+      /const submitKeywordSearch = async \(event: FormEvent\)[\s\S]*listSavedItems\(\{ q: question/,
     );
-    expect(page).toMatch(/<form onSubmit=\{submitAsk\}/);
+    expect(page).toMatch(/<form[\s\S]*onSubmit=\{submitKeywordSearch\}/);
+    expect(page).toMatch(
+      /const submitAskAi = async \(\)[\s\S]*queryRecallStream\(question/,
+    );
+    expect(page).toMatch(/onClick=\{\(\) => void submitAskAi\(\)\}/);
     expect(page).not.toMatch(/useEffect\([\s\S]{0,300}queryRecallStream/);
   });
 
@@ -42,7 +48,9 @@ describe("saved items AI boundary", () => {
     expect(items).toMatch(/left\(i\.body_text, \$\{filters\.bodyTextLimit\}\)/);
     expect(items).toMatch(/left\(n\.preview, 280\)/);
     expect(items).not.toMatch(/n\.content AS body_text|left\(n\.content/);
-    expect(items).toMatch(/left\(coalesce\(sr\.record_text, ''\), \$\{filters\.bodyTextLimit\}\)/);
+    expect(items).toMatch(
+      /left\(coalesce\(sr\.record_text, ''\), \$\{filters\.bodyTextLimit\}\)/,
+    );
     expect(items).not.toMatch(/note_attachments|extracted_text/);
     expect(graph).toContain("Math.min(1_501, query.limit + query.offset + 1)");
   });
