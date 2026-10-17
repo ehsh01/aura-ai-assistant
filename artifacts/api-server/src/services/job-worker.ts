@@ -18,7 +18,7 @@ import {
   continueJob,
   deferJob,
   enexImportFromPayload,
-  evernoteRateLimitDeferral,
+  evernoteTransientDeferral,
   failJob,
   getJobForUser,
   heartbeatJob,
@@ -172,19 +172,29 @@ async function runOneJob(job: Job): Promise<void> {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Job failed";
-    const rateLimit =
+    const transientEvernoteFailure =
       job.type === JOB_TYPE_CONNECTOR_SYNC
-        ? evernoteRateLimitDeferral(err)
+        ? evernoteTransientDeferral(err)
         : null;
-    if (rateLimit) {
-      await deferJob(job.id, rateLimit.retryAfterMs, message);
+    if (transientEvernoteFailure) {
+      await deferJob(
+        job.id,
+        transientEvernoteFailure.retryAfterMs,
+        message,
+      );
       scheduleExplicitJobResume({
         id: job.id,
-        availableAt: new Date(Date.now() + rateLimit.retryAfterMs),
+        availableAt: new Date(
+          Date.now() + transientEvernoteFailure.retryAfterMs,
+        ),
       });
       logger.info(
-        { jobId: job.id, type: job.type, retryAfterMs: rateLimit.retryAfterMs },
-        "Background job paused by Evernote rate limit",
+        {
+          jobId: job.id,
+          type: job.type,
+          retryAfterMs: transientEvernoteFailure.retryAfterMs,
+        },
+        "Background job paused by transient Evernote response",
       );
       return;
     }

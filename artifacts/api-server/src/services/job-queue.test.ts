@@ -4,7 +4,7 @@ import {
   attemptsAfterDeferredClaim,
   captureIdFromPayload,
   connectorSyncFromPayload,
-  evernoteRateLimitDeferral,
+  evernoteTransientDeferral,
   jobFailureIsTerminal,
   mapJobRow,
 } from "./job-queue";
@@ -23,20 +23,28 @@ describe("job-queue helpers", () => {
     expect(attemptsAfterDeferredClaim(0)).toBe(0);
   });
 
-  it("detects marked, HTTP, and MCP-text rate limits for attempt-free deferral", () => {
+  it("detects rate limits, 503s, and HTML errors for attempt-free deferral", () => {
     expect(
-      evernoteRateLimitDeferral({
+      evernoteTransientDeferral({
         evernoteRateLimited: true,
         retryAfterMs: 12_000,
       }),
     ).toEqual({ retryAfterMs: 12_000 });
-    expect(evernoteRateLimitDeferral({ status: 429 })).toEqual({
+    expect(evernoteTransientDeferral({ status: 429 })).toEqual({
       retryAfterMs: 30_000,
     });
     expect(
-      evernoteRateLimitDeferral(new Error("MCP rate limit exceeded")),
+      evernoteTransientDeferral(new Error("MCP rate limit exceeded")),
     ).toEqual({ retryAfterMs: 30_000 });
-    expect(evernoteRateLimitDeferral(new Error("ordinary failure"))).toBeNull();
+    expect(evernoteTransientDeferral({ status: 503 })).toEqual({
+      retryAfterMs: 30_000,
+    });
+    expect(
+      evernoteTransientDeferral(new Error("<html>backend read error</html>")),
+    ).toEqual({ retryAfterMs: 30_000 });
+    expect(evernoteTransientDeferral({ status: 500 })).toBeNull();
+    expect(evernoteTransientDeferral({ status: 501 })).toBeNull();
+    expect(evernoteTransientDeferral(new Error("ordinary failure"))).toBeNull();
   });
 
   it("makes only the third real Tesseract failure terminal", () => {

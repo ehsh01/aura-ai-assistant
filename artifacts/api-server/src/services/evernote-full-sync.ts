@@ -26,6 +26,7 @@ import type {
 } from "../connectors/evernote-mcp";
 import {
   callEvernoteReadTool,
+  fetchEvernoteNoteListingPageWithRetry,
 } from "../connectors/evernote-mcp";
 import { getDb } from "../lib/db";
 import {
@@ -793,18 +794,23 @@ export async function verifyOneEvernoteNotebook(
     .offset(offset)
     .limit(1);
   if (!notebook) return false;
-  const result = await callEvernoteReadTool(client, "search_notes", {
-    query: `nbGuid:"${notebook.externalId.replaceAll('"', "")}"`,
-    maxResults: 1,
-    startIndex: 0,
-  });
-  const expected = Number(
-    result.totalResultCount ?? result.total ?? result.totalNotes,
+  const result = await fetchEvernoteNoteListingPageWithRetry(
+    client,
+    {
+      query: `nbGuid:"${notebook.externalId.replaceAll('"', "")}"`,
+      maxResults: 1,
+      startIndex: 0,
+    },
+    { connectorId, phase: "verification" },
   );
+  const expected = result.totalResultCount;
   await getDb()
     .update(evernoteContainers)
     .set({
-      expectedNoteCount: Number.isFinite(expected) ? Math.max(0, expected) : null,
+      expectedNoteCount:
+        expected != null && Number.isFinite(expected)
+          ? Math.max(0, expected)
+          : null,
       updatedAt: new Date(),
     })
     .where(eq(evernoteContainers.id, notebook.id));
@@ -819,28 +825,41 @@ export async function syncEvernoteReminderFlags(
   let startIndex = 0;
   let expectedTotal: number | null = null;
   for (;;) {
-    const result = await callEvernoteReadTool(client, "search_notes", {
-      query: "reminderOrder:*",
-      maxResults: 100,
-      startIndex,
-      sortBy: "updated",
-      ascending: false,
-    });
-    const page = firstArray(result, ["notes", "results", "items"]);
+    const parsedPage = await fetchEvernoteNoteListingPageWithRetry(
+      client,
+      {
+        query: "reminderOrder:*",
+        maxResults: 100,
+        startIndex,
+        sortBy: "updated",
+        ascending: false,
+      },
+      { connectorId, phase: "reminders" },
+    );
+    const page = parsedPage.rows;
     for (const item of page) {
       const value = row(item);
-      const id = text(value.id) ?? text(value.guid) ?? text(value.noteId);
+      const id =
+        text(value.id) ??
+        text(value.guid) ??
+        text(value.noteId) ??
+        text(value.noteGuid);
       if (id) ids.add(id);
     }
-    const reportedTotal = Number(
-      result.totalResultCount ?? result.total ?? result.totalNotes,
-    );
-    if (Number.isFinite(reportedTotal)) expectedTotal = reportedTotal;
+    if (parsedPage.totalResultCount != null) {
+      expectedTotal = parsedPage.totalResultCount;
+    }
     startIndex += page.length;
+    if (page.length === 0) {
+      break;
+    }
+    if (expectedTotal != null && startIndex >= expectedTotal) {
+      break;
+    }
     if (
-      page.length === 0 ||
-      page.length < 100 ||
-      (expectedTotal != null && startIndex >= expectedTotal)
+      expectedTotal == null &&
+      (parsedPage.hasMore === false ||
+        (parsedPage.hasMore == null && page.length < 100))
     ) {
       break;
     }

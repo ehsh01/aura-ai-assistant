@@ -18,6 +18,7 @@ async function buildAll() {
     entryPoints: [
       path.resolve(artifactDir, "src/index.ts"),
       path.resolve(artifactDir, "src/reimport-enex-cli.ts"),
+      path.resolve(artifactDir, "src/evernote-dry-run-list-cli.ts"),
     ],
     platform: "node",
     bundle: true,

@@ -1,0 +1,40 @@
+{
+  "textContentForm": {
+    "content": [
+      {
+        "type": "text",
+        "text": "1. 11111111-1111-4111-8111-111111111111 — [REDACTED_TITLE_1]\n2. 22222222-2222-4222-8222-222222222222 — [REDACTED_TITLE_2]\n\nShowing 2 of 4927 (startIndex=0, more available)."
+      }
+    ],
+    "structuredContent": {
+      "totalResultCount": 4927
+    }
+  },
+  "structuredContentForm": {
+    "content": [
+      {
+        "type": "text",
+        "text": "1. 33333333-3333-4333-8333-333333333333 — [REDACTED_TITLE_3]\n2. 44444444-4444-4444-8444-444444444444 — [REDACTED_TITLE_4]\n\nShowing 2 of 4927 (startIndex=2, more available)."
+      }
+    ],
+    "structuredContent": {
+      "data": {
+        "noteList": [
+          {
+            "noteGuid": "33333333-3333-4333-8333-333333333333",
+            "title": "[REDACTED_TITLE_3]"
+          },
+          {
+            "noteGuid": "44444444-4444-4444-8444-444444444444",
+            "title": "[REDACTED_TITLE_4]"
+          }
+        ],
+        "pageInfo": {
+          "startIndex": 2,
+          "totalResultCount": 4927,
+          "hasMore": true
+        }
+      }
+    }
+  }
+}
