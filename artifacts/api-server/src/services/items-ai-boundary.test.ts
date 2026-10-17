@@ -26,9 +26,15 @@ describe("saved items AI boundary", () => {
     );
 
     expect(page).toMatch(
-      /const submitKeywordSearch = async \(event: FormEvent\)[\s\S]*listSavedItems\(\{ q: question/,
+      /const runKeywordSearch = useCallback\([\s\S]*?async \(rawQuestion: string\)[\s\S]*?listSavedItems\(\{ q: question/,
+    );
+    expect(page).toMatch(
+      /const submitKeywordSearch = \(event: FormEvent\)[\s\S]*runKeywordSearch\(ask\)/,
     );
     expect(page).toMatch(/<form[\s\S]*onSubmit=\{submitKeywordSearch\}/);
+    expect(page).toMatch(
+      /const submitVoiceTranscript = useCallback\([\s\S]*runKeywordSearch\(question\)/,
+    );
     expect(page).toMatch(
       /const submitAskAi = async \(\)[\s\S]*queryRecallStream\(question/,
     );

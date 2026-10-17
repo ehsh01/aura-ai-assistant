@@ -43,23 +43,28 @@ export function getSpeechBlockReason(): SpeechInputError | null {
   return null;
 }
 
-export function speechErrorMessage(error: SpeechInputError): { title: string; description: string } {
+export function speechErrorMessage(error: SpeechInputError): {
+  title: string;
+  description: string;
+} {
   switch (error) {
     case "unsupported":
       return {
         title: "Voice not available",
-        description: "Use Chrome or Safari on a device that supports voice input.",
+        description:
+          "Voice works in Safari/Chrome tab, or use your keyboard's dictation mic",
       };
     case "pwa-blocked":
       return {
-        title: "Voice needs a moment",
+        title: "Voice not available",
         description:
-          "This device will record your voice and transcribe it on the server. Tap the mic, speak, then tap again to stop.",
+          "Voice works in Safari/Chrome tab, or use your keyboard's dictation mic",
       };
     case "permission-denied":
       return {
         title: "Microphone blocked",
-        description: "Allow microphone access in browser settings, then try again.",
+        description:
+          "Allow microphone access in browser settings, then try again.",
       };
     case "no-speech":
       return {
@@ -74,7 +79,8 @@ export function speechErrorMessage(error: SpeechInputError): { title: string; de
     case "audio-capture":
       return {
         title: "Microphone unavailable",
-        description: "Another app may be using the mic. Close it and try again.",
+        description:
+          "Another app may be using the mic. Close it and try again.",
       };
     case "aborted":
       return {

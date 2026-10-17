@@ -7,8 +7,12 @@ import {
   mapRecognitionError,
   type SpeechInputError,
 } from "@/lib/speech-support";
-import { canUseMediaRecorder, UtteranceRecorder } from "@/lib/utterance-recorder";
+import {
+  canUseMediaRecorder,
+  UtteranceRecorder,
+} from "@/lib/utterance-recorder";
 import { transcribeUtterance } from "@/lib/recall-api";
+import { getServerSttEnabled } from "@/lib/speech-synthesis-shared";
 
 type StartResult = { ok: true } | { ok: false; error: SpeechInputError };
 
@@ -22,10 +26,7 @@ function collectTranscript(event: SpeechRecognitionEvent): string {
       parts.push(text);
     }
   }
-  if (parts.length > 0) return parts.join(" ").trim();
-
-  const last = event.results[event.results.length - 1];
-  return last?.[0]?.transcript?.trim() ?? "";
+  return parts.join(" ").trim();
 }
 
 export type SpeechMode = "browser" | "server" | "none";
@@ -34,18 +35,25 @@ type UseSpeechInputOptions = {
   onError?: (error: SpeechInputError) => void;
   /** Called while server transcription is in flight. */
   onTranscribingChange?: (busy: boolean) => void;
+  onListeningChange?: (listening: boolean) => void;
+  /** Explore sets this false so voice can never invoke paid transcription. */
+  allowServerTranscription?: boolean;
 };
 
-function pickMode(): SpeechMode {
+export function pickSpeechMode(allowServerTranscription: boolean): SpeechMode {
   const block = getSpeechBlockReason();
   // Prefer browser STT when available (fast, free).
   if (block === null && getSpeechRecognitionCtor()) return "browser";
-  // iOS PWA / unsupported Web Speech → MediaRecorder + server Whisper when possible.
-  if (canUseMediaRecorder()) return "server";
+  // Paid transcription requires both an explicit client preference and the
+  // server-side environment flag enforced by POST /ai/transcribe.
+  if (allowServerTranscription && canUseMediaRecorder()) return "server";
   return "none";
 }
 
-export function useSpeechInput(onFinal: (text: string) => void, options: UseSpeechInputOptions = {}) {
+export function useSpeechInput(
+  onFinal: (text: string) => void,
+  options: UseSpeechInputOptions = {},
+) {
   const [listening, setListening] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [mode, setMode] = useState<SpeechMode>("none");
@@ -57,20 +65,30 @@ export function useSpeechInput(onFinal: (text: string) => void, options: UseSpee
   const onFinalRef = useRef(onFinal);
   const onErrorRef = useRef(options.onError);
   const onTranscribingRef = useRef(options.onTranscribingChange);
+  const onListeningRef = useRef(options.onListeningChange);
   onFinalRef.current = onFinal;
   onErrorRef.current = options.onError;
   onTranscribingRef.current = options.onTranscribingChange;
+  onListeningRef.current = options.onListeningChange;
 
   useEffect(() => {
-    const next = pickMode();
+    const next = pickSpeechMode(
+      options.allowServerTranscription ?? getServerSttEnabled(),
+    );
     setMode(next);
     setSupported(next !== "none");
-    setBlockReason(next === "none" ? getSpeechBlockReason() ?? "unsupported" : null);
+    setBlockReason(
+      next === "none" ? (getSpeechBlockReason() ?? "unsupported") : null,
+    );
     return () => {
       recognitionRef.current?.abort();
       recorderRef.current?.cancel();
     };
-  }, []);
+  }, [options.allowServerTranscription]);
+
+  useEffect(() => {
+    onListeningRef.current?.(listening);
+  }, [listening]);
 
   const setBusyTranscribing = useCallback((busy: boolean) => {
     setTranscribing(busy);
@@ -78,7 +96,9 @@ export function useSpeechInput(onFinal: (text: string) => void, options: UseSpee
   }, []);
 
   const stopBrowser = useCallback(() => {
-    recognitionRef.current?.stop();
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+    recognition?.stop();
     setListening(false);
   }, []);
 
@@ -103,8 +123,12 @@ export function useSpeechInput(onFinal: (text: string) => void, options: UseSpee
       deliveredRef.current = true;
       onFinalRef.current(transcript);
     };
-    recognition.onend = () => setListening(false);
+    recognition.onend = () => {
+      if (recognitionRef.current === recognition) recognitionRef.current = null;
+      setListening(false);
+    };
     recognition.onerror = (event: Event) => {
+      if (recognitionRef.current === recognition) recognitionRef.current = null;
       setListening(false);
       const code = (event as SpeechRecognitionErrorEvent).error ?? "unknown";
       if (code === "aborted" || deliveredRef.current) return;
@@ -136,7 +160,12 @@ export function useSpeechInput(onFinal: (text: string) => void, options: UseSpee
     const result = await recorder.stop();
     if ("error" in result) {
       if (result.error === "too-short") onErrorRef.current?.("no-speech");
-      else onErrorRef.current?.(result.error === "permission-denied" ? "permission-denied" : "unknown");
+      else
+        onErrorRef.current?.(
+          result.error === "permission-denied"
+            ? "permission-denied"
+            : "unknown",
+        );
       return;
     }
     setBusyTranscribing(true);
@@ -205,7 +234,9 @@ export function useSpeechInput(onFinal: (text: string) => void, options: UseSpee
     return { ok: false, error: blockReason ?? "unsupported" };
   }, [mode, startBrowser, startServer, blockReason]);
 
-  const toggle = useCallback(async (): Promise<StartResult | { ok: true; stopped: true }> => {
+  const toggle = useCallback(async (): Promise<
+    StartResult | { ok: true; stopped: true }
+  > => {
     if (listening) {
       stop();
       return { ok: true, stopped: true };

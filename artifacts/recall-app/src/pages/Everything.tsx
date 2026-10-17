@@ -20,10 +20,15 @@ import {
   SlidersHorizontal,
   Sparkles,
   Upload,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { KnowledgeGraph } from "@/components/KnowledgeGraph";
+import { MicButton, showSpeechError } from "@/components/MicButton";
+import { useSpeakAnswer } from "@/hooks/use-speak-answer";
+import { useSpeechInput } from "@/hooks/use-speech-input";
 import { toast } from "@/hooks/use-toast";
 import { shouldUseGridFallback } from "@/lib/graph-performance";
 import {
@@ -389,6 +394,7 @@ export function Everything() {
   const [aiResult, setAiResult] = useState<QueryRecallResult | null>(null);
   const [aiAvailability, setAiAvailability] =
     useState<AskAiAvailability | null>(null);
+  const voiceAnswer = useSpeakAnswer(answer, askStatus === "ready");
 
   useEffect(() => {
     if (lowMotionFallback) setMode("grid");
@@ -489,22 +495,45 @@ export function Everything() {
     }
   };
 
-  const submitKeywordSearch = async (event: FormEvent) => {
+  const runKeywordSearch = useCallback(
+    async (rawQuestion: string) => {
+      const question = rawQuestion.trim();
+      if (!question || askStatus === "searching") return;
+      setAskStatus("searching");
+      setAnswer("");
+      setAiResult(null);
+      try {
+        const result = await listSavedItems({ q: question, limit: 12 });
+        setKeywordResults(result.items);
+        setAskStatus("results");
+      } catch {
+        setKeywordResults([]);
+        setAskStatus("error");
+      }
+    },
+    [askStatus],
+  );
+
+  const submitKeywordSearch = (event: FormEvent) => {
     event.preventDefault();
-    const question = ask.trim();
-    if (!question || askStatus === "searching") return;
-    setAskStatus("searching");
-    setAnswer("");
-    setAiResult(null);
-    try {
-      const result = await listSavedItems({ q: question, limit: 12 });
-      setKeywordResults(result.items);
-      setAskStatus("results");
-    } catch {
-      setKeywordResults([]);
-      setAskStatus("error");
-    }
+    void runKeywordSearch(ask);
   };
+
+  const submitVoiceTranscript = useCallback(
+    (transcript: string) => {
+      const question = transcript.trim();
+      if (!question) return;
+      setAsk(question);
+      // Voice follows Enter: free keyword results only. AI remains an explicit
+      // action on the separate Ask AI button.
+      void runKeywordSearch(question);
+    },
+    [runKeywordSearch],
+  );
+  const speechInput = useSpeechInput(submitVoiceTranscript, {
+    allowServerTranscription: false,
+    onError: showSpeechError,
+  });
 
   const submitAskAi = async () => {
     const question = ask.trim();
@@ -551,6 +580,17 @@ export function Everything() {
           : aiAvailability
             ? undefined
             : "Checking Ask AI availability";
+
+  const ringState = speechInput.listening
+    ? "listening"
+    : voiceAnswer.speaking
+      ? "speaking"
+      : askStatus === "thinking"
+        ? "thinking"
+        : askStatus === "searching"
+          ? "searching"
+          : "ready";
+  const ringLabel = ringState.toUpperCase();
 
   const openNode = useCallback(
     (node: KnowledgeGraphNode) => {
@@ -836,47 +876,99 @@ export function Everything() {
               ))}
             </div>
 
-            <div className="assistant-ring-wrap absolute right-3 top-1/2 z-30 hidden -translate-y-1/2 sm:block">
+            <div
+              className="assistant-ring-wrap absolute right-3 top-1/2 z-30 hidden -translate-y-1/2 sm:block"
+              aria-live="polite"
+              aria-label={`R.E.C.A.L.L. ${ringLabel.toLowerCase()}`}
+            >
               <div
-                className={`assistant-ring ${askStatus === "thinking" ? "is-thinking" : ""}`}
+                className={`assistant-ring is-${ringState}`}
+                data-testid="assistant-ring-desktop"
               >
+                <MicButton
+                  onTranscript={submitVoiceTranscript}
+                  controller={speechInput}
+                  className="assistant-ring-mic"
+                  iconSize={18}
+                  title="Voice input on Recall ring"
+                  testId="ring-mic-desktop"
+                />
                 <div>
                   <span>R.E.C.A.L.L.</span>
-                  <small>
-                    {askStatus === "thinking"
-                      ? "THINKING"
-                      : askStatus === "searching"
-                        ? "SEARCHING"
-                        : "ONLINE"}
-                  </small>
+                  <small>{ringLabel}</small>
                 </div>
+                <button
+                  type="button"
+                  className="assistant-speaker-toggle"
+                  onClick={() =>
+                    voiceAnswer.setVoiceEnabled(!voiceAnswer.enabled)
+                  }
+                  disabled={!voiceAnswer.supported}
+                  aria-label={
+                    voiceAnswer.enabled
+                      ? "Turn voice answers off"
+                      : "Turn voice answers on"
+                  }
+                  aria-pressed={voiceAnswer.enabled}
+                  title="Voice answers use your browser's free speaker"
+                  data-testid="speaker-toggle-desktop"
+                >
+                  {voiceAnswer.enabled ? (
+                    <Volume2 size={14} />
+                  ) : (
+                    <VolumeX size={14} />
+                  )}
+                </button>
               </div>
               <span className="assistant-status">
                 <span className="h-1.5 w-1.5 rounded-full bg-[#7dffd9] shadow-[0_0_8px_#7dffd9]" />
-                {askStatus === "thinking"
-                  ? "PROCESSING"
-                  : askStatus === "searching"
-                    ? "SEARCHING"
-                    : "READY"}
+                {ringLabel}
               </span>
             </div>
 
             <div
               className="assistant-ring-mobile-wrap absolute bottom-[104px] left-3 z-30 flex items-center gap-1.5 sm:hidden"
-              aria-label={`R.E.C.A.L.L. ${askStatus === "thinking" ? "processing" : "ready"}`}
+              aria-live="polite"
+              aria-label={`R.E.C.A.L.L. ${ringLabel.toLowerCase()}`}
             >
               <div
-                className={`assistant-ring-mobile ${askStatus === "thinking" ? "is-thinking" : ""}`}
+                className={`assistant-ring-mobile is-${ringState}`}
+                data-testid="assistant-ring-mobile"
               >
-                <span>RECALL</span>
+                <MicButton
+                  onTranscript={submitVoiceTranscript}
+                  controller={speechInput}
+                  className="assistant-ring-mic assistant-ring-mic-mobile"
+                  iconSize={13}
+                  title="Voice input on Recall ring"
+                  testId="ring-mic-mobile"
+                />
+                <button
+                  type="button"
+                  className="assistant-speaker-toggle assistant-speaker-toggle-mobile"
+                  onClick={() =>
+                    voiceAnswer.setVoiceEnabled(!voiceAnswer.enabled)
+                  }
+                  disabled={!voiceAnswer.supported}
+                  aria-label={
+                    voiceAnswer.enabled
+                      ? "Turn voice answers off"
+                      : "Turn voice answers on"
+                  }
+                  aria-pressed={voiceAnswer.enabled}
+                  title="Voice answers use your browser's free speaker"
+                  data-testid="speaker-toggle-mobile"
+                >
+                  {voiceAnswer.enabled ? (
+                    <Volume2 size={9} />
+                  ) : (
+                    <VolumeX size={9} />
+                  )}
+                </button>
               </div>
               <span className="assistant-status assistant-status-mobile">
                 <span className="h-1.5 w-1.5 rounded-full bg-[#7dffd9] shadow-[0_0_8px_#7dffd9]" />
-                {askStatus === "thinking"
-                  ? "THINKING"
-                  : askStatus === "searching"
-                    ? "SEARCH"
-                    : "READY"}
+                {ringLabel}
               </span>
             </div>
 
@@ -1057,6 +1149,14 @@ export function Everything() {
                   placeholder="Ask Recall about what you see…"
                   aria-label="Ask Recall"
                   className="min-w-0 flex-1 bg-transparent text-base text-[#e8fff7] outline-none placeholder:text-[#8aa69c] sm:text-sm"
+                />
+                <MicButton
+                  onTranscript={submitVoiceTranscript}
+                  controller={speechInput}
+                  className="rounded-full p-2 text-[#7dffd9] hover:bg-cyan-200/10"
+                  iconSize={16}
+                  title="Voice input for free search"
+                  testId="ask-bar-mic"
                 />
                 <button
                   type="submit"

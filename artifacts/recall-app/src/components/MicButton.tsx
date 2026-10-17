@@ -2,7 +2,12 @@ import React, { useCallback } from "react";
 import { Mic, Loader2 } from "lucide-react";
 import { useSpeechInput } from "@/hooks/use-speech-input";
 import { toast } from "@/hooks/use-toast";
-import { speechErrorMessage, type SpeechInputError } from "@/lib/speech-support";
+import {
+  speechErrorMessage,
+  type SpeechInputError,
+} from "@/lib/speech-support";
+
+export type MicButtonController = ReturnType<typeof useSpeechInput>;
 
 interface MicButtonProps {
   onTranscript: (text: string) => void;
@@ -11,32 +16,32 @@ interface MicButtonProps {
   title?: string;
   children?: React.ReactNode;
   listeningLabel?: string;
+  allowServerTranscription?: boolean;
+  onListeningChange?: (listening: boolean) => void;
+  testId?: string;
+  controller?: MicButtonController;
 }
 
-function showSpeechError(error: SpeechInputError) {
+export function showSpeechError(error: SpeechInputError) {
   const { title, description } = speechErrorMessage(error);
   toast({ title, description, variant: "destructive" });
 }
 
-export function MicButton({
-  onTranscript,
+function MicButtonControl({
+  controller,
   className = "",
   iconSize = 16,
   title = "Voice input",
   children,
   listeningLabel,
-}: MicButtonProps) {
-  const onError = useCallback((error: SpeechInputError) => {
-    showSpeechError(error);
-  }, []);
-
-  const { listening, transcribing, supported, mode, toggle } = useSpeechInput(onTranscript, {
-    onError,
-  });
+  testId,
+}: MicButtonProps & { controller: MicButtonController }) {
+  const { listening, transcribing, supported, blockReason, mode, toggle } =
+    controller;
 
   const handleClick = async () => {
     if (!supported) {
-      showSpeechError("unsupported");
+      showSpeechError(blockReason ?? "unsupported");
       return;
     }
 
@@ -47,7 +52,10 @@ export function MicButton({
     }
     if ("stopped" in result) {
       if (mode === "server") {
-        toast({ title: "Transcribing…", description: "Turning your recording into text." });
+        toast({
+          title: "Transcribing…",
+          description: "Turning your recording into text.",
+        });
       }
       return;
     }
@@ -64,7 +72,7 @@ export function MicButton({
   const label = transcribing
     ? "Transcribing…"
     : listening
-      ? listeningLabel ?? "Listening…"
+      ? (listeningLabel ?? "Listening…")
       : children;
 
   return (
@@ -92,6 +100,7 @@ export function MicButton({
       }
       aria-pressed={listening}
       aria-busy={transcribing || undefined}
+      data-testid={testId}
       className={`${className} ${listening ? "text-red-400 bg-red-500/20 animate-pulse" : ""} ${
         transcribing ? "opacity-70" : ""
       }`}
@@ -104,4 +113,23 @@ export function MicButton({
       {label != null && typeof label !== "boolean" && <span>{label}</span>}
     </button>
   );
+}
+
+function ManagedMicButton(props: MicButtonProps) {
+  const onError = useCallback((error: SpeechInputError) => {
+    showSpeechError(error);
+  }, []);
+  const controller = useSpeechInput(props.onTranscript, {
+    onError,
+    allowServerTranscription: props.allowServerTranscription,
+    onListeningChange: props.onListeningChange,
+  });
+  return <MicButtonControl {...props} controller={controller} />;
+}
+
+export function MicButton(props: MicButtonProps) {
+  if (props.controller) {
+    return <MicButtonControl {...props} controller={props.controller} />;
+  }
+  return <ManagedMicButton {...props} />;
 }

@@ -16,22 +16,31 @@ function isOpenAiTtsVoice(value: string): value is OpenAiTtsVoice {
   return (OPENAI_TTS_VOICES as readonly string[]).includes(value);
 }
 
+export function assertServerTtsEnabled(): void {
+  if (
+    !isEnabled("RECALL_SERVER_TTS_ENABLED") ||
+    !isEnabled("RECALL_OPENAI_TTS_ENABLED")
+  ) {
+    const err = new Error("Server TTS is disabled") as Error & {
+      status?: number;
+    };
+    err.status = 503;
+    throw err;
+  }
+}
+
 /**
  * Synthesize speech with OpenAI TTS.
  * Defaults: model tts-1 (fast/cheap), voice nova.
  * Override with OPENAI_TTS_MODEL / OPENAI_TTS_VOICE.
- * Disabled entirely when RECALL_OPENAI_TTS_ENABLED=false.
+ * Disabled unless both server and provider TTS flags are explicitly enabled.
  */
 export async function synthesizeSpeech(
   text: string,
   voice?: string,
   userId?: string | null,
 ): Promise<{ buffer: Buffer; contentType: string }> {
-  if (!isEnabled("RECALL_OPENAI_TTS_ENABLED")) {
-    const err = new Error("OpenAI TTS is disabled") as Error & { status?: number };
-    err.status = 503;
-    throw err;
-  }
+  assertServerTtsEnabled();
 
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
