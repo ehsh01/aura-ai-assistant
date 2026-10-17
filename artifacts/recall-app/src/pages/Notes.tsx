@@ -2,13 +2,17 @@ import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useSearch } from "wouter";
 import { AppLayout } from "@/components/AppLayout";
 import { MicButton } from "@/components/MicButton";
-import { useAiChat, useSummarizeNote, useSemanticSearch } from "@workspace/api-client-react";
+import {
+  listNotes,
+  useAiChat,
+  useSummarizeNote,
+  useSemanticSearch,
+} from "@workspace/api-client-react";
 import { useAuth } from "@/context/AuthContext";
 import { useRecallData } from "@/context/RecallDataContext";
 import { firstName } from "@/lib/user-display";
 import {
   filterNotesByNotebook,
-  noteMatchesQuery,
   notesForSemanticSearch,
   noteUsesRichViewer,
   resolveNotesForAi,
@@ -31,8 +35,18 @@ import {
   resolvePersonIdByName,
 } from "@/components/PersonTagLink";
 import { PersonTagger } from "@/components/PersonTagger";
-import { Download, Loader2, BookOpen, ChevronDown, Library, Sparkles, ChevronLeft, X } from "lucide-react";
+import {
+  Download,
+  Loader2,
+  BookOpen,
+  ChevronDown,
+  Library,
+  Sparkles,
+  ChevronLeft,
+  X,
+} from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { notesForList } from "@/lib/notes-search";
 
 function notebookIdFromFilter(filter: NotebookFilter): string | null {
   if (filter === "all" || filter === "unfiled") return null;
@@ -64,12 +78,18 @@ export function Notes() {
   const [activeNotebook, setActiveNotebook] = useState<NotebookFilter>("all");
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [serverSearchResults, setServerSearchResults] = useState<
+    RecallNote[] | null
+  >(null);
+  const [isSearchingNotes, setIsSearchingNotes] = useState(false);
   const [personFilter, setPersonFilter] = useState<string | null>(null);
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
   const [toolbarDraft, setToolbarDraft] = useState("");
   const [importing, setImporting] = useState(false);
   const [editingContent, setEditingContent] = useState(false);
-  const [semanticMatchIds, setSemanticMatchIds] = useState<string[] | null>(null);
+  const [semanticMatchIds, setSemanticMatchIds] = useState<string[] | null>(
+    null,
+  );
   const appliedSearchRef = useRef("");
   const pendingNoteIdRef = useRef<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -77,14 +97,27 @@ export function Notes() {
   const aiChat = useAiChat();
   const semanticSearch = useSemanticSearch();
   const isMobile = useIsMobile();
+  const availableNotes = serverSearchResults
+    ? [
+        ...serverSearchResults.map((result) => {
+          const loaded = notes.find((note) => note.id === result.id);
+          return loaded ? { ...result, ...loaded } : result;
+        }),
+        ...notes.filter(
+          (note) =>
+            !serverSearchResults.some((result) => result.id === note.id),
+        ),
+      ]
+    : notes;
 
   const openNote = (noteId: string, notebook?: NotebookFilter | null) => {
     setActiveNoteId(noteId);
     setAiSuggestion(null);
-    const note = notes.find((n) => n.id === noteId);
+    const note = availableNotes.find((n) => n.id === noteId);
     const notebookForUrl =
       notebook === undefined
-        ? note?.notebookId || (activeNotebook === "all" ? undefined : activeNotebook)
+        ? note?.notebookId ||
+          (activeNotebook === "all" ? undefined : activeNotebook)
         : notebook === "all"
           ? undefined
           : notebook;
@@ -102,11 +135,49 @@ export function Notes() {
     setEditingContent(false);
   }, [activeNoteId]);
 
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (!query) {
+      setServerSearchResults(null);
+      setIsSearchingNotes(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setServerSearchResults(null);
+    setIsSearchingNotes(true);
+    const timer = window.setTimeout(() => {
+      void listNotes({ limit: 100, q: query }, { signal: controller.signal })
+        .then((result) => {
+          setServerSearchResults(
+            (result.notes as RecallNote[]).map((note) => ({
+              ...note,
+              content: "",
+            })),
+          );
+        })
+        .catch((error: unknown) => {
+          if (!(error instanceof DOMException && error.name === "AbortError")) {
+            setServerSearchResults([]);
+          }
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setIsSearchingNotes(false);
+        });
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [searchQuery]);
+
   // Apply ?note= / ?notebook= deep links. Depend on searchString so query-only
   // navigations (e.g. Home → /notes?note=note-en-…) work while already on /notes.
   useEffect(() => {
     const fullSearch = window.location.search;
-    if (appliedSearchRef.current === fullSearch && !pendingNoteIdRef.current) return;
+    if (appliedSearchRef.current === fullSearch && !pendingNoteIdRef.current)
+      return;
 
     const noteId = readSearchParam("note");
     const notebookParam = readSearchParam("notebook");
@@ -131,8 +202,14 @@ export function Notes() {
     if (isNew) {
       appliedSearchRef.current = fullSearch;
       pendingNoteIdRef.current = null;
-      const notebookId = notebookParam && notebookParam !== "unfiled" ? notebookParam : null;
-      const note = addNote({ title: "Untitled", content: "", tags: [], notebookId });
+      const notebookId =
+        notebookParam && notebookParam !== "unfiled" ? notebookParam : null;
+      const note = addNote({
+        title: "Untitled",
+        content: "",
+        tags: [],
+        notebookId,
+      });
       setActiveNoteId(note.id);
       setAiSuggestion(null);
       return;
@@ -185,28 +262,33 @@ export function Notes() {
       setActiveNoteId(null);
       return;
     }
-    if (activeNoteId && !notes.some((n) => n.id === activeNoteId)) {
-      setActiveNoteId(isMobile ? null : notes[0]!.id);
+    if (activeNoteId && !availableNotes.some((n) => n.id === activeNoteId)) {
+      setActiveNoteId(isMobile ? null : (availableNotes[0]?.id ?? null));
       return;
     }
     // Desktop: default to first note. Mobile: show the list until the user picks one.
     if (!activeNoteId && !isMobile) {
-      setActiveNoteId(notes[0]!.id);
+      setActiveNoteId(availableNotes[0]?.id ?? null);
     }
-  }, [notes, activeNoteId, isMobile, isReady]);
+  }, [notes, serverSearchResults, activeNoteId, isMobile, isReady]);
 
-  const activeNote = notes.find((n) => n.id === activeNoteId) ?? null;
+  const activeNote = availableNotes.find((n) => n.id === activeNoteId) ?? null;
 
   useEffect(() => {
     if (!activeNoteId) return;
-    const note = notes.find((n) => n.id === activeNoteId);
+    const note = availableNotes.find((n) => n.id === activeNoteId);
     if (!note || note.content) return;
     void loadNote(activeNoteId);
-  }, [activeNoteId, loadNote, notes]);
+  }, [activeNoteId, loadNote, notes, serverSearchResults]);
 
   const handleNewNote = () => {
     const notebookId = notebookIdFromFilter(activeNotebook);
-    const note = addNote({ title: "Untitled", content: "", tags: [], notebookId });
+    const note = addNote({
+      title: "Untitled",
+      content: "",
+      tags: [],
+      notebookId,
+    });
     openNote(note.id, activeNotebook);
   };
 
@@ -299,7 +381,13 @@ export function Notes() {
     }
   };
 
-  const notebookScopedNotes = filterNotesByNotebook(notes, activeNotebook);
+  const notebookScopedNotes = notesForList({
+    loadedNotes: notes,
+    serverResults: serverSearchResults,
+    query: searchQuery,
+    notebook: activeNotebook,
+    tag: activeTag,
+  });
 
   const matchesPerson = (note: RecallNote) => {
     if (!personFilter) return true;
@@ -317,20 +405,14 @@ export function Notes() {
   };
 
   const filteredNotes = notebookScopedNotes.filter((note) => {
-    const matchesTag = activeTag === "All" || note.tags.includes(activeTag);
     if (!matchesPerson(note)) return false;
     if (semanticMatchIds !== null) {
-      return matchesTag && semanticMatchIds.includes(note.id);
+      return semanticMatchIds.includes(note.id);
     }
-    return matchesTag && noteMatchesQuery(note, searchQuery);
+    return true;
   });
 
-  const keywordOnlyMatches = notebookScopedNotes.filter(
-    (note) =>
-      (activeTag === "All" || note.tags.includes(activeTag)) &&
-      matchesPerson(note) &&
-      noteMatchesQuery(note, searchQuery),
-  );
+  const keywordOnlyMatches = notebookScopedNotes.filter(matchesPerson);
 
   const unfiledCount = notes.filter((n) => !n.notebookId).length;
   const activeNotebookMeta =
@@ -338,7 +420,7 @@ export function Notes() {
       ? null
       : activeNotebook === "unfiled"
         ? { name: "Unfiled", noteCount: unfiledCount }
-        : notebooks.find((nb) => nb.id === activeNotebook) ?? null;
+        : (notebooks.find((nb) => nb.id === activeNotebook) ?? null);
 
   const pinnedNotes = filteredNotes.filter((n) => n.pinned);
   const recentNotes = filteredNotes.filter((n) => !n.pinned);
@@ -360,7 +442,9 @@ export function Notes() {
           <div className="p-4 border-b border-white/[0.06] space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-xl font-semibold tracking-tight text-white/90">Notes</h1>
+                <h1 className="text-xl font-semibold tracking-tight text-white/90">
+                  Notes
+                </h1>
                 {!isReady ? (
                   <p className="text-xs text-white/30 mt-0.5">Loading…</p>
                 ) : (
@@ -399,8 +483,17 @@ export function Notes() {
                   className="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 hover:opacity-90 transition-opacity"
                   title="New Note"
                 >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M5 12h14M12 5v14"/>
+                  <svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="white"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M5 12h14M12 5v14" />
                   </svg>
                 </button>
               </div>
@@ -408,8 +501,18 @@ export function Notes() {
 
             <div className="relative group">
               <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="rgba(255,255,255,0.4)"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <circle cx="11" cy="11" r="8" />
+                  <path d="m21 21-4.35-4.35" />
                 </svg>
               </div>
               <input
@@ -420,8 +523,11 @@ export function Notes() {
                   setSearchQuery(e.target.value);
                   setSemanticMatchIds(null);
                 }}
-                className="w-full bg-white/[0.03] border border-white/[0.08] rounded-xl pl-9 pr-4 py-2.5 text-sm text-white/90 placeholder:text-white/30 focus:outline-none focus:border-indigo-500/50 focus:bg-white/[0.05] transition-all"
+                className="w-full bg-white/[0.03] border border-white/[0.08] rounded-xl pl-9 pr-10 py-2.5 text-sm text-white/90 placeholder:text-white/30 focus:outline-none focus:border-indigo-500/50 focus:bg-white/[0.05] transition-all"
               />
+              {isSearchingNotes && (
+                <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-indigo-300" />
+              )}
             </div>
 
             <div className="relative flex items-center">
@@ -477,7 +583,9 @@ export function Notes() {
                     type="button"
                     onClick={() => {
                       void resolvePersonIdByName(personFilter).then((id) => {
-                        navigate(id ? tasksPath({ personId: id }) : tasksPath());
+                        navigate(
+                          id ? tasksPath({ personId: id }) : tasksPath(),
+                        );
                       });
                     }}
                     className="rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
@@ -488,7 +596,9 @@ export function Notes() {
                     type="button"
                     onClick={() => {
                       void resolvePersonIdByName(personFilter).then((id) => {
-                        navigate(id ? peoplePath({ personId: id }) : peoplePath());
+                        navigate(
+                          id ? peoplePath({ personId: id }) : peoplePath(),
+                        );
                       });
                     }}
                     className="rounded-lg px-1.5 py-0.5 text-sky-200/80 hover:bg-sky-500/20 hover:text-white"
@@ -501,7 +611,10 @@ export function Notes() {
                       setPersonFilter(null);
                       navigate(
                         notesPath({
-                          notebook: activeNotebook === "all" ? undefined : activeNotebook,
+                          notebook:
+                            activeNotebook === "all"
+                              ? undefined
+                              : activeNotebook,
                           q: searchQuery || undefined,
                         }),
                       );
@@ -535,14 +648,17 @@ export function Notes() {
 
           <div className="flex-1 overflow-y-auto recall-scrollbar p-3 space-y-6">
             {!isReady && (
-              <div className="text-center py-12 px-4 text-sm text-white/40">Loading your notes…</div>
+              <div className="text-center py-12 px-4 text-sm text-white/40">
+                Loading your notes…
+              </div>
             )}
 
             {isReady && notes.length === 0 && (
               <div className="text-center py-12 px-4">
                 <p className="text-sm text-white/40 mb-2">No notes yet</p>
                 <p className="text-xs text-white/25 mb-4 leading-relaxed">
-                  Import from Evernote: export a notebook as .enex, then use the import button above.
+                  Import from Evernote: export a notebook as .enex, then use the
+                  import button above.
                 </p>
                 <button
                   type="button"
@@ -554,46 +670,60 @@ export function Notes() {
               </div>
             )}
 
-            {isReady && filteredNotes.length === 0 && notes.length > 0 && (
-              <div className="text-center py-8 px-4 text-sm text-white/40">
-                {semanticMatchIds !== null && semanticMatchIds.length === 0
-                  ? "Smart search found no related notes."
-                  : "No notes match your search, tag, or notebook filter."}
-                {searchQuery.trim() && keywordOnlyMatches.length === 0 && semanticMatchIds === null && (
-                  <button
-                    type="button"
-                    onClick={() => void handleSmartSearch()}
-                    disabled={semanticSearch.isPending}
-                    className="flex items-center justify-center gap-2 mx-auto mt-4 px-4 py-2 rounded-xl bg-indigo-500/15 text-indigo-300 border border-indigo-500/25 hover:bg-indigo-500/25 disabled:opacity-50"
-                  >
-                    {semanticSearch.isPending ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Sparkles className="w-4 h-4" />
-                    )}
-                    Try smart search (uses AI)
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTag("All");
-                    setSearchQuery("");
-                    setPersonFilter(null);
-                    setSemanticMatchIds(null);
-                    setActiveNotebook("all");
-                    navigate(notesPath());
-                  }}
-                  className="block mx-auto mt-3 text-indigo-300 hover:text-indigo-200"
-                >
-                  Clear filters
-                </button>
+            {isReady && isSearchingNotes && searchQuery.trim() && (
+              <div className="flex items-center justify-center gap-2 py-8 px-4 text-sm text-white/40">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Searching all notes…
               </div>
             )}
 
+            {isReady &&
+              !isSearchingNotes &&
+              filteredNotes.length === 0 &&
+              notes.length > 0 && (
+                <div className="text-center py-8 px-4 text-sm text-white/40">
+                  {semanticMatchIds !== null && semanticMatchIds.length === 0
+                    ? "Smart search found no related notes."
+                    : "No notes match your search, tag, or notebook filter."}
+                  {searchQuery.trim() &&
+                    keywordOnlyMatches.length === 0 &&
+                    semanticMatchIds === null && (
+                      <button
+                        type="button"
+                        onClick={() => void handleSmartSearch()}
+                        disabled={semanticSearch.isPending}
+                        className="flex items-center justify-center gap-2 mx-auto mt-4 px-4 py-2 rounded-xl bg-indigo-500/15 text-indigo-300 border border-indigo-500/25 hover:bg-indigo-500/25 disabled:opacity-50"
+                      >
+                        {semanticSearch.isPending ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Sparkles className="w-4 h-4" />
+                        )}
+                        Try smart search (uses AI)
+                      </button>
+                    )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTag("All");
+                      setSearchQuery("");
+                      setPersonFilter(null);
+                      setSemanticMatchIds(null);
+                      setActiveNotebook("all");
+                      navigate(notesPath());
+                    }}
+                    className="block mx-auto mt-3 text-indigo-300 hover:text-indigo-200"
+                  >
+                    Clear filters
+                  </button>
+                </div>
+              )}
+
             {pinnedNotes.length > 0 && (
               <div className="space-y-2">
-                <h3 className="text-[11px] font-semibold text-white/30 uppercase tracking-wider px-1">Pinned</h3>
+                <h3 className="text-[11px] font-semibold text-white/30 uppercase tracking-wider px-1">
+                  Pinned
+                </h3>
                 <div className="space-y-2">
                   {pinnedNotes.map((note, i) => (
                     <NoteCard
@@ -601,7 +731,9 @@ export function Notes() {
                       note={note}
                       isActive={activeNoteId === note.id}
                       onClick={() => openNote(note.id)}
-                      onPersonClick={(name) => navigate(notesPath({ person: name }))}
+                      onPersonClick={(name) =>
+                        navigate(notesPath({ person: name }))
+                      }
                       index={i}
                     />
                   ))}
@@ -611,7 +743,9 @@ export function Notes() {
 
             {recentNotes.length > 0 && (
               <div className="space-y-2">
-                <h3 className="text-[11px] font-semibold text-white/30 uppercase tracking-wider px-1">Recent</h3>
+                <h3 className="text-[11px] font-semibold text-white/30 uppercase tracking-wider px-1">
+                  Recent
+                </h3>
                 <div className="space-y-2">
                   {recentNotes.map((note, i) => (
                     <NoteCard
@@ -619,7 +753,9 @@ export function Notes() {
                       note={note}
                       isActive={activeNoteId === note.id}
                       onClick={() => openNote(note.id)}
-                      onPersonClick={(name) => navigate(notesPath({ person: name }))}
+                      onPersonClick={(name) =>
+                        navigate(notesPath({ person: name }))
+                      }
                       index={i + pinnedNotes.length}
                     />
                   ))}
@@ -627,14 +763,16 @@ export function Notes() {
               </div>
             )}
 
-            {isReady && notesHasMore && (
+            {isReady && !searchQuery.trim() && notesHasMore && (
               <button
                 type="button"
                 onClick={() => void loadMoreNotes()}
                 disabled={isLoadingMoreNotes}
                 className="mx-auto flex items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-4 py-2 text-xs text-white/60 hover:bg-white/[0.08] disabled:opacity-50"
               >
-                {isLoadingMoreNotes && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {isLoadingMoreNotes && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                )}
                 Load more notes
               </button>
             )}
@@ -668,7 +806,9 @@ export function Notes() {
                 <NoteNotebookPicker
                   notebooks={notebooks}
                   value={activeNote.notebookId ?? null}
-                  onChange={(notebookId) => updateNote(activeNote.id, { notebookId })}
+                  onChange={(notebookId) =>
+                    updateNote(activeNote.id, { notebookId })
+                  }
                 />
               </div>
 
@@ -676,7 +816,9 @@ export function Notes() {
                 <input
                   type="text"
                   value={activeNote.title}
-                  onChange={(e) => updateNote(activeNote.id, { title: e.target.value })}
+                  onChange={(e) =>
+                    updateNote(activeNote.id, { title: e.target.value })
+                  }
                   placeholder="Note title"
                   className="w-full bg-transparent text-2xl sm:text-3xl font-semibold text-white/95 mb-3 outline-none border-none placeholder:text-white/20"
                 />
@@ -727,7 +869,9 @@ export function Notes() {
                     )}
                     <textarea
                       value={activeNote.content}
-                      onChange={(e) => updateNote(activeNote.id, { content: e.target.value })}
+                      onChange={(e) =>
+                        updateNote(activeNote.id, { content: e.target.value })
+                      }
                       placeholder="Start writing..."
                       className="w-full min-h-[320px] bg-transparent text-base text-white/80 leading-relaxed outline-none resize-none placeholder:text-white/25"
                     />
@@ -738,7 +882,9 @@ export function Notes() {
                   <div className="absolute top-0 left-0 w-1 h-full bg-indigo-500" />
                   <div className="flex items-start gap-3 pl-2">
                     <div>
-                      <h4 className="text-sm font-semibold text-indigo-300 mb-1">Recall Suggestion</h4>
+                      <h4 className="text-sm font-semibold text-indigo-300 mb-1">
+                        Recall Suggestion
+                      </h4>
                       <p className="text-sm text-indigo-200/70 leading-relaxed m-0 whitespace-pre-wrap">
                         {aiSuggestion ??
                           (searchQuery.trim()
@@ -759,8 +905,17 @@ export function Notes() {
                     className="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-indigo-300 transition-colors disabled:opacity-50"
                     title="Summarize"
                   >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    <svg
+                      width="18"
+                      height="18"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                     </svg>
                   </button>
 
@@ -781,7 +936,9 @@ export function Notes() {
 
                   <MicButton
                     onTranscript={(text) =>
-                      setToolbarDraft((prev) => (prev ? `${prev} ${text}` : text))
+                      setToolbarDraft((prev) =>
+                        prev ? `${prev} ${text}` : text,
+                      )
                     }
                     className="w-8 h-8 rounded-full flex items-center justify-center text-white/50 hover:text-white/80 hover:bg-white/5 transition-colors"
                     title="Voice input"
@@ -793,8 +950,17 @@ export function Notes() {
                     disabled={aiChat.isPending || !toolbarDraft.trim()}
                     className="w-8 h-8 rounded-full bg-indigo-500 hover:bg-indigo-400 disabled:opacity-40 text-white flex items-center justify-center transition-colors"
                   >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M5 12h14M12 5v14"/>
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M5 12h14M12 5v14" />
                     </svg>
                   </button>
                 </div>
@@ -861,9 +1027,17 @@ function NoteCard({
         <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-indigo-500 rounded-l-xl" />
       )}
       <div className="flex justify-between items-start mb-1">
-        <h4 className="text-sm font-semibold text-white/90 truncate pr-4">{note.title}</h4>
+        <h4 className="text-sm font-semibold text-white/90 truncate pr-4">
+          {note.title}
+        </h4>
         {note.pinned && (
-          <svg className="text-indigo-400 flex-shrink-0" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+          <svg
+            className="text-indigo-400 flex-shrink-0"
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+          >
             <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 11.2V6a3 3 0 0 0-6 0v5.2a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
           </svg>
         )}
@@ -873,7 +1047,9 @@ function NoteCard({
       </p>
       <div className="flex items-center justify-between mt-auto gap-2">
         <NoteTagList tags={note.tags} limit={2} onPersonClick={onPersonClick} />
-        <span className="text-[10px] text-white/30 flex-shrink-0 ml-2">{note.date}</span>
+        <span className="text-[10px] text-white/30 flex-shrink-0 ml-2">
+          {note.date}
+        </span>
       </div>
     </button>
   );

@@ -477,11 +477,14 @@ export const ListNotebooksResponse = zod.object({
 export const listNotesQueryLimitDefault = 100;
 export const listNotesQueryLimitMax = 200;
 
+export const listNotesQueryQMax = 300;
+
 
 
 export const ListNotesQueryParams = zod.object({
   "limit": zod.coerce.number().min(1).max(listNotesQueryLimitMax).default(listNotesQueryLimitDefault),
-  "cursor": zod.coerce.string().optional().describe('Opaque cursor returned by the previous page.')
+  "cursor": zod.coerce.string().optional().describe('Opaque cursor returned by the previous page.'),
+  "q": zod.coerce.string().max(listNotesQueryQMax).optional().describe('Full-text search across note titles, bodies, tags, and attachment text.')
 })
 
 export const ListNotesResponse = zod.object({
