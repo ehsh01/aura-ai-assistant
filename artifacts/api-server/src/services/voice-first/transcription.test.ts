@@ -58,8 +58,8 @@ describe("TranscriptionProvider contract (fake)", () => {
 });
 
 describe("OpenAI Whisper kill switch", () => {
-  it("returns unavailable only when server STT is explicitly disabled", async () => {
-    process.env.RECALL_SERVER_STT_ENABLED = "false";
+  it("returns unavailable when server STT is not explicitly enabled", async () => {
+    delete process.env.RECALL_SERVER_STT_ENABLED;
     const provider = new OpenAiWhisperTranscriptionProvider();
     await expect(
       provider.transcribe({

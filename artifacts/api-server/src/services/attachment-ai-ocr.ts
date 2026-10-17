@@ -1,12 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { and, eq, isNotNull } from "drizzle-orm";
-import OpenAI from "openai";
 import { noteAttachments } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { isEnabled } from "../lib/feature-flags";
-import { allowAttachmentOcrAi, recordAiUsage, usageTokens } from "./ai-usage";
+import { allowAttachmentOcrAi } from "./ai-usage";
 import { attachmentContentHash } from "./attachment-text-extract";
 import { getAttachmentForUser } from "./note-attachments";
+import { createOpenAiClient } from "./openai-client";
 
 const MAX_EXTRACTED_CHARS = 12_000;
 const DEFAULT_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -93,7 +93,13 @@ export async function extractAttachmentTextWithAi(
         aiOcrAt: noteAttachments.aiOcrAt,
       })
       .from(noteAttachments)
-      .where(and(eq(noteAttachments.contentHash, contentHash), isNotNull(noteAttachments.aiOcrAt)))
+      .where(
+        and(
+          eq(noteAttachments.userId, userId),
+          eq(noteAttachments.contentHash, contentHash),
+          isNotNull(noteAttachments.aiOcrAt),
+        ),
+      )
       .limit(1);
     if (cached?.aiOcrAt) {
       await getDb()
@@ -125,7 +131,13 @@ export async function extractAttachmentTextWithAi(
     }
 
     const selectedModel = model();
-    const completion = await new OpenAI({ apiKey }).chat.completions.create({
+    const client = createOpenAiClient({
+      apiKey,
+      feature: "attachment_ocr_ai",
+      userId,
+      background: false,
+    });
+    const completion = await client.chat.completions.create({
       model: selectedModel,
       max_tokens: 1200,
       messages: [
@@ -149,14 +161,6 @@ export async function extractAttachmentTextWithAi(
     });
 
     const text = truncate(completion.choices[0]?.message?.content ?? "") || null;
-    await recordAiUsage({
-      userId,
-      feature: "attachment_ocr_ai",
-      model: selectedModel,
-      background: false,
-      ...usageTokens(completion.usage),
-    });
-
     const now = new Date();
     await getDb()
       .update(noteAttachments)

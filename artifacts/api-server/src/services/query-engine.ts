@@ -88,7 +88,7 @@ import {
 } from "./ask-accuracy-policy";
 import { verifyFinanceAmountsInAnswer } from "./ask-verifier";
 import { isRelationLiteral } from "./ask-accuracy-policy";
-import { allowUserAi } from "./ai-usage";
+import { userAiAllowance } from "./ai-usage";
 
 function buildFinanceBreakdownAnswer(
   finance: QueryFinanceAggregate,
@@ -191,6 +191,23 @@ export type QueryAnswer = {
     categoriesSent: string[];
   };
 };
+
+export function buildKeywordFallbackAnswer(
+  records: Array<{ entityType: string; title: string; text: string }>,
+): { answer: string; suggestedNextAction: string | null } {
+  const top = records[0];
+  if (!top) {
+    return {
+      answer:
+        "I don't have enough matching records to answer confidently. Try capturing more context or connecting a data source.",
+      suggestedNextAction: null,
+    };
+  }
+  return {
+    answer: `I found ${records.length} related record(s). Top match: "${top.title}". ${top.text.slice(0, 200)}`,
+    suggestedNextAction: `Review ${top.entityType}: ${top.title}`,
+  };
+}
 
 /** Metadata emitted once, before answer tokens, so the UI can show sources instantly. */
 export type QueryStreamMeta = {
@@ -298,9 +315,33 @@ async function runQueryForUser(
   question: string,
   options?: { threadId?: string | null; stream?: QueryStreamHandlers | null },
 ): Promise<QueryAnswer> {
-  if (!(await allowUserAi("ask_query", userId))) {
+  const allowance = await userAiAllowance("ask_query", userId);
+  if (!allowance.allowed) {
+    let keywordRecords: Awaited<
+      ReturnType<typeof retrieveRelevantRecords>
+    >["records"] = [];
+    if (allowance.reason === "unavailable") {
+      try {
+        keywordRecords = (
+          await retrieveRelevantRecords(userId, question, 16, {
+            noteSearchQuery: question,
+            semantic: false,
+          })
+        ).records;
+      } catch {
+        // A retrieval failure still returns the graceful deterministic empty state.
+      }
+    }
+    const keywordFallback = buildKeywordFallbackAnswer(keywordRecords);
     const answer =
-      "Your daily AI budget has been reached. Ask will be available again after midnight UTC.";
+      allowance.reason === "daily_limit"
+        ? "Your daily AI budget has been reached. Ask will be available again after midnight UTC."
+        : keywordFallback.answer;
+    const relatedRecords = keywordRecords.slice(0, 8).map((record) => ({
+      entityType: record.entityType,
+      entityId: record.entityId,
+      title: record.title,
+    }));
     const thread = await ensureAskThreadForUser(userId, options?.threadId, question);
     await appendAskMessage({
       userId,
@@ -310,12 +351,19 @@ async function runQueryForUser(
     });
     const result: QueryAnswer = {
       answer,
-      confidence: 1,
-      caveats: "No AI model was called.",
+      confidence:
+        allowance.reason === "daily_limit" ? 1 : keywordRecords.length > 0 ? 0.6 : 0.2,
+      caveats:
+        allowance.reason === "daily_limit"
+          ? "No AI model was called."
+          : "AI spend accounting is temporarily unavailable; this answer uses keyword search only.",
       evidence: [],
-      relatedRecords: [],
+      relatedRecords,
       images: [],
-      suggestedNextAction: null,
+      suggestedNextAction:
+        allowance.reason === "unavailable"
+          ? keywordFallback.suggestedNextAction
+          : null,
       promptVersion: QUERY_ANSWER_PROMPT_VERSION,
       degraded: true,
       threadId: thread.id,
@@ -339,7 +387,7 @@ async function runQueryForUser(
       options.stream.onMeta({
         threadId: thread.id,
         evidence: [],
-        relatedRecords: [],
+        relatedRecords,
         images: [],
         privacy: result.privacy,
         sourcesConsulted: [],
@@ -795,18 +843,18 @@ async function runQueryForUser(
 
     const [gmailPlanRaw, drivePlan] = await Promise.all([
       wantsEmailAsk && mailboxes.length > 0
-        ? planGmailSearch(retrievalQuestion).then((p) =>
+        ? planGmailSearch(retrievalQuestion, userId).then((p) =>
             p ??
             (retrievalQuestion.trim() !== workingQuestion.trim()
-              ? planGmailSearch(workingQuestion)
+              ? planGmailSearch(workingQuestion, userId)
               : null),
           )
         : Promise.resolve(null),
       wantsDriveAsk && mailboxes.length > 0
-        ? planDriveSearch(retrievalQuestion).then((p) =>
+        ? planDriveSearch(retrievalQuestion, userId).then((p) =>
             p ??
             (retrievalQuestion.trim() !== workingQuestion.trim()
-              ? planDriveSearch(workingQuestion)
+              ? planDriveSearch(workingQuestion, userId)
               : null),
           )
         : Promise.resolve(null),
@@ -2121,13 +2169,13 @@ async function runQueryForUser(
     confidence = 0.85;
     suggestedNextAction = focus ? `Open task: ${focus.title}` : "Review your task list";
   } else if (relevant.length > 0) {
-    answer = `I found ${relevant.length} related record(s)${
-      usedSemantic ? " (semantic match)" : ""
-    }. Top match: "${relevant[0]!.title}". ${relevant[0]!.text.slice(0, 200)}`;
-    suggestedNextAction = `Review ${relevant[0]!.entityType}: ${relevant[0]!.title}`;
+    const fallback = buildKeywordFallbackAnswer(relevant);
+    answer = usedSemantic
+      ? fallback.answer.replace(" related record(s).", " related record(s) (semantic match).")
+      : fallback.answer;
+    suggestedNextAction = fallback.suggestedNextAction;
   } else {
-    answer =
-      "I don't have enough matching records to answer confidently. Try capturing more context or connecting a data source.";
+    answer = buildKeywordFallbackAnswer([]).answer;
     confidence = 0.2;
   }
 

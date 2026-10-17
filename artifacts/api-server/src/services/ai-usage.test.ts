@@ -17,8 +17,10 @@ import {
   allowBackgroundAi,
   allowUserAi,
   attachmentOcrAiDailyLimit,
+  backgroundDailyBudgetUsdPerUser,
   costMicrosFor,
   currentAiFeature,
+  dailyBudgetUsd,
   dailyBudgetUsdPerUser,
   isBackgroundFeature,
   priceFor,
@@ -26,6 +28,7 @@ import {
   resetBudgetCacheForTests,
   usageSummary,
   usageTokens,
+  userAiAllowance,
   withAiFeature,
 } from "./ai-usage";
 
@@ -54,11 +57,13 @@ function stubUsageSummary(opts: {
   let call = 0;
   mocks.select.mockImplementation(() => {
     const result =
-      call === 0 ? opts.rows
-      : call === 1 ? opts.daily
-      : [{ micros: String(opts.todayMicros) }];
+      call === 0
+        ? opts.rows
+        : call === 1
+          ? opts.daily
+          : [{ micros: String(opts.todayMicros) }];
     call += 1;
-    const settle = <T,>(onOk: (v: SqlRow[]) => T, onErr?: (e: unknown) => T) =>
+    const settle = <T>(onOk: (v: SqlRow[]) => T, onErr?: (e: unknown) => T) =>
       Promise.resolve(result).then(onOk, onErr);
     const builder = {
       from: () => builder,
@@ -80,7 +85,11 @@ function stubUsageSummary(opts: {
  * object graph because the table references in it are circular, so the
  * condition cannot simply be serialized.
  */
-function bindsValue(node: unknown, needle: string, seen = new WeakSet()): boolean {
+function bindsValue(
+  node: unknown,
+  needle: string,
+  seen = new WeakSet(),
+): boolean {
   if (node === needle) return true;
   if (typeof node !== "object" || node === null) return false;
   if (seen.has(node)) return false;
@@ -90,12 +99,15 @@ function bindsValue(node: unknown, needle: string, seen = new WeakSet()): boolea
 
 const ENV_KEYS = [
   "AI_DAILY_BUDGET_USD",
+  "AI_BACKGROUND_DAILY_BUDGET_USD_PER_USER",
   "AI_DAILY_BUDGET_USD_PER_USER",
   "RECALL_BACKGROUND_AI_ENABLED",
   "RECALL_ATTACHMENT_OCR_ENABLED",
   "RECALL_ATTACHMENT_OCR_AI_DAILY_LIMIT",
   "RECALL_AI_DIGESTS_ENABLED",
   "RECALL_EMAIL_AI_SCAN_ENABLED",
+  "RECALL_HOME_AI_DIGEST_ENABLED",
+  "RECALL_EMBEDDING_WARM_ENABLED",
 ] as const;
 
 let savedEnv: Record<string, string | undefined> = {};
@@ -108,6 +120,12 @@ beforeEach(() => {
   mocks.select.mockReset();
   mocks.insert.mockReturnValue({ values: () => Promise.resolve() });
   stubSpend(0);
+  process.env.RECALL_BACKGROUND_AI_ENABLED = "true";
+  process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
+  process.env.RECALL_AI_DIGESTS_ENABLED = "true";
+  process.env.RECALL_EMAIL_AI_SCAN_ENABLED = "true";
+  process.env.RECALL_HOME_AI_DIGEST_ENABLED = "true";
+  process.env.RECALL_EMBEDDING_WARM_ENABLED = "true";
 });
 
 afterEach(() => {
@@ -123,7 +141,10 @@ describe("pricing", () => {
   });
 
   it("matches dated model snapshots by prefix", () => {
-    expect(priceFor("gpt-4.1-mini-2025-04-14")).toEqual({ input: 0.4, output: 1.6 });
+    expect(priceFor("gpt-4.1-mini-2025-04-14")).toEqual({
+      input: 0.4,
+      output: 1.6,
+    });
   });
 
   it("falls back to the most expensive rate for unknown models", () => {
@@ -153,7 +174,10 @@ describe("pricing", () => {
   });
 
   it("defaults missing usage to zero rather than throwing", () => {
-    expect(usageTokens(undefined)).toEqual({ promptTokens: 0, completionTokens: 0 });
+    expect(usageTokens(undefined)).toEqual({
+      promptTokens: 0,
+      completionTokens: 0,
+    });
   });
 });
 
@@ -189,11 +213,32 @@ describe("recordAiUsage", () => {
       recordAiUsage({ feature: "digest", model: "gpt-4.1-mini" }),
     ).resolves.toBeUndefined();
   });
+
+  it("fails closed when an instrumented provider requires durable accounting", async () => {
+    mocks.insert.mockReturnValue({
+      values: () => Promise.reject(new Error("db down")),
+    });
+    await expect(
+      recordAiUsage(
+        { feature: "ask_query", model: "gpt-4.1-mini" },
+        { strict: true },
+      ),
+    ).rejects.toThrow("db down");
+  });
 });
 
 describe("background budget guard", () => {
-  it("allows background work when no budget is configured", async () => {
-    await expect(allowBackgroundAi("digest")).resolves.toBe(true);
+  it("uses finite conservative defaults when budgets are unset or zero", () => {
+    expect(dailyBudgetUsd()).toBe(0.5);
+    expect(backgroundDailyBudgetUsdPerUser()).toBe(0.5);
+    process.env.AI_DAILY_BUDGET_USD = "0";
+    process.env.AI_BACKGROUND_DAILY_BUDGET_USD_PER_USER = "0";
+    expect(dailyBudgetUsd()).toBe(0.5);
+    expect(backgroundDailyBudgetUsdPerUser()).toBe(0.5);
+  });
+
+  it("allows background work while default spend is under the cap", async () => {
+    await expect(allowBackgroundAi("attachment_ocr")).resolves.toBe(true);
   });
 
   it("allows background work while spend is under the cap", async () => {
@@ -219,8 +264,17 @@ describe("background budget guard", () => {
 
   it("honours the global background kill switch", async () => {
     process.env.RECALL_BACKGROUND_AI_ENABLED = "false";
-    await expect(allowBackgroundAi("digest")).resolves.toBe(false);
-    await expect(allowBackgroundAi("deadline_extract")).resolves.toBe(false);
+    for (const feature of [
+      "digest",
+      "home_digest",
+      "deadline_extract",
+      "waiting_extract",
+      "waiting_outcome",
+      "capture_classify",
+      "embedding_warm",
+    ] as const) {
+      await expect(allowBackgroundAi(feature, "u1")).resolves.toBe(false);
+    }
   });
 
   it("honours the OCR-only kill switch without disabling other work", async () => {
@@ -247,22 +301,23 @@ describe("background budget guard", () => {
     expect(mocks.select).toHaveBeenCalledTimes(1);
   });
 
-  it("fails open when the spend query errors", async () => {
+  it("fails closed when the spend query errors", async () => {
     process.env.AI_DAILY_BUDGET_USD = "5";
     mocks.select.mockReturnValue({
       from: () => ({ where: () => Promise.reject(new Error("db down")) }),
     });
-    // A reporting outage must not silently disable the product.
-    await expect(allowBackgroundAi("digest")).resolves.toBe(true);
+    await expect(allowBackgroundAi("digest")).resolves.toBe(false);
   });
 });
 
 describe("per-user Ask budget guard", () => {
-  it("parses a positive per-user budget and disables invalid values", () => {
+  it("parses a positive per-user budget and defaults invalid/unset values to $0.50", () => {
+    delete process.env.AI_DAILY_BUDGET_USD_PER_USER;
+    expect(dailyBudgetUsdPerUser()).toBe(0.5);
     process.env.AI_DAILY_BUDGET_USD_PER_USER = "1.25";
     expect(dailyBudgetUsdPerUser()).toBe(1.25);
     process.env.AI_DAILY_BUDGET_USD_PER_USER = "invalid";
-    expect(dailyBudgetUsdPerUser()).toBe(0);
+    expect(dailyBudgetUsdPerUser()).toBe(0.5);
   });
 
   it("blocks Ask when the user's spend reaches their cap", async () => {
@@ -277,6 +332,27 @@ describe("per-user Ask budget guard", () => {
     await expect(allowUserAi("transcribe", "u1")).resolves.toBe(true);
     expect(mocks.select).not.toHaveBeenCalled();
   });
+
+  it("fails closed when the per-user spend read errors", async () => {
+    mocks.select.mockReturnValue({
+      from: () => ({ where: () => Promise.reject(new Error("db down")) }),
+    });
+    await expect(allowUserAi("ask_query", "u1")).resolves.toBe(false);
+    resetBudgetCacheForTests();
+    await expect(userAiAllowance("ask_query", "u1")).resolves.toEqual({
+      allowed: false,
+      reason: "unavailable",
+    });
+  });
+
+  it("distinguishes a reached Ask cap from unavailable spend accounting", async () => {
+    process.env.AI_DAILY_BUDGET_USD_PER_USER = "1";
+    stubSpend(1_000_000);
+    await expect(userAiAllowance("ask_query", "u1")).resolves.toEqual({
+      allowed: false,
+      reason: "daily_limit",
+    });
+  });
 });
 
 describe("explicit attachment AI OCR guard", () => {
@@ -285,6 +361,7 @@ describe("explicit attachment AI OCR guard", () => {
   });
 
   it("defaults the AI OCR kill switch to off", async () => {
+    delete process.env.RECALL_ATTACHMENT_OCR_ENABLED;
     await expect(allowAttachmentOcrAi("u1")).resolves.toEqual({
       allowed: false,
       reason: "disabled",
@@ -359,7 +436,11 @@ describe("usageSummary", () => {
   });
 
   it("scopes every query to the user when one is given", async () => {
-    const conditions = stubUsageSummary({ rows: [], daily: [], todayMicros: 0 });
+    const conditions = stubUsageSummary({
+      rows: [],
+      daily: [],
+      todayMicros: 0,
+    });
     const summary = await usageSummary(30, "user-abc");
 
     expect(summary.everyone).toBe(false);
@@ -374,7 +455,9 @@ describe("usageSummary", () => {
   it("clamps a zero or negative window to at least one day", async () => {
     stubUsageSummary({ rows: [], daily: [], todayMicros: 0 });
     const summary = await usageSummary(0);
-    expect(Date.now() - Date.parse(summary.since)).toBeGreaterThanOrEqual(86_400_000);
+    expect(Date.now() - Date.parse(summary.since)).toBeGreaterThanOrEqual(
+      86_400_000,
+    );
   });
 });
 
@@ -384,10 +467,13 @@ describe("feature attribution", () => {
   });
 
   it("carries the feature through async boundaries", async () => {
-    const seen = await withAiFeature({ feature: "ask_query", userId: "u1" }, async () => {
-      await Promise.resolve();
-      return currentAiFeature();
-    });
+    const seen = await withAiFeature(
+      { feature: "ask_query", userId: "u1" },
+      async () => {
+        await Promise.resolve();
+        return currentAiFeature();
+      },
+    );
     expect(seen).toEqual({ feature: "ask_query", userId: "u1" });
   });
 

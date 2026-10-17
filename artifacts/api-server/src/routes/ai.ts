@@ -189,7 +189,7 @@ const AiTtsBody = z.object({
 router.post("/ai/tts", async (req, res, next) => {
   try {
     const body = AiTtsBody.parse(req.body);
-    const { buffer, contentType } = await synthesizeSpeech(body.text, body.voice);
+    const { buffer, contentType } = await synthesizeSpeech(body.text, body.voice, req.user!.id);
     res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Length", String(buffer.length));

@@ -1,4 +1,5 @@
-import OpenAI from "openai";
+import { isEnabled } from "../lib/feature-flags";
+import { createOpenAiClient } from "./openai-client";
 
 export const OPENAI_TTS_VOICES = [
   "alloy",
@@ -24,8 +25,9 @@ function isOpenAiTtsVoice(value: string): value is OpenAiTtsVoice {
 export async function synthesizeSpeech(
   text: string,
   voice?: string,
+  userId?: string | null,
 ): Promise<{ buffer: Buffer; contentType: string }> {
-  if (process.env.RECALL_OPENAI_TTS_ENABLED === "false") {
+  if (!isEnabled("RECALL_OPENAI_TTS_ENABLED")) {
     const err = new Error("OpenAI TTS is disabled") as Error & { status?: number };
     err.status = 503;
     throw err;
@@ -49,7 +51,7 @@ export async function synthesizeSpeech(
   const envVoice = process.env.OPENAI_TTS_VOICE?.trim() || "nova";
   const chosen = voice && isOpenAiTtsVoice(voice) ? voice : isOpenAiTtsVoice(envVoice) ? envVoice : "nova";
 
-  const client = new OpenAI({ apiKey });
+  const client = createOpenAiClient({ apiKey, feature: "tts", userId });
   const response = await client.audio.speech.create({
     model,
     voice: chosen,

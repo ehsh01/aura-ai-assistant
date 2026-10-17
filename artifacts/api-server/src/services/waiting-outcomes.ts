@@ -9,6 +9,7 @@ import { defaultFollowUpAt, type DateConfidence } from "./waiting-items";
 import { isAutomatedGmailRecord, isInboundGmailRecord } from "./waiting-extract";
 import { dueAtFromDateString } from "./attention";
 import { CLASSIFY_WAITING_REPLY_PROMPT_VERSION } from "../prompts/classifyWaitingReply.v1";
+import { allowBackgroundAi, withAiFeature } from "./ai-usage";
 
 export type WaitingMatchType = "thread" | "sender" | "subject";
 
@@ -304,6 +305,9 @@ export async function processWaitingOutcomesForUser(
   if (replies.length === 0) return { scanned: 0, matched: 0, applied: 0 };
 
   const active = await listActiveWaitingRows(userId);
+  if (!(await allowBackgroundAi("waiting_outcome", userId))) {
+    return { scanned: 0, matched: 0, applied: 0 };
+  }
   let matched = 0;
   let applied = 0;
 
@@ -318,13 +322,17 @@ export async function processWaitingOutcomesForUser(
       }
       matched += 1;
 
-      const classification = await aiService.classifyWaitingReply({
-        ownerName: match.item.ownerName,
-        deliverable: match.item.deliverable,
-        expectedAt: match.item.expectedAt?.toISOString().slice(0, 10) ?? null,
-        replySubject: reply.recordTitle ?? "",
-        replyBody: reply.recordText ?? "",
-      });
+      const classification = await withAiFeature(
+        { feature: "waiting_outcome", userId },
+        () =>
+          aiService.classifyWaitingReply({
+            ownerName: match.item.ownerName,
+            deliverable: match.item.deliverable,
+            expectedAt: match.item.expectedAt?.toISOString().slice(0, 10) ?? null,
+            replySubject: reply.recordTitle ?? "",
+            replyBody: reply.recordText ?? "",
+          }),
+      );
       logger.info(
         {
           userId,

@@ -142,7 +142,7 @@ export async function extractGmailDeadlinesForUser(
   items: AttentionItemDto[];
 }> {
   const limit = opts?.limit ?? 20;
-  if (!(await allowBackgroundAi("deadline_extract"))) {
+  if (!(await allowBackgroundAi("deadline_extract", userId))) {
     return { scanned: 0, created: 0, skippedLocal: 0, items: [] };
   }
   // Pull a wider window than `limit` so local skips do not starve real candidates.
@@ -294,7 +294,7 @@ export async function scanNoteForDeadlines(
   if (!note) return { scanned: 0, created: 0 };
   const text = `${note.title}\n${note.content}`;
   if (!hasDateCues(text)) return { scanned: 1, created: 0 };
-  if (!(await allowBackgroundAi("deadline_extract"))) {
+  if (!(await allowBackgroundAi("deadline_extract", userId))) {
     return { scanned: 1, created: 0 };
   }
 
