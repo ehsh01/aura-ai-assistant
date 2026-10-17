@@ -11,6 +11,7 @@
     "build:api": "pnpm --filter @workspace/api-server run build",
     "build:prod": "pnpm run build:api && pnpm run build:frontend",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
+    "stress:evernote": "pnpm --filter @workspace/scripts exec node --expose-gc --max-old-space-size=384 --import tsx ../artifacts/api-server/src/connectors/evernote-backfill.stress.ts",
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
   },

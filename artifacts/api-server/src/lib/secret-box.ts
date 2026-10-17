@@ -64,6 +64,18 @@ export function openSecret(blob: string): string {
   return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
 }
 
+function isDecryptableSealedSecret(value: string): boolean {
+  if (!value.startsWith("v1.")) return false;
+  try {
+    openSecret(value);
+    return true;
+  } catch {
+    // OAuth values may legitimately begin with "v1."; prefix alone is not
+    // evidence that Recall encrypted them.
+    return false;
+  }
+}
+
 /** Seal string fields commonly used for OAuth / API credentials. */
 const SENSITIVE_SETTING_KEYS = [
   "accessToken",
@@ -80,7 +92,11 @@ export function sealConnectorSettings(
   const out: Record<string, unknown> = { ...settings };
   for (const key of SENSITIVE_SETTING_KEYS) {
     const val = out[key];
-    if (typeof val === "string" && val.length > 0 && !val.startsWith("v1.")) {
+    if (
+      typeof val === "string" &&
+      val.length > 0 &&
+      !isDecryptableSealedSecret(val)
+    ) {
       out[key] = sealSecret(val);
     }
   }

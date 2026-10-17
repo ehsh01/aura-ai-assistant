@@ -1,5 +1,13 @@
-import { and, desc, eq } from "drizzle-orm";
-import { connectors, sourceRecords, syncRuns, type Connector } from "@workspace/db/schema";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import {
+  connectors,
+  entityEmbeddings,
+  evidence,
+  jobs,
+  sourceRecords,
+  syncRuns,
+  type Connector,
+} from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newConnectorId, newSourceRecordId, newSyncRunId } from "../lib/recall-format";
 import { csvImportConnector, parseCsvText } from "../connectors/csv-import";
@@ -43,7 +51,12 @@ import {
 import type { RecallConnector } from "../connectors/types";
 import { upsertEvidenceForSourceRecord } from "./evidence";
 import { writeAuditLog } from "./audit";
-import { warmEntityEmbedding } from "./embedding-cache";
+import {
+  embedItemsCached,
+  evictEntityEmbedding,
+  warmEntityEmbedding,
+} from "./embedding-cache";
+import { isEnabled } from "../lib/feature-flags";
 import { heuristicDigest, withSourceDigest } from "./digests";
 import { openConnectorSettings, sealConnectorSettings } from "../lib/secret-box";
 import { matchHomeyName, type HomeyAskPlan } from "./nl-homey-query";
@@ -63,6 +76,15 @@ import {
   testFlipperForceConnection,
   FlipperForceAuthError,
 } from "../connectors/flipperforce";
+import {
+  evernoteConnector,
+  fetchEvernoteBundle,
+  inspectEvernoteToken,
+  testEvernoteReadAccess,
+  type EvernoteFetchResult,
+  type EvernoteKnownNote,
+} from "../connectors/evernote";
+import { embeddingTextForContextRecord } from "./embedding-text";
 
 const CONNECTOR_IMPLS: Record<string, RecallConnector> = {
   manual: manualConnector,
@@ -73,6 +95,7 @@ const CONNECTOR_IMPLS: Record<string, RecallConnector> = {
   ticket_email: ticketEmailConnector,
   homey: homeyConnector,
   flipperforce: flipperforceConnector,
+  evernote: evernoteConnector,
 };
 
 export type ConnectorDto = {
@@ -163,6 +186,88 @@ export async function getConnectorForUser(
     .where(and(eq(connectors.id, connectorId), eq(connectors.userId, userId)))
     .limit(1);
   return rows[0] ? toDto(rows[0]) : null;
+}
+
+export async function updateConnectorForUser(
+  userId: string,
+  connectorId: string,
+  input: { enabled?: boolean; name?: string },
+): Promise<ConnectorDto | null> {
+  const current = await getDb()
+    .select()
+    .from(connectors)
+    .where(
+      and(eq(connectors.id, connectorId), eq(connectors.userId, userId)),
+    )
+    .limit(1);
+  if (!current[0]) return null;
+  const [updated] = await getDb()
+    .update(connectors)
+    .set({
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.enabled !== undefined
+        ? {
+            enabled: input.enabled,
+            syncStatus: input.enabled
+              ? current[0].syncStatus === "paused"
+                ? "connected"
+                : current[0].syncStatus
+              : "paused",
+          }
+        : {}),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(eq(connectors.id, connectorId), eq(connectors.userId, userId)),
+    )
+    .returning();
+  return updated ? toDto(updated) : null;
+}
+
+export type SyncRunDto = {
+  id: string;
+  connectorId: string;
+  status: string;
+  startedAt: string;
+  completedAt: string | null;
+  recordsFetched: number;
+  recordsCreated: number;
+  recordsUpdated: number;
+  recordsSkipped: number;
+  recordsFailed: number;
+  errorMessage: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export async function listConnectorSyncRunsForUser(
+  userId: string,
+  connectorId: string,
+  limit = 25,
+): Promise<SyncRunDto[] | null> {
+  const connector = await getConnectorForUser(userId, connectorId);
+  if (!connector) return null;
+  const rows = await getDb()
+    .select()
+    .from(syncRuns)
+    .where(
+      and(eq(syncRuns.userId, userId), eq(syncRuns.connectorId, connectorId)),
+    )
+    .orderBy(desc(syncRuns.startedAt))
+    .limit(Math.min(Math.max(limit, 1), 100));
+  return rows.map((row) => ({
+    id: row.id,
+    connectorId: row.connectorId,
+    status: row.status,
+    startedAt: row.startedAt.toISOString(),
+    completedAt: row.completedAt?.toISOString() ?? null,
+    recordsFetched: row.recordsFetched,
+    recordsCreated: row.recordsCreated,
+    recordsUpdated: row.recordsUpdated,
+    recordsSkipped: row.recordsSkipped,
+    recordsFailed: row.recordsFailed,
+    errorMessage: row.errorMessage ?? null,
+    metadata: row.metadata ?? {},
+  }));
 }
 
 export async function upsertFlipperForceConnectorForUser(
@@ -871,6 +976,143 @@ async function fetchFlipperForceRecordsForConnector(conn: Connector): Promise<un
   return fetchFlipperForceBundle(apiKey);
 }
 
+async function fetchEvernoteRecordsForConnector(
+  conn: Connector,
+): Promise<EvernoteFetchResult> {
+  const settings = openConnectorSettings(
+    (conn.settings ?? {}) as Record<string, unknown>,
+  );
+  const accessToken =
+    typeof settings.accessToken === "string" ? settings.accessToken : "";
+  const noteStoreUrl =
+    typeof settings.noteStoreUrl === "string" ? settings.noteStoreUrl : "";
+  const authTransport =
+    settings.authTransport === "mcp" ? "mcp" : "edam";
+  if (!accessToken || (authTransport === "edam" && !noteStoreUrl)) {
+    throw new Error("Evernote connector is missing OAuth credentials — reconnect Evernote");
+  }
+
+  if (authTransport === "mcp") {
+    const existing = await getDb()
+      .select({
+        externalId: sourceRecords.externalId,
+        metadata: sourceRecords.recordMetadata,
+      })
+      .from(sourceRecords)
+      .where(
+        and(
+          eq(sourceRecords.connectorId, conn.id),
+          eq(sourceRecords.recordType, "evernote_note"),
+        ),
+      );
+    const knownNotes = new Map<string, EvernoteKnownNote>();
+    for (const row of existing) {
+      const usn = row.metadata?.usn ?? row.metadata?.updateSequenceNum;
+      const hash = row.metadata?.contentHash;
+      knownNotes.set(row.externalId, {
+        updateSequenceNum:
+          typeof usn === "number" && Number.isFinite(usn) ? usn : null,
+        contentHash: typeof hash === "string" ? hash : null,
+        evernoteUpdated:
+          typeof row.metadata?.evernoteUpdated === "string"
+            ? row.metadata.evernoteUpdated
+            : null,
+      });
+    }
+    const { fetchEvernoteViaMcp, withEvernoteMcpClient } = await import(
+      "../connectors/evernote-mcp"
+    );
+    const persistMcpState = async (next: Record<string, unknown>) => {
+      await getDb()
+        .update(connectors)
+        .set({
+          settings: sealConnectorSettings({ ...settings, ...next }),
+          updatedAt: new Date(),
+        })
+        .where(eq(connectors.id, conn.id));
+    };
+    const synced = await withEvernoteMcpClient(
+      settings,
+      (client) => fetchEvernoteViaMcp(client, knownNotes),
+      persistMcpState,
+    );
+    await getDb()
+      .update(connectors)
+      .set({
+        settings: sealConnectorSettings({
+          ...settings,
+          ...synced.settings,
+        }),
+        updatedAt: new Date(),
+      })
+      .where(eq(connectors.id, conn.id));
+    return synced.value;
+  }
+
+  return fetchEvernoteBundle(accessToken, noteStoreUrl, {
+    loadKnownNotes: (externalIds) =>
+      loadEvernoteKnownNotes(conn.id, externalIds),
+    webApiUrlPrefix:
+      typeof settings.webApiUrlPrefix === "string"
+        ? settings.webApiUrlPrefix
+        : null,
+    accountId:
+      typeof settings.evernoteAccountId === "string"
+        ? settings.evernoteAccountId
+        : null,
+  });
+}
+
+async function removeDeletedEvernoteRecords(
+  userId: string,
+  connectorId: string,
+  externalIds: string[],
+): Promise<number> {
+  if (externalIds.length === 0) return 0;
+  const rows = await getDb()
+    .select({ id: sourceRecords.id })
+    .from(sourceRecords)
+    .where(
+      and(
+        eq(sourceRecords.userId, userId),
+        eq(sourceRecords.connectorId, connectorId),
+        inArray(sourceRecords.externalId, externalIds),
+      ),
+    );
+  const ids = rows.map((row) => row.id);
+  if (ids.length === 0) return 0;
+
+  await getDb().transaction(async (tx) => {
+    await tx
+      .delete(evidence)
+      .where(
+        and(
+          eq(evidence.userId, userId),
+          inArray(evidence.sourceRecordId, ids),
+        ),
+      );
+    await tx
+      .delete(entityEmbeddings)
+      .where(
+        and(
+          eq(entityEmbeddings.userId, userId),
+          eq(entityEmbeddings.entityType, "source_record"),
+          inArray(entityEmbeddings.entityId, ids),
+        ),
+      );
+    await tx
+      .delete(sourceRecords)
+      .where(
+        and(
+          eq(sourceRecords.userId, userId),
+          eq(sourceRecords.connectorId, connectorId),
+          inArray(sourceRecords.id, ids),
+        ),
+      );
+  });
+  return ids.length;
+}
+
 export type LiveGmailHit = {
   mailbox: string;
   title: string;
@@ -1313,11 +1555,26 @@ export async function createGoogleConnectorForUser(
   return toDto(row!);
 }
 
+export function sourceRecordContentHashUnchanged(
+  existingMetadata: Record<string, unknown> | null | undefined,
+  incomingMetadata: Record<string, unknown> | null | undefined,
+): boolean {
+  const incoming =
+    typeof incomingMetadata?.contentHash === "string"
+      ? incomingMetadata.contentHash
+      : null;
+  const stored =
+    typeof existingMetadata?.contentHash === "string"
+      ? existingMetadata.contentHash
+      : null;
+  return Boolean(incoming && stored && incoming === stored);
+}
+
 export async function upsertSourceRecord(
   userId: string,
   connectorId: string,
   record: Awaited<ReturnType<RecallConnector["normalize"]>>[number],
-): Promise<string> {
+): Promise<{ id: string; action: "created" | "updated" | "skipped" }> {
   const existing = await getDb()
     .select()
     .from(sourceRecords)
@@ -1331,22 +1588,68 @@ export async function upsertSourceRecord(
 
   const now = new Date();
   if (existing[0]) {
+    if (
+      sourceRecordContentHashUnchanged(
+        existing[0].recordMetadata,
+        record.recordMetadata,
+      )
+    ) {
+      // Advance Evernote's incremental checkpoint without rebuilding FTS or
+      // embeddings. The DB trigger preserves its existing search vector when
+      // contentHash/title/text are unchanged.
+      await getDb()
+        .update(sourceRecords)
+        .set({
+          recordMetadata: {
+            ...(existing[0].recordMetadata ?? {}),
+            ...(record.recordMetadata ?? {}),
+          },
+          sourceUpdatedAt: record.sourceUpdatedAt
+            ? new Date(record.sourceUpdatedAt)
+            : existing[0].sourceUpdatedAt,
+          lastSyncedAt: now,
+        })
+        .where(eq(sourceRecords.id, existing[0].id));
+      return { id: existing[0].id, action: "skipped" };
+    }
     const meta = withSourceDigest(
       (record.recordMetadata ?? {}) as Record<string, unknown>,
       heuristicDigest(record.recordTitle ?? "", record.recordText ?? "", 400),
     );
-    await getDb()
-      .update(sourceRecords)
-      .set({
-        recordTitle: record.recordTitle ?? null,
-        recordText: record.recordText ?? null,
-        recordMetadata: meta,
-        sourceUrl: record.sourceUrl ?? null,
-        lastSyncedAt: now,
-        updatedAt: now,
-      })
-      .where(eq(sourceRecords.id, existing[0].id));
-    return existing[0].id;
+    await getDb().transaction(async (tx) => {
+      await tx
+        .update(sourceRecords)
+        .set({
+          recordType: record.recordType,
+          recordTitle: record.recordTitle ?? null,
+          recordText: record.recordText ?? null,
+          recordMetadata: meta,
+          sourceUrl: record.sourceUrl ?? null,
+          sourceCreatedAt: record.sourceCreatedAt
+            ? new Date(record.sourceCreatedAt)
+            : existing[0].sourceCreatedAt,
+          sourceUpdatedAt: record.sourceUpdatedAt
+            ? new Date(record.sourceUpdatedAt)
+            : null,
+          lastSyncedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(sourceRecords.id, existing[0].id));
+      // Atomic with the content update: a changed row must never retain an ANN
+      // vector for old content. Capped warmup may regenerate it; otherwise Ask
+      // stays keyword/FTS-only.
+      await tx
+        .delete(entityEmbeddings)
+        .where(
+          and(
+            eq(entityEmbeddings.userId, userId),
+            eq(entityEmbeddings.entityType, "source_record"),
+            eq(entityEmbeddings.entityId, existing[0].id),
+          ),
+        );
+    });
+    evictEntityEmbedding(userId, "source_record", existing[0].id);
+    return { id: existing[0].id, action: "updated" };
   }
 
   const id = newSourceRecordId();
@@ -1365,11 +1668,12 @@ export async function upsertSourceRecord(
     recordMetadata: meta,
     sourceUrl: record.sourceUrl ?? null,
     sourceCreatedAt: record.sourceCreatedAt ? new Date(record.sourceCreatedAt) : null,
+    sourceUpdatedAt: record.sourceUpdatedAt ? new Date(record.sourceUpdatedAt) : null,
     lastSyncedAt: now,
     createdAt: now,
     updatedAt: now,
   });
-  return id;
+  return { id, action: "created" };
 }
 
 /**
@@ -1413,11 +1717,737 @@ async function warmRecentSourceEmbeddings(
   }
 }
 
+/** Changed-only Evernote embedding budget. Zero is the explicit kill-switch. */
+export function evernoteEmbeddingSyncLimit(): number {
+  if (
+    !isEnabled("RECALL_BACKGROUND_AI_ENABLED") ||
+    !isEnabled("RECALL_EMBEDDING_WARM_ENABLED") ||
+    !isEnabled("RECALL_EVERNOTE_EMBEDDINGS_ENABLED", false)
+  ) {
+    return 0;
+  }
+  const configured = Number(process.env.EVERNOTE_EMBEDDING_MAX_PER_SYNC ?? 25);
+  if (!Number.isFinite(configured) || configured <= 0) return 0;
+  return Math.min(Math.floor(configured), 100);
+}
+
+export function evernoteEmbeddingDailyLimit(): number {
+  const configured = Number(process.env.EVERNOTE_EMBEDDING_DAILY_CAP ?? 100);
+  if (!Number.isFinite(configured) || configured <= 0) return 0;
+  return Math.min(Math.floor(configured), 1_000);
+}
+
+async function reserveEvernoteEmbeddingSlots(
+  userId: string,
+  syncRunId: string,
+  requested: number,
+  perSyncRemaining: number,
+): Promise<number> {
+  const dailyLimit = evernoteEmbeddingDailyLimit();
+  if (requested <= 0 || dailyLimit === 0 || perSyncRemaining <= 0) return 0;
+  const now = new Date();
+  const today = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+  return getDb().transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`evernote-embed:${userId}`}, 0))`,
+    );
+    const rows = await tx
+      .select({ id: syncRuns.id, metadata: syncRuns.metadata })
+      .from(syncRuns)
+      .where(
+        and(eq(syncRuns.userId, userId), gte(syncRuns.startedAt, today)),
+      );
+    const reserved = rows.reduce((total, row) => {
+      const count = Number(row.metadata?.evernoteEmbeddingReserved ?? 0);
+      return total + (Number.isFinite(count) && count > 0 ? count : 0);
+    }, 0);
+    const current = rows.find((row) => row.id === syncRunId);
+    const currentReserved = Number(
+      current?.metadata?.evernoteEmbeddingReserved ?? 0,
+    );
+    const allowed = Math.min(
+      requested,
+      perSyncRemaining,
+      Math.max(0, dailyLimit - reserved),
+    );
+    if (allowed > 0) {
+      const existing = await tx
+        .select({ metadata: syncRuns.metadata })
+        .from(syncRuns)
+        .where(eq(syncRuns.id, syncRunId))
+        .limit(1);
+      await tx
+        .update(syncRuns)
+        .set({
+          metadata: {
+            ...(existing[0]?.metadata ?? {}),
+            evernoteEmbeddingReserved: currentReserved + allowed,
+          },
+        })
+        .where(eq(syncRuns.id, syncRunId));
+    }
+    return allowed;
+  });
+}
+
+async function warmChangedEvernoteEmbeddings(
+  userId: string,
+  syncRunId: string,
+  changedIds: string[],
+  alreadyReserved = 0,
+): Promise<number> {
+  const limit = evernoteEmbeddingSyncLimit();
+  if (limit === 0 || changedIds.length === 0) return 0;
+  const remaining = Math.max(0, limit - alreadyReserved);
+  if (remaining === 0) return 0;
+  const ids = [...new Set(changedIds)];
+  const rows = await getDb()
+    .select({
+      id: sourceRecords.id,
+      title: sourceRecords.recordTitle,
+      text: sourceRecords.recordText,
+      metadata: sourceRecords.recordMetadata,
+    })
+    .from(sourceRecords)
+    .where(
+      and(
+        eq(sourceRecords.userId, userId),
+        inArray(sourceRecords.id, ids),
+      ),
+    );
+  const items = rows.map((row) => ({
+      entityType: "source_record",
+      entityId: row.id,
+      text: embeddingTextForContextRecord({
+        entityType: "source_record",
+        title: row.title ?? "Evernote note",
+        text: row.text ?? "",
+        digest:
+          typeof row.metadata?.digest === "string"
+            ? row.metadata.digest
+            : null,
+      }),
+    }));
+  const cached = await embedItemsCached(userId, items, {
+    generateMissing: false,
+  });
+  if (cached === null) return 0;
+  const missing = items.filter(
+    (item) => !cached.has(`${item.entityType}:${item.entityId}`),
+  );
+  const requested = Math.min(missing.length, remaining);
+  const reserved = await reserveEvernoteEmbeddingSlots(
+    userId,
+    syncRunId,
+    requested,
+    remaining,
+  );
+  if (reserved === 0) return 0;
+  const generated = await embedItemsCached(
+    userId,
+    missing.slice(0, reserved),
+    { purpose: "warm" },
+  );
+  return generated?.size ?? 0;
+}
+
+type EvernoteWorkerCheckpoint = {
+  startIndex: number;
+  expectedTotal: number | null;
+  recordsFetched: number;
+  recordsSkipped: number;
+  recordsFailed: number;
+  batchesProcessed: number;
+  listingAuthoritative: boolean;
+};
+
+function checkpointFromMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): Partial<EvernoteWorkerCheckpoint> {
+  const value = metadata?.evernoteCheckpoint;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Partial<EvernoteWorkerCheckpoint>)
+    : {};
+}
+
+async function loadEvernoteKnownNotes(
+  connectorId: string,
+  externalIds: string[],
+): Promise<Map<string, EvernoteKnownNote>> {
+  if (externalIds.length === 0) return new Map();
+  const rows = await getDb()
+    .select({
+      externalId: sourceRecords.externalId,
+      metadata: sourceRecords.recordMetadata,
+    })
+    .from(sourceRecords)
+    .where(
+      and(
+        eq(sourceRecords.connectorId, connectorId),
+        eq(sourceRecords.recordType, "evernote_note"),
+        inArray(sourceRecords.externalId, externalIds),
+      ),
+    );
+  const notes = new Map<string, EvernoteKnownNote>();
+  for (const row of rows) {
+    const metadata = row.metadata ?? {};
+    const usn = metadata.usn ?? metadata.updateSequenceNum;
+    notes.set(row.externalId, {
+      updateSequenceNum:
+        typeof usn === "number" && Number.isFinite(usn) ? usn : null,
+      contentHash:
+        typeof metadata.contentHash === "string"
+          ? metadata.contentHash
+          : null,
+      notebookGuid:
+        typeof metadata.notebookGuid === "string"
+          ? metadata.notebookGuid
+          : null,
+      notebookName:
+        typeof metadata.notebookName === "string"
+          ? metadata.notebookName
+          : null,
+      tagGuids: Array.isArray(metadata.tagGuids)
+        ? metadata.tagGuids.filter(
+            (tag): tag is string => typeof tag === "string",
+          )
+        : [],
+      tagNames: Array.isArray(metadata.tagNames)
+        ? metadata.tagNames.filter(
+            (tag): tag is string => typeof tag === "string",
+          )
+        : [],
+      evernoteUpdated:
+        typeof metadata.evernoteUpdated === "string"
+          ? metadata.evernoteUpdated
+          : null,
+      evernoteSeenSyncRunId:
+        typeof metadata.evernoteSeenSyncRunId === "string"
+          ? metadata.evernoteSeenSyncRunId
+          : null,
+      evernoteSeenAtIndex:
+        typeof metadata.evernoteSeenAtIndex === "number"
+          ? metadata.evernoteSeenAtIndex
+          : null,
+      evernoteProcessedSyncRunId:
+        typeof metadata.evernoteProcessedSyncRunId === "string"
+          ? metadata.evernoteProcessedSyncRunId
+          : null,
+      evernoteProcessedAtIndex:
+        typeof metadata.evernoteProcessedAtIndex === "number"
+          ? metadata.evernoteProcessedAtIndex
+          : null,
+    });
+  }
+  return notes;
+}
+
+async function markEvernoteRecordsSeen(
+  connectorId: string,
+  syncRunId: string,
+  seen: Array<{ externalId: string; listingIndex: number }>,
+): Promise<void> {
+  for (const item of seen) {
+    const marker = JSON.stringify({
+      evernoteSeenSyncRunId: syncRunId,
+      evernoteSeenAtIndex: item.listingIndex,
+    });
+    await getDb()
+      .update(sourceRecords)
+      .set({
+        recordMetadata: sql`coalesce(${sourceRecords.recordMetadata}, '{}'::jsonb) || ${marker}::jsonb`,
+        lastSyncedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(sourceRecords.connectorId, connectorId),
+          eq(sourceRecords.externalId, item.externalId),
+        ),
+      );
+  }
+}
+
+async function markEvernoteRecordsProcessed(
+  connectorId: string,
+  syncRunId: string,
+  seen: Array<{ externalId: string; listingIndex: number }>,
+): Promise<void> {
+  for (const item of seen) {
+    const marker = JSON.stringify({
+      evernoteProcessedSyncRunId: syncRunId,
+      evernoteProcessedAtIndex: item.listingIndex,
+    });
+    await getDb()
+      .update(sourceRecords)
+      .set({
+        recordMetadata: sql`coalesce(${sourceRecords.recordMetadata}, '{}'::jsonb) || ${marker}::jsonb`,
+        lastSyncedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(sourceRecords.connectorId, connectorId),
+          eq(sourceRecords.externalId, item.externalId),
+        ),
+      );
+  }
+}
+
+async function removeUnseenEvernoteRecords(
+  userId: string,
+  connectorId: string,
+  syncRunId: string,
+): Promise<number> {
+  let removed = 0;
+  for (;;) {
+    const rows = await getDb()
+      .select({ externalId: sourceRecords.externalId })
+      .from(sourceRecords)
+      .where(
+        and(
+          eq(sourceRecords.userId, userId),
+          eq(sourceRecords.connectorId, connectorId),
+          eq(sourceRecords.recordType, "evernote_note"),
+          sql`coalesce(${sourceRecords.recordMetadata}->>'evernoteSeenSyncRunId', '') <> ${syncRunId}`,
+        ),
+      )
+      .limit(100);
+    if (rows.length === 0) return removed;
+    removed += await removeDeletedEvernoteRecords(
+      userId,
+      connectorId,
+      rows.map((row) => row.externalId),
+    );
+  }
+}
+
+export async function enqueueEvernoteSyncForUser(
+  userId: string,
+  connectorId: string,
+): Promise<{ syncRunId: string; jobId: string; status: string }> {
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(
+      and(
+        eq(connectors.id, connectorId),
+        eq(connectors.userId, userId),
+        eq(connectors.type, "evernote"),
+      ),
+    )
+    .limit(1);
+  const connector = rows[0];
+  if (!connector) throw new Error("Evernote connector not found");
+  if (!connector.enabled) {
+    const error = new Error(
+      `${connector.name} is paused; enable it before syncing`,
+    ) as Error & { status?: number };
+    error.status = 409;
+    throw error;
+  }
+
+  const queued = await getDb().transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`evernote-sync:${connectorId}`}, 0))`,
+    );
+    const active = await tx
+      .select({ id: syncRuns.id, status: syncRuns.status })
+      .from(syncRuns)
+      .where(
+        and(
+          eq(syncRuns.userId, userId),
+          eq(syncRuns.connectorId, connectorId),
+          inArray(syncRuns.status, ["queued", "running"]),
+        ),
+      )
+      .limit(1);
+    if (active[0]) {
+      return {
+        syncRunId: active[0].id,
+        jobId: active[0].id,
+        status: active[0].status,
+      };
+    }
+
+    const syncRunId = newSyncRunId();
+    const now = new Date();
+    await tx.insert(syncRuns).values({
+      id: syncRunId,
+      userId,
+      connectorId,
+      status: "queued",
+      startedAt: now,
+      metadata: {
+        evernoteCheckpoint: {
+          startIndex: 0,
+          expectedTotal: null,
+          recordsFetched: 0,
+          recordsSkipped: 0,
+          recordsFailed: 0,
+          batchesProcessed: 0,
+          listingAuthoritative: true,
+        },
+        recordsDeferred: 0,
+        recordsDeleted: 0,
+        recordsEmbedded: 0,
+        evernoteEmbeddingReserved: 0,
+        errors: [],
+      },
+    });
+    await tx.insert(jobs).values({
+      id: syncRunId,
+      userId,
+      type: "connector_sync",
+      payload: { connectorId, syncRunId },
+      status: "queued",
+      attempts: 0,
+      maxAttempts: 3,
+      availableAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await tx
+      .update(connectors)
+      .set({ syncStatus: "syncing", updatedAt: now })
+      .where(eq(connectors.id, connectorId));
+    return { syncRunId, jobId: syncRunId, status: "queued" };
+  });
+  return queued;
+}
+
+export async function processEvernoteSyncJob(
+  userId: string,
+  connectorId: string,
+  syncRunId: string,
+  heartbeat?: () => Promise<void>,
+): Promise<boolean> {
+  const [connectorRows, runRows] = await Promise.all([
+    getDb()
+      .select()
+      .from(connectors)
+      .where(
+        and(
+          eq(connectors.id, connectorId),
+          eq(connectors.userId, userId),
+          eq(connectors.type, "evernote"),
+        ),
+      )
+      .limit(1),
+    getDb()
+      .select()
+      .from(syncRuns)
+      .where(
+        and(eq(syncRuns.id, syncRunId), eq(syncRuns.userId, userId)),
+      )
+      .limit(1),
+  ]);
+  const connector = connectorRows[0];
+  const run = runRows[0];
+  if (!connector || !run) throw new Error("Evernote sync job target not found");
+  if (run.status === "complete" || run.status === "partial_success") return true;
+  if (!connector.enabled) throw new Error("Evernote connector is paused");
+
+  const settings = openConnectorSettings(
+    (connector.settings ?? {}) as Record<string, unknown>,
+  );
+  if (settings.authTransport !== "mcp") {
+    await syncConnectorForUser(
+      userId,
+      connectorId,
+      undefined,
+      { syncRunId },
+    );
+    return true;
+  }
+  if (typeof settings.accessToken !== "string" || !settings.accessToken) {
+    throw new Error("Evernote connector is missing OAuth credentials");
+  }
+
+  await getDb()
+    .update(syncRuns)
+    .set({ status: "running", completedAt: null, errorMessage: null })
+    .where(eq(syncRuns.id, syncRunId));
+
+  let metadata = { ...(run.metadata ?? {}) };
+  let recordsCreated = run.recordsCreated;
+  let recordsUpdated = run.recordsUpdated;
+  let contentHashSkipped = Number(metadata.contentHashSkipped ?? 0) || 0;
+  let processingFailures = Number(metadata.processingFailures ?? 0) || 0;
+  let recordsEmbedded = Number(metadata.recordsEmbedded ?? 0) || 0;
+  let embeddingReserved =
+    Number(metadata.evernoteEmbeddingReserved ?? 0) || 0;
+  let recordsDeleted = Number(metadata.recordsDeleted ?? 0) || 0;
+  let errors = Array.isArray(metadata.errors)
+    ? metadata.errors.filter((error): error is string => typeof error === "string")
+    : [];
+
+  const { streamEvernoteViaMcp, withEvernoteMcpClient } = await import(
+    "../connectors/evernote-mcp"
+  );
+  const persistMcpState = async (next: Record<string, unknown>) => {
+    await getDb()
+      .update(connectors)
+      .set({
+        settings: sealConnectorSettings({ ...settings, ...next }),
+        updatedAt: new Date(),
+      })
+      .where(eq(connectors.id, connector.id));
+  };
+
+  const streamed = await withEvernoteMcpClient(
+    settings,
+    (client) =>
+      streamEvernoteViaMcp(client, {
+        syncRunId,
+        checkpoint: checkpointFromMetadata(metadata),
+        loadKnownNotes: (externalIds) =>
+          loadEvernoteKnownNotes(connectorId, externalIds),
+        processBatch: async (batch) => {
+          await markEvernoteRecordsSeen(
+            connectorId,
+            syncRunId,
+            batch.seen,
+          );
+          const replayIds = new Set(batch.replayExternalIds);
+          const indexById = new Map(
+            batch.seen.map((item) => [item.externalId, item.listingIndex]),
+          );
+          for (const record of batch.records) {
+            record.metadata = {
+              ...record.metadata,
+              evernoteSeenSyncRunId: syncRunId,
+              evernoteSeenAtIndex:
+                indexById.get(record.externalId) ?? null,
+            };
+          }
+
+          const changedIds: string[] = [];
+          const normalized = await evernoteConnector.normalize(batch.records);
+          for (const record of normalized) {
+            try {
+              const upsert = await upsertSourceRecord(
+                userId,
+                connectorId,
+                record,
+              );
+              if (upsert.action === "created") {
+                recordsCreated += 1;
+                changedIds.push(upsert.id);
+              } else if (upsert.action === "updated") {
+                recordsUpdated += 1;
+                changedIds.push(upsert.id);
+              } else {
+                contentHashSkipped += 1;
+                if (!replayIds.has(record.externalId)) continue;
+                // The source row committed before a crash, but evidence and
+                // embedding work for this page did not finish.
+                changedIds.push(upsert.id);
+              }
+              for (const ev of evernoteConnector.mapEvidence(record)) {
+                await upsertEvidenceForSourceRecord(userId, {
+                  entityType: "source_record",
+                  entityId: upsert.id,
+                  claimType: ev.claimType,
+                  sourceRecordId: upsert.id,
+                  evidenceText: ev.evidenceText ?? null,
+                  url: ev.url ?? null,
+                  rowNumber: ev.rowNumber ?? null,
+                });
+              }
+            } catch (error) {
+              processingFailures += 1;
+              errors.push(
+                error instanceof Error
+                  ? error.message.slice(0, 300)
+                  : "Source record upsert failed",
+              );
+            }
+          }
+
+          try {
+            recordsEmbedded += await warmChangedEvernoteEmbeddings(
+              userId,
+              syncRunId,
+              changedIds,
+              embeddingReserved,
+            );
+          } catch (error) {
+            errors.push(
+              error instanceof Error
+                ? `Embedding warmup: ${error.message.slice(0, 240)}`
+                : "Embedding warmup failed",
+            );
+          }
+          await markEvernoteRecordsProcessed(
+            connectorId,
+            syncRunId,
+            batch.seen,
+          );
+          const currentRun = await getDb()
+            .select({ metadata: syncRuns.metadata })
+            .from(syncRuns)
+            .where(eq(syncRuns.id, syncRunId))
+            .limit(1);
+          embeddingReserved =
+            Number(
+              currentRun[0]?.metadata?.evernoteEmbeddingReserved ??
+                embeddingReserved,
+            ) || 0;
+          errors = [...errors, ...batch.errors].slice(-100);
+          metadata = {
+            ...(currentRun[0]?.metadata ?? metadata),
+            evernoteCheckpoint: batch.checkpoint,
+            contentHashSkipped,
+            processingFailures,
+            recordsDeleted,
+            recordsEmbedded,
+            evernoteEmbeddingReserved: embeddingReserved,
+            errors,
+          };
+          await getDb()
+            .update(syncRuns)
+            .set({
+              recordsFetched: batch.checkpoint.recordsFetched,
+              recordsCreated,
+              recordsUpdated,
+              recordsSkipped:
+                batch.checkpoint.recordsSkipped + contentHashSkipped,
+              recordsFailed:
+                batch.checkpoint.recordsFailed + processingFailures,
+              metadata,
+            })
+            .where(eq(syncRuns.id, syncRunId));
+          await heartbeat?.();
+        },
+        // Yield the shared worker regularly while keeping each page durable.
+        maxBatchesPerInvocation: 4,
+      }),
+    persistMcpState,
+  );
+
+  await getDb()
+    .update(connectors)
+    .set({
+      settings: sealConnectorSettings({
+        ...settings,
+        ...streamed.settings,
+      }),
+      updatedAt: new Date(),
+    })
+    .where(eq(connectors.id, connector.id));
+
+  if (!streamed.value.listingComplete) {
+    return false;
+  }
+
+  if (streamed.value.authoritativeListing) {
+    recordsDeleted = await removeUnseenEvernoteRecords(
+      userId,
+      connectorId,
+      syncRunId,
+    );
+  }
+  const recordsSkipped = streamed.value.recordsSkipped + contentHashSkipped;
+  const recordsFailed = streamed.value.recordsFailed + processingFailures;
+  const status =
+    recordsFailed > 0 || streamed.value.recordsDeferred > 0
+      ? "partial_success"
+      : "complete";
+  metadata = {
+    ...metadata,
+    evernoteCheckpoint: streamed.value,
+    contentHashSkipped,
+    processingFailures,
+    recordsDeferred: streamed.value.recordsDeferred,
+    recordsDeleted,
+    recordsEmbedded,
+    evernoteEmbeddingReserved: embeddingReserved,
+    errors,
+  };
+  await getDb()
+    .update(syncRuns)
+    .set({
+      status,
+      completedAt: new Date(),
+      errorMessage: null,
+      recordsFetched: streamed.value.recordsFetched,
+      recordsCreated,
+      recordsUpdated,
+      recordsSkipped,
+      recordsFailed,
+      metadata,
+    })
+    .where(eq(syncRuns.id, syncRunId));
+  await getDb()
+    .update(connectors)
+    .set({
+      syncStatus: status === "complete" ? "connected" : "partial_success",
+      lastSyncAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(connectors.id, connectorId));
+  await writeAuditLog({
+    userId,
+    action: "connector_sync",
+    entityType: "connector",
+    entityId: connectorId,
+    metadata: {
+      syncRunId,
+      recordsFetched: streamed.value.recordsFetched,
+      recordsCreated,
+      recordsUpdated,
+      recordsSkipped,
+      recordsDeferred: streamed.value.recordsDeferred,
+      recordsDeleted,
+      recordsFailed,
+    },
+  });
+  return true;
+}
+
+export async function failEvernoteSyncRun(
+  userId: string,
+  syncRunId: string,
+  errorMessage: string,
+): Promise<void> {
+  const rows = await getDb()
+    .select({ connectorId: syncRuns.connectorId, metadata: syncRuns.metadata })
+    .from(syncRuns)
+    .where(and(eq(syncRuns.id, syncRunId), eq(syncRuns.userId, userId)))
+    .limit(1);
+  if (!rows[0]) return;
+  await getDb()
+    .update(syncRuns)
+    .set({
+      status: "failed",
+      completedAt: new Date(),
+      errorMessage: errorMessage.slice(0, 1_000),
+      metadata: {
+        ...(rows[0].metadata ?? {}),
+        errors: [
+          ...(Array.isArray(rows[0].metadata?.errors)
+            ? rows[0].metadata.errors.filter(
+                (error): error is string => typeof error === "string",
+              )
+            : []),
+          errorMessage.slice(0, 300),
+        ].slice(-100),
+      },
+    })
+    .where(eq(syncRuns.id, syncRunId));
+  await getDb()
+    .update(connectors)
+    .set({ syncStatus: "sync_failed", updatedAt: new Date() })
+    .where(eq(connectors.id, rows[0].connectorId));
+}
+
 export async function syncConnectorForUser(
   userId: string,
   connectorId: string,
   payload?: { csvText?: string; records?: unknown[] },
-): Promise<{ syncRunId: string; result: { recordsFetched: number; recordsCreated: number; recordsUpdated: number; recordsFailed: number } }> {
+  execution?: { syncRunId?: string },
+): Promise<{ syncRunId: string; result: { recordsFetched: number; recordsCreated: number; recordsUpdated: number; recordsSkipped: number; recordsDeferred: number; recordsDeleted: number; recordsFailed: number } }> {
   const connRows = await getDb()
     .select()
     .from(connectors)
@@ -1425,33 +2455,66 @@ export async function syncConnectorForUser(
     .limit(1);
   const conn = connRows[0];
   if (!conn) throw new Error("Connector not found");
+  if (!conn.enabled) {
+    const error = new Error(
+      `${conn.name} is paused; enable it before syncing`,
+    ) as Error & { status?: number };
+    error.status = 409;
+    throw error;
+  }
 
   const impl = CONNECTOR_IMPLS[conn.type];
   if (!impl) throw new Error(`Unsupported connector type: ${conn.type}`);
 
-  const syncRunId = newSyncRunId();
+  const syncRunId = execution?.syncRunId ?? newSyncRunId();
   const started = new Date();
-  await getDb().insert(syncRuns).values({
-    id: syncRunId,
-    userId,
-    connectorId,
-    status: "running",
-    startedAt: started,
-    recordsFetched: 0,
-    recordsCreated: 0,
-    recordsUpdated: 0,
-    recordsFailed: 0,
-    metadata: {},
-  });
+  if (execution?.syncRunId) {
+    await getDb()
+      .update(syncRuns)
+      .set({
+        status: "running",
+        completedAt: null,
+        errorMessage: null,
+      })
+      .where(
+        and(
+          eq(syncRuns.id, syncRunId),
+          eq(syncRuns.userId, userId),
+          eq(syncRuns.connectorId, connectorId),
+        ),
+      );
+  } else {
+    await getDb().insert(syncRuns).values({
+      id: syncRunId,
+      userId,
+      connectorId,
+      status: "running",
+      startedAt: started,
+      recordsFetched: 0,
+      recordsCreated: 0,
+      recordsUpdated: 0,
+      recordsSkipped: 0,
+      recordsFailed: 0,
+      metadata: {},
+    });
+  }
 
   let recordsFetched = 0;
   let recordsCreated = 0;
   let recordsUpdated = 0;
+  let recordsSkipped = 0;
+  let recordsDeferred = 0;
+  let recordsDeleted = 0;
+  let recordsEmbedded = 0;
+  let evernoteEmbeddingReserved = 0;
   let recordsFailed = 0;
   let errorMessage: string | null = null;
+  const syncErrors: string[] = [];
+  const changedSourceRecordIds: string[] = [];
 
   try {
     let rawRecords: unknown[] = payload?.records ?? [];
+    let evernoteFetch: EvernoteFetchResult | null = null;
     if (conn.type === "csv_import" && payload?.csvText) {
       rawRecords = parseCsvText(payload.csvText);
     }
@@ -1474,26 +2537,37 @@ export async function syncConnectorForUser(
     if (conn.type === "flipperforce") {
       rawRecords = await fetchFlipperForceRecordsForConnector(conn);
     }
+    if (conn.type === "evernote") {
+      evernoteFetch = await fetchEvernoteRecordsForConnector(conn);
+      rawRecords = evernoteFetch.records;
+      recordsDeleted = await removeDeletedEvernoteRecords(
+        userId,
+        connectorId,
+        evernoteFetch.deletedExternalIds,
+      );
+    }
 
     const normalized = await impl.normalize(rawRecords);
-    recordsFetched = normalized.length;
+    recordsFetched = evernoteFetch?.recordsFetched ?? normalized.length;
+    recordsSkipped = evernoteFetch?.recordsSkipped ?? 0;
+    recordsDeferred = evernoteFetch?.recordsDeferred ?? 0;
+    recordsFailed = evernoteFetch?.recordsFailed ?? 0;
+    syncErrors.push(...(evernoteFetch?.errors ?? []));
 
     for (const record of normalized) {
       try {
-        const existingBefore = await getDb()
-          .select({ id: sourceRecords.id })
-          .from(sourceRecords)
-          .where(
-            and(
-              eq(sourceRecords.connectorId, connectorId),
-              eq(sourceRecords.externalId, record.externalId),
-            ),
-          )
-          .limit(1);
-
-        const sourceRecordId = await upsertSourceRecord(userId, connectorId, record);
-        if (existingBefore[0]) recordsUpdated++;
-        else recordsCreated++;
+        const upsert = await upsertSourceRecord(userId, connectorId, record);
+        const sourceRecordId = upsert.id;
+        if (upsert.action === "created") {
+          recordsCreated++;
+          changedSourceRecordIds.push(sourceRecordId);
+        } else if (upsert.action === "updated") {
+          recordsUpdated++;
+          changedSourceRecordIds.push(sourceRecordId);
+        } else {
+          recordsSkipped++;
+          continue;
+        }
 
         for (const ev of impl.mapEvidence(record)) {
           await upsertEvidenceForSourceRecord(userId, {
@@ -1506,8 +2580,13 @@ export async function syncConnectorForUser(
             rowNumber: ev.rowNumber ?? null,
           });
         }
-      } catch {
+      } catch (error) {
         recordsFailed++;
+        syncErrors.push(
+          error instanceof Error
+            ? error.message.slice(0, 300)
+            : "Source record upsert failed",
+        );
       }
     }
 
@@ -1525,6 +2604,29 @@ export async function syncConnectorForUser(
       // Warm freshly synced mail/calendar/drive/contact records across types.
       void warmRecentSourceEmbeddings(userId, connectorId, { limit: 60 }).catch(
         () => undefined,
+      );
+    } else if (conn.type === "evernote") {
+      // Never sweep the library: only this sync's changed rows, with a hard cap.
+      try {
+        recordsEmbedded = await warmChangedEvernoteEmbeddings(
+          userId,
+          syncRunId,
+          changedSourceRecordIds,
+        );
+      } catch (error) {
+        syncErrors.push(
+          error instanceof Error
+            ? `Embedding warmup: ${error.message.slice(0, 240)}`
+            : "Embedding warmup failed",
+        );
+      }
+      const reservation = await getDb()
+        .select({ metadata: syncRuns.metadata })
+        .from(syncRuns)
+        .where(eq(syncRuns.id, syncRunId))
+        .limit(1);
+      evernoteEmbeddingReserved = Number(
+        reservation[0]?.metadata?.evernoteEmbeddingReserved ?? 0,
       );
     }
 
@@ -1559,7 +2661,10 @@ export async function syncConnectorForUser(
     await getDb()
       .update(connectors)
       .set({
-        syncStatus: recordsFailed > 0 ? "partial_success" : "connected",
+        syncStatus:
+          recordsFailed > 0 || recordsDeferred > 0
+            ? "partial_success"
+            : "connected",
         lastSyncAt: new Date(),
         updatedAt: new Date(),
       })
@@ -1568,12 +2673,24 @@ export async function syncConnectorForUser(
     await getDb()
       .update(syncRuns)
       .set({
-        status: recordsFailed > 0 ? "partial_success" : "complete",
+        status:
+          recordsFailed > 0 || recordsDeferred > 0
+            ? "partial_success"
+            : "complete",
         completedAt: new Date(),
         recordsFetched,
         recordsCreated,
         recordsUpdated,
+        recordsSkipped,
         recordsFailed,
+        metadata: {
+          recordsSkipped,
+          recordsDeferred,
+          recordsDeleted,
+          recordsEmbedded,
+          evernoteEmbeddingReserved,
+          errors: syncErrors,
+        },
       })
       .where(eq(syncRuns.id, syncRunId));
   } catch (err) {
@@ -1595,7 +2712,19 @@ export async function syncConnectorForUser(
         recordsFetched,
         recordsCreated,
         recordsUpdated,
+        recordsSkipped,
         recordsFailed,
+        metadata: {
+          recordsSkipped,
+          recordsDeferred,
+          recordsDeleted,
+          recordsEmbedded,
+          evernoteEmbeddingReserved,
+          errors: [
+            ...syncErrors,
+            ...(errorMessage ? [errorMessage.slice(0, 300)] : []),
+          ],
+        },
       })
       .where(eq(syncRuns.id, syncRunId));
     throw err;
@@ -1606,12 +2735,29 @@ export async function syncConnectorForUser(
     action: "connector_sync",
     entityType: "connector",
     entityId: connectorId,
-    metadata: { syncRunId, recordsFetched, recordsCreated },
+    metadata: {
+      syncRunId,
+      recordsFetched,
+      recordsCreated,
+      recordsUpdated,
+      recordsSkipped,
+      recordsDeferred,
+      recordsDeleted,
+      recordsFailed,
+    },
   });
 
   return {
     syncRunId,
-    result: { recordsFetched, recordsCreated, recordsUpdated, recordsFailed },
+    result: {
+      recordsFetched,
+      recordsCreated,
+      recordsUpdated,
+      recordsSkipped,
+      recordsDeferred,
+      recordsDeleted,
+      recordsFailed,
+    },
   };
 }
 
@@ -1830,6 +2976,404 @@ export async function writeHomeyConnectAudit(
     entityType: "connector",
     entityId: connectorId,
     metadata: { homeyEmail: email },
+  });
+}
+
+async function findEvernoteConnectorByAccountId(
+  userId: string,
+  accountId: string,
+): Promise<Connector | null> {
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(and(eq(connectors.userId, userId), eq(connectors.type, "evernote")));
+  for (const row of rows) {
+    const settings = openConnectorSettings(
+      (row.settings ?? {}) as Record<string, unknown>,
+    );
+    if (String(settings.evernoteAccountId ?? "") === accountId) return row;
+  }
+  return null;
+}
+
+export async function beginEvernoteMcpOAuthForUser(
+  userId: string,
+  oauthState: string,
+): Promise<{ connectorId: string; authorizeUrl: string }> {
+  const { beginEvernoteMcpOAuth } = await import(
+    "../connectors/evernote-mcp"
+  );
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(
+      and(eq(connectors.userId, userId), eq(connectors.type, "evernote")),
+    );
+  const existing =
+    rows.find((row) => {
+      const settings = openConnectorSettings(
+        (row.settings ?? {}) as Record<string, unknown>,
+      );
+      return settings.authTransport === "mcp";
+    }) ?? null;
+  const existingSettings = existing
+    ? openConnectorSettings(
+        (existing.settings ?? {}) as Record<string, unknown>,
+      )
+    : undefined;
+  const started = await beginEvernoteMcpOAuth(
+    oauthState,
+    existingSettings,
+  );
+  const now = new Date();
+  const sealed = sealConnectorSettings({
+    ...(existingSettings ?? {}),
+    ...started.settings,
+  });
+  if (existing) {
+    await getDb()
+      .update(connectors)
+      .set({
+        name: "Evernote",
+        description: "Read-only Evernote MCP sync for evidence-backed Ask.",
+        baseUrl: "https://mcp.evernote.com/mcp",
+        authType: "oauth2_dcr",
+        settings: sealed,
+        updatedAt: now,
+      })
+      .where(eq(connectors.id, existing.id));
+    return { connectorId: existing.id, authorizeUrl: started.authorizeUrl };
+  }
+  const connectorId = newConnectorId();
+  await getDb().insert(connectors).values({
+    id: connectorId,
+    userId,
+    name: "Evernote",
+    type: "evernote",
+    description: "Read-only Evernote MCP sync for evidence-backed Ask.",
+    baseUrl: "https://mcp.evernote.com/mcp",
+    authType: "oauth2_dcr",
+    enabled: false,
+    syncStatus: "authorizing",
+    settings: sealed,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return { connectorId, authorizeUrl: started.authorizeUrl };
+}
+
+export async function finishEvernoteMcpOAuthForUser(
+  userId: string,
+  connectorId: string,
+  oauthState: string,
+  callbackParams: URLSearchParams,
+): Promise<ConnectorDto> {
+  const { finishEvernoteMcpOAuth, testEvernoteMcpConnection } = await import(
+    "../connectors/evernote-mcp"
+  );
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(
+      and(
+        eq(connectors.id, connectorId),
+        eq(connectors.userId, userId),
+        eq(connectors.type, "evernote"),
+      ),
+    )
+    .limit(1);
+  const connector = rows[0];
+  if (!connector) throw new Error("Evernote MCP authorization connector not found");
+  const settings = openConnectorSettings(
+    (connector.settings ?? {}) as Record<string, unknown>,
+  );
+  if (
+    settings.authTransport !== "mcp" ||
+    settings.mcpOAuthState !== oauthState
+  ) {
+    throw new Error("Evernote MCP OAuth state mismatch");
+  }
+  const persistMcpState = async (next: Record<string, unknown>) => {
+    await getDb()
+      .update(connectors)
+      .set({
+        settings: sealConnectorSettings({ ...settings, ...next }),
+        updatedAt: new Date(),
+      })
+      .where(eq(connectors.id, connector.id));
+  };
+  const completed = await finishEvernoteMcpOAuth(
+    settings,
+    callbackParams,
+    persistMcpState,
+  );
+  const checked = await testEvernoteMcpConnection(
+    completed,
+    persistMcpState,
+  );
+  const finalSettings = sealConnectorSettings({
+    ...completed,
+    ...checked.settings,
+    mcpOAuthState: "",
+    token: "",
+  });
+  const [updated] = await getDb()
+    .update(connectors)
+    .set({
+      enabled: true,
+      syncStatus: "connected",
+      settings: finalSettings,
+      updatedAt: new Date(),
+    })
+    .where(eq(connectors.id, connector.id))
+    .returning();
+  return toDto(updated!);
+}
+
+export async function createEvernoteConnectorForUser(
+  userId: string,
+  input: {
+    accountId: string;
+    accountName?: string | null;
+    accountEmail?: string | null;
+    accessToken: string;
+    noteStoreUrl: string;
+    webApiUrlPrefix?: string | null;
+    expiresAt?: string | null;
+    authType?: "oauth1" | "developer_token";
+  },
+): Promise<ConnectorDto> {
+  const now = new Date();
+  const identity =
+    input.accountEmail?.trim() ||
+    input.accountName?.trim() ||
+    input.accountId;
+  const settings = sealConnectorSettings({
+    authTransport: "edam",
+    evernoteAccountId: input.accountId,
+    evernoteAccountName: input.accountName ?? null,
+    evernoteAccountEmail: input.accountEmail ?? null,
+    accessToken: input.accessToken,
+    noteStoreUrl: input.noteStoreUrl,
+    webApiUrlPrefix: input.webApiUrlPrefix ?? null,
+    accessTokenExpiresAt: input.expiresAt ?? null,
+  });
+  const existing = await findEvernoteConnectorByAccountId(
+    userId,
+    input.accountId,
+  );
+  if (existing) {
+    const [updated] = await getDb()
+      .update(connectors)
+      .set({
+        name: `Evernote · ${identity}`,
+        description: "Read-only Evernote notes synced for evidence-backed Ask.",
+        baseUrl: input.noteStoreUrl,
+        authType: input.authType ?? "oauth1",
+        enabled: true,
+        syncStatus: "connected",
+        settings,
+        updatedAt: now,
+      })
+      .where(eq(connectors.id, existing.id))
+      .returning();
+    return toDto(updated!);
+  }
+
+  const [row] = await getDb()
+    .insert(connectors)
+    .values({
+      id: newConnectorId(),
+      userId,
+      name: `Evernote · ${identity}`,
+      type: "evernote",
+      description: "Read-only Evernote notes synced for evidence-backed Ask.",
+      baseUrl: input.noteStoreUrl,
+      authType: input.authType ?? "oauth1",
+      enabled: true,
+      syncStatus: "connected",
+      settings,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning();
+  return toDto(row!);
+}
+
+export async function createEvernoteConnectorFromDeveloperTokenForUser(
+  userId: string,
+): Promise<ConnectorDto & { evernoteAccountId: string }> {
+  const token = process.env.EVERNOTE_DEVELOPER_TOKEN?.trim();
+  if (!token) {
+    const error = new Error(
+      "EVERNOTE_DEVELOPER_TOKEN is not configured on this server",
+    ) as Error & { status?: number };
+    error.status = 503;
+    throw error;
+  }
+  const account = await inspectEvernoteToken(token);
+  await testEvernoteReadAccess(account.accessToken, account.noteStoreUrl);
+  const now = new Date();
+  const identity =
+    account.accountEmail?.trim() ||
+    account.accountName?.trim() ||
+    account.accountId;
+  const sealedSettings = sealConnectorSettings({
+    authTransport: "edam",
+    evernoteAccountId: account.accountId,
+    evernoteAccountName: account.accountName,
+    evernoteAccountEmail: account.accountEmail,
+    accessToken: account.accessToken,
+    noteStoreUrl: account.noteStoreUrl,
+    webApiUrlPrefix: account.webApiUrlPrefix,
+    accessTokenExpiresAt: null,
+  });
+  const row = await getDb().transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`evernote-dev-token:${account.accountId}`}, 0))`,
+    );
+    const existingEvernote = await tx
+      .select()
+      .from(connectors)
+      .where(eq(connectors.type, "evernote"));
+    let sameUser: Connector | null = null;
+    for (const existing of existingEvernote) {
+      const settings = openConnectorSettings(
+        (existing.settings ?? {}) as Record<string, unknown>,
+      );
+      if (settings.evernoteAccountId !== account.accountId) continue;
+      if (existing.userId !== userId) {
+        const error = new Error(
+          "This single-user Evernote developer token is already linked to another Recall account",
+        ) as Error & { status?: number };
+        error.status = 409;
+        throw error;
+      }
+      sameUser = existing;
+    }
+    if (sameUser) {
+      const [updated] = await tx
+        .update(connectors)
+        .set({
+          name: `Evernote · ${identity}`,
+          description: "Read-only Evernote notes synced for evidence-backed Ask.",
+          baseUrl: account.noteStoreUrl,
+          authType: "developer_token",
+          enabled: true,
+          syncStatus: "connected",
+          settings: sealedSettings,
+          updatedAt: now,
+        })
+        .where(eq(connectors.id, sameUser.id))
+        .returning();
+      return updated!;
+    }
+    const [created] = await tx
+      .insert(connectors)
+      .values({
+        id: newConnectorId(),
+        userId,
+        name: `Evernote · ${identity}`,
+        type: "evernote",
+        description: "Read-only Evernote notes synced for evidence-backed Ask.",
+        baseUrl: account.noteStoreUrl,
+        authType: "developer_token",
+        enabled: true,
+        syncStatus: "connected",
+        settings: sealedSettings,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
+    return created!;
+  });
+  const connector = toDto(row);
+  return { ...connector, evernoteAccountId: account.accountId };
+}
+
+export async function testEvernoteConnectorForUser(
+  userId: string,
+  connectorId: string,
+): Promise<{ ok: true; notebookCount: number; tagCount: number }> {
+  const rows = await getDb()
+    .select()
+    .from(connectors)
+    .where(
+      and(
+        eq(connectors.id, connectorId),
+        eq(connectors.userId, userId),
+        eq(connectors.type, "evernote"),
+      ),
+    )
+    .limit(1);
+  const connector = rows[0];
+  if (!connector) throw new Error("Evernote connector not found");
+  const settings = openConnectorSettings(
+    (connector.settings ?? {}) as Record<string, unknown>,
+  );
+  const accessToken =
+    typeof settings.accessToken === "string" ? settings.accessToken : "";
+  const noteStoreUrl =
+    typeof settings.noteStoreUrl === "string" ? settings.noteStoreUrl : "";
+  if (!accessToken) {
+    throw new Error("Evernote connector is missing sealed credentials");
+  }
+  if (settings.authTransport === "mcp") {
+    const { testEvernoteMcpConnection } = await import(
+      "../connectors/evernote-mcp"
+    );
+    const persistMcpState = async (next: Record<string, unknown>) => {
+      await getDb()
+        .update(connectors)
+        .set({
+          settings: sealConnectorSettings({ ...settings, ...next }),
+          updatedAt: new Date(),
+        })
+        .where(eq(connectors.id, connector.id));
+    };
+    const result = await testEvernoteMcpConnection(
+      settings,
+      persistMcpState,
+    );
+    await getDb()
+      .update(connectors)
+      .set({
+        syncStatus: "connected",
+        settings: sealConnectorSettings({
+          ...settings,
+          ...result.settings,
+        }),
+        updatedAt: new Date(),
+      })
+      .where(eq(connectors.id, connector.id));
+    return {
+      ok: true,
+      notebookCount: result.notebookCount,
+      tagCount: result.tagCount,
+    };
+  }
+  if (!noteStoreUrl) {
+    throw new Error("Evernote EDAM connector is missing its NoteStore URL");
+  }
+  const result = await testEvernoteReadAccess(accessToken, noteStoreUrl);
+  await getDb()
+    .update(connectors)
+    .set({ syncStatus: "connected", updatedAt: new Date() })
+    .where(eq(connectors.id, connector.id));
+  return { ok: true, ...result };
+}
+
+export async function writeEvernoteConnectAudit(
+  userId: string,
+  connectorId: string,
+  accountId: string,
+): Promise<void> {
+  await writeAuditLog({
+    userId,
+    action: "evernote_connected",
+    entityType: "connector",
+    entityId: connectorId,
+    metadata: { evernoteAccountId: accountId },
   });
 }
 

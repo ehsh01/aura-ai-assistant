@@ -34,6 +34,7 @@ describe("isEnabled", () => {
       "RECALL_SERVER_STT_ENABLED",
       "RECALL_HOME_AI_DIGEST_ENABLED",
       "RECALL_EMBEDDING_WARM_ENABLED",
+      "RECALL_EVERNOTE_EMBEDDINGS_ENABLED",
     ];
     const saved = new Map(keys.map((key) => [key, process.env[key]]));
     try {

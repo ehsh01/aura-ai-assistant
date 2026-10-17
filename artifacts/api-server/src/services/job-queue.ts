@@ -11,6 +11,7 @@ export const JOB_TYPE_ENEX_IMPORT = "enex_import" as const;
 export const JOB_TYPE_DIGEST_REGEN = "digest_regen" as const;
 export const JOB_TYPE_ATTENTION_SCAN = "attention_scan" as const;
 export const JOB_TYPE_WAITING_SCAN = "waiting_scan" as const;
+export const JOB_TYPE_CONNECTOR_SYNC = "connector_sync" as const;
 
 export type JobStatus = "queued" | "processing" | "complete" | "failed";
 
@@ -185,11 +186,40 @@ export async function completeJob(jobId: string): Promise<void> {
     .where(eq(jobs.id, jobId));
 }
 
+/** Keep a long-running paged job from being mistaken for an abandoned worker. */
+export async function heartbeatJob(jobId: string): Promise<void> {
+  await getDb()
+    .update(jobs)
+    .set({ lockedAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(jobs.id, jobId), eq(jobs.status, "processing")));
+}
+
+/** Yield a successfully checkpointed long job back to the shared worker queue. */
+export async function continueJob(jobId: string): Promise<void> {
+  const now = new Date();
+  await getDb()
+    .update(jobs)
+    .set({
+      status: "queued",
+      attempts: 0,
+      availableAt: new Date(now.getTime() + 1_000),
+      lockedAt: null,
+      lockedBy: null,
+      lastError: null,
+      updatedAt: now,
+    })
+    .where(and(eq(jobs.id, jobId), eq(jobs.status, "processing")));
+}
+
 /**
  * Mark failure. If attempts remain, re-queue with backoff.
  * @returns whether the job is terminally failed
  */
-export async function failJob(jobId: string, error: string): Promise<boolean> {
+export async function failJob(
+  jobId: string,
+  error: string,
+  options?: { retryAfterMs?: number },
+): Promise<boolean> {
   const rows = await getDb().select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
   const job = rows[0];
   if (!job) return true;
@@ -212,7 +242,12 @@ export async function failJob(jobId: string, error: string): Promise<boolean> {
     return true;
   }
 
-  const delay = backoffMs(job.attempts);
+  const retryAfterMs =
+    typeof options?.retryAfterMs === "number" &&
+    Number.isFinite(options.retryAfterMs)
+      ? Math.min(Math.max(options.retryAfterMs, 0), 60_000)
+      : 0;
+  const delay = Math.max(backoffMs(job.attempts), retryAfterMs);
   await getDb()
     .update(jobs)
     .set({
@@ -261,6 +296,16 @@ export function enexImportFromPayload(payload: Record<string, unknown>): { fileP
   if (typeof filePath !== "string" || !filePath) return null;
   if (typeof fileName !== "string" || !fileName) return null;
   return { filePath, fileName };
+}
+
+export function connectorSyncFromPayload(
+  payload: Record<string, unknown>,
+): { connectorId: string; syncRunId: string } | null {
+  const connectorId = payload.connectorId;
+  const syncRunId = payload.syncRunId;
+  if (typeof connectorId !== "string" || !connectorId) return null;
+  if (typeof syncRunId !== "string" || !syncRunId) return null;
+  return { connectorId, syncRunId };
 }
 
 /** Lightweight queue counts for health / ops. */

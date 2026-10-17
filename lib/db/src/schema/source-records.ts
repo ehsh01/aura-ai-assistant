@@ -1,6 +1,12 @@
-import { index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import { customType, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 import { connectors } from "./connectors";
 import { users } from "./users";
+
+const tsvector = customType<{ data: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});
 
 export const sourceRecords = pgTable(
   "source_records",
@@ -21,6 +27,9 @@ export const sourceRecords = pgTable(
     sourceCreatedAt: timestamp("source_created_at", { withTimezone: true }),
     sourceUpdatedAt: timestamp("source_updated_at", { withTimezone: true }),
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    /** Denormalized title/text/selected metadata for connector full-text search. */
+    searchDocument: text("search_document").notNull().default(""),
+    searchTsv: tsvector("search_tsv"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
