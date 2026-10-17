@@ -104,6 +104,18 @@ pm2 startOrReload artifacts/api-server/ecosystem.config.cjs --update-env
 pm2 save
 ```
 
+### Map a production stack trace offline
+
+The API build emits `artifacts/api-server/dist/index.mjs.map`, but production
+processes intentionally do not load it. The deploy only requires `index.mjs`;
+archive the map with its exact release SHA if mapped stack traces are needed.
+On a workstation built from that SHA, resolve a bundled frame with:
+
+```bash
+pnpm dlx source-map-cli resolve \
+  artifacts/api-server/dist/index.mjs.map <line> <column>
+```
+
 ## 4. Smoke-test production
 
 Capture usage before the unauthenticated checks:
