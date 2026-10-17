@@ -1,6 +1,9 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 const now = "2026-10-17T12:00:00.000Z";
+const localFeatureTarget = /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/i.test(
+  process.env.E2E_BASE_URL?.replace(/\/$/, "") ?? "",
+);
 const baseItems = [
   {
     id: "item-permit",
@@ -163,6 +166,11 @@ async function mockRecall(
 }
 
 test.describe("Everything capture, graph, grid, and search", () => {
+  test.skip(
+    !localFeatureTarget,
+    "Everything feature tests require the checked-out PR frontend, not deployed production",
+  );
+
   test("saves a note, browses masonry, filters instantly, and opens detail", async ({ page }) => {
     await mockRecall(page);
     await page.goto("/");
