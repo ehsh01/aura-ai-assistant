@@ -21,6 +21,13 @@ import {
   graphNodeOpacity,
   isHighlightedEdge,
 } from "@/lib/graph-highlight";
+import {
+  GRAPH_EDGE_CORE_COLOR,
+  GRAPH_EDGE_GLOW_COLOR,
+  GRAPH_EDGE_HIGHLIGHT_COLOR,
+  graphEdgeCoreWidth,
+  graphEdgeGlowWidth,
+} from "@/lib/graph-edge-style";
 
 type LayoutNode = KnowledgeGraphNode &
   SimulationNodeDatum & {
@@ -159,6 +166,7 @@ export function KnowledgeGraph({
     let width = container.clientWidth;
     let height = container.clientHeight;
     let frame = 0;
+    let renderedEdgeCoreWidth = Number.NaN;
     const context = canvas.getContext("2d");
     if (!context) return;
 
@@ -179,6 +187,47 @@ export function KnowledgeGraph({
       y: height / 2 + viewRef.current.y + (node.y ?? 0) * viewRef.current.scale,
     });
 
+    const strokeEdgeLayer = (
+      activeNodeId: string | null,
+      highlightedOnly: boolean,
+      lineWidth: number,
+      strokeStyle: string,
+      alpha: number,
+    ) => {
+      context.beginPath();
+      for (const edge of layoutEdges) {
+        const source = edge.source as LayoutNode;
+        const target = edge.target as LayoutNode;
+        if (typeof source !== "object" || typeof target !== "object") continue;
+        if (
+          highlightedOnly &&
+          !isHighlightedEdge(edge.sourceId, edge.targetId, activeNodeId)
+        ) {
+          continue;
+        }
+        context.moveTo(
+          width / 2 +
+            viewRef.current.x +
+            (source.x ?? 0) * viewRef.current.scale,
+          height / 2 +
+            viewRef.current.y +
+            (source.y ?? 0) * viewRef.current.scale,
+        );
+        context.lineTo(
+          width / 2 +
+            viewRef.current.x +
+            (target.x ?? 0) * viewRef.current.scale,
+          height / 2 +
+            viewRef.current.y +
+            (target.y ?? 0) * viewRef.current.scale,
+        );
+      }
+      context.globalAlpha = alpha;
+      context.lineWidth = lineWidth;
+      context.strokeStyle = strokeStyle;
+      context.stroke();
+    };
+
     const draw = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
@@ -190,27 +239,48 @@ export function KnowledgeGraph({
           ? highlightLookup.get(activeNodeId)
           : undefined;
         context.lineCap = "round";
-        for (const edge of layoutEdges) {
-          const source = edge.source as LayoutNode;
-          const target = edge.target as LayoutNode;
-          if (typeof source !== "object" || typeof target !== "object")
-            continue;
-          const from = screenPoint(source);
-          const to = screenPoint(target);
-          const highlighted = isHighlightedEdge(
-            edge.sourceId,
-            edge.targetId,
+        context.lineJoin = "round";
+        context.shadowBlur = 0;
+        const edgeCoreWidth = graphEdgeCoreWidth(viewRef.current.scale);
+        const edgeGlowWidth = graphEdgeGlowWidth(edgeCoreWidth);
+        if (edgeCoreWidth !== renderedEdgeCoreWidth) {
+          canvas.dataset.graphEdgeWidth = edgeCoreWidth.toFixed(2);
+          canvas.dataset.graphEdgeGlowWidth = edgeGlowWidth.toFixed(2);
+          renderedEdgeCoreWidth = edgeCoreWidth;
+        }
+
+        // Two batched paths create the glow and bright core. Hover adds only
+        // two more bounded passes for connected edges; no per-edge shadows or
+        // screen-point objects are allocated during animation frames.
+        strokeEdgeLayer(
+          activeNodeId,
+          false,
+          edgeGlowWidth,
+          GRAPH_EDGE_GLOW_COLOR,
+          activeNodeId ? 0.1 : focus ? 0.22 : 0.28,
+        );
+        strokeEdgeLayer(
+          activeNodeId,
+          false,
+          edgeCoreWidth,
+          GRAPH_EDGE_CORE_COLOR,
+          activeNodeId ? 0.2 : focus ? 0.82 : 0.9,
+        );
+        if (activeNodeId) {
+          strokeEdgeLayer(
             activeNodeId,
+            true,
+            graphEdgeGlowWidth(edgeCoreWidth + 0.8),
+            GRAPH_EDGE_GLOW_COLOR,
+            0.46,
           );
-          context.globalAlpha = activeNodeId ? (highlighted ? 1 : 0.12) : 0.64;
-          context.lineWidth = highlighted ? 3.2 : focus ? 1.45 : 1.8;
-          context.strokeStyle = highlighted ? "#b8fff2" : "#58dcd8";
-          context.shadowColor = highlighted ? "#6dffe0" : "transparent";
-          context.shadowBlur = highlighted ? 9 : 0;
-          context.beginPath();
-          context.moveTo(from.x, from.y);
-          context.lineTo(to.x, to.y);
-          context.stroke();
+          strokeEdgeLayer(
+            activeNodeId,
+            true,
+            edgeCoreWidth + 0.8,
+            GRAPH_EDGE_HIGHLIGHT_COLOR,
+            1,
+          );
         }
         context.shadowBlur = 0;
 

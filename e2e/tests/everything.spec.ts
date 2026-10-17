@@ -262,6 +262,16 @@ test.describe("Everything capture, graph, grid, and search", () => {
     await expect(graphCanvas).toHaveAttribute("data-graph-nodes", "180");
     await expect
       .poll(async () =>
+        Number((await graphCanvas.getAttribute("data-graph-edge-width")) ?? 0),
+      )
+      .toBeGreaterThanOrEqual(1.35);
+    const glowWidth = Number(
+      await graphCanvas.getAttribute("data-graph-edge-glow-width"),
+    );
+    expect(glowWidth).toBeGreaterThan(1.35);
+    expect(glowWidth).toBeLessThanOrEqual(6);
+    await expect
+      .poll(async () =>
         Number((await graphCanvas.getAttribute("data-rendered-labels")) ?? 0),
       )
       .toBeGreaterThan(0);
