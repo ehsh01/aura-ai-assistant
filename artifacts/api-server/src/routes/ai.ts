@@ -16,12 +16,22 @@ import {
   SummarizeNoteBody,
   SummarizeNoteResponse,
 } from "@workspace/api-zod";
-import { aiService, type AiContext, type NoteContextItem } from "../services/ai";
+import {
+  aiService,
+  type AiContext,
+  type NoteContextItem,
+} from "../services/ai";
 import { searchNotesForUser } from "../services/notes";
-import { pickBestNoteToOpen, userWantsNoteOpened } from "../lib/note-open-intent";
+import {
+  pickBestNoteToOpen,
+  userWantsNoteOpened,
+} from "../lib/note-open-intent";
 import { z } from "zod";
 import { queryRecallForUser } from "../services/query-engine";
-import { getExtractionJobStatus, ingestCaptureForUser } from "../services/capture-pipeline";
+import {
+  getExtractionJobStatus,
+  ingestCaptureForUser,
+} from "../services/capture-pipeline";
 import { routeIntentForText } from "../services/intent-router";
 import { writeAuditLog } from "../services/audit";
 import {
@@ -43,6 +53,7 @@ import {
   TranscriptionUnavailableError,
   TranscriptionValidationError,
 } from "../services/voice-first";
+import { askAiAvailabilityForUser } from "../services/ask-ai-availability";
 
 const voiceAudioUpload = multer({
   storage: multer.memoryStorage(),
@@ -85,16 +96,30 @@ router.get("/ai/status", (_req, res) => {
   res.json(data);
 });
 
+router.get("/ai/query/availability", async (req, res, next) => {
+  try {
+    res.json(await askAiAvailabilityForUser(req.user!.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/ai/chat", async (req, res, next) => {
   try {
     const body = AiChatBody.parse(req.body);
     const userId = req.user!.id;
-    const lastUserMessage = [...body.messages].reverse().find((m) => m.role === "user");
+    const lastUserMessage = [...body.messages]
+      .reverse()
+      .find((m) => m.role === "user");
     let context = body.context;
     let searchHits: Awaited<ReturnType<typeof searchNotesForUser>> = [];
 
     if (lastUserMessage?.content.trim()) {
-      searchHits = await searchNotesForUser(userId, lastUserMessage.content, 20);
+      searchHits = await searchNotesForUser(
+        userId,
+        lastUserMessage.content,
+        20,
+      );
       context = mergeSearchHitsIntoContext(context, searchHits);
     }
 
@@ -108,7 +133,9 @@ router.post("/ai/chat", async (req, res, next) => {
     res.json(
       AiChatResponse.parse({
         ...result,
-        openNote: openTarget ? { id: openTarget.id, title: openTarget.title } : null,
+        openNote: openTarget
+          ? { id: openTarget.id, title: openTarget.title }
+          : null,
       }),
     );
   } catch (err) {
@@ -189,7 +216,11 @@ const AiTtsBody = z.object({
 router.post("/ai/tts", async (req, res, next) => {
   try {
     const body = AiTtsBody.parse(req.body);
-    const { buffer, contentType } = await synthesizeSpeech(body.text, body.voice, req.user!.id);
+    const { buffer, contentType } = await synthesizeSpeech(
+      body.text,
+      body.voice,
+      req.user!.id,
+    );
     res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Length", String(buffer.length));
@@ -433,11 +464,18 @@ router.post("/ai/transcribe", (req, res, next) => {
       try {
         const file = req.file;
         if (!file?.buffer?.length) {
-          res.status(400).json({ error: "MISSING_AUDIO", message: "Audio file is required" });
+          res
+            .status(400)
+            .json({
+              error: "MISSING_AUDIO",
+              message: "Audio file is required",
+            });
           return;
         }
         const locale =
-          typeof req.body?.locale === "string" ? req.body.locale.slice(0, 16) : undefined;
+          typeof req.body?.locale === "string"
+            ? req.body.locale.slice(0, 16)
+            : undefined;
         const result = await getTranscriptionProvider().transcribe({
           userId: req.user!.id,
           audio: file.buffer,
@@ -466,11 +504,15 @@ router.post("/ai/transcribe", (req, res, next) => {
         });
       } catch (e) {
         if (e instanceof TranscriptionUnavailableError) {
-          res.status(503).json({ error: "TRANSCRIBE_UNAVAILABLE", message: e.message });
+          res
+            .status(503)
+            .json({ error: "TRANSCRIBE_UNAVAILABLE", message: e.message });
           return;
         }
         if (e instanceof TranscriptionValidationError) {
-          res.status(400).json({ error: "TRANSCRIBE_INVALID", message: e.message });
+          res
+            .status(400)
+            .json({ error: "TRANSCRIBE_INVALID", message: e.message });
           return;
         }
         next(e);
@@ -496,7 +538,10 @@ const AiConfirmActionBody = z.object({
     priority: z.enum(["low", "medium", "high", "urgent"]).default("medium"),
     tags: z.array(z.string().max(64)).max(24).default([]),
     domain: z.string().max(64).nullable().default(null),
-    kind: z.enum(["deadline", "appointment", "follow_up", "other"]).nullable().default(null),
+    kind: z
+      .enum(["deadline", "appointment", "follow_up", "other"])
+      .nullable()
+      .default(null),
     // Ownership is re-verified server-side; these are untrusted client input.
     personId: z.string().min(1).max(64).nullable().default(null),
     projectId: z.string().min(1).max(64).nullable().default(null),
@@ -530,10 +575,19 @@ const AiCancelActionBody = z.object({
 router.post("/ai/actions/cancel", async (req, res, next) => {
   try {
     const body = AiCancelActionBody.parse(req.body);
-    const { cancelProposalForUser } = await import("../services/action-proposals");
-    const cancelled = await cancelProposalForUser(req.user!.id, body.proposalId);
+    const { cancelProposalForUser } =
+      await import("../services/action-proposals");
+    const cancelled = await cancelProposalForUser(
+      req.user!.id,
+      body.proposalId,
+    );
     if (!cancelled) {
-      res.status(404).json({ error: "NOT_FOUND", message: "Proposal not found or not cancellable" });
+      res
+        .status(404)
+        .json({
+          error: "NOT_FOUND",
+          message: "Proposal not found or not cancellable",
+        });
       return;
     }
     res.json({ ok: true, proposal: cancelled });
@@ -550,10 +604,13 @@ const AiCorrectActionBody = z.object({
 router.post("/ai/actions/correct", async (req, res, next) => {
   try {
     const body = AiCorrectActionBody.parse(req.body);
-    const { correctProposalForUser } = await import("../services/action-proposals");
-    const { getBriefingPrefsForUser } = await import("../services/notification-settings");
+    const { correctProposalForUser } =
+      await import("../services/action-proposals");
+    const { getBriefingPrefsForUser } =
+      await import("../services/notification-settings");
     const prefs = await getBriefingPrefsForUser(req.user!.id).catch(() => null);
-    const timezone = prefs?.timezone ?? process.env.RECALL_TIMEZONE ?? "America/New_York";
+    const timezone =
+      prefs?.timezone ?? process.env.RECALL_TIMEZONE ?? "America/New_York";
     const result = await correctProposalForUser(
       req.user!.id,
       body.proposalId,
@@ -561,7 +618,9 @@ router.post("/ai/actions/correct", async (req, res, next) => {
       timezone,
     );
     if (!result.ok) {
-      res.status(400).json({ error: "CORRECTION_FAILED", message: result.error });
+      res
+        .status(400)
+        .json({ error: "CORRECTION_FAILED", message: result.error });
       return;
     }
     res.json(result);
@@ -597,7 +656,9 @@ router.get("/ai/runs/:jobId", async (req, res, next) => {
   try {
     const job = await getExtractionJobStatus(req.user!.id, req.params.jobId);
     if (!job) {
-      res.status(404).json({ error: "NOT_FOUND", message: "Extraction job not found" });
+      res
+        .status(404)
+        .json({ error: "NOT_FOUND", message: "Extraction job not found" });
       return;
     }
     res.json(job);

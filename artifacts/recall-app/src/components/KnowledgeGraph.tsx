@@ -16,12 +16,21 @@ import type {
   KnowledgeGraphNode,
   KnowledgeGraphNodeType,
 } from "@/lib/recall-api";
+import {
+  buildGraphHighlightLookup,
+  graphNodeOpacity,
+  isHighlightedEdge,
+} from "@/lib/graph-highlight";
 
 type LayoutNode = KnowledgeGraphNode &
   SimulationNodeDatum & {
     radius: number;
   };
-type LayoutEdge = SimulationLinkDatum<LayoutNode> & KnowledgeGraphEdge;
+type LayoutEdge = SimulationLinkDatum<LayoutNode> &
+  KnowledgeGraphEdge & {
+    sourceId: string;
+    targetId: string;
+  };
 type GraphTooltip = {
   node: KnowledgeGraphNode;
   x: number;
@@ -135,10 +144,17 @@ export function KnowledgeGraph({
     const nodeIds = new Set(layoutNodes.map((node) => node.id));
     const layoutEdges: LayoutEdge[] = edges
       .filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))
-      .map((edge) => ({ ...edge }));
+      .map((edge) => ({
+        ...edge,
+        sourceId: edge.source,
+        targetId: edge.target,
+      })) as LayoutEdge[];
+    const highlightLookup = buildGraphHighlightLookup(edges);
     layoutRef.current = { nodes: layoutNodes, edges: layoutEdges };
     canvas.dataset.graphNodes = String(layoutNodes.length);
-    canvas.dataset.graphHubs = String(layoutNodes.filter((node) => node.hub).length);
+    canvas.dataset.graphHubs = String(
+      layoutNodes.filter((node) => node.hub).length,
+    );
 
     let width = container.clientWidth;
     let height = container.clientHeight;
@@ -169,27 +185,48 @@ export function KnowledgeGraph({
         context.clearRect(0, 0, width, height);
         canvas.dataset.graphScale = viewRef.current.scale.toFixed(3);
         context.save();
-        context.lineWidth = focus ? 0.55 : 0.75;
+        const activeNodeId = hoverRef.current?.node.id ?? null;
+        const activeNeighbors = activeNodeId
+          ? highlightLookup.get(activeNodeId)
+          : undefined;
+        context.lineCap = "round";
         for (const edge of layoutEdges) {
           const source = edge.source as LayoutNode;
           const target = edge.target as LayoutNode;
-          if (typeof source !== "object" || typeof target !== "object") continue;
+          if (typeof source !== "object" || typeof target !== "object")
+            continue;
           const from = screenPoint(source);
           const to = screenPoint(target);
-          const gradient = context.createLinearGradient(from.x, from.y, to.x, to.y);
-          gradient.addColorStop(0, `${COLORS[source.type]}55`);
-          gradient.addColorStop(1, `${COLORS[target.type]}32`);
-          context.strokeStyle = gradient;
+          const highlighted = isHighlightedEdge(
+            edge.sourceId,
+            edge.targetId,
+            activeNodeId,
+          );
+          context.globalAlpha = activeNodeId ? (highlighted ? 1 : 0.12) : 0.64;
+          context.lineWidth = highlighted ? 3.2 : focus ? 1.45 : 1.8;
+          context.strokeStyle = highlighted ? "#b8fff2" : "#58dcd8";
+          context.shadowColor = highlighted ? "#6dffe0" : "transparent";
+          context.shadowBlur = highlighted ? 9 : 0;
           context.beginPath();
           context.moveTo(from.x, from.y);
           context.lineTo(to.x, to.y);
           context.stroke();
         }
+        context.shadowBlur = 0;
 
         for (const node of layoutNodes) {
           const point = screenPoint(node);
-          const radius = Math.max(2.2, node.radius * Math.sqrt(viewRef.current.scale));
-          context.globalAlpha = focus && !node.hub ? 0.72 : 1;
+          const radius = Math.max(
+            2.2,
+            node.radius * Math.sqrt(viewRef.current.scale),
+          );
+          const highlightOpacity = graphNodeOpacity(
+            node.id,
+            activeNodeId,
+            activeNeighbors,
+          );
+          context.globalAlpha =
+            highlightOpacity * (focus && !activeNodeId && !node.hub ? 0.72 : 1);
           if (holo) {
             context.shadowColor = COLORS[node.type];
             context.shadowBlur = node.hub ? 18 : 10;
@@ -212,25 +249,38 @@ export function KnowledgeGraph({
           context.arc(point.x, point.y, radius, 0, Math.PI * 2);
           context.fill();
           context.shadowBlur = 0;
-
         }
 
         if (viewRef.current.scale >= 0.24) {
-          const occupied: Array<{ left: number; top: number; right: number; bottom: number }> = [];
+          const occupied: Array<{
+            left: number;
+            top: number;
+            right: number;
+            bottom: number;
+          }> = [];
           const labeledNodes = layoutNodes
-            .filter((node) => node.hub || (labels && viewRef.current.scale > 0.42))
+            .filter(
+              (node) => node.hub || (labels && viewRef.current.scale > 0.42),
+            )
             .sort((a, b) => Number(b.hub) - Number(a.hub) || b.value - a.value);
 
           for (const node of labeledNodes) {
             const point = screenPoint(node);
-            const radius = Math.max(2.2, node.radius * Math.sqrt(viewRef.current.scale));
-            const label = node.label.length > 26 ? `${node.label.slice(0, 24)}…` : node.label;
+            const radius = Math.max(
+              2.2,
+              node.radius * Math.sqrt(viewRef.current.scale),
+            );
+            const label =
+              node.label.length > 26
+                ? `${node.label.slice(0, 24)}…`
+                : node.label;
             const badge = TYPE_BADGES[node.type];
             const labelFont = `${node.hub ? 11 : 9}px ui-monospace, SFMono-Regular, Menlo, monospace`;
             context.font = labelFont;
             const labelWidth = context.measureText(label).width;
             context.font = "7px ui-monospace, SFMono-Regular, Menlo, monospace";
-            const badgeWidth = context.measureText(badge.toUpperCase()).width + 8;
+            const badgeWidth =
+              context.measureText(badge.toUpperCase()).width + 8;
             const totalWidth = labelWidth + badgeWidth + 5;
             const labelHeight = 14;
             const above = {
@@ -257,8 +307,14 @@ export function KnowledgeGraph({
                   : [below, above, right, left];
             const expanded = [
               ...candidates,
-              ...candidates.map((candidate) => ({ ...candidate, top: candidate.top + 10 })),
-              ...candidates.map((candidate) => ({ ...candidate, top: candidate.top - 10 })),
+              ...candidates.map((candidate) => ({
+                ...candidate,
+                top: candidate.top + 10,
+              })),
+              ...candidates.map((candidate) => ({
+                ...candidate,
+                top: candidate.top - 10,
+              })),
             ];
             const box = expanded
               .map((candidate) => ({
@@ -284,7 +340,12 @@ export function KnowledgeGraph({
             occupied.push(box);
 
             const labelY = box.top + labelHeight / 2;
-            context.globalAlpha = node.hub ? 0.94 : 0.76;
+            const highlightOpacity = graphNodeOpacity(
+              node.id,
+              activeNodeId,
+              activeNeighbors,
+            );
+            context.globalAlpha = highlightOpacity * (node.hub ? 0.94 : 0.76);
             context.textBaseline = "middle";
             context.textAlign = "left";
             context.font = labelFont;
@@ -303,7 +364,11 @@ export function KnowledgeGraph({
             context.fillStyle = COLORS[node.type];
             context.font = "7px ui-monospace, SFMono-Regular, Menlo, monospace";
             context.textAlign = "center";
-            context.fillText(badge.toUpperCase(), badgeX + badgeWidth / 2, labelY + 0.5);
+            context.fillText(
+              badge.toUpperCase(),
+              badgeX + badgeWidth / 2,
+              labelY + 0.5,
+            );
           }
           canvas.dataset.renderedLabels = String(occupied.length);
         } else {
@@ -315,7 +380,10 @@ export function KnowledgeGraph({
     };
 
     const simulation = forceSimulation(layoutNodes)
-      .force("charge", forceManyBody<LayoutNode>().strength((node) => (node.hub ? -90 : -35)))
+      .force(
+        "charge",
+        forceManyBody<LayoutNode>().strength((node) => (node.hub ? -90 : -35)),
+      )
       .force(
         "link",
         forceLink<LayoutNode, LayoutEdge>(layoutEdges)
@@ -326,19 +394,21 @@ export function KnowledgeGraph({
       .force(
         "collide",
         forceCollide<LayoutNode>()
-          .radius((node) => (node.hub ? node.radius + 22 : node.radius + (labels ? 12 : 6)))
+          .radius((node) =>
+            node.hub ? node.radius + 22 : node.radius + (labels ? 12 : 6),
+          )
           .iterations(2),
       )
       .force(
         "lane-x",
-        forceX<LayoutNode>((node) => laneOffset(node.type).x).strength((node) =>
-          node.hub ? 0.08 : 0.025,
+        forceX<LayoutNode>((node) => laneOffset(node.type).x).strength(
+          (node) => (node.hub ? 0.08 : 0.025),
         ),
       )
       .force(
         "lane-y",
-        forceY<LayoutNode>((node) => laneOffset(node.type).y).strength((node) =>
-          node.hub ? 0.08 : 0.025,
+        forceY<LayoutNode>((node) => laneOffset(node.type).y).strength(
+          (node) => (node.hub ? 0.08 : 0.025),
         ),
       )
       .force("center", forceCenter(0, 0))
@@ -357,7 +427,10 @@ export function KnowledgeGraph({
       const graphHeight = Math.max(1, maxY - minY);
       const scale = Math.max(
         0.25,
-        Math.min(1.3, Math.min((width - 80) / graphWidth, (height - 110) / graphHeight)),
+        Math.min(
+          1.3,
+          Math.min((width - 80) / graphWidth, (height - 110) / graphHeight),
+        ),
       );
       viewRef.current = {
         scale,
@@ -373,7 +446,10 @@ export function KnowledgeGraph({
       let nearestDistance = 22;
       for (const node of layoutNodes) {
         const point = screenPoint(node);
-        const distance = Math.hypot(clientX - bounds.left - point.x, clientY - bounds.top - point.y);
+        const distance = Math.hypot(
+          clientX - bounds.left - point.x,
+          clientY - bounds.top - point.y,
+        );
         if (distance < nearestDistance) {
           nearest = node;
           nearestDistance = distance;
@@ -400,11 +476,15 @@ export function KnowledgeGraph({
         : null;
       hoverRef.current = next;
       setHover(next);
+      draw();
     };
 
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
-      const next = Math.max(0.2, Math.min(3, viewRef.current.scale * Math.exp(-event.deltaY * 0.001)));
+      const next = Math.max(
+        0.2,
+        Math.min(3, viewRef.current.scale * Math.exp(-event.deltaY * 0.001)),
+      );
       viewRef.current.scale = next;
       draw();
     };
@@ -440,13 +520,15 @@ export function KnowledgeGraph({
       if (!drag?.moved) {
         const node = findNode(event.clientX, event.clientY);
         const coarsePointer =
-          event.pointerType === "touch" || window.matchMedia("(pointer: coarse)").matches;
+          event.pointerType === "touch" ||
+          window.matchMedia("(pointer: coarse)").matches;
         if (node && coarsePointer && hoverRef.current?.node.id !== node.id) {
           showTooltip(node, event.clientX, event.clientY, true);
           return;
         }
         if (node) onNodeClick(node);
-        else if (coarsePointer) showTooltip(null, event.clientX, event.clientY, true);
+        else if (coarsePointer)
+          showTooltip(null, event.clientX, event.clientY, true);
       }
     };
 
@@ -472,8 +554,16 @@ export function KnowledgeGraph({
   }, [degree, edges, fitVersion, focus, holo, labels, nodes, onNodeClick]);
 
   return (
-    <div ref={containerRef} className="relative h-full w-full" data-testid="knowledge-graph">
-      <canvas ref={canvasRef} className="block h-full w-full touch-none" aria-label="Interactive knowledge graph" />
+    <div
+      ref={containerRef}
+      className="relative h-full w-full"
+      data-testid="knowledge-graph"
+    >
+      <canvas
+        ref={canvasRef}
+        className="block h-full w-full touch-none"
+        aria-label="Interactive knowledge graph"
+      />
       <button
         type="button"
         onClick={() => setFitVersion((value) => value + 1)}
