@@ -48,11 +48,13 @@ module.exports = {
       exec_mode: "fork",
       instances: 1,
       autorestart: true,
-      // The bounded 5k-note metadata benchmark peaks below 20M V8 heap after
-      // the pagination fix. Keep PM2's RSS ceiling above the heap cap so it can
-      // restart cleanly before V8 reaches a fatal allocation failure.
-      max_memory_restart: "450M",
-      node_args: "--max-old-space-size=384",
+      // Must stay BELOW the RSS the heap cap implies (heap + ~100M runtime), or
+      // V8 aborts with a fatal OOM before pm2 ever reaches this threshold and
+      // in-flight requests die as 502s. Restarting on RSS is the graceful path.
+      // Steady-state RSS is ~550M, so leave real headroom above it or the
+      // process restarts every few seconds instead.
+      max_memory_restart: "840M",
+      node_args: "--max-old-space-size=768",
       env: {
         ...fileEnvNoPort,
         NODE_ENV: "production",
