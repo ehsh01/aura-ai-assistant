@@ -93,20 +93,27 @@ function retryAfterHeaderMs(value: string | null): number | null {
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
 }
 
+type EvernoteMcpFetchImplementation = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
 type EvernoteMcpFetchOptions = {
-  fetchFn?: FetchLike;
+  fetchFn?: EvernoteMcpFetchImplementation;
   maxRetries?: number;
 };
 
 export async function evernoteMcpFetch(
-  input: Parameters<FetchLike>[0],
+  input: string | URL | Request,
   init?: Parameters<FetchLike>[1],
   options?: EvernoteMcpFetchOptions,
 ): Promise<Response> {
   const retries = options?.maxRetries ?? max429Retries();
-  const fetchFn = options?.fetchFn ?? fetch;
   for (let attempt = 0; ; attempt++) {
-    const response = await fetchFn(input, init);
+    const request = input instanceof Request ? input.clone() : input;
+    const response = options?.fetchFn
+      ? await options.fetchFn(request, init)
+      : await fetch(request, init);
     if (response.status !== 429) return response;
     const retryAfterMs = Math.min(
       retryAfterHeaderMs(response.headers.get("retry-after")) ?? 1_000,
@@ -438,10 +445,11 @@ export function createEvernoteReadOnlyCaller(
 ): EvernoteReadOnlyToolCaller {
   return Object.freeze({
     async callTool(input) {
-      if (!READ_ONLY_TOOL_NAME.test(input.name)) {
-        throw new EvernoteReadOnlyViolation(input.name);
+      const name = input.name;
+      if (!READ_ONLY_TOOL_NAME.test(name)) {
+        throw new EvernoteReadOnlyViolation(name);
       }
-      return client.callTool(input);
+      return client.callTool({ name, arguments: input.arguments });
     },
   });
 }
@@ -452,6 +460,52 @@ function invokeTool(
 ): Promise<unknown> {
   const callTool = client.callTool;
   return callTool.call(client, input);
+}
+
+function parseToolResult(raw: JsonRecord, name: string): JsonRecord {
+  const text = asArray(raw.content)
+    .map((part) => asRecord(part))
+    .find(
+      (part) => part.type === "text" && typeof part.text === "string",
+    )?.text;
+  if (raw.isError === true) {
+    const structuredError = asRecord(raw.structuredContent);
+    const error = new Error(
+      typeof text === "string"
+        ? text.slice(0, 300)
+        : `Evernote MCP ${name} failed`,
+    ) as Error & { status?: number; retryAfterMs?: number };
+    const structuredStatus = asNumber(
+      structuredError.status ?? structuredError.statusCode,
+    );
+    if (structuredStatus != null) error.status = structuredStatus;
+    if (
+      structuredStatus === 429 ||
+      /\b429\b|rate.?limit/i.test(error.message)
+    ) {
+      error.status = 429;
+      const retryMs = asNumber(
+        structuredError.retryAfterMs ??
+          structuredError.retry_after_ms,
+      );
+      const retrySeconds = asNumber(
+        structuredError.retryAfter ??
+          structuredError.retry_after,
+      );
+      error.retryAfterMs =
+        retryMs ?? (retrySeconds != null ? retrySeconds * 1_000 : undefined);
+    }
+    throw error;
+  }
+  if (raw.structuredContent !== undefined) {
+    return asRecord(raw.structuredContent);
+  }
+  if (typeof text !== "string") return raw;
+  try {
+    return asRecord(JSON.parse(text));
+  } catch {
+    return { text };
+  }
 }
 
 async function callReadTool(
@@ -468,48 +522,7 @@ async function callReadTool(
       const raw = asRecord(
         await invokeTool(client, { name, arguments: args }),
       );
-      const text = asArray(raw.content)
-        .map((part) => asRecord(part))
-        .find(
-          (part) => part.type === "text" && typeof part.text === "string",
-        )?.text;
-      if (raw.isError === true) {
-        const structuredError = asRecord(raw.structuredContent);
-        const error = new Error(
-          typeof text === "string"
-            ? text.slice(0, 300)
-            : `Evernote MCP ${name} failed`,
-        ) as Error & { status?: number; retryAfterMs?: number };
-        const structuredStatus = asNumber(
-          structuredError.status ?? structuredError.statusCode,
-        );
-        if (
-          structuredStatus === 429 ||
-          /\b429\b|rate.?limit/i.test(error.message)
-        ) {
-          error.status = 429;
-          const retryMs = asNumber(
-            structuredError.retryAfterMs ??
-              structuredError.retry_after_ms,
-          );
-          const retrySeconds = asNumber(
-            structuredError.retryAfter ??
-              structuredError.retry_after,
-          );
-          error.retryAfterMs =
-            retryMs ?? (retrySeconds != null ? retrySeconds * 1_000 : undefined);
-        }
-        throw error;
-      }
-      if (raw.structuredContent !== undefined) {
-        return asRecord(raw.structuredContent);
-      }
-      if (typeof text !== "string") return raw;
-      try {
-        return asRecord(JSON.parse(text));
-      } catch {
-        return { text };
-      }
+      return parseToolResult(raw, name);
     } catch (error) {
       const row = asRecord(error);
       const data = asRecord(row.data);
@@ -1428,7 +1441,7 @@ export async function fetchEvernoteViaMcp(
 type EvernoteMcpClientOptions = {
   signal?: AbortSignal;
   deadlineMs?: number;
-  fetchFn?: FetchLike;
+  fetchFn?: EvernoteMcpFetchImplementation;
   max429Retries?: number;
 };
 
@@ -1546,7 +1559,7 @@ function isEvernoteAuthenticationError(error: unknown): boolean {
 
 type EvernoteConnectionTestOptions = {
   timeoutMs?: number;
-  fetchFn?: FetchLike;
+  fetchFn?: EvernoteMcpFetchImplementation;
 };
 
 export async function testEvernoteMcpConnection(
@@ -1575,15 +1588,17 @@ export async function testEvernoteMcpConnection(
   }, timeoutMs);
   try {
     const result = await withEvernoteMcpClient(settings, async (client) => {
-      const raw = asRecord(
-        await invokeTool(client, {
-          name: "search_notebooks",
-          arguments: { query: "", maxResults: 1 },
-        }),
+      const probe = parseToolResult(
+        asRecord(
+          await invokeTool(client, {
+            name: "search_notebooks",
+            arguments: { query: "", maxResults: 1 },
+          }),
+        ),
+        "search_notebooks",
       );
-      const structured = asRecord(raw.structuredContent);
       const notebookCount = firstArray(
-        Object.keys(structured).length > 0 ? structured : raw,
+        probe,
         ["notebooks", "results", "items"],
       ).length;
       return { notebookCount, tagCount: null };
