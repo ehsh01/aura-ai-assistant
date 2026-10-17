@@ -1,78 +1,48 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover"
+    />
     <title>Recall — AI Personal Assistant</title>
     <meta name="theme-color" content="#05070a" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
     <meta name="apple-mobile-web-app-title" content="Recall" />
     <meta name="application-name" content="Recall" />
     <link rel="canonical" href="https://recall-app.net/" />
-    <meta name="description" content="Recall — AI personal assistant for notes, tasks, and canvas. Available at recall-app.net." />
+    <meta
+      name="description"
+      content="Recall — AI personal assistant for notes, tasks, and canvas. Available at recall-app.net."
+    />
     <meta name="robots" content="index, follow" />
     <meta property="og:title" content="Recall — AI Personal Assistant" />
-    <meta property="og:description" content="Recall — AI personal assistant for notes, tasks, and canvas." />
+    <meta
+      property="og:description"
+      content="Recall — AI personal assistant for notes, tasks, and canvas."
+    />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://recall-app.net/" />
-    <meta property="og:image" content="https://recall-app.net/pwa-512x512.png" />
+    <meta
+      property="og:image"
+      content="https://recall-app.net/pwa-512x512.png"
+    />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Recall — AI Personal Assistant" />
-    <meta name="twitter:description" content="Recall — AI personal assistant for notes, tasks, and canvas." />
+    <meta
+      name="twitter:description"
+      content="Recall — AI personal assistant for notes, tasks, and canvas."
+    />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script>
-      (function () {
-        var KNOWN = [
-          "/",
-          "/today",
-          "/everything",
-          "/ask",
-          "/notes",
-          "/notebooks",
-          "/inbox",
-          "/documents",
-          "/knowledge",
-          "/memory",
-          "/people",
-          "/vehicles",
-          "/organizations",
-          "/activity",
-          "/connectors",
-          "/settings",
-          "/projects",
-          "/waiting",
-          "/deadlines",
-          "/tasks",
-          "/canvas",
-          "/privacy",
-          "/terms",
-          "/login"
-        ];
-        var path = location.pathname;
-        if (path.endsWith("/index.html")) {
-          path = path.slice(0, -"/index.html".length) || "/";
-        }
-        var PREFIXES = ["/projects/", "/waiting/", "/today/", "/everything/", "/people/"];
-        if (
-          KNOWN.indexOf(path) === -1 &&
-          !PREFIXES.some(function (prefix) { return path.startsWith(prefix); })
-        ) {
-          path = "/";
-        }
-        var next = path + location.search + location.hash;
-        if (next !== location.pathname + location.search + location.hash) {
-          history.replaceState(null, "", next);
-        }
-      })();
-    </script>
   </head>
   <body>
     <div id="root"></div>

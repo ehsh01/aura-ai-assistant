@@ -40,18 +40,17 @@ export function pathnameOnly(): string {
   return window.location.pathname.split("?")[0]?.split("#")[0] ?? "/";
 }
 
-/** Fix /index.html and other unknown paths in the address bar (safe before React mounts). */
-export function normalizeBrowserPath(): void {
-  let path = pathnameOnly();
+export function normalizedAppPath(pathname: string): string {
+  let path = pathname;
   if (path.endsWith("/index.html")) {
     path = path.slice(0, -"/index.html".length) || "/";
   }
-  if (
-    !APP_PATHS.includes(path as AppPath) &&
-    !APP_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))
-  ) {
-    path = "/";
-  }
+  return isAppPath(path) ? path : "/";
+}
+
+/** Fix /index.html and other unknown paths in the address bar (safe before React mounts). */
+export function normalizeBrowserPath(): void {
+  const path = normalizedAppPath(pathnameOnly());
   const next = path + window.location.search + window.location.hash;
   const current =
     window.location.pathname + window.location.search + window.location.hash;
