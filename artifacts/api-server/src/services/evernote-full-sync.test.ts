@@ -10,7 +10,10 @@ import {
   evernoteScheduleDecision,
   scheduledEvernoteLoadIsSafe,
 } from "./evernote-sync-scheduler";
-import { processEvernoteSyncJob } from "./connectors";
+import {
+  processEvernoteSyncJob,
+  withEvernoteTaxonomyProgress,
+} from "./connectors";
 
 describe("Evernote completeness report", () => {
   it("calculates per-notebook and total missing counts", () => {
@@ -216,5 +219,45 @@ describe("Evernote import AI boundary", () => {
     const implementation = processEvernoteSyncJob.toString();
     expect(implementation).toContain("evernoteScheduled");
     expect(implementation).toContain("isEvernoteNightWindow");
+  });
+});
+
+describe("Evernote taxonomy sync-run progress", () => {
+  it("persists the phase, checkpoint, counters, and elapsed time in metadata", () => {
+    const checkpoint = {
+      version: 1,
+      stage: "tags",
+      frontier: ["a", "b"],
+    };
+    const metadata = withEvernoteTaxonomyProgress(
+      { evernoteSyncMode: "full" },
+      checkpoint,
+      {
+        stage: "tags",
+        searchesDone: 42,
+        prefixesQueued: 2,
+        notebooksFound: 18,
+        tagsFound: 75,
+        spacesFound: 0,
+        elapsedMs: 63_000,
+      },
+      new Date("2026-10-17T21:00:00.000Z"),
+    );
+
+    expect(metadata).toMatchObject({
+      evernoteSyncMode: "full",
+      evernotePhase: "taxonomy",
+      evernoteTaxonomyCheckpoint: checkpoint,
+      evernoteTaxonomyProgress: {
+        stage: "tags",
+        searchesDone: 42,
+        prefixesQueued: 2,
+        notebooksFound: 18,
+        tagsFound: 75,
+        spacesFound: 0,
+        elapsedMs: 63_000,
+        updatedAt: "2026-10-17T21:00:00.000Z",
+      },
+    });
   });
 });

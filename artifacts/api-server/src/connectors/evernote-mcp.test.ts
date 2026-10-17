@@ -8,6 +8,7 @@ import {
   mcpOAuthStateFromSettings,
   mcpSettingsFromOAuthState,
   streamEvernoteViaMcp,
+  type EvernoteTaxonomyCheckpoint,
 } from "./evernote-mcp";
 import {
   openConnectorSettings,
@@ -411,6 +412,118 @@ describe("Evernote MCP read sync", () => {
     expect(new Set(taxonomy.notebooks.map((item) => item.id)).size).toBe(
       taxonomy.notebooks.length,
     );
+  });
+
+  it("resumes taxonomy from its durable frontier with identical results and progress", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const notebooks = [
+      ...Array.from({ length: 60 }, (_, index) => ({
+        id: `nb-a-${index}`,
+        name: `a notebook ${index}`,
+      })),
+      ...Array.from({ length: 60 }, (_, index) => ({
+        id: `nb-z-${index}`,
+        name: `z notebook ${index}`,
+      })),
+    ];
+    const tags = [
+      ...Array.from({ length: 55 }, (_, index) => ({
+        id: `tag-b-${index}`,
+        name: `b tag ${index}`,
+      })),
+      ...Array.from({ length: 70 }, (_, index) => ({
+        id: `tag-y-${index}`,
+        name: `y tag ${index}`,
+      })),
+    ];
+    const calls: string[] = [];
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        const query = String(input.arguments?.query ?? "").toLowerCase();
+        calls.push(`${input.name}:${query}`);
+        if (input.name === "search_notebooks") {
+          const matches = query
+            ? notebooks.filter((item) => item.name.startsWith(query))
+            : notebooks;
+          return {
+            structuredContent: {
+              totalResultCount: matches.length,
+              notebooks: matches.slice(0, 100),
+            },
+          };
+        }
+        if (input.name === "search_tags") {
+          const matches = query
+            ? tags.filter((item) => item.name.startsWith(query))
+            : tags;
+          return {
+            structuredContent: {
+              totalResultCount: matches.length,
+              tags: matches.slice(0, 100),
+            },
+          };
+        }
+        if (input.name === "search_spaces") {
+          return {
+            structuredContent: {
+              spaces: [{ id: "space-home", name: "Home" }],
+            },
+          };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+
+    let durableCheckpoint: EvernoteTaxonomyCheckpoint | undefined;
+    await expect(
+      enumerateEvernoteTaxonomy(client, {
+        checkpointEverySearches: 10,
+        onCheckpoint: async (checkpoint, progress) => {
+          durableCheckpoint = structuredClone(checkpoint);
+          expect(progress).toMatchObject({
+            searchesDone: 10,
+            notebooksFound: 100,
+            tagsFound: 0,
+          });
+          throw new Error("simulated worker interruption");
+        },
+      }),
+    ).rejects.toThrow("simulated worker interruption");
+    expect(durableCheckpoint).toBeDefined();
+
+    const resumedProgress: Array<{
+      stage: string;
+      searchesDone: number;
+      prefixesQueued: number;
+      notebooksFound: number;
+      tagsFound: number;
+    }> = [];
+    const resumed = await enumerateEvernoteTaxonomy(client, {
+      checkpoint: durableCheckpoint,
+      checkpointEverySearches: 10,
+      onCheckpoint: async (_checkpoint, progress) => {
+        resumedProgress.push(progress);
+      },
+    });
+    const baseline = await enumerateEvernoteTaxonomy(client);
+
+    expect(resumed).toEqual(baseline);
+    expect(calls.filter((call) => call === "search_notebooks:")).toHaveLength(2);
+    expect(resumedProgress.at(-1)).toMatchObject({
+      stage: "complete",
+      notebooksFound: 120,
+      tagsFound: 125,
+    });
+    expect(
+      resumedProgress.every(
+        (progress) =>
+          progress.searchesDone >= 10 &&
+          progress.prefixesQueued >= 0,
+      ),
+    ).toBe(true);
   });
 
   it("chunks changed-note backfill and reports deferred work", async () => {

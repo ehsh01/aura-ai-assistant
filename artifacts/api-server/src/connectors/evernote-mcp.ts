@@ -918,6 +918,37 @@ export type EvernoteTaxonomy = {
   spaces: EvernoteTaxonomyEntity[];
 };
 
+export type EvernoteTaxonomyCheckpoint = {
+  version: 1;
+  stage: "notebooks" | "tags" | "spaces" | "complete";
+  startedAt: string;
+  searchesDone: number;
+  frontier: string[];
+  visited: string[];
+  notebooks: EvernoteTaxonomyEntity[];
+  tags: EvernoteTaxonomyEntity[];
+  spaces: EvernoteTaxonomyEntity[];
+};
+
+export type EvernoteTaxonomyProgress = {
+  stage: EvernoteTaxonomyCheckpoint["stage"];
+  searchesDone: number;
+  prefixesQueued: number;
+  notebooksFound: number;
+  tagsFound: number;
+  spacesFound: number;
+  elapsedMs: number;
+};
+
+type EvernoteTaxonomyOptions = {
+  checkpoint?: unknown;
+  checkpointEverySearches?: number;
+  onCheckpoint?: (
+    checkpoint: EvernoteTaxonomyCheckpoint,
+    progress: EvernoteTaxonomyProgress,
+  ) => Promise<void>;
+};
+
 function taxonomyEntity(value: unknown): EvernoteTaxonomyEntity | null {
   const row = asRecord(value);
   const named = idAndName(row);
@@ -938,25 +969,123 @@ function taxonomyEntity(value: unknown): EvernoteTaxonomyEntity | null {
   };
 }
 
+function taxonomyCheckpointEntity(
+  value: unknown,
+): EvernoteTaxonomyEntity | null {
+  const entity = taxonomyEntity(value);
+  if (!entity) return null;
+  const valueRow = asRecord(value);
+  return {
+    ...entity,
+    metadata: asRecord(valueRow.metadata),
+  };
+}
+
+function initialTaxonomyCheckpoint(
+  value: unknown,
+): EvernoteTaxonomyCheckpoint {
+  const checkpoint = asRecord(value);
+  const stage = checkpoint.stage;
+  if (
+    checkpoint.version !== 1 ||
+    (stage !== "notebooks" &&
+      stage !== "tags" &&
+      stage !== "spaces" &&
+      stage !== "complete")
+  ) {
+    return {
+      version: 1,
+      stage: "notebooks",
+      startedAt: new Date().toISOString(),
+      searchesDone: 0,
+      frontier: [""],
+      visited: [],
+      notebooks: [],
+      tags: [],
+      spaces: [],
+    };
+  }
+  const strings = (candidate: unknown): string[] =>
+    asArray(candidate)
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.slice(0, 12));
+  const entities = (candidate: unknown): EvernoteTaxonomyEntity[] =>
+    asArray(candidate)
+      .map(taxonomyCheckpointEntity)
+      .filter(
+        (entity): entity is EvernoteTaxonomyEntity => Boolean(entity),
+      );
+  return {
+    version: 1,
+    stage,
+    startedAt:
+      asString(checkpoint.startedAt) ?? new Date().toISOString(),
+    searchesDone: Math.max(
+      0,
+      Math.floor(asNumber(checkpoint.searchesDone) ?? 0),
+    ),
+    frontier: strings(checkpoint.frontier),
+    visited: strings(checkpoint.visited),
+    notebooks: entities(checkpoint.notebooks),
+    tags: entities(checkpoint.tags),
+    spaces: entities(checkpoint.spaces),
+  };
+}
+
+export function evernoteTaxonomyProgress(
+  checkpoint: EvernoteTaxonomyCheckpoint,
+): EvernoteTaxonomyProgress {
+  const startedAt = Date.parse(checkpoint.startedAt);
+  return {
+    stage: checkpoint.stage,
+    searchesDone: checkpoint.searchesDone,
+    prefixesQueued: checkpoint.frontier.length,
+    notebooksFound: checkpoint.notebooks.length,
+    tagsFound: checkpoint.tags.length,
+    spacesFound: checkpoint.spaces.length,
+    elapsedMs: Number.isFinite(startedAt)
+      ? Math.max(0, Date.now() - startedAt)
+      : 0,
+  };
+}
+
+async function emitTaxonomyCheckpoint(
+  checkpoint: EvernoteTaxonomyCheckpoint,
+  options: EvernoteTaxonomyOptions,
+): Promise<void> {
+  await options.onCheckpoint?.(
+    checkpoint,
+    evernoteTaxonomyProgress(checkpoint),
+  );
+}
+
 async function enumerateNameSearch(
   client: ToolCaller,
   tool: "search_notebooks" | "search_tags",
   keys: string[],
-): Promise<EvernoteTaxonomyEntity[]> {
+  checkpoint: EvernoteTaxonomyCheckpoint,
+  collection: "notebooks" | "tags",
+  options: EvernoteTaxonomyOptions,
+): Promise<void> {
   const cap = 100;
-  const entities = new Map<string, EvernoteTaxonomyEntity>();
+  const entities = new Map(
+    checkpoint[collection].map((entity) => [entity.id, entity] as const),
+  );
   const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789".split("");
-  const queue: string[] = [""];
-  const visited = new Set<string>();
+  const visited = new Set(checkpoint.visited);
   const maxCalls = 5_000;
   const maxDepth = 12;
-  while (queue.length > 0) {
+  const checkpointEvery = Math.min(
+    100,
+    Math.max(1, Math.floor(options.checkpointEverySearches ?? 10)),
+  );
+  while (checkpoint.frontier.length > 0) {
     if (visited.size >= maxCalls) {
       throw new Error(
         `Evernote ${tool} enumeration exceeded ${maxCalls} refined searches`,
       );
     }
-    const query = queue.shift()!;
+    const query = checkpoint.frontier.shift()!;
     if (visited.has(query)) continue;
     visited.add(query);
     const result = await callReadTool(client, tool, {
@@ -979,11 +1108,22 @@ async function enumerateNameSearch(
           `Evernote ${tool} result remained capped for query ${JSON.stringify(query)}`,
         );
       }
-      for (const char of alphabet) queue.push(`${query}${char}`);
+      for (const char of alphabet) {
+        checkpoint.frontier.push(`${query}${char}`);
+      }
     }
+    checkpoint.searchesDone += 1;
     await pace();
+    if (checkpoint.searchesDone % checkpointEvery === 0) {
+      checkpoint.visited = [...visited];
+      checkpoint[collection] = [...entities.values()];
+      await emitTaxonomyCheckpoint(checkpoint, options);
+    }
   }
-  return [...entities.values()].sort((a, b) => a.name.localeCompare(b.name));
+  checkpoint.visited = [...visited];
+  checkpoint[collection] = [...entities.values()].sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
 }
 
 /**
@@ -992,36 +1132,74 @@ async function enumerateNameSearch(
  */
 export async function enumerateEvernoteTaxonomy(
   client: ToolCaller,
+  options: EvernoteTaxonomyOptions = {},
 ): Promise<EvernoteTaxonomy> {
-  const notebooks = await enumerateNameSearch(client, "search_notebooks", [
-    "notebooks",
-    "results",
-    "items",
-  ]);
-  const tags = await enumerateNameSearch(client, "search_tags", [
-    "tags",
-    "results",
-    "items",
-  ]);
-  const spaceResult = await callReadTool(client, "search_spaces", {
-    query: "",
-    maxResults: 100,
-  });
-  await pace();
-  const spaces = firstArray(spaceResult, ["spaces", "results", "items"])
-    .map(taxonomyEntity)
-    .filter(
-      (entity): entity is EvernoteTaxonomyEntity => Boolean(entity),
+  const checkpoint = initialTaxonomyCheckpoint(options.checkpoint);
+  if (checkpoint.stage === "notebooks") {
+    await enumerateNameSearch(
+      client,
+      "search_notebooks",
+      ["notebooks", "results", "items"],
+      checkpoint,
+      "notebooks",
+      options,
     );
-  const reportedSpaces = asNumber(
-    spaceResult.totalResultCount ?? spaceResult.total ?? spaceResult.totalCount,
-  );
-  if (reportedSpaces != null && reportedSpaces > spaces.length) {
-    throw new Error(
-      `Evernote space listing was capped at ${spaces.length} of ${reportedSpaces}`,
-    );
+    checkpoint.stage = "tags";
+    checkpoint.frontier = [""];
+    checkpoint.visited = [];
+    await emitTaxonomyCheckpoint(checkpoint, options);
   }
-  return { notebooks, tags, spaces };
+  if (checkpoint.stage === "tags") {
+    await enumerateNameSearch(
+      client,
+      "search_tags",
+      ["tags", "results", "items"],
+      checkpoint,
+      "tags",
+      options,
+    );
+    checkpoint.stage = "spaces";
+    checkpoint.frontier = [];
+    checkpoint.visited = [];
+    await emitTaxonomyCheckpoint(checkpoint, options);
+  }
+  if (checkpoint.stage === "spaces") {
+    const spaceResult = await callReadTool(client, "search_spaces", {
+      query: "",
+      maxResults: 100,
+    });
+    await pace();
+    checkpoint.searchesDone += 1;
+    checkpoint.spaces = firstArray(spaceResult, [
+      "spaces",
+      "results",
+      "items",
+    ])
+      .map(taxonomyEntity)
+      .filter(
+        (entity): entity is EvernoteTaxonomyEntity => Boolean(entity),
+      );
+    const reportedSpaces = asNumber(
+      spaceResult.totalResultCount ??
+        spaceResult.total ??
+        spaceResult.totalCount,
+    );
+    if (
+      reportedSpaces != null &&
+      reportedSpaces > checkpoint.spaces.length
+    ) {
+      throw new Error(
+        `Evernote space listing was capped at ${checkpoint.spaces.length} of ${reportedSpaces}`,
+      );
+    }
+    checkpoint.stage = "complete";
+    await emitTaxonomyCheckpoint(checkpoint, options);
+  }
+  return {
+    notebooks: checkpoint.notebooks,
+    tags: checkpoint.tags,
+    spaces: checkpoint.spaces,
+  };
 }
 
 async function pace(): Promise<void> {
@@ -1059,6 +1237,9 @@ type EvernoteMcpStreamOptions = {
   maxBatchesPerInvocation?: number;
   taxonomy?: EvernoteTaxonomy;
   onTaxonomy?: (taxonomy: EvernoteTaxonomy) => Promise<void>;
+  taxonomyCheckpoint?: unknown;
+  onTaxonomyCheckpoint?: EvernoteTaxonomyOptions["onCheckpoint"];
+  taxonomyCheckpointEverySearches?: number;
   query?: string;
   forceTrashed?: boolean;
   stopAtFirstUnchanged?: boolean;
@@ -1101,7 +1282,12 @@ export async function streamEvernoteViaMcp(
   }
 > {
   const taxonomy =
-    options.taxonomy ?? (await enumerateEvernoteTaxonomy(client));
+    options.taxonomy ??
+    (await enumerateEvernoteTaxonomy(client, {
+      checkpoint: options.taxonomyCheckpoint,
+      checkpointEverySearches: options.taxonomyCheckpointEverySearches,
+      onCheckpoint: options.onTaxonomyCheckpoint,
+    }));
   if (!options.taxonomy) await options.onTaxonomy?.(taxonomy);
   const notebooks = new Map(
     taxonomy.notebooks.map((item) => [item.id, item.name] as const),

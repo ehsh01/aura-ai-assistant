@@ -69,6 +69,31 @@ function preferredEvernoteConnector(
   return rows.find((connector) => connector.enabled) ?? rows[0] ?? null;
 }
 
+function evernoteTaxonomyProgressLine(
+  run: ConnectorSyncRun | null,
+): string | null {
+  const progress = run?.metadata.evernoteTaxonomyProgress;
+  if (
+    !progress ||
+    typeof progress !== "object" ||
+    Array.isArray(progress)
+  ) {
+    return null;
+  }
+  const value = progress as Record<string, unknown>;
+  if (run?.metadata.evernotePhase !== "taxonomy") {
+    return null;
+  }
+  const count = (key: string) =>
+    Math.max(0, Math.floor(Number(value[key]) || 0));
+  const elapsedSeconds = Math.floor(count("elapsedMs") / 1_000);
+  return `Taxonomy ${String(value.stage ?? "starting")} · ${count(
+    "searchesDone",
+  )} searches · ${count("prefixesQueued")} prefixes queued · ${count(
+    "notebooksFound",
+  )} notebooks / ${count("tagsFound")} tags · ${elapsedSeconds}s elapsed`;
+}
+
 export function Connectors() {
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
   const [googleOAuthConfigured, setGoogleOAuthConfigured] = useState(false);
@@ -759,6 +784,11 @@ export function Connectors() {
                     ? ` · ${evernoteLastRun.status.replace(/_/g, " ")} · ${evernoteLastRun.recordsFetched} fetched / ${evernoteLastRun.recordsCreated} created / ${evernoteLastRun.recordsUpdated} updated / ${evernoteLastRun.recordsSkipped} skipped / ${evernoteLastRun.recordsFailed} failed`
                     : ""}
                 </p>
+                {evernoteTaxonomyProgressLine(evernoteLastRun) && (
+                  <p className="w-full text-xs text-sky-200/70">
+                    {evernoteTaxonomyProgressLine(evernoteLastRun)}
+                  </p>
+                )}
                 {evernoteLastRun &&
                   (evernoteLastRun.errorMessage ||
                     (Array.isArray(evernoteLastRun.metadata.errors) &&
