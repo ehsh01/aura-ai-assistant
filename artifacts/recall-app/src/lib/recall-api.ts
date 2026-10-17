@@ -1959,11 +1959,25 @@ export async function testFlipperForceConnector(
 
 export async function testEvernoteConnector(
   connectorId: string,
-): Promise<{ ok: true; notebookCount: number; tagCount: number }> {
-  return apiFetch(`/connectors/${encodeURIComponent(connectorId)}/test`, {
-    method: "POST",
-    body: "{}",
-  });
+): Promise<{ ok: true; notebookCount: number; tagCount: number | null }> {
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), 20_000);
+  try {
+    return await apiFetch(`/connectors/${encodeURIComponent(connectorId)}/test`, {
+      method: "POST",
+      body: "{}",
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("Evernote didn't respond — reconnect Evernote", {
+        cause: error,
+      });
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
 }
 
 export async function patchConnector(

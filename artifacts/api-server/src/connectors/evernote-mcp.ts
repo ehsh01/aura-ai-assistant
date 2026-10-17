@@ -1,6 +1,7 @@
 import {
   Client,
   StreamableHTTPClientTransport,
+  UnauthorizedError,
   auth,
   type OAuthClientInformationContext,
   type OAuthClientMetadata,
@@ -92,11 +93,27 @@ function retryAfterHeaderMs(value: string | null): number | null {
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
 }
 
-export const evernoteMcpFetch: FetchLike = async (input, init) => {
-  const retries = max429Retries();
+type EvernoteMcpFetchImplementation = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
+type EvernoteMcpFetchOptions = {
+  fetchFn?: EvernoteMcpFetchImplementation;
+  maxRetries?: number;
+};
+
+export async function evernoteMcpFetch(
+  input: string | URL | Request,
+  init?: Parameters<FetchLike>[1],
+  options?: EvernoteMcpFetchOptions,
+): Promise<Response> {
+  const retries = options?.maxRetries ?? max429Retries();
   for (let attempt = 0; ; attempt++) {
     const request = input instanceof Request ? input.clone() : input;
-    const response = await fetch(request, init);
+    const response = options?.fetchFn
+      ? await options.fetchFn(request, init)
+      : await fetch(request, init);
     if (response.status !== 429) return response;
     const retryAfterMs = Math.min(
       retryAfterHeaderMs(response.headers.get("retry-after")) ?? 1_000,
@@ -117,7 +134,7 @@ export const evernoteMcpFetch: FetchLike = async (input, init) => {
     }
     await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
   }
-};
+}
 
 function firstArray(root: JsonRecord, keys: string[]): unknown[] {
   for (const key of keys) {
@@ -401,15 +418,98 @@ export function evernoteMcpAuthorizationCode(
   return authorizationCode;
 }
 
-type ToolCaller = {
+export type EvernoteReadOnlyToolCaller = {
   callTool(input: {
     name: string;
     arguments?: Record<string, unknown>;
   }): Promise<unknown>;
 };
 
+export class EvernoteReadOnlyViolation extends Error {
+  readonly toolName: string;
+
+  constructor(toolName: string) {
+    super(
+      `Evernote read-only policy blocked MCP tool: ${toolName || "(empty name)"}`,
+    );
+    this.name = "EvernoteReadOnlyViolation";
+    this.toolName = toolName;
+  }
+}
+
+const READ_ONLY_TOOL_NAME =
+  /^(?:search_[a-z_]+|get_[a-z_]+|semantic_search|get_attachment)$/;
+
+export function createEvernoteReadOnlyCaller(
+  client: EvernoteReadOnlyToolCaller,
+): EvernoteReadOnlyToolCaller {
+  return Object.freeze({
+    async callTool(input) {
+      const name = input.name;
+      if (!READ_ONLY_TOOL_NAME.test(name)) {
+        throw new EvernoteReadOnlyViolation(name);
+      }
+      return client.callTool({ name, arguments: input.arguments });
+    },
+  });
+}
+
+function invokeTool(
+  client: EvernoteReadOnlyToolCaller,
+  input: Parameters<EvernoteReadOnlyToolCaller["callTool"]>[0],
+): Promise<unknown> {
+  const callTool = client.callTool;
+  return callTool.call(client, input);
+}
+
+function parseToolResult(raw: JsonRecord, name: string): JsonRecord {
+  const text = asArray(raw.content)
+    .map((part) => asRecord(part))
+    .find(
+      (part) => part.type === "text" && typeof part.text === "string",
+    )?.text;
+  if (raw.isError === true) {
+    const structuredError = asRecord(raw.structuredContent);
+    const error = new Error(
+      typeof text === "string"
+        ? text.slice(0, 300)
+        : `Evernote MCP ${name} failed`,
+    ) as Error & { status?: number; retryAfterMs?: number };
+    const structuredStatus = asNumber(
+      structuredError.status ?? structuredError.statusCode,
+    );
+    if (structuredStatus != null) error.status = structuredStatus;
+    if (
+      structuredStatus === 429 ||
+      /\b429\b|rate.?limit/i.test(error.message)
+    ) {
+      error.status = 429;
+      const retryMs = asNumber(
+        structuredError.retryAfterMs ??
+          structuredError.retry_after_ms,
+      );
+      const retrySeconds = asNumber(
+        structuredError.retryAfter ??
+          structuredError.retry_after,
+      );
+      error.retryAfterMs =
+        retryMs ?? (retrySeconds != null ? retrySeconds * 1_000 : undefined);
+    }
+    throw error;
+  }
+  if (raw.structuredContent !== undefined) {
+    return asRecord(raw.structuredContent);
+  }
+  if (typeof text !== "string") return raw;
+  try {
+    return asRecord(JSON.parse(text));
+  } catch {
+    return { text };
+  }
+}
+
 async function callReadTool(
-  client: ToolCaller,
+  client: EvernoteReadOnlyToolCaller,
   name: string,
   args: Record<string, unknown>,
 ): Promise<JsonRecord> {
@@ -419,49 +519,10 @@ async function callReadTool(
   const maxRetries = max429Retries();
   for (let attempt = 0; ; attempt++) {
     try {
-      const raw = asRecord(await client.callTool({ name, arguments: args }));
-      const text = asArray(raw.content)
-        .map((part) => asRecord(part))
-        .find(
-          (part) => part.type === "text" && typeof part.text === "string",
-        )?.text;
-      if (raw.isError === true) {
-        const structuredError = asRecord(raw.structuredContent);
-        const error = new Error(
-          typeof text === "string"
-            ? text.slice(0, 300)
-            : `Evernote MCP ${name} failed`,
-        ) as Error & { status?: number; retryAfterMs?: number };
-        const structuredStatus = asNumber(
-          structuredError.status ?? structuredError.statusCode,
-        );
-        if (
-          structuredStatus === 429 ||
-          /\b429\b|rate.?limit/i.test(error.message)
-        ) {
-          error.status = 429;
-          const retryMs = asNumber(
-            structuredError.retryAfterMs ??
-              structuredError.retry_after_ms,
-          );
-          const retrySeconds = asNumber(
-            structuredError.retryAfter ??
-              structuredError.retry_after,
-          );
-          error.retryAfterMs =
-            retryMs ?? (retrySeconds != null ? retrySeconds * 1_000 : undefined);
-        }
-        throw error;
-      }
-      if (raw.structuredContent !== undefined) {
-        return asRecord(raw.structuredContent);
-      }
-      if (typeof text !== "string") return raw;
-      try {
-        return asRecord(JSON.parse(text));
-      } catch {
-        return { text };
-      }
+      const raw = asRecord(
+        await invokeTool(client, { name, arguments: args }),
+      );
+      return parseToolResult(raw, name);
     } catch (error) {
       const row = asRecord(error);
       const data = asRecord(row.data);
@@ -537,7 +598,7 @@ async function callReadTool(
 
 /** Read-only escape hatch for the durable worker's attachment/task phases. */
 export async function callEvernoteReadTool(
-  client: ToolCaller,
+  client: EvernoteReadOnlyToolCaller,
   name: string,
   args: Record<string, unknown>,
 ): Promise<JsonRecord> {
@@ -939,7 +1000,7 @@ function taxonomyEntity(value: unknown): EvernoteTaxonomyEntity | null {
 }
 
 async function enumerateNameSearch(
-  client: ToolCaller,
+  client: EvernoteReadOnlyToolCaller,
   tool: "search_notebooks" | "search_tags",
   keys: string[],
 ): Promise<EvernoteTaxonomyEntity[]> {
@@ -991,7 +1052,7 @@ async function enumerateNameSearch(
  * saturated result sets; note-body IDs are unioned by the caller.
  */
 export async function enumerateEvernoteTaxonomy(
-  client: ToolCaller,
+  client: EvernoteReadOnlyToolCaller,
 ): Promise<EvernoteTaxonomy> {
   const notebooks = await enumerateNameSearch(client, "search_notebooks", [
     "notebooks",
@@ -1091,7 +1152,7 @@ function initialCheckpoint(
  * caller, and checkpointed before the next page is requested.
  */
 export async function streamEvernoteViaMcp(
-  client: ToolCaller,
+  client: EvernoteReadOnlyToolCaller,
   options: EvernoteMcpStreamOptions,
 ): Promise<
   EvernoteMcpSyncCheckpoint & {
@@ -1341,7 +1402,7 @@ export async function streamEvernoteViaMcp(
 }
 
 export async function fetchEvernoteViaMcp(
-  client: ToolCaller,
+  client: EvernoteReadOnlyToolCaller,
   knownNotes: Map<string, EvernoteKnownNote>,
 ): Promise<EvernoteFetchResult> {
   const records: EvernoteRawRecord[] = [];
@@ -1377,12 +1438,27 @@ export async function fetchEvernoteViaMcp(
   };
 }
 
+type EvernoteMcpClientOptions = {
+  signal?: AbortSignal;
+  deadlineMs?: number;
+  fetchFn?: EvernoteMcpFetchImplementation;
+  max429Retries?: number;
+};
+
+class EvernoteMcpDeadlineError extends Error {
+  constructor() {
+    super("Evernote MCP connection deadline exceeded");
+    this.name = "EvernoteMcpDeadlineError";
+  }
+}
+
 export async function withEvernoteMcpClient<T>(
   settings: Record<string, unknown>,
-  operation: (client: ToolCaller) => Promise<T>,
+  operation: (client: EvernoteReadOnlyToolCaller) => Promise<T>,
   onStateChanged?: (
     settings: EvernoteMcpConnectorSettings,
   ) => Promise<void>,
+  options: EvernoteMcpClientOptions = {},
 ): Promise<{
   value: T;
   settings: EvernoteMcpConnectorSettings;
@@ -1393,36 +1469,158 @@ export async function withEvernoteMcpClient<T>(
     callbackUrl(),
     onStateChanged,
   );
+  const requestSignal = options.signal;
+  const transportFetch: FetchLike = (input, init) =>
+    evernoteMcpFetch(
+      input,
+      {
+        ...init,
+        signal:
+          requestSignal && init?.signal
+            ? AbortSignal.any([requestSignal, init.signal])
+            : requestSignal ?? init?.signal,
+      },
+      {
+        fetchFn: options.fetchFn,
+        maxRetries: options.max429Retries,
+      },
+    );
   const transport = new StreamableHTTPClientTransport(mcpServerUrl(), {
     authProvider: provider,
-    fetch: evernoteMcpFetch,
+    requestInit: requestSignal ? { signal: requestSignal } : undefined,
+    fetch: transportFetch,
   });
   const client = new Client({ name: "Recall", version: "1.0.0" });
+  let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
-    await client.connect(transport);
-    const value = await operation(client);
-    return { value, settings: mcpSettingsFromOAuthState(state) };
+    const run = (async () => {
+      await client.connect(transport);
+      const value = await operation(createEvernoteReadOnlyCaller(client));
+      return { value, settings: mcpSettingsFromOAuthState(state) };
+    })();
+    if (options.deadlineMs == null) return await run;
+    const timeout = new Promise<never>((_, reject) => {
+      deadline = setTimeout(() => {
+        reject(new EvernoteMcpDeadlineError());
+      }, options.deadlineMs);
+    });
+    return await Promise.race([run, timeout]);
+  } catch (error) {
+    const deadlineExpired =
+      error instanceof EvernoteMcpDeadlineError ||
+      options.signal?.reason instanceof EvernoteMcpDeadlineError;
+    if (provider.authorizationUrl && !deadlineExpired) {
+      const authorizationError = new UnauthorizedError(
+        "Evernote OAuth authorization is required",
+      ) as UnauthorizedError & { cause?: unknown };
+      authorizationError.cause = error;
+      throw authorizationError;
+    }
+    throw error;
   } finally {
+    if (deadline) clearTimeout(deadline);
     await client.close().catch(() => undefined);
+    await transport.close().catch(() => undefined);
   }
 }
+
+const EVERNOTE_CONNECTION_TEST_TIMEOUT_MS = 15_000;
+const EVERNOTE_RECONNECT_MESSAGE =
+  "Evernote didn't respond — reconnect Evernote";
+
+function connectionTestError(
+  status: 401 | 504,
+  cause: unknown,
+): Error & { status: number } {
+  const error = new Error(EVERNOTE_RECONNECT_MESSAGE, { cause }) as Error & {
+    status: number;
+  };
+  error.status = status;
+  return error;
+}
+
+function isEvernoteAuthenticationError(error: unknown): boolean {
+  if (UnauthorizedError.isInstance(error)) return true;
+  const details = asRecord(error);
+  const data = asRecord(details.data);
+  const status = asNumber(
+    details.status ?? details.statusCode ?? data.status ?? data.statusCode,
+  );
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return (
+    status === 401 ||
+    details.code === "invalid_grant" ||
+    data.code === "invalid_grant" ||
+    /\binvalid_grant\b|\bunauthorized\b|oauth authorization is required/i.test(
+      message,
+    )
+  );
+}
+
+type EvernoteConnectionTestOptions = {
+  timeoutMs?: number;
+  fetchFn?: EvernoteMcpFetchImplementation;
+};
 
 export async function testEvernoteMcpConnection(
   settings: Record<string, unknown>,
   onStateChanged?: (
     settings: EvernoteMcpConnectorSettings,
   ) => Promise<void>,
+  options: EvernoteConnectionTestOptions = {},
 ): Promise<{
   notebookCount: number;
-  tagCount: number;
+  tagCount: null;
   settings: EvernoteMcpConnectorSettings;
 }> {
-  const result = await withEvernoteMcpClient(settings, async (client) => {
-    const taxonomy = await enumerateEvernoteTaxonomy(client);
-    return {
-      notebookCount: taxonomy.notebooks.length,
-      tagCount: taxonomy.tags.length,
-    };
-  }, onStateChanged);
-  return { ...result.value, settings: result.settings };
+  const controller = new AbortController();
+  const timeoutMs = Math.max(
+    1,
+    Math.min(
+      Math.floor(
+        options.timeoutMs ?? EVERNOTE_CONNECTION_TEST_TIMEOUT_MS,
+      ),
+      EVERNOTE_CONNECTION_TEST_TIMEOUT_MS,
+    ),
+  );
+  const abortTimer = setTimeout(() => {
+    controller.abort(new EvernoteMcpDeadlineError());
+  }, timeoutMs);
+  try {
+    const result = await withEvernoteMcpClient(settings, async (client) => {
+      const probe = parseToolResult(
+        asRecord(
+          await invokeTool(client, {
+            name: "search_notebooks",
+            arguments: { query: "", maxResults: 1 },
+          }),
+        ),
+        "search_notebooks",
+      );
+      const notebookCount = firstArray(
+        probe,
+        ["notebooks", "results", "items"],
+      ).length;
+      return { notebookCount, tagCount: null };
+    }, onStateChanged, {
+      signal: controller.signal,
+      deadlineMs: timeoutMs,
+      fetchFn: options.fetchFn,
+      max429Retries: 0,
+    });
+    return { ...result.value, settings: result.settings };
+  } catch (error) {
+    if (
+      error instanceof EvernoteMcpDeadlineError ||
+      controller.signal.reason instanceof EvernoteMcpDeadlineError
+    ) {
+      throw connectionTestError(504, error);
+    }
+    if (isEvernoteAuthenticationError(error)) {
+      throw connectionTestError(401, error);
+    }
+    throw error;
+  } finally {
+    clearTimeout(abortTimer);
+  }
 }

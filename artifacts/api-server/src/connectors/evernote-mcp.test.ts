@@ -1,6 +1,15 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  Client,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EVERNOTE_MAX_NOTE_CONTENT_CHARS,
+  EvernoteReadOnlyViolation,
+  createEvernoteReadOnlyCaller,
   enumerateEvernoteTaxonomy,
   evernoteMcpFetch,
   evernoteMcpAuthorizationCode,
@@ -8,18 +17,273 @@ import {
   mcpOAuthStateFromSettings,
   mcpSettingsFromOAuthState,
   streamEvernoteViaMcp,
+  testEvernoteMcpConnection,
 } from "./evernote-mcp";
 import {
   openConnectorSettings,
   sealConnectorSettings,
 } from "../lib/secret-box";
+import { connectorTestErrorResponse } from "../routes/connector-test-error";
 
 afterEach(() => {
   delete process.env.SECRETS_ENCRYPTION_KEY;
   delete process.env.EVERNOTE_MCP_PACE_MS;
   delete process.env.EVERNOTE_MCP_MAX_429_RETRIES;
   delete process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE;
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("Evernote MCP read-only boundary", () => {
+  it("passes every read-only tool-name shape through to the SDK client", async () => {
+    const callTool = vi.fn(async (input: { name: string }) => ({
+      tool: input.name,
+    }));
+    const client = createEvernoteReadOnlyCaller({ callTool });
+    const allowed = [
+      "search_notes",
+      "search_future_resource",
+      "get_note",
+      "get_future_resource",
+      "semantic_search",
+      "get_attachment",
+    ];
+
+    for (const name of allowed) {
+      await expect(client.callTool({ name })).resolves.toEqual({ tool: name });
+    }
+    expect(callTool).toHaveBeenCalledTimes(allowed.length);
+  });
+
+  it("blocks write families, unknown names, and an empty name before SDK dispatch", async () => {
+    const callTool = vi.fn(async () => ({}));
+    const client = createEvernoteReadOnlyCaller({ callTool });
+    const rejected = [
+      "create_note",
+      "edit_note",
+      "delete_note",
+      "move_notes",
+      "rename_notebook",
+      "update_note",
+      "restore_note",
+      "start_attachment_upload",
+      "finalize_attachment",
+      "list_notebooks",
+      "do_something",
+      "",
+    ];
+
+    for (const name of rejected) {
+      await expect(client.callTool({ name })).rejects.toBeInstanceOf(
+        EvernoteReadOnlyViolation,
+      );
+    }
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
+  it("dispatches the validated tool name instead of the caller's mutable input", async () => {
+    const dispatched: string[] = [];
+    const client = createEvernoteReadOnlyCaller({
+      async callTool(input) {
+        dispatched.push(input.name);
+        return {};
+      },
+    });
+    let reads = 0;
+    const input = {
+      get name() {
+        reads += 1;
+        return reads === 1 ? "search_notes" : "delete_note";
+      },
+    };
+
+    await client.callTool(input);
+
+    expect(reads).toBe(1);
+    expect(dispatched).toEqual(["search_notes"]);
+  });
+
+  it("keeps direct SDK callTool dispatch inside the guarded wrapper", () => {
+    const srcRoot = fileURLToPath(new URL("../", import.meta.url));
+    const sourceFiles: string[] = [];
+    const visit = (directory: string) => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) {
+          visit(path);
+        } else if (
+          /\.(?:ts|tsx)$/.test(entry.name) &&
+          !/\.(?:test|spec)\.(?:ts|tsx)$/.test(entry.name)
+        ) {
+          sourceFiles.push(path);
+        }
+      }
+    };
+    visit(srcRoot);
+
+    const mcpPath = join(srcRoot, "connectors", "evernote-mcp.ts");
+    const mcpSource = readFileSync(mcpPath, "utf8");
+    const wrapperStart = mcpSource.indexOf(
+      "export function createEvernoteReadOnlyCaller",
+    );
+    const wrapperEnd = mcpSource.indexOf("\n}\n\nfunction invokeTool", wrapperStart);
+    expect(wrapperStart).toBeGreaterThanOrEqual(0);
+    expect(wrapperEnd).toBeGreaterThan(wrapperStart);
+
+    const violations = sourceFiles.flatMap((path) => {
+      let source = readFileSync(path, "utf8");
+      if (path === mcpPath) {
+        source =
+          source.slice(0, wrapperStart) +
+          source.slice(wrapperEnd + "\n}\n".length);
+      }
+      return source.includes(".callTool(") ? [relative(srcRoot, path)] : [];
+    });
+    expect(violations).toEqual([]);
+    expect(
+      mcpSource.slice(wrapperStart, wrapperEnd).match(/\.callTool\(/g),
+    ).toHaveLength(1);
+  });
+});
+
+describe("Evernote MCP connection probe", () => {
+  const settings = {
+    authTransport: "mcp",
+    mcpOAuthState: "test-state",
+    mcpClientInformation: { client_id: "test-client" },
+    accessToken: "test-access-token",
+  };
+
+  it("makes exactly one small search_notebooks call", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "10000";
+    vi.spyOn(Client.prototype, "connect").mockResolvedValue(undefined);
+    const callTool = vi
+      .spyOn(Client.prototype, "callTool")
+      .mockResolvedValue({
+        structuredContent: {
+          notebooks: [{ id: "notebook-1", name: "Projects" }],
+        },
+      } as never);
+
+    const result = await testEvernoteMcpConnection(settings, undefined, {
+      timeoutMs: 100,
+    });
+
+    expect(result.notebookCount).toBe(1);
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledWith({
+      name: "search_notebooks",
+      arguments: { query: "", maxResults: 1 },
+    });
+  });
+
+  it("maps a tool-level invalid_grant response to AUTH_FAILED without retrying", async () => {
+    vi.spyOn(Client.prototype, "connect").mockResolvedValue(undefined);
+    const callTool = vi
+      .spyOn(Client.prototype, "callTool")
+      .mockResolvedValue({
+        isError: true,
+        structuredContent: { status: 401, code: "invalid_grant" },
+        content: [{ type: "text", text: "invalid_grant" }],
+      } as never);
+    let error: unknown;
+
+    try {
+      await testEvernoteMcpConnection(settings, undefined, {
+        timeoutMs: 100,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(connectorTestErrorResponse(error)).toEqual({
+      status: 401,
+      body: {
+        error: "AUTH_FAILED",
+        message: "Evernote didn't respond — reconnect Evernote",
+      },
+    });
+  });
+
+  it("does not retry a tool-level 429 during the connection probe", async () => {
+    vi.spyOn(Client.prototype, "connect").mockResolvedValue(undefined);
+    const callTool = vi
+      .spyOn(Client.prototype, "callTool")
+      .mockResolvedValue({
+        isError: true,
+        structuredContent: { status: 429, retryAfter: 60 },
+        content: [{ type: "text", text: "rate limit" }],
+      } as never);
+
+    await expect(
+      testEvernoteMcpConnection(settings, undefined, {
+        timeoutMs: 100,
+      }),
+    ).rejects.toMatchObject({ status: 429 });
+    expect(callTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("times out a fetch that never resolves and closes the transport", async () => {
+    const close = vi.spyOn(
+      StreamableHTTPClientTransport.prototype,
+      "close",
+    );
+    const fetchFn = vi.fn(
+      () => new Promise<Response>(() => undefined),
+    );
+
+    let error: unknown;
+    try {
+      await testEvernoteMcpConnection(settings, undefined, {
+        timeoutMs: 25,
+        fetchFn,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toMatchObject({
+      status: 504,
+      message: "Evernote didn't respond — reconnect Evernote",
+    });
+    expect(connectorTestErrorResponse(error)).toMatchObject({
+      status: 504,
+      body: { error: "UPSTREAM_TIMEOUT" },
+    });
+    expect(fetchFn).toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("turns an HTTP 401 into the reconnect error used by AUTH_FAILED", async () => {
+    const fetchFn = vi.fn(async () =>
+      new Response("Unauthorized", {
+        status: 401,
+        headers: { "WWW-Authenticate": "Bearer" },
+      }),
+    );
+    let error: unknown;
+    try {
+      await testEvernoteMcpConnection(settings, undefined, {
+        timeoutMs: 250,
+        fetchFn,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toMatchObject({
+      status: 401,
+      message: "Evernote didn't respond — reconnect Evernote",
+    });
+    expect(connectorTestErrorResponse(error)).toEqual({
+      status: 401,
+      body: {
+        error: "AUTH_FAILED",
+        message: "Evernote didn't respond — reconnect Evernote",
+      },
+    });
+  });
 });
 
 describe("Evernote MCP auth persistence", () => {
@@ -91,6 +355,28 @@ describe("Evernote MCP HTTP pacing", () => {
     const response = await evernoteMcpFetch("https://mcp.evernote.com/mcp");
     expect(response.status).toBe(200);
     expect(calls).toBe(2);
+  });
+
+  it("clones Request bodies before each HTTP retry", async () => {
+    const bodies: string[] = [];
+    const fetchFn = vi.fn(async (input: string | URL | Request) => {
+      bodies.push(await (input as Request).text());
+      return bodies.length === 1
+        ? new Response("limited", {
+            status: 429,
+            headers: { "Retry-After": "0" },
+          })
+        : new Response("ok", { status: 200 });
+    });
+    const request = new Request("https://mcp.evernote.com/mcp", {
+      method: "POST",
+      body: '{"probe":true}',
+    });
+
+    const response = await evernoteMcpFetch(request, undefined, { fetchFn });
+
+    expect(response.status).toBe(200);
+    expect(bodies).toEqual(['{"probe":true}', '{"probe":true}']);
   });
 
   it("marks exhausted HTTP retries so tool retries cannot multiply them", async () => {

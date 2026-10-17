@@ -20,6 +20,7 @@ import {
   sourceRecords,
 } from "@workspace/db/schema";
 import type {
+  EvernoteReadOnlyToolCaller,
   EvernoteTaxonomy,
   EvernoteTaxonomyEntity,
 } from "../connectors/evernote-mcp";
@@ -42,13 +43,6 @@ import {
   evernoteDeferredError,
   requiredMemoryMbForBytes,
 } from "./evernote-watchdog";
-
-type ToolCaller = {
-  callTool(input: {
-    name: string;
-    arguments?: Record<string, unknown>;
-  }): Promise<unknown>;
-};
 
 type JsonRecord = Record<string, unknown>;
 
@@ -516,7 +510,7 @@ export function evernoteAttachmentFailureTransition(
 }
 
 export async function processOneEvernoteAttachment(
-  client: ToolCaller,
+  client: EvernoteReadOnlyToolCaller,
   connectorId: string,
 ): Promise<boolean> {
   const inNightWindow = isEvernoteNightWindow();
@@ -734,7 +728,7 @@ export async function processOneEvernoteAttachment(
 }
 
 export async function processEvernoteTaskPage(input: {
-  client: ToolCaller;
+  client: EvernoteReadOnlyToolCaller;
   userId: string;
   connectorId: string;
   cursor: string | null;
@@ -782,7 +776,7 @@ export async function processEvernoteTaskPage(input: {
 }
 
 export async function verifyOneEvernoteNotebook(
-  client: ToolCaller,
+  client: EvernoteReadOnlyToolCaller,
   connectorId: string,
   offset: number,
 ): Promise<boolean> {
@@ -818,7 +812,7 @@ export async function verifyOneEvernoteNotebook(
 }
 
 export async function syncEvernoteReminderFlags(
-  client: ToolCaller,
+  client: EvernoteReadOnlyToolCaller,
   connectorId: string,
 ): Promise<number> {
   const ids = new Set<string>();
