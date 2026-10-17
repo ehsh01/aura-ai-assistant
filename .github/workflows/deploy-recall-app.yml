@@ -2,21 +2,17 @@ name: Deploy Recall App
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "artifacts/**"
-      - "lib/**"
-      - "scripts/**"
-      - "nginx-recall-app.conf"
-      - "DEPLOYMENT.md"
-      - ".github/workflows/deploy-recall-app.yml"
+    inputs:
+      sha:
+        description: Full commit SHA to deploy
+        required: true
+        type: string
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Only run when the deploy key is configured, so pushes don't fail for
-    # forks/contributors without secret access.
+    # Only run when the deploy key is configured, so manual dispatches from
+    # forks/contributors without secret access do not fail.
     env:
       HAS_KEY: ${{ secrets.DEPLOY_SSH_KEY != '' }}
     steps:
@@ -31,16 +27,36 @@ jobs:
       - name: Deploy to DigitalOcean droplet
         if: steps.guard.outputs.skip != 'true'
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_SHA: ${{ inputs.sha }}
         with:
           host: 159.223.130.69
           username: root
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: DEPLOY_SHA
           # After running scripts/setup-recall-deploy-user.sh and verifying, you can
           # switch username to `recall` (or set an optional DEPLOY_SSH_USER secret)
           # without removing root SSH access.
           script: |
+            set -euo pipefail
+
+            if [[ -z "${DEPLOY_SHA:-}" ]]; then
+              echo "ERROR: required deploy input 'sha' is missing." >&2
+              exit 1
+            fi
+            if [[ ! "$DEPLOY_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "ERROR: deploy input 'sha' must be a full 40-character commit SHA." >&2
+              exit 1
+            fi
+
             cd /var/www/recall-app
-            # Pull first so the deploy script itself (migrations list, etc.) is current.
-            # Running an already-started bash file after git pull keeps the pre-pull version.
-            git pull --ff-only
+            git fetch --all --prune
+            if ! git cat-file -e "${DEPLOY_SHA}^{commit}" 2>/dev/null; then
+              echo "ERROR: commit SHA '$DEPLOY_SHA' does not exist after fetch." >&2
+              exit 1
+            fi
+
+            DEPLOY_SHA="$(git rev-parse --verify "${DEPLOY_SHA}^{commit}")"
+            git checkout --detach "$DEPLOY_SHA"
             RECALL_DEPLOY_ALREADY_PULLED=1 bash scripts/deploy-recall-app.sh
+            echo "Deployed SHA: $(git rev-parse HEAD)"
