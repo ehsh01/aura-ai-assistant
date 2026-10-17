@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { aiService, type ExtractDeadlineItem } from "./ai";
 import { logger } from "../lib/logger";
 import {
@@ -267,13 +268,17 @@ export async function scheduleNoteDeadlineScan(
   try {
     const { enqueueJob, JOB_TYPE_ATTENTION_SCAN } = await import("./job-queue");
     const { nudgeJobWorker } = await import("./job-worker");
-    await enqueueJob({
+    const contentHash = createHash("sha256")
+      .update(`${userId}\n${noteId}\n${content}`)
+      .digest("hex")
+      .slice(0, 40);
+    const job = await enqueueJob({
       userId,
       type: JOB_TYPE_ATTENTION_SCAN,
       payload: { noteId },
-      id: `attn-note-${noteId}-${Date.now()}`,
+      id: `attn-note-${contentHash}`,
     });
-    nudgeJobWorker();
+    nudgeJobWorker(job.id);
   } catch (err) {
     logger.warn({ err, noteId }, "Failed to schedule note deadline scan");
   }
@@ -289,6 +294,9 @@ export async function scanNoteForDeadlines(
   if (!note) return { scanned: 0, created: 0 };
   const text = `${note.title}\n${note.content}`;
   if (!hasDateCues(text)) return { scanned: 1, created: 0 };
+  if (!(await allowBackgroundAi("deadline_extract"))) {
+    return { scanned: 1, created: 0 };
+  }
 
   const extracted = await withAiFeature({ feature: "deadline_extract", userId }, () =>
     aiService.extractDeadline({

@@ -10,7 +10,8 @@ import {
   JOB_TYPE_WAITING_SCAN,
   attachmentIdFromPayload,
   captureIdFromPayload,
-  claimNextJob,
+  claimJobById,
+  claimNextJobOfTypes,
   completeJob,
   enexImportFromPayload,
   failJob,
@@ -25,6 +26,9 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let tickRunning = false;
 let wakeRequested = false;
 let ticks = 0;
+const requestedJobIds = new Set<string>();
+
+const TIMER_SAFE_JOB_TYPES = [JOB_TYPE_ATTACHMENT_EXTRACT] as const;
 
 const workerId = `recall-api:${hostname()}:${process.pid}`;
 
@@ -55,17 +59,13 @@ const handlers: Record<string, JobHandler> = {
       throw new Error("enex_import job missing filePath/fileName");
     }
     const statusJobId =
-      typeof job.payload.statusJobId === "string" && job.payload.statusJobId
-        ? job.payload.statusJobId
-        : job.id;
+      typeof job.payload.statusJobId === "string" && job.payload.statusJobId ? job.payload.statusJobId : job.id;
     const { processEnexImportJob } = await import("./enex-import-jobs");
     await processEnexImportJob(job.userId, statusJobId, meta.filePath, meta.fileName);
   },
   [JOB_TYPE_DIGEST_REGEN]: async (job) => {
-    const entityType =
-      typeof job.payload.entityType === "string" ? job.payload.entityType : "";
-    const entityId =
-      typeof job.payload.entityId === "string" ? job.payload.entityId : "";
+    const entityType = typeof job.payload.entityType === "string" ? job.payload.entityType : "";
+    const entityId = typeof job.payload.entityId === "string" ? job.payload.entityId : "";
     if (!entityType || !entityId) {
       throw new Error("digest_regen job missing entityType/entityId");
     }
@@ -73,10 +73,7 @@ const handlers: Record<string, JobHandler> = {
     await processDigestRegen(job.userId, entityType, entityId);
   },
   [JOB_TYPE_ATTENTION_SCAN]: async (job) => {
-    const noteId =
-      typeof job.payload.noteId === "string" && job.payload.noteId
-        ? job.payload.noteId
-        : null;
+    const noteId = typeof job.payload.noteId === "string" && job.payload.noteId ? job.payload.noteId : null;
     if (noteId) {
       const { scanNoteForDeadlines } = await import("./attention-extract");
       const result = await scanNoteForDeadlines(job.userId, noteId);
@@ -88,10 +85,7 @@ const handlers: Record<string, JobHandler> = {
     logger.info({ userId: job.userId, ...result }, "Attention scan complete");
   },
   [JOB_TYPE_WAITING_SCAN]: async (job) => {
-    const noteId =
-      typeof job.payload.noteId === "string" && job.payload.noteId
-        ? job.payload.noteId
-        : null;
+    const noteId = typeof job.payload.noteId === "string" && job.payload.noteId ? job.payload.noteId : null;
     if (noteId) {
       const { scanNoteForWaitingCandidates } = await import("./waiting-candidates");
       const result = await scanNoteForWaitingCandidates(job.userId, noteId);
@@ -104,10 +98,7 @@ const handlers: Record<string, JobHandler> = {
     const outcomes = await processWaitingOutcomesForUser(job.userId);
     const { scanTaskWaitingCandidates } = await import("./waiting-candidates");
     const taskCandidates = await scanTaskWaitingCandidates(job.userId);
-    logger.info(
-      { userId: job.userId, ...scan, ...outcomes, taskCandidates },
-      "Waiting scan complete",
-    );
+    logger.info({ userId: job.userId, ...scan, ...outcomes, taskCandidates }, "Waiting scan complete");
   },
 };
 
@@ -161,8 +152,14 @@ async function pollOnce(): Promise<void> {
       }
     }
 
+    for (const jobId of [...requestedJobIds]) {
+      requestedJobIds.delete(jobId);
+      const job = await claimJobById(workerId, jobId);
+      if (job) await runOneJob(job);
+    }
+
     for (let i = 0; i < 3; i += 1) {
-      const job = await claimNextJob(workerId);
+      const job = await claimNextJobOfTypes(workerId, TIMER_SAFE_JOB_TYPES);
       if (!job) break;
       await runOneJob(job);
     }
@@ -188,8 +185,12 @@ export function startJobWorker(): void {
   logger.info({ workerId }, "Durable job worker started");
 }
 
-/** Call after enqueue so work starts without waiting for the next interval. */
-export function nudgeJobWorker(): void {
+/**
+ * Run a specific job because the current user/save action just created it.
+ * Timer polling is intentionally restricted to non-AI job types.
+ */
+export function nudgeJobWorker(jobId?: string): void {
+  if (jobId) requestedJobIds.add(jobId);
   void pollOnce();
 }
 

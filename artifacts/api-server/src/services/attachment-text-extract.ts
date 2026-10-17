@@ -1,32 +1,32 @@
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import path from "node:path";
-import { and, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
-import OpenAI from "openai";
-import { noteAttachments, notes } from "@workspace/db/schema";
+import { promisify } from "node:util";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { noteAttachments } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { config } from "../lib/config";
 import { logger } from "../lib/logger";
-import { warmEntityEmbedding } from "./embedding-cache";
-import { noteRetrievalText } from "./note-retrieval";
-import { allowBackgroundAi, recordAiUsage, usageTokens } from "./ai-usage";
 
 const MAX_EXTRACTED_CHARS = 12_000;
 const MIN_IMAGE_BYTES_FOR_OCR = 2_500;
 const MAX_IMAGE_BYTES_FOR_OCR = 8 * 1024 * 1024;
-const BACKFILL_BATCH = 4;
-const BACKFILL_TICK_MS = 15_000;
-const BACKFILL_INITIAL_DELAY_MS = 45_000;
+const DEFAULT_TESSERACT_TIMEOUT_MS = 30_000;
+const execFileAsync = promisify(execFile);
 
-let backfillTimer: NodeJS.Timeout | null = null;
-let backfillRunning = false;
+let tesseractQueue: Promise<void> = Promise.resolve();
+let loggedMissingTesseract = false;
 
 export function attachmentContentHash(data: Buffer): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
 function truncate(text: string, max = MAX_EXTRACTED_CHARS): string {
-  const cleaned = text.replace(/\u0000/g, "").replace(/\s+/g, " ").trim();
+  const cleaned = text
+    .replace(/\u0000/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (cleaned.length <= max) return cleaned;
   return cleaned.slice(0, max);
 }
@@ -58,77 +58,70 @@ async function extractPlainText(data: Buffer, mimeType: string): Promise<string>
   return truncate(raw);
 }
 
-/**
- * Image detail sent to the vision model. "low" bills a flat, small number of
- * image tokens instead of scaling with resolution, which is the single biggest
- * lever on OCR cost. Extracted text only feeds search indexing, so the accuracy
- * trade is worth it by default; set OPENAI_OCR_DETAIL=high to restore fidelity.
- */
-function ocrDetail(): "low" | "high" | "auto" {
-  const raw = process.env.OPENAI_OCR_DETAIL?.trim().toLowerCase();
-  return raw === "high" || raw === "auto" ? raw : "low";
-}
-
-/** OCR can run on a cheaper model than the main answer model. */
-function ocrModel(): string {
-  return (
-    process.env.OPENAI_OCR_MODEL?.trim() ||
-    process.env.OPENAI_MODEL?.trim() ||
-    "gpt-4o-mini"
-  );
-}
-
 function maxImageBytes(): number {
   const raw = Number(process.env.OCR_MAX_IMAGE_BYTES ?? "");
   return Number.isFinite(raw) && raw > 0 ? raw : MAX_IMAGE_BYTES_FOR_OCR;
 }
 
-async function extractImageText(
-  data: Buffer,
-  mimeType: string,
-  userId?: string | null,
+function tesseractTimeoutMs(): number {
+  const raw = Number(process.env.TESSERACT_OCR_TIMEOUT_MS ?? "");
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TESSERACT_TIMEOUT_MS;
+}
+
+function serializeTesseract<T>(work: () => Promise<T>): Promise<T> {
+  const run = tesseractQueue.then(work, work);
+  tesseractQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+function isMissingExecutable(err: unknown): boolean {
+  if (typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === "ENOENT") {
+    return true;
+  }
+  const detail =
+    typeof err === "object" && err !== null && "stderr" in err
+      ? String((err as { stderr?: unknown }).stderr)
+      : err instanceof Error
+        ? err.message
+        : "";
+  return (
+    /(?:failed to execute|not found|no such file).*\btesseract\b/i.test(detail) ||
+    /\btesseract\b.*(?:not found|no such file)/i.test(detail)
+  );
+}
+
+/** Free, out-of-process OCR. Serialized to protect low-memory production hosts. */
+export async function extractImageTextWithTesseract(
+  absPath: string,
+  sizeBytes: number,
+  run: typeof execFileAsync = execFileAsync,
 ): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!apiKey) return "";
-  if (data.length < MIN_IMAGE_BYTES_FOR_OCR) return "";
-  if (data.length > maxImageBytes()) return "";
-  if (!(await allowBackgroundAi("attachment_ocr"))) return "";
+  if (sizeBytes < MIN_IMAGE_BYTES_FOR_OCR || sizeBytes > maxImageBytes()) return "";
 
-  const client = new OpenAI({ apiKey });
-  const model = ocrModel();
-  const b64 = data.toString("base64");
-  const mime = mimeType.startsWith("image/") ? mimeType : "image/jpeg";
-
-  const completion = await client.chat.completions.create({
-    model,
-    max_tokens: 1200,
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: "Extract all readable text from this image for search indexing. Include printed text and clear handwriting. Return only the extracted text with no commentary. If there is no text, return an empty string.",
-          },
-          {
-            type: "image_url",
-            image_url: { url: `data:${mime};base64,${b64}`, detail: ocrDetail() },
-          },
-        ],
-      },
-    ],
+  return serializeTesseract(async () => {
+    try {
+      // `flock` makes the concurrency cap host-wide across API/worker PM2
+      // processes; the in-process queue avoids needless lock contention.
+      const { stdout } = await run("flock", ["-x", "-F", "/tmp/recall-tesseract.lock", "tesseract", absPath, "stdout"], {
+        timeout: tesseractTimeoutMs(),
+        maxBuffer: 2 * 1024 * 1024,
+      });
+      return truncate(String(stdout));
+    } catch (err) {
+      if (isMissingExecutable(err)) {
+        if (!loggedMissingTesseract) {
+          loggedMissingTesseract = true;
+          logger.warn("tesseract binary is unavailable; image attachment text extraction is disabled");
+        }
+        return "";
+      }
+      logger.warn({ err, absPath }, "Tesseract attachment extraction failed");
+      return "";
+    }
   });
-
-  const tokens = usageTokens(completion.usage);
-  await recordAiUsage({
-    userId,
-    feature: "attachment_ocr",
-    model,
-    background: true,
-    ...tokens,
-  });
-
-  return truncate(completion.choices[0]?.message?.content ?? "");
 }
 
 /** Best-effort DOCX: unzip word/document.xml when `unzip` is available. */
@@ -137,11 +130,9 @@ async function extractDocxText(absPath: string): Promise<string> {
     const { execFile } = await import("node:child_process");
     const { promisify } = await import("node:util");
     const execFileAsync = promisify(execFile);
-    const { stdout } = await execFileAsync(
-      "unzip",
-      ["-p", absPath, "word/document.xml"],
-      { maxBuffer: 8 * 1024 * 1024 },
-    );
+    const { stdout } = await execFileAsync("unzip", ["-p", absPath, "word/document.xml"], {
+      maxBuffer: 8 * 1024 * 1024,
+    });
     return truncate(stripHtml(String(stdout)));
   } catch {
     return "";
@@ -153,7 +144,6 @@ export async function extractTextFromAttachmentFile(opts: {
   mimeType: string;
   fileName: string;
   sizeBytes: number;
-  userId?: string | null;
 }): Promise<string> {
   const mime = (opts.mimeType || "").toLowerCase();
   const name = (opts.fileName || "").toLowerCase();
@@ -180,30 +170,20 @@ export async function extractTextFromAttachmentFile(opts: {
     ) {
       return await extractPlainText(data, mime || "text/plain");
     }
-    if (
-      mime.includes("wordprocessingml") ||
-      mime === "application/msword" ||
-      name.endsWith(".docx")
-    ) {
+    if (mime.includes("wordprocessingml") || mime === "application/msword" || name.endsWith(".docx")) {
       return await extractDocxText(opts.absPath);
     }
     if (mime.startsWith("image/") || /\.(jpe?g|png|gif|webp|bmp)$/i.test(name)) {
-      return await extractImageText(data, mime || "image/jpeg", opts.userId);
+      return await extractImageTextWithTesseract(opts.absPath, data.length);
     }
   } catch (err) {
-    logger.warn(
-      { err, fileName: opts.fileName, mimeType: opts.mimeType },
-      "Attachment text extraction failed",
-    );
+    logger.warn({ err, fileName: opts.fileName, mimeType: opts.mimeType }, "Attachment text extraction failed");
   }
 
   return "";
 }
 
-export async function persistAttachmentExtractedText(
-  attachmentId: string,
-  text: string,
-): Promise<void> {
+export async function persistAttachmentExtractedText(attachmentId: string, text: string | null): Promise<void> {
   await getDb()
     .update(noteAttachments)
     .set({
@@ -213,12 +193,27 @@ export async function persistAttachmentExtractedText(
     .where(eq(noteAttachments.id, attachmentId));
 }
 
+export type CachedExtraction = {
+  processed: boolean;
+  text: string | null;
+};
+
+/**
+ * Small testable cache boundary: a completed hash (including an empty result)
+ * never invokes the extractor again.
+ */
+export async function extractWithContentHashCache(opts: {
+  findCached: () => Promise<CachedExtraction>;
+  extract: () => Promise<string>;
+}): Promise<{ text: string | null; cached: boolean }> {
+  const cached = await opts.findCached();
+  if (cached.processed) return { text: cached.text, cached: true };
+  const text = (await opts.extract()) || null;
+  return { text, cached: false };
+}
+
 export async function extractAndStoreAttachmentText(attachmentId: string): Promise<string> {
-  const rows = await getDb()
-    .select()
-    .from(noteAttachments)
-    .where(eq(noteAttachments.id, attachmentId))
-    .limit(1);
+  const rows = await getDb().select().from(noteAttachments).where(eq(noteAttachments.id, attachmentId)).limit(1);
   const row = rows[0];
   if (!row) return "";
 
@@ -229,83 +224,52 @@ export async function extractAndStoreAttachmentText(attachmentId: string): Promi
   let contentHash: string | null = null;
   try {
     contentHash = attachmentContentHash(await readFile(absPath));
-    await getDb()
-      .update(noteAttachments)
-      .set({ contentHash })
-      .where(eq(noteAttachments.id, attachmentId));
+    await getDb().update(noteAttachments).set({ contentHash }).where(eq(noteAttachments.id, attachmentId));
   } catch {
     // A missing/unreadable file follows the existing extraction failure path.
   }
 
-  let text: string | null = null;
-  if (contentHash) {
-    try {
-      const [reusable] = await getDb()
-        .select({ extractedText: noteAttachments.extractedText })
-        .from(noteAttachments)
-        .where(
-          and(
-            eq(noteAttachments.userId, row.userId),
-            eq(noteAttachments.contentHash, contentHash),
-            ne(noteAttachments.id, attachmentId),
-            isNotNull(noteAttachments.extractedText),
-          ),
-        )
-        .limit(1);
-      if (reusable?.extractedText != null) {
-        text = reusable.extractedText;
+  const result = await extractWithContentHashCache({
+    findCached: async () => {
+      if (!contentHash) return { processed: false, text: null };
+      try {
+        const [reusable] = await getDb()
+          .select({
+            extractedText: noteAttachments.extractedText,
+            extractedAt: noteAttachments.extractedAt,
+          })
+          .from(noteAttachments)
+          .where(and(eq(noteAttachments.contentHash, contentHash), isNotNull(noteAttachments.extractedAt)))
+          .limit(1);
+        return reusable?.extractedAt
+          ? { processed: true, text: reusable.extractedText }
+          : { processed: false, text: null };
+      } catch {
+        // Cache lookup is best-effort; extraction remains available.
+        return { processed: false, text: null };
       }
-    } catch {
-      // Reuse is an optimization; extraction still works if this lookup fails.
-    }
-  }
-
-  if (text == null) {
-    text = await extractTextFromAttachmentFile({
-      absPath,
-      mimeType: row.mimeType,
-      fileName: row.fileName,
-      sizeBytes: row.sizeBytes,
-      userId: row.userId,
-    });
-  }
-  await persistAttachmentExtractedText(attachmentId, text);
-
-  const [note] = await getDb()
-    .select()
-    .from(notes)
-    .where(eq(notes.id, row.noteId))
-    .limit(1);
-  if (note) {
-    const attachmentText = await attachmentSearchTextForNotes([row.noteId]);
-    warmEntityEmbedding(row.userId, {
-      entityType: "note",
-      entityId: row.noteId,
-      text: noteRetrievalText({
-        ...note,
-        attachmentText: attachmentText.get(row.noteId) ?? "",
+    },
+    extract: () =>
+      extractTextFromAttachmentFile({
+        absPath,
+        mimeType: row.mimeType,
+        fileName: row.fileName,
+        sizeBytes: row.sizeBytes,
       }),
-    });
-  }
-  return text;
+  });
+  await persistAttachmentExtractedText(attachmentId, result.text);
+  return result.text ?? "";
 }
 
-/**
- * Deterministic job id for an attachment's OCR.
- * Job ids are the queue's only dedupe key, so this is what prevents the same
- * image from being charged more than once.
- */
-export const OCR_JOB_PREFIX = "ocr-";
+/** Deterministic upload-time extraction job id. */
+export const ATTACHMENT_TEXT_JOB_PREFIX = "attachment-text-";
 
-export function ocrJobId(attachmentId: string): string {
-  return `${OCR_JOB_PREFIX}${attachmentId}`.slice(0, 64);
+export function attachmentTextJobId(attachmentId: string): string {
+  return `${ATTACHMENT_TEXT_JOB_PREFIX}${attachmentId}`.slice(0, 64);
 }
 
-/** Queue extraction without blocking import/upload responses (durable Postgres jobs). */
-export function queueAttachmentTextExtraction(
-  attachmentIds: string[],
-  userIdHint?: string,
-): void {
+/** Queue one local extraction when an attachment is saved. */
+export function queueAttachmentTextExtraction(attachmentIds: string[], userIdHint?: string): void {
   if (attachmentIds.length === 0) return;
   void (async () => {
     const { enqueueJob, JOB_TYPE_ATTACHMENT_EXTRACT } = await import("./job-queue");
@@ -324,21 +288,18 @@ export function queueAttachmentTextExtraction(
         }
         if (!userId) continue;
 
-        await enqueueJob({
-          // Stable per attachment. OCR is billed per call, and the 15s backfill
-          // re-selects rows that are still unprocessed, so a random id here let
-          // the same image be sent to the vision model over and over.
-          id: ocrJobId(attachmentId),
+        const job = await enqueueJob({
+          id: attachmentTextJobId(attachmentId),
           userId,
           type: JOB_TYPE_ATTACHMENT_EXTRACT,
           payload: { attachmentId },
           maxAttempts: 3,
         });
+        nudgeJobWorker(job.id);
       } catch (err) {
         logger.warn({ err, attachmentId }, "Failed to enqueue attachment extraction");
       }
     }
-    nudgeJobWorker();
   })();
 }
 
@@ -374,62 +335,4 @@ export async function attachmentSearchTextForNotes(
   }
 
   return out;
-}
-
-/** Enqueue pending OCR jobs (does not run extraction inline). */
-export async function processPendingAttachmentExtractions(
-  limit = BACKFILL_BATCH,
-): Promise<number> {
-  if (backfillRunning) return 0;
-  backfillRunning = true;
-  try {
-    // Skip attachments that already have an OCR job of any status. Without this
-    // the tick would keep re-selecting the same rows (the stable job id makes
-    // re-enqueue a no-op) and never reach the rest of the backlog.
-    const result = await getDb().execute(sql`
-      SELECT a.id, a.user_id AS "userId"
-      FROM note_attachments a
-      WHERE a.extracted_at IS NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM jobs j WHERE j.id = ${OCR_JOB_PREFIX} || a.id
-        )
-      LIMIT ${limit}
-    `);
-    type PendingRow = { id: string; userId: string };
-    const raw = result as unknown as { rows?: PendingRow[] } | PendingRow[];
-    const rows = Array.isArray(raw) ? raw : (raw.rows ?? []);
-
-    if (rows.length === 0) return 0;
-
-    const byUser = new Map<string, string[]>();
-    for (const row of rows) {
-      const list = byUser.get(row.userId) ?? [];
-      list.push(row.id);
-      byUser.set(row.userId, list);
-    }
-    for (const [userId, ids] of byUser) {
-      queueAttachmentTextExtraction(ids, userId);
-    }
-    if (rows.length > 0) {
-      logger.info({ enqueued: rows.length }, "Attachment text backfill enqueued");
-    }
-    return rows.length;
-  } catch (err) {
-    logger.warn({ err }, "Attachment text backfill tick failed");
-    return 0;
-  } finally {
-    backfillRunning = false;
-  }
-}
-
-export function startAttachmentTextBackfill(): void {
-  if (backfillTimer) return;
-  setTimeout(() => {
-    void processPendingAttachmentExtractions();
-  }, BACKFILL_INITIAL_DELAY_MS);
-  backfillTimer = setInterval(() => {
-    void processPendingAttachmentExtractions();
-  }, BACKFILL_TICK_MS);
-  backfillTimer.unref?.();
-  logger.info("Attachment text extraction backfill started");
 }

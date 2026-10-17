@@ -17,6 +17,7 @@ import { logger } from "../lib/logger";
 /** Product areas that spend money. Keep stable; used for reporting. */
 export type AiFeature =
   | "attachment_ocr"
+  | "attachment_ocr_ai"
   | "digest"
   | "deadline_extract"
   | "waiting_extract"
@@ -199,9 +200,58 @@ export function dailyBudgetUsdPerUser(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : 0;
 }
 
+/** Explicit attachment vision OCR calls allowed per user and UTC day. */
+export function attachmentOcrAiDailyLimit(): number {
+  const raw = Number(process.env.RECALL_ATTACHMENT_OCR_AI_DAILY_LIMIT ?? "20");
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 20;
+}
+
+export async function attachmentOcrAiCallsToday(
+  userId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  const rows = await getDb()
+    .select({ calls: sql<string>`COUNT(*)` })
+    .from(aiUsage)
+    .where(
+      and(
+        eq(aiUsage.userId, userId),
+        eq(aiUsage.feature, "attachment_ocr_ai"),
+        gte(aiUsage.createdAt, startOfTodayUtc(now)),
+      ),
+    );
+  return Number(rows[0]?.calls ?? 0);
+}
+
+export type AttachmentOcrAiAllowance =
+  | { allowed: true; remaining: number }
+  | { allowed: false; reason: "disabled" | "daily_limit" | "unavailable" };
+
+/** Fail closed: paid OCR is off by default and a quota read failure blocks calls. */
+export async function allowAttachmentOcrAi(
+  userId: string,
+): Promise<AttachmentOcrAiAllowance> {
+  if (!isEnabled("RECALL_ATTACHMENT_OCR_ENABLED", false)) {
+    return { allowed: false, reason: "disabled" };
+  }
+  const limit = attachmentOcrAiDailyLimit();
+  if (limit <= 0) return { allowed: false, reason: "daily_limit" };
+  try {
+    const calls = await attachmentOcrAiCallsToday(userId);
+    if (calls >= limit) return { allowed: false, reason: "daily_limit" };
+    return { allowed: true, remaining: limit - calls };
+  } catch (err) {
+    logger.warn({ err, userId }, "Failed to enforce attachment AI OCR daily limit");
+    return { allowed: false, reason: "unavailable" };
+  }
+}
+
 function featureEnabled(feature: AiFeature): boolean {
   if (!isEnabled("RECALL_BACKGROUND_AI_ENABLED")) return false;
-  if (feature === "attachment_ocr" && !isEnabled("RECALL_ATTACHMENT_OCR_ENABLED")) {
+  if (
+    feature === "attachment_ocr" &&
+    !isEnabled("RECALL_ATTACHMENT_OCR_ENABLED", false)
+  ) {
     return false;
   }
   if (feature === "digest" && !isEnabled("RECALL_AI_DIGESTS_ENABLED")) return false;

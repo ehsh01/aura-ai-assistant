@@ -60,6 +60,9 @@ ssh root@159.223.130.69
 git clone https://github.com/ehsh01/aura-ai-assistant.git /var/www/recall-app
 cd /var/www/recall-app
 
+apt-get update
+apt-get install -y tesseract-ocr
+
 cp artifacts/api-server/.env.example artifacts/api-server/.env
 # Edit .env — at minimum PORT/API_PORT=5008; add DATABASE_URL when schema exists
 
@@ -101,6 +104,8 @@ certbot --nginx -d recall-app.net -d www.recall-app.net
 ssh root@159.223.130.69
 cd /var/www/recall-app
 git pull
+apt-get update
+apt-get install -y tesseract-ocr
 pnpm install
 pnpm run build:prod
 pm2 restart recall-api --update-env
@@ -164,7 +169,16 @@ SECRETS_ENCRYPTION_KEY=$(openssl rand -hex 32)
 # planning and falls back to OPENAI_MODEL when unset.
 OPENAI_MODEL=gpt-4.1-mini
 OPENAI_PLANNER_MODEL=gpt-4.1-nano
+
+# Paid vision OCR is only available from each attachment's explicit UI button.
+# It is off by default and capped per user per UTC day.
+RECALL_ATTACHMENT_OCR_ENABLED=false
+RECALL_ATTACHMENT_OCR_AI_DAILY_LIMIT=20
 ```
+
+Image uploads use the system `tesseract` CLI locally (one subprocess at a time,
+30-second default timeout). PDFs continue to use `pdf-parse`. If Tesseract is
+missing, image uploads still succeed and extracted text remains empty.
 
 Ask answers stream over Server-Sent Events (`POST /api/ai/query/stream`); the
 client falls back to the buffered `POST /api/ai/query` automatically. After

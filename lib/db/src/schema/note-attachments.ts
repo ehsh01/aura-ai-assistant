@@ -20,6 +20,8 @@ export const noteAttachments = pgTable("note_attachments", {
   extractedAt: timestamp("extracted_at", { withTimezone: true }),
   /** SHA-256 of file bytes; reused so identical images are not OCR'd twice. */
   contentHash: varchar("content_hash", { length: 64 }),
+  /** Set only after the explicit, user-triggered OpenAI vision path is processed. */
+  aiOcrAt: timestamp("ai_ocr_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

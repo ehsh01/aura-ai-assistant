@@ -13,8 +13,10 @@ vi.mock("../lib/db", () => ({
 }));
 
 import {
+  allowAttachmentOcrAi,
   allowBackgroundAi,
   allowUserAi,
+  attachmentOcrAiDailyLimit,
   costMicrosFor,
   currentAiFeature,
   dailyBudgetUsdPerUser,
@@ -91,6 +93,7 @@ const ENV_KEYS = [
   "AI_DAILY_BUDGET_USD_PER_USER",
   "RECALL_BACKGROUND_AI_ENABLED",
   "RECALL_ATTACHMENT_OCR_ENABLED",
+  "RECALL_ATTACHMENT_OCR_AI_DAILY_LIMIT",
   "RECALL_AI_DIGESTS_ENABLED",
   "RECALL_EMAIL_AI_SCAN_ENABLED",
 ] as const;
@@ -190,16 +193,18 @@ describe("recordAiUsage", () => {
 
 describe("background budget guard", () => {
   it("allows background work when no budget is configured", async () => {
-    await expect(allowBackgroundAi("attachment_ocr")).resolves.toBe(true);
+    await expect(allowBackgroundAi("digest")).resolves.toBe(true);
   });
 
   it("allows background work while spend is under the cap", async () => {
+    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
     process.env.AI_DAILY_BUDGET_USD = "5";
     stubSpend(2_000_000); // $2.00
     await expect(allowBackgroundAi("attachment_ocr")).resolves.toBe(true);
   });
 
   it("blocks background work once spend reaches the cap", async () => {
+    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
     process.env.AI_DAILY_BUDGET_USD = "5";
     stubSpend(5_000_000); // $5.00
     await expect(allowBackgroundAi("attachment_ocr")).resolves.toBe(false);
@@ -225,6 +230,7 @@ describe("background budget guard", () => {
   });
 
   it("honours the email-scan kill switch for both scan types", async () => {
+    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
     process.env.RECALL_EMAIL_AI_SCAN_ENABLED = "false";
     await expect(allowBackgroundAi("deadline_extract")).resolves.toBe(false);
     await expect(allowBackgroundAi("waiting_extract")).resolves.toBe(false);
@@ -232,6 +238,7 @@ describe("background budget guard", () => {
   });
 
   it("caches the spend query so a tight loop cannot hammer the database", async () => {
+    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
     process.env.AI_DAILY_BUDGET_USD = "5";
     stubSpend(1_000_000);
     await allowBackgroundAi("attachment_ocr");
@@ -269,6 +276,35 @@ describe("per-user Ask budget guard", () => {
     stubSpend(10_000_000);
     await expect(allowUserAi("transcribe", "u1")).resolves.toBe(true);
     expect(mocks.select).not.toHaveBeenCalled();
+  });
+});
+
+describe("explicit attachment AI OCR guard", () => {
+  it("defaults the daily limit to 20", () => {
+    expect(attachmentOcrAiDailyLimit()).toBe(20);
+  });
+
+  it("defaults the AI OCR kill switch to off", async () => {
+    await expect(allowAttachmentOcrAi("u1")).resolves.toEqual({
+      allowed: false,
+      reason: "disabled",
+    });
+    expect(mocks.select).not.toHaveBeenCalled();
+  });
+
+  it("enforces the per-user daily call cap", async () => {
+    process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
+    process.env.RECALL_ATTACHMENT_OCR_AI_DAILY_LIMIT = "2";
+    mocks.select.mockReturnValue({
+      from: () => ({
+        where: () => Promise.resolve([{ calls: "2" }]),
+      }),
+    });
+
+    await expect(allowAttachmentOcrAi("u1")).resolves.toEqual({
+      allowed: false,
+      reason: "daily_limit",
+    });
   });
 });
 

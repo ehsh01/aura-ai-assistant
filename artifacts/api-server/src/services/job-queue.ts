@@ -54,9 +54,7 @@ export function mapJobRow(row: RawJobRow): Job {
     userId: String(row.user_id ?? row.userId),
     type: String(row.type),
     payload:
-      payload && typeof payload === "object" && !Array.isArray(payload)
-        ? (payload as Record<string, unknown>)
-        : {},
+      payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {},
     status: String(row.status),
     attempts: Number(row.attempts ?? 0),
     maxAttempts: Number(row.max_attempts ?? row.maxAttempts ?? DEFAULT_MAX_ATTEMPTS),
@@ -112,6 +110,18 @@ export async function getJobForUser(userId: string, jobId: string): Promise<Job 
  * Returns null when the queue is empty.
  */
 export async function claimNextJob(workerId: string): Promise<Job | null> {
+  return claimNextJobOfTypes(workerId);
+}
+
+/** Polling workers may be restricted to job types that cannot invoke paid AI. */
+export async function claimNextJobOfTypes(workerId: string, allowedTypes?: readonly string[]): Promise<Job | null> {
+  const typeFilter =
+    allowedTypes && allowedTypes.length > 0
+      ? sql`AND type IN (${sql.join(
+          allowedTypes.map((type) => sql`${type}`),
+          sql`, `,
+        )})`
+      : sql``;
   const result = await getDb().execute(sql`
     UPDATE jobs
     SET
@@ -126,6 +136,7 @@ export async function claimNextJob(workerId: string): Promise<Job | null> {
       FROM jobs
       WHERE status = 'queued'
         AND available_at <= now()
+        ${typeFilter}
       ORDER BY available_at ASC, created_at ASC
       FOR UPDATE SKIP LOCKED
       LIMIT 1
@@ -133,9 +144,28 @@ export async function claimNextJob(workerId: string): Promise<Job | null> {
     RETURNING *
   `);
 
-  const rawRows =
-    (result as { rows?: RawJobRow[] }).rows ??
-    (Array.isArray(result) ? (result as RawJobRow[]) : []);
+  const rawRows = (result as { rows?: RawJobRow[] }).rows ?? (Array.isArray(result) ? (result as RawJobRow[]) : []);
+  const row = rawRows[0];
+  return row ? mapJobRow(row) : null;
+}
+
+/** Claim one freshly enqueued job from its user/save action, never from a sweep. */
+export async function claimJobById(workerId: string, jobId: string): Promise<Job | null> {
+  const result = await getDb().execute(sql`
+    UPDATE jobs
+    SET
+      status = 'processing',
+      locked_at = now(),
+      locked_by = ${workerId},
+      started_at = COALESCE(started_at, now()),
+      attempts = attempts + 1,
+      updated_at = now()
+    WHERE id = ${jobId}
+      AND status = 'queued'
+      AND available_at <= now()
+    RETURNING *
+  `);
+  const rawRows = (result as { rows?: RawJobRow[] }).rows ?? (Array.isArray(result) ? (result as RawJobRow[]) : []);
   const row = rawRows[0];
   return row ? mapJobRow(row) : null;
 }
@@ -198,9 +228,7 @@ export async function failJob(jobId: string, error: string): Promise<boolean> {
 }
 
 /** Re-queue processing jobs abandoned after a crash / deploy. */
-export async function recoverStaleProcessingJobs(
-  olderThanMs: number = STALE_PROCESSING_MS,
-): Promise<number> {
+export async function recoverStaleProcessingJobs(olderThanMs: number = STALE_PROCESSING_MS): Promise<number> {
   const cutoff = new Date(Date.now() - olderThanMs);
   const result = await getDb()
     .update(jobs)
@@ -227,9 +255,7 @@ export function attachmentIdFromPayload(payload: Record<string, unknown>): strin
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-export function enexImportFromPayload(
-  payload: Record<string, unknown>,
-): { filePath: string; fileName: string } | null {
+export function enexImportFromPayload(payload: Record<string, unknown>): { filePath: string; fileName: string } | null {
   const filePath = payload.filePath;
   const fileName = payload.fileName;
   if (typeof filePath !== "string" || !filePath) return null;

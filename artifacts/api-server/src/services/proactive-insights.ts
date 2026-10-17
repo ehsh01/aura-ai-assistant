@@ -42,11 +42,11 @@ const DATE_TOKEN_RE =
 /** Pure: find payees that appear often enough to look like recurring charges. */
 export function findRecurringPayees(
   transactions: { payee: string; date: string; amount: number }[],
-  opts?: { minCount?: number; lookbackDays?: number },
+  opts?: { minCount?: number; lookbackDays?: number; now?: Date },
 ): { payee: string; count: number; total: number }[] {
   const minCount = opts?.minCount ?? 3;
   const lookbackDays = opts?.lookbackDays ?? 90;
-  const cutoff = new Date();
+  const cutoff = new Date(opts?.now ?? new Date());
   cutoff.setHours(0, 0, 0, 0);
   cutoff.setDate(cutoff.getDate() - lookbackDays);
   const cutoffIso = cutoff.toISOString().slice(0, 10);

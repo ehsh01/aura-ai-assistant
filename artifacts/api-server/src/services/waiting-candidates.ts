@@ -237,13 +237,13 @@ export async function scheduleNoteWaitingScan(
   try {
     const { enqueueJob, JOB_TYPE_WAITING_SCAN } = await import("./job-queue");
     const { nudgeJobWorker } = await import("./job-worker");
-    await enqueueJob({
+    const job = await enqueueJob({
       userId,
       type: JOB_TYPE_WAITING_SCAN,
       payload: { noteId },
       id: `wait-note-${noteId}-${Date.now()}`,
     });
-    nudgeJobWorker();
+    nudgeJobWorker(job.id);
   } catch (err) {
     logger.warn({ err, noteId }, "Failed to schedule note waiting scan");
   }

@@ -82,7 +82,7 @@ export async function enqueueDigestRegen(input: {
   entityType: "note" | "memory" | "capture" | "document" | "source_record";
   entityId: string;
 }): Promise<void> {
-  await enqueueJob({
+  const job = await enqueueJob({
     userId: input.userId,
     type: JOB_TYPE_DIGEST_REGEN,
     payload: {
@@ -91,6 +91,8 @@ export async function enqueueDigestRegen(input: {
     },
     maxAttempts: 2,
   });
+  const { nudgeJobWorker } = await import("./job-worker");
+  nudgeJobWorker(job.id);
 }
 
 export function scheduleDigestRegen(input: {

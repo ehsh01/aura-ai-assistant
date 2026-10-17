@@ -1535,20 +1535,21 @@ export async function syncConnectorForUser(
           const { enqueueJob, JOB_TYPE_ATTENTION_SCAN, JOB_TYPE_WAITING_SCAN } =
             await import("./job-queue");
           const { nudgeJobWorker } = await import("./job-worker");
-          await enqueueJob({
+          const attentionJob = await enqueueJob({
             userId,
             type: JOB_TYPE_ATTENTION_SCAN,
             payload: { connectorId },
             id: `attn-scan-${userId}-${connectorId}-${Math.floor(Date.now() / 300_000)}`,
           });
           // Extract waiting-on commitments + classify replies in the same pass.
-          await enqueueJob({
+          const waitingJob = await enqueueJob({
             userId,
             type: JOB_TYPE_WAITING_SCAN,
             payload: { connectorId },
             id: `wait-scan-${userId}-${connectorId}-${Math.floor(Date.now() / 300_000)}`,
           });
-          nudgeJobWorker();
+          nudgeJobWorker(attentionJob.id);
+          nudgeJobWorker(waitingJob.id);
         } catch {
           /* non-fatal */
         }
