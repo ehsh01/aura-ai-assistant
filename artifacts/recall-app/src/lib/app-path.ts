@@ -14,6 +14,7 @@ export const APP_PATHS = [
   "/connectors",
   "/settings",
   "/projects",
+  "/waiting",
   "/tasks",
   "/canvas",
   "/vehicles",
@@ -25,7 +26,13 @@ export const APP_PATHS = [
 ] as const;
 
 /** Detail routes with dynamic segments, allowed alongside APP_PATHS. */
-const APP_PATH_PREFIXES = ["/projects/", "/waiting/", "/today/", "/everything/"] as const;
+const APP_PATH_PREFIXES = [
+  "/projects/",
+  "/waiting/",
+  "/today/",
+  "/everything/",
+  "/people/",
+] as const;
 
 export type AppPath = (typeof APP_PATHS)[number];
 

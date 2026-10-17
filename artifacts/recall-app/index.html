@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover" />
     <title>Recall — AI Personal Assistant</title>
-    <meta name="theme-color" content="#060610" />
+    <meta name="theme-color" content="#05070a" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -33,6 +33,7 @@
         var KNOWN = [
           "/",
           "/today",
+          "/everything",
           "/ask",
           "/notes",
           "/notebooks",
@@ -41,9 +42,14 @@
           "/knowledge",
           "/memory",
           "/people",
+          "/vehicles",
+          "/organizations",
           "/activity",
           "/connectors",
+          "/settings",
           "/projects",
+          "/waiting",
+          "/deadlines",
           "/tasks",
           "/canvas",
           "/privacy",
@@ -54,7 +60,11 @@
         if (path.endsWith("/index.html")) {
           path = path.slice(0, -"/index.html".length) || "/";
         }
-        if (KNOWN.indexOf(path) === -1 && !path.startsWith("/projects/")) {
+        var PREFIXES = ["/projects/", "/waiting/", "/today/", "/everything/", "/people/"];
+        if (
+          KNOWN.indexOf(path) === -1 &&
+          !PREFIXES.some(function (prefix) { return path.startsWith(prefix); })
+        ) {
           path = "/";
         }
         var next = path + location.search + location.hash;
