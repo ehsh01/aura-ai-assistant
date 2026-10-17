@@ -29,7 +29,7 @@ function envNumber(name: string, fallback: number, min: number, max: number): nu
 }
 
 export function watchdogDbConnectionLimit(): number {
-  return envNumber("EVERNOTE_WATCHDOG_DB_CONNECTIONS", 22, 1, 1_000);
+  return envNumber("EVERNOTE_WATCHDOG_DB_CONNECTIONS", 15, 1, 1_000);
 }
 
 export function watchdogMinMemoryMb(): number {
@@ -64,7 +64,10 @@ export function requiredMemoryMbForBytes(sizeBytes: number): number {
 async function defaultDbConnections(): Promise<number | null> {
   try {
     const result = await getDb().execute(
-      sql`SELECT cast(count(*) as int) AS count FROM pg_stat_activity`,
+      sql`SELECT cast(count(*) as int) AS count
+          FROM pg_stat_activity
+          WHERE backend_type = 'client backend'
+            AND datname = current_database()`,
     );
     const rows =
       (result as { rows?: Array<Record<string, unknown>> }).rows ??
@@ -134,7 +137,7 @@ export async function checkEvernoteImportWatchdog(deps?: {
   );
   if (dbConnections != null && dbConnections >= watchdogDbConnectionLimit()) {
     reasons.push(
-      `database connections ${dbConnections} >= ${watchdogDbConnectionLimit()}`,
+      `recall DB client connections ${dbConnections} >= ${watchdogDbConnectionLimit()}`,
     );
   }
   if (availableMemoryMb == null && deps?.requireMemoryMeasurement) {
