@@ -1973,6 +1973,42 @@ export async function retrieveRelevantRecords(
     }
   }
 
+  // Apply title-complete note promotion last so later Gmail/person injections
+  // cannot displace an explicitly named multi-word note.
+  const titleTerms = freeRetrievalTerms(noteQuery);
+  if (titleTerms.length > 0 && noteSearchHits.length > 0) {
+    const titleMatches = noteSearchHits
+      .map((record) => ({
+        record,
+        relevance: freeTextRelevance(
+          noteQuery,
+          record.title,
+          record.text,
+        ),
+      }))
+      .filter(
+        ({ relevance }) =>
+          relevance.titleMatches === titleTerms.length,
+      )
+      .map(({ record, relevance }) =>
+        toRetrieved(record, relevance.score, "keyword"),
+      );
+    if (titleMatches.length > 0) {
+      const titleKeys = new Set(
+        titleMatches.map(
+          (record) => `${record.entityType}:${record.entityId}`,
+        ),
+      );
+      top = [
+        ...titleMatches,
+        ...top.filter(
+          (record) =>
+            !titleKeys.has(`${record.entityType}:${record.entityId}`),
+        ),
+      ].slice(0, Math.max(limit, Math.min(16, titleMatches.length + 6)));
+    }
+  }
+
   // If semantic threshold filtered everything, fall back to keyword hits.
   if (top.length === 0 && keywordHits.length > 0) {
     return {

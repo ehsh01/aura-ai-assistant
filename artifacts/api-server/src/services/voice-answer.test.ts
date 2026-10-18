@@ -89,11 +89,49 @@ const PSYCHIATRY_REAL_LINK_RECORD = {
   score: 7.8,
 } as const;
 
+const PSYCHIATRY_VYNCS_DECOY = {
+  ...NOTE_RECORD,
+  entityId: "note-en-23lzct",
+  title:
+    "Amazon.com: Vyncs No Monthly Fee Connected Car OBD Link, 3G Car GPS Tracker",
+  text: "https://www.amazon.com/vyncs-obd-tracker",
+  score: 7.7,
+} as const;
+
+const PSYCHIATRY_PAP_DECOY = {
+  ...NOTE_RECORD,
+  entityId: "abnormal-pap-test",
+  title: "Abnormal pap test",
+  text: "Reference: https://womenshealth.gov/a-z-topics/pap-hpv-tests",
+  score: 7.6,
+} as const;
+
+const PSYCHIATRY_RECEIPT_DECOY = {
+  ...NOTE_RECORD,
+  entityId: "build-receipt",
+  title: "Your Build.com receipt",
+  text: "https://www.build.com/checkout/order?id=123",
+  recordType: "gmail_message",
+  score: 7.5,
+} as const;
+
+const PSYCHIATRY_CLOUD_APP_RECORD = {
+  ...NOTE_RECORD,
+  entityId: "psychiatry-cloud-app",
+  title: "Psychiatry Inventory App",
+  text: "https://cloud.digitalocean.com/spaces/psychiatry-inventory?i=abc",
+  score: 7.2,
+} as const;
+
 const PSYCHIATRY_CASE_RECORDS = [
   PSYCHIATRY_HOW_TO_RECORD,
   PSYCHIATRY_BEST_BUY_EMAIL,
   PSYCHIATRY_BUSINESS_CARD_RECORD,
+  PSYCHIATRY_VYNCS_DECOY,
+  PSYCHIATRY_PAP_DECOY,
+  PSYCHIATRY_RECEIPT_DECOY,
   PSYCHIATRY_REAL_LINK_RECORD,
+  PSYCHIATRY_CLOUD_APP_RECORD,
 ] as const;
 
 const UM_MARKETPLACE_RECORDS = [
@@ -101,7 +139,7 @@ const UM_MARKETPLACE_RECORDS = [
     ...NOTE_RECORD,
     entityId: "note-en-3mujtl",
     title: "UM Marketplace link",
-    text: "https://secure.touchnet.net/central",
+    text: "https://nam10.safelinks.protection.outlook.com/?url=https%3A%2F%2Fsecure.touchnet.net%2Fcentral&data=abc",
     score: 9,
   },
   {
@@ -117,7 +155,7 @@ const HALOGEN_RECORD = {
   ...NOTE_RECORD,
   entityId: "note-en-vmfbij",
   title: "Halogen Portals",
-  text: "From: Riveron, Christopher [mailto:c.riveron@med.miami.edu]. Portal: halogen.med.miami.edu",
+  text: "From: Riveron, Christopher [mailto:c.riveron@med.miami.edu]. Portal: eappraisal.miami.edu",
   score: 9,
 } as const;
 
@@ -136,6 +174,24 @@ const PSYCHIATRY_INVENTORY_RECORD = {
   text: "The note describes the inventory app workflow and access details.",
   score: 9,
 } as const;
+
+const KENNY_RECORDS = [
+  {
+    ...NOTE_RECORD,
+    entityId: "build-receipt-kenny",
+    title: "Your Build.com receipt",
+    text: "Checkout: https://www.build.com/checkout/order?id=456",
+    recordType: "gmail_message",
+    score: 9,
+  },
+  {
+    ...NOTE_RECORD,
+    entityId: "kenny-company",
+    title: "Kenny&apos;s company and website",
+    text: "http://smartersoftware.io/",
+    score: 8,
+  },
+] as const;
 
 beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "test-key");
@@ -265,31 +321,34 @@ describe("spoken grounded answers", () => {
     expect(voice.sources).toEqual([]);
   });
 
-  it("skips placeholder, tracking, and map links for the real Psychiatry bare domain", async () => {
-    mocks.retrieve.mockResolvedValue({
-      records: PSYCHIATRY_CASE_RECORDS,
-      usedSemantic: false,
-      namedPeople: [],
-      tasks: [],
-    });
-    const result = await queryVoiceNotesForUser(
-      "u1",
-      "[AppSmith test] what is the Psychiatry website link?",
-      null,
-    );
-    expect(result.answer).toContain("https://psychiatry.med.miami.edu");
-    expect(result.answer).not.toContain("the-actual-link-here");
-    expect(result.answer).not.toContain("policyemail");
-    expect(result.answer).not.toContain("maps.google.com");
-    expect(result.answer).toContain(
-      "Adding and editing a web link on the Psychiatry website",
-    );
-    expect(result.sources.map((source) => source.title)).toEqual([
-      "Turn an image into a link",
-      "Adding and editing a web link on the Psychiatry website",
-    ]);
-    expect(mocks.completion).not.toHaveBeenCalled();
-  });
+  it.each([
+    "what is the Psychiatry website link?",
+    "[AppSmith test] what is the Psychiatry website link?",
+  ])(
+    "selects the Psychiatry hostname over decoys for %s",
+    async (question) => {
+      mocks.retrieve.mockResolvedValue({
+        records: PSYCHIATRY_CASE_RECORDS,
+        usedSemantic: false,
+        namedPeople: [],
+        tasks: [],
+      });
+      const result = await queryVoiceNotesForUser("u1", question, null);
+      expect(result.answer).toContain("https://psychiatry.med.miami.edu");
+      expect(result.answer).not.toContain("the-actual-link-here");
+      expect(result.answer).not.toContain("policyemail");
+      expect(result.answer).not.toContain("maps.google.com");
+      expect(result.answer).not.toContain("cloud.digitalocean.com");
+      expect(result.answer).toContain(
+        "Adding and editing a web link on the Psychiatry website",
+      );
+      expect(result.sources.map((source) => source.title)).toEqual([
+        "Turn an image into a link",
+        "Adding and editing a web link on the Psychiatry website",
+      ]);
+      expect(mocks.completion).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["AI off", "daily cap exhausted"])(
     "returns the deterministic Psychiatry link with 0 LLM calls when %s",
@@ -402,14 +461,40 @@ describe("spoken grounded answers", () => {
       null,
     );
 
-    expect(result.answer).toContain("https://halogen.med.miami.edu");
+    expect(result.answer).toContain("https://eappraisal.miami.edu");
     expect(result.answer).not.toContain("https://c.riveron");
+    expect(mocks.completion).not.toHaveBeenCalled();
+  });
+
+  it("prefers Kenny's company note over a checkout receipt", async () => {
+    mocks.retrieve.mockResolvedValue({
+      records: KENNY_RECORDS,
+      usedSemantic: false,
+      namedPeople: [],
+      tasks: [],
+    });
+
+    const result = await queryVoiceNotesForUser(
+      "u1",
+      "what is Kenny's company website link",
+      null,
+    );
+
+    expect(result.answer).toContain("http://smartersoftware.io/");
+    expect(result.answer).not.toContain("build.com");
+    expect(result.sources[0]?.title).toBe(
+      "Kenny&apos;s company and website",
+    );
     expect(mocks.completion).not.toHaveBeenCalled();
   });
 
   it("answers the Khaila school portal from a subject-matching bare domain", async () => {
     mocks.retrieve.mockResolvedValue({
-      records: [KHAILA_RECORD],
+      records: [
+        KHAILA_RECORD,
+        PSYCHIATRY_BEST_BUY_EMAIL,
+        PSYCHIATRY_RECEIPT_DECOY,
+      ],
       usedSemantic: false,
       namedPeople: [],
       tasks: [],
@@ -428,7 +513,12 @@ describe("spoken grounded answers", () => {
 
   it("treats the exact multi-word Psychiatry Inventory App title as relevant", async () => {
     mocks.retrieve.mockResolvedValue({
-      records: [PSYCHIATRY_INVENTORY_RECORD, NOTE_RECORD],
+      records: [
+        PSYCHIATRY_INVENTORY_RECORD,
+        PSYCHIATRY_BEST_BUY_EMAIL,
+        PSYCHIATRY_RECEIPT_DECOY,
+        NOTE_RECORD,
+      ],
       usedSemantic: false,
       namedPeople: [],
       tasks: [],

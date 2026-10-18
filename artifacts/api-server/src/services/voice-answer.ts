@@ -16,6 +16,7 @@ import {
   extractRealHttpUrls,
   isPlaceholderUrl,
   isTrackingOrUtilityUrl,
+  urlSelectionPenalty,
 } from "./url-quality";
 import { withAiFeature } from "./ai-usage";
 import { writeAuditLog } from "./audit";
@@ -209,6 +210,7 @@ function findVoiceLinkEvidence(
   const allowMaps = /\b(?:directions?|location|map|address|where)\b/i.test(
     question,
   );
+  const websiteAsk = /\bwebsite\b/i.test(question);
   const howToContext: LoadedCandidate[] = [];
   const scored: Array<{
     candidate: LoadedCandidate;
@@ -249,7 +251,9 @@ function findVoiceLinkEvidence(
       } catch {
         // Keep the encoded path for relevance matching.
       }
-      const urlTokens = wordTokens(`${parsed.hostname} ${decodedPath}`);
+      const hostTokens = wordTokens(parsed.hostname);
+      const pathTokens = wordTokens(decodedPath);
+      const queryTokens = wordTokens(parsed.search);
       const titleTokens = wordTokens(candidate.source.title);
       const nearText = candidate.record.text
         .slice(
@@ -260,7 +264,9 @@ function findVoiceLinkEvidence(
           ),
         )
         .toLowerCase();
-      const urlMatches = countWholeTermMatches(subjectTerms, urlTokens);
+      const hostMatches = countWholeTermMatches(subjectTerms, hostTokens);
+      const pathMatches = countWholeTermMatches(subjectTerms, pathTokens);
+      const queryMatches = countWholeTermMatches(subjectTerms, queryTokens);
       const titleMatches = countWholeTermMatches(subjectTerms, titleTokens);
       const nearMatches = countWholeTermMatches(
         subjectTerms,
@@ -268,7 +274,12 @@ function findVoiceLinkEvidence(
       );
       if (
         subjectTerms.length > 0 &&
-        urlMatches + titleMatches + nearMatches === 0
+        hostMatches +
+          pathMatches +
+          queryMatches +
+          titleMatches +
+          nearMatches ===
+          0
       ) {
         continue;
       }
@@ -276,16 +287,24 @@ function findVoiceLinkEvidence(
         candidate.record.entityType === "note" ||
         candidate.record.recordType === "evernote_note";
       const isEmail = candidate.record.recordType === "gmail_message";
+      const receiptLike =
+        /\b(?:receipt|checkout|order|purchase|payment|invoice)\b/i.test(
+          `${candidate.source.title}\n${candidate.record.text.slice(0, 500)}`,
+        );
       scored.push({
         candidate,
         url: link.url,
         score:
-          urlMatches * 45 +
-          nearMatches * 60 +
-          titleMatches * 60 +
+          hostMatches * 120 +
+          titleMatches * 120 +
+          nearMatches * 120 +
+          pathMatches * 40 +
+          queryMatches * 15 +
           (candidates.length - candidateIndex) * 25 +
           (isNote ? 20 : 0) -
-          (isEmail ? 20 : 0),
+          (isEmail ? 20 : 0) -
+          (receiptLike ? 120 : 0) -
+          urlSelectionPenalty(link.url, { websiteAsk }),
         candidateIndex,
         linkIndex,
       });

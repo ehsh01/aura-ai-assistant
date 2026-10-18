@@ -54,6 +54,28 @@ export const URL_REJECTION_RULES = {
     "/optout",
   ],
   mapHosts: ["maps.google.com", "maps.app.goo.gl", "goo.gl"],
+  redirectHosts: [
+    "safelinks.protection.outlook.com",
+    "www.google.com",
+    "google.com",
+    "l.facebook.com",
+    "lm.facebook.com",
+  ],
+  consoleHosts: [
+    "cloud.digitalocean.com",
+    "console.aws.amazon.com",
+    "console.cloud.google.com",
+    "portal.azure.com",
+  ],
+  consolePathTerms: ["console", "dashboard", "admin", "spaces"],
+  commercePathTerms: [
+    "checkout",
+    "receipt",
+    "cart",
+    "order",
+    "payment",
+    "purchase",
+  ],
   allowedTlds: [
     "com",
     "org",
@@ -122,6 +144,45 @@ export type ExtractedLink = {
   index: number;
 };
 
+export function unwrapRedirectUrl(value: string): string {
+  let current = value;
+  for (let depth = 0; depth < 3; depth += 1) {
+    let wrapper: URL;
+    try {
+      wrapper = new URL(current);
+    } catch {
+      return current;
+    }
+    const host = wrapper.hostname.toLowerCase();
+    const isSafeLinks = host.endsWith(".safelinks.protection.outlook.com");
+    const isGoogleRedirect =
+      (host === "google.com" || host === "www.google.com") &&
+      wrapper.pathname === "/url";
+    const isFacebookRedirect =
+      (host === "l.facebook.com" || host === "lm.facebook.com") &&
+      wrapper.pathname === "/l.php";
+    const isKnownWrapper =
+      isSafeLinks ||
+      isGoogleRedirect ||
+      isFacebookRedirect ||
+      URL_REJECTION_RULES.redirectHosts.includes(
+        host as (typeof URL_REJECTION_RULES.redirectHosts)[number],
+      );
+    if (!isKnownWrapper) return current;
+    const target =
+      (isGoogleRedirect
+        ? wrapper.searchParams.get("q")
+        : isFacebookRedirect
+          ? wrapper.searchParams.get("u")
+          : wrapper.searchParams.get("url")) ??
+      wrapper.searchParams.get("target") ??
+      wrapper.searchParams.get("destination");
+    if (!target || !/^https?:\/\//i.test(target)) return current;
+    current = target;
+  }
+  return current;
+}
+
 function cleanLink(value: string): string {
   return value.replace(/[),.;!?]+$/, "");
 }
@@ -150,7 +211,7 @@ export function extractLinkCandidates(text: string): ExtractedLink[] {
   for (const match of text.matchAll(HTTP_URL_PATTERN)) {
     const raw = cleanLink(match[0]);
     const index = match.index ?? 0;
-    found.push({ raw, url: raw, index });
+    found.push({ raw, url: unwrapRedirectUrl(raw), index });
     occupied.push([index, index + match[0].length]);
   }
   for (const match of text.matchAll(BARE_DOMAIN_PATTERN)) {
@@ -259,6 +320,50 @@ export function isTrackingOrUtilityUrl(
     return true;
   }
   return false;
+}
+
+export function urlSelectionPenalty(
+  value: string,
+  options: { websiteAsk?: boolean } = {},
+): number {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return 500;
+  }
+  const host = url.hostname.toLowerCase();
+  const pathTokens = url.pathname
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  let penalty = 0;
+  const isConsoleHost = URL_REJECTION_RULES.consoleHosts.some(
+    (candidate) => host === candidate || host.endsWith(`.${candidate}`),
+  );
+  if (isConsoleHost) penalty += 180;
+  if (
+    pathTokens.some((token) =>
+      URL_REJECTION_RULES.consolePathTerms.includes(
+        token as (typeof URL_REJECTION_RULES.consolePathTerms)[number],
+      ),
+    )
+  ) {
+    penalty += 90;
+  }
+  if (
+    pathTokens.some((token) =>
+      URL_REJECTION_RULES.commercePathTerms.includes(
+        token as (typeof URL_REJECTION_RULES.commercePathTerms)[number],
+      ),
+    )
+  ) {
+    penalty += 140;
+  }
+  if (options.websiteAsk && url.searchParams.size >= 2) penalty += 70;
+  else if (options.websiteAsk && url.searchParams.size === 1 && isConsoleHost)
+    penalty += 30;
+  return penalty;
 }
 
 export function extractRealHttpUrls(text: string): string[] {
