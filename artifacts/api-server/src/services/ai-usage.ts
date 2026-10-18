@@ -447,10 +447,10 @@ export async function aiSpendAllowance(): Promise<AiSpendAllowance> {
   }
 
   try {
-    const [dailySpend, monthlySpend] = await Promise.all([
-      spendTodayUsd(),
-      spendCurrentMonthUsd(),
-    ]);
+    // A spend lock scopes getDb() to one pg client. Keep these reads ordered:
+    // node-postgres deprecates concurrent client.query calls on one client.
+    const dailySpend = await spendTodayUsd();
+    const monthlySpend = await spendCurrentMonthUsd();
     if (dailySpend >= dailyBudget) {
       logger.warn(
         { spend: dailySpend, budget: dailyBudget },
@@ -747,10 +747,9 @@ export async function voiceAiAllowance(
   if (limit <= 0) return { allowed: false, reason: "daily_limit" };
 
   try {
-    const [spendAllowance, usage] = await Promise.all([
-      aiSpendAllowance(),
-      dailyFeatureUsageForUser(userId, feature),
-    ]);
+    // withVoiceAiLock holds the same scoped pg client through this gate.
+    const spendAllowance = await aiSpendAllowance();
+    const usage = await dailyFeatureUsageForUser(userId, feature);
     if (!spendAllowance.allowed) return spendAllowance;
     if (!usage) return { allowed: false, reason: "unavailable" };
 
