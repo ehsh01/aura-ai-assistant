@@ -557,11 +557,25 @@ function parseToolResult(raw: JsonRecord, name: string): JsonRecord {
     const structuredError = asRecord(raw.structuredContent);
     const error = new Error(
       text ? text.slice(0, 300) : `Evernote MCP ${name} failed`,
-    ) as Error & { status?: number; retryAfterMs?: number };
+    ) as Error & {
+      status?: number;
+      retryAfterMs?: number;
+      evernoteMcpError: true;
+      evernoteToolName: string;
+      evernoteNotFound?: true;
+    };
+    error.evernoteMcpError = true;
+    error.evernoteToolName = name;
     const structuredStatus = asNumber(
       structuredError.status ?? structuredError.statusCode,
     );
     if (structuredStatus != null) error.status = structuredStatus;
+    if (
+      name === "get_note" &&
+      (structuredStatus === 404 || /\bnot found\b/i.test(error.message))
+    ) {
+      error.evernoteNotFound = true;
+    }
     if (
       structuredStatus === 429 ||
       /\b429\b|rate.?limit/i.test(error.message)
@@ -722,6 +736,26 @@ function isMcpTransientError(error: unknown): boolean {
     /\b429\b|rate.?limit|\b50[234]\b|backend read error|<!doctype html|<html/i.test(
       message,
     )
+  );
+}
+
+function isEvernoteNoteNotFoundError(error: unknown): boolean {
+  if (isMcpTransientError(error)) return false;
+  const row = asRecord(error);
+  const data = asRecord(row.data);
+  const status = asNumber(
+    row.status ?? row.statusCode ?? data.status ?? data.statusCode,
+  );
+  if (status === 429 || (status != null && status >= 500 && status < 600)) {
+    return false;
+  }
+  const message = error instanceof Error ? error.message : "";
+  return (
+    row.evernoteMcpError === true &&
+    row.evernoteToolName === "get_note" &&
+    (row.evernoteNotFound === true ||
+      status === 404 ||
+      /\bnot found\b/i.test(message))
   );
 }
 
@@ -1776,7 +1810,7 @@ export type EvernoteFailedNote = {
 };
 
 export type EvernoteRetryReportEntry = EvernoteFailedNote & {
-  status: "recovered" | "failed";
+  status: "recovered" | "failed" | "skipped_not_found";
 };
 
 export type EvernoteNotebookScope = {
@@ -1847,7 +1881,14 @@ function parseRetryReport(value: unknown): EvernoteRetryReportEntry[] {
       const item = asRecord(candidate);
       const guid = asString(item.guid);
       const status = item.status;
-      if (!guid || (status !== "recovered" && status !== "failed")) return null;
+      if (
+        !guid ||
+        (status !== "recovered" &&
+          status !== "failed" &&
+          status !== "skipped_not_found")
+      ) {
+        return null;
+      }
       return {
         guid,
         title: asString(item.title) ?? "Untitled",
@@ -2739,6 +2780,28 @@ async function streamEvernoteByNotebook(
         failedNotes: [],
       });
     } catch (error) {
+      if (isEvernoteNoteNotFoundError(error)) {
+        logger.warn(
+          { guid: retry.guid, title: retry.title },
+          "Evernote note not found; skipping",
+        );
+        cursor.retryReport.push({
+          ...retry,
+          status: "skipped_not_found",
+        });
+        checkpoint.recordsFailed = Math.max(0, checkpoint.recordsFailed - 1);
+        checkpoint.recordsSkipped += 1;
+        cursor.legacyRetryIndex += 1;
+        checkpoint.batchesProcessed += 1;
+        await emit({
+          records: [],
+          seen: [],
+          replayExternalIds: [],
+          errors: [],
+          failedNotes: [],
+        });
+        continue;
+      }
       if (isMcpTransientError(error)) throw error;
       const message =
         error instanceof Error
@@ -2940,18 +3003,26 @@ async function streamEvernoteByNotebook(
           try {
             records.push(await fetchFullNote(summary.guid));
           } catch (error) {
-            if (isMcpTransientError(error)) throw error;
-            failed = 1;
-            const message =
-              error instanceof Error
-                ? error.message.slice(0, 300)
-                : "get_note failed";
-            errors.push(`${summary.title} (${summary.guid}): ${message}`);
-            failedNotes.push({
-              guid: summary.guid,
-              title: summary.title,
-              error: message,
-            });
+            if (isEvernoteNoteNotFoundError(error)) {
+              logger.warn(
+                { guid: summary.guid, title: summary.title },
+                "Evernote note not found; skipping",
+              );
+              skipped = 1;
+            } else {
+              if (isMcpTransientError(error)) throw error;
+              failed = 1;
+              const message =
+                error instanceof Error
+                  ? error.message.slice(0, 300)
+                  : "get_note failed";
+              errors.push(`${summary.title} (${summary.guid}): ${message}`);
+              failedNotes.push({
+                guid: summary.guid,
+                title: summary.title,
+                error: message,
+              });
+            }
           }
         }
       }
@@ -3194,20 +3265,28 @@ export async function streamEvernoteViaMcp(
             }
             records.push(record);
           } catch (error) {
-            if (
-              isMcpTransientError(error) ||
-              asRecord(error).evernoteTaxonomyLookupRetryable === true
-            ) {
-              throw error;
+            if (isEvernoteNoteNotFoundError(error)) {
+              logger.warn(
+                { guid, title: summary.title },
+                "Evernote note not found; skipping",
+              );
+              skipped = 1;
+            } else {
+              if (
+                isMcpTransientError(error) ||
+                asRecord(error).evernoteTaxonomyLookupRetryable === true
+              ) {
+                throw error;
+              }
+              failed = 1;
+              const message =
+                error instanceof Error
+                  ? error.message.slice(0, 300)
+                  : `Evernote MCP get_note failed for ${guid}`;
+              const title = summary.title;
+              errors.push(`${title} (${guid}): ${message}`);
+              failedNotes.push({ guid, title, error: message });
             }
-            failed = 1;
-            const message =
-              error instanceof Error
-                ? error.message.slice(0, 300)
-                : `Evernote MCP get_note failed for ${guid}`;
-            const title = summary.title;
-            errors.push(`${title} (${guid}): ${message}`);
-            failedNotes.push({ guid, title, error: message });
           }
         }
       }

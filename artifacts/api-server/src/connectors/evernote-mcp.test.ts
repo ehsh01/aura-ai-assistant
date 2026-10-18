@@ -60,6 +60,16 @@ const notebookListingFixture = JSON.parse(
   ),
 ) as Record<string, unknown>;
 
+const noteNotFoundFixture = JSON.parse(
+  readFileSync(
+    new URL(
+      "./fixtures/evernote-get-note-not-found.sanitized.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+) as Record<"textOnly" | "withStatus", Record<string, unknown>>;
+
 describe("Evernote MCP read-only boundary", () => {
   it("passes every read-only tool-name shape through to the SDK client", async () => {
     const callTool = vi.fn(async (input: { name: string }) => ({
@@ -753,6 +763,220 @@ describe("Evernote MCP HTTP pacing", () => {
 });
 
 describe("Evernote MCP read sync", () => {
+  it.each(["textOnly", "withStatus"] as const)(
+    "skips a missing note and completes the listing (%s)",
+    async (fixtureName) => {
+      process.env.EVERNOTE_MCP_PACE_MS = "0";
+      const batches: Array<{
+        errors: string[];
+        failedNotes: unknown[];
+      }> = [];
+      const client = {
+        async callTool(input: {
+          name: string;
+          arguments?: Record<string, unknown>;
+        }): Promise<unknown> {
+          if (input.name === "search_notes") {
+            return {
+              structuredContent: {
+                totalResultCount: 1,
+                notes: [
+                  {
+                    id: "11111111-1111-4111-8111-111111111111",
+                    title: "Daily Journal – 8/11/2024",
+                  },
+                ],
+              },
+            };
+          }
+          if (input.name === "get_note") {
+            return structuredClone(noteNotFoundFixture[fixtureName]);
+          }
+          throw new Error(`Unexpected tool ${input.name}`);
+        },
+      };
+
+      const result = await streamEvernoteViaMcp(client, {
+        syncRunId: `not-found-${fixtureName}`,
+        taxonomy: { notebooks: [], tags: [], spaces: [] },
+        loadKnownNotes: async () => new Map(),
+        processBatch: async (batch) => {
+          batches.push({
+            errors: batch.errors,
+            failedNotes: batch.failedNotes,
+          });
+        },
+      });
+
+      expect(result).toMatchObject({
+        listingComplete: true,
+        recordsDeferred: 0,
+        recordsSkipped: 1,
+        recordsFailed: 0,
+      });
+      expect(batches.flatMap((batch) => batch.errors)).toEqual([]);
+      expect(batches.flatMap((batch) => batch.failedNotes)).toEqual([]);
+    },
+  );
+
+  it.each([429, 503])(
+    "does not treat a get_note %i as not found",
+    async (status) => {
+      process.env.EVERNOTE_MCP_PACE_MS = "0";
+      process.env.EVERNOTE_MCP_MAX_429_RETRIES = "0";
+      const client = {
+        async callTool(input: { name: string }): Promise<unknown> {
+          if (input.name === "search_notes") {
+            return {
+              structuredContent: {
+                totalResultCount: 1,
+                notes: [{ id: "transient-note", title: "Transient note" }],
+              },
+            };
+          }
+          if (input.name === "get_note") {
+            return {
+              isError: true,
+              structuredContent: { status },
+              content: [
+                {
+                  type: "text",
+                  text: `Note transient-note not found (${status})`,
+                },
+              ],
+            };
+          }
+          throw new Error(`Unexpected tool ${input.name}`);
+        },
+      };
+
+      await expect(
+        streamEvernoteViaMcp(client, {
+          syncRunId: `transient-${status}`,
+          taxonomy: { notebooks: [], tags: [], spaces: [] },
+          loadKnownNotes: async () => new Map(),
+          processBatch: async () => undefined,
+        }),
+      ).rejects.toMatchObject({ status });
+    },
+  );
+
+  it("still counts other get_note errors as failed", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const batches: Array<{ errors: string[]; failedNotes: unknown[] }> = [];
+    const client = {
+      async callTool(input: { name: string }): Promise<unknown> {
+        if (input.name === "search_notes") {
+          return {
+            structuredContent: {
+              totalResultCount: 1,
+              notes: [{ id: "failed-note", title: "Failed note" }],
+            },
+          };
+        }
+        if (input.name === "get_note") {
+          return {
+            isError: true,
+            structuredContent: { status: 400 },
+            content: [{ type: "text", text: "Malformed Evernote response" }],
+          };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+
+    const result = await streamEvernoteViaMcp(client, {
+      syncRunId: "other-error",
+      taxonomy: { notebooks: [], tags: [], spaces: [] },
+      loadKnownNotes: async () => new Map(),
+      processBatch: async (batch) => {
+        batches.push({
+          errors: batch.errors,
+          failedNotes: batch.failedNotes,
+        });
+      },
+    });
+
+    expect(result).toMatchObject({
+      listingComplete: true,
+      recordsSkipped: 0,
+      recordsFailed: 1,
+    });
+    expect(batches.flatMap((batch) => batch.errors)).toHaveLength(1);
+    expect(batches.flatMap((batch) => batch.failedNotes)).toHaveLength(1);
+  });
+
+  it("recovers a legacy failed note as skipped when it is gone", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const batches: Array<{ errors: string[]; failedNotes: unknown[] }> = [];
+    const client = {
+      async callTool(input: { name: string }): Promise<unknown> {
+        if (input.name === "get_note") {
+          return structuredClone(noteNotFoundFixture.withStatus);
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+
+    const result = await streamEvernoteViaMcp(client, {
+      syncRunId: "legacy-not-found",
+      partitionByNotebook: true,
+      checkpoint: {
+        version: 2,
+        startIndex: 0,
+        expectedTotal: 0,
+        recordsFetched: 0,
+        recordsSkipped: 0,
+        recordsFailed: 1,
+        batchesProcessed: 0,
+        listingAuthoritative: false,
+        notebookCursor: {
+          scopes: [],
+          scopeIndex: 0,
+          pendingRanges: [],
+          activeRange: null,
+          legacyPrefixEnd: 0,
+          legacyScanIndex: 0,
+          legacyRetryIndex: 0,
+          legacyRetryNotes: [
+            {
+              guid: "11111111-1111-4111-8111-111111111111",
+              title: "Daily Journal – 8/12/2024",
+              error: "Previous get_note failure",
+            },
+          ],
+          retryReport: [],
+          skipExistingSourceRecords: false,
+        },
+      },
+      taxonomy: { notebooks: [], tags: [], spaces: [] },
+      loadKnownNotes: async () => new Map(),
+      processBatch: async (batch) => {
+        batches.push({
+          errors: batch.errors,
+          failedNotes: batch.failedNotes,
+        });
+      },
+    });
+
+    expect(result).toMatchObject({
+      listingComplete: true,
+      recordsDeferred: 0,
+      recordsSkipped: 1,
+      recordsFailed: 0,
+      notebookCursor: {
+        retryReport: [
+          expect.objectContaining({
+            guid: "11111111-1111-4111-8111-111111111111",
+            status: "skipped_not_found",
+          }),
+        ],
+      },
+    });
+    expect(batches.flatMap((batch) => batch.errors)).toEqual([]);
+    expect(batches.flatMap((batch) => batch.failedNotes)).toEqual([]);
+  });
+
   it("persists discovered notebook names once and resumes from the v2 cursor", async () => {
     process.env.EVERNOTE_MCP_PACE_MS = "0";
     let notebookCalls = 0;
