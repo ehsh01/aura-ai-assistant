@@ -116,6 +116,13 @@ export function useSpeechInput(
     recognition.continuous = false;
     recognition.interimResults = isIosDevice();
     recognition.lang = "en-US";
+    // Chrome 139+ can keep recognition on-device when its English language
+    // pack is available. Older browsers ignore this extension.
+    if ("processLocally" in recognition) {
+      (
+        recognition as SpeechRecognition & { processLocally: boolean }
+      ).processLocally = true;
+    }
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       const transcript = collectTranscript(event);

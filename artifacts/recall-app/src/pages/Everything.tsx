@@ -35,9 +35,11 @@ import {
   fetchKnowledgeGraph,
   getAskAiAvailability,
   getSavedItem,
+  getVoiceAiAvailability,
   listItemFacets,
   listSavedItems,
   queryRecallStream,
+  queryVoiceRecall,
   savedItemMediaUrl,
   saveImageItem,
   saveTextItem,
@@ -48,7 +50,10 @@ import {
   type KnowledgeGraphResponse,
   type SavedItemRecord,
   type QueryRecallResult,
+  type VoiceAnswerSource,
+  VoiceQueryError,
 } from "@/lib/recall-api";
+import { speakText, stopSpeaking } from "@/lib/speech-synthesis";
 
 const GRAPH_TYPES: Array<{
   type: KnowledgeGraphNodeType;
@@ -62,6 +67,26 @@ const GRAPH_TYPES: Array<{
   { type: "files", label: "Files", color: "#ff8f82" },
   { type: "evernote", label: "Evernote", color: "#74e59b" },
 ];
+
+type TalkTurn = {
+  id: string;
+  question: string;
+  answer: string;
+  sources: VoiceAnswerSource[];
+  paid: boolean;
+};
+
+const VOICE_LIMIT_REPLY = "Daily voice limit reached. Free search still works.";
+
+function talkSourceDate(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
 
 function useLowMotionFallback(): boolean {
   const [fallback, setFallback] = useState(false);
@@ -394,7 +419,17 @@ export function Everything() {
   const [aiResult, setAiResult] = useState<QueryRecallResult | null>(null);
   const [aiAvailability, setAiAvailability] =
     useState<AskAiAvailability | null>(null);
-  const voiceAnswer = useSpeakAnswer(answer, askStatus === "ready");
+  const [talkTurns, setTalkTurns] = useState<TalkTurn[]>([]);
+  const [talkThreadId, setTalkThreadId] = useState<string | null>(null);
+  const [talkThinking, setTalkThinking] = useState(false);
+  const [talkSpeaking, setTalkSpeaking] = useState(false);
+  const [outputMode, setOutputMode] = useState<
+    "search" | "ask" | "talk" | null
+  >(null);
+  const voiceAnswer = useSpeakAnswer(
+    answer,
+    outputMode === "ask" && askStatus === "ready",
+  );
 
   useEffect(() => {
     if (lowMotionFallback) setMode("grid");
@@ -411,6 +446,13 @@ export function Everything() {
         }),
       );
   }, []);
+
+  useEffect(
+    () => () => {
+      stopSpeaking();
+    },
+    [],
+  );
 
   const reloadItems = useCallback(async () => {
     const result = await listSavedItems({ ...filters, limit: 150 });
@@ -499,6 +541,7 @@ export function Everything() {
     async (rawQuestion: string) => {
       const question = rawQuestion.trim();
       if (!question || askStatus === "searching") return;
+      setOutputMode("search");
       setAskStatus("searching");
       setAnswer("");
       setAiResult(null);
@@ -530,15 +573,159 @@ export function Everything() {
     },
     [runKeywordSearch],
   );
-  const speechInput = useSpeechInput(submitVoiceTranscript, {
+  const searchSpeechInput = useSpeechInput(submitVoiceTranscript, {
     allowServerTranscription: false,
     onError: showSpeechError,
   });
+
+  const speakTalkReply = useCallback((text: string, premium: boolean) => {
+    setTalkSpeaking(true);
+    void speakText(text, {
+      premium,
+      onEnd: () => setTalkSpeaking(false),
+      onError: () => setTalkSpeaking(false),
+    }).then((started) => {
+      if (!started) setTalkSpeaking(false);
+    });
+  }, []);
+
+  const addTalkTurn = useCallback(
+    (
+      question: string,
+      reply: string,
+      sources: VoiceAnswerSource[],
+      paid: boolean,
+    ) => {
+      setTalkTurns((current) => [
+        ...current.slice(-3),
+        {
+          id: `${Date.now()}-${current.length}`,
+          question,
+          answer: reply,
+          sources,
+          paid,
+        },
+      ]);
+    },
+    [],
+  );
+
+  const runFreeTalkFallback = useCallback(
+    async (question: string) => {
+      let results: SavedItemRecord[] = [];
+      try {
+        results = (await listSavedItems({ q: question, limit: 6 })).items;
+      } catch {
+        // Free browser speech still responds without surfacing an error.
+      }
+      const reply =
+        results.length > 0
+          ? `I found ${results.length} matching note${results.length === 1 ? "" : "s"}. The top match is ${results[0]!.title}.`
+          : "I couldn't find that in your notes.";
+      const sources = results.slice(0, 5).map((item) => ({
+        itemId: item.id,
+        title: item.title,
+        notebook: item.notebook,
+        date: item.bumpedAt,
+      }));
+      setKeywordResults(results);
+      setOutputMode("talk");
+      setAskStatus("results");
+      addTalkTurn(question, reply, sources, false);
+      speakTalkReply(reply, false);
+    },
+    [addTalkTurn, speakTalkReply],
+  );
+
+  const submitTalkTranscript = useCallback(
+    async (transcript: string) => {
+      const question = transcript.trim();
+      if (!question || talkThinking) return;
+      setAsk(question);
+      setOutputMode("talk");
+      setTalkThinking(true);
+      setAskStatus("thinking");
+      setAnswer("");
+      setAiResult(null);
+      setKeywordResults([]);
+      // Immediate local acknowledgement keeps first sound under the 2s target;
+      // the grounded answer replaces it with natural TTS when ready.
+      void speakText("Searching your notes.", { premium: false });
+      try {
+        const availability = await getVoiceAiAvailability();
+        if (!availability.allowed) {
+          if (availability.reason === "daily_limit") {
+            addTalkTurn(question, VOICE_LIMIT_REPLY, [], false);
+            setAskStatus("ready");
+            speakTalkReply(VOICE_LIMIT_REPLY, false);
+          } else {
+            await runFreeTalkFallback(question);
+          }
+          return;
+        }
+
+        const result = await queryVoiceRecall(question, {
+          threadId: talkThreadId,
+        });
+        setTalkThreadId(result.threadId);
+        setAnswer(result.answer);
+        setAiResult(result);
+        setAskStatus("ready");
+        addTalkTurn(question, result.answer, result.sources, true);
+        speakTalkReply(result.answer, true);
+      } catch (error) {
+        if (
+          error instanceof VoiceQueryError &&
+          error.reason === "daily_limit"
+        ) {
+          addTalkTurn(question, VOICE_LIMIT_REPLY, [], false);
+          setAskStatus("ready");
+          speakTalkReply(VOICE_LIMIT_REPLY, false);
+        } else {
+          await runFreeTalkFallback(question);
+        }
+      } finally {
+        setTalkThinking(false);
+      }
+    },
+    [
+      addTalkTurn,
+      runFreeTalkFallback,
+      speakTalkReply,
+      talkThinking,
+      talkThreadId,
+    ],
+  );
+
+  const talkSpeechInput = useSpeechInput(
+    (transcript) => void submitTalkTranscript(transcript),
+    {
+      allowServerTranscription: false,
+      onError: showSpeechError,
+    },
+  );
+
+  const stopTalkSpeech = useCallback(() => {
+    stopSpeaking();
+    setTalkSpeaking(false);
+  }, []);
+
+  const beforeTalkToggle = useCallback(() => {
+    if (talkThinking) {
+      stopTalkSpeech();
+      return false;
+    }
+    if (!talkSpeaking && !voiceAnswer.speaking) return true;
+    stopTalkSpeech();
+    voiceAnswer.stop();
+    return false;
+  }, [stopTalkSpeech, talkSpeaking, talkThinking, voiceAnswer]);
 
   const submitAskAi = async () => {
     const question = ask.trim();
     if (!question || askStatus === "thinking" || !aiAvailability?.allowed)
       return;
+    setOutputMode("ask");
     setAskStatus("thinking");
     setAnswer("");
     setKeywordResults([]);
@@ -581,11 +768,11 @@ export function Everything() {
             ? undefined
             : "Checking Ask AI availability";
 
-  const ringState = speechInput.listening
+  const ringState = talkSpeechInput.listening
     ? "listening"
-    : voiceAnswer.speaking
+    : talkSpeaking || voiceAnswer.speaking
       ? "speaking"
-      : askStatus === "thinking"
+      : talkThinking || askStatus === "thinking"
         ? "thinking"
         : askStatus === "searching"
           ? "searching"
@@ -884,14 +1071,20 @@ export function Everything() {
               <div
                 className={`assistant-ring is-${ringState}`}
                 data-testid="assistant-ring-desktop"
+                onClick={() => {
+                  if (talkSpeaking || voiceAnswer.speaking) beforeTalkToggle();
+                }}
               >
                 <MicButton
-                  onTranscript={submitVoiceTranscript}
-                  controller={speechInput}
+                  onTranscript={submitTalkTranscript}
+                  controller={talkSpeechInput}
                   className="assistant-ring-mic"
                   iconSize={18}
-                  title="Voice input on Recall ring"
+                  title="Talk to Recall"
                   testId="ring-mic-desktop"
+                  holdToTalk
+                  quiet
+                  onBeforeToggle={beforeTalkToggle}
                 />
                 <div>
                   <span>R.E.C.A.L.L.</span>
@@ -927,21 +1120,29 @@ export function Everything() {
             </div>
 
             <div
-              className="assistant-ring-mobile-wrap absolute bottom-[104px] left-3 z-30 flex items-center gap-1.5 sm:hidden"
+              className={`assistant-ring-mobile-wrap absolute left-3 z-40 flex items-center gap-1.5 sm:hidden ${
+                outputMode === "talk" ? "top-36" : "bottom-[104px]"
+              }`}
               aria-live="polite"
               aria-label={`R.E.C.A.L.L. ${ringLabel.toLowerCase()}`}
             >
               <div
                 className={`assistant-ring-mobile is-${ringState}`}
                 data-testid="assistant-ring-mobile"
+                onClick={() => {
+                  if (talkSpeaking || voiceAnswer.speaking) beforeTalkToggle();
+                }}
               >
                 <MicButton
-                  onTranscript={submitVoiceTranscript}
-                  controller={speechInput}
+                  onTranscript={submitTalkTranscript}
+                  controller={talkSpeechInput}
                   className="assistant-ring-mic assistant-ring-mic-mobile"
                   iconSize={13}
-                  title="Voice input on Recall ring"
+                  title="Talk to Recall"
                   testId="ring-mic-mobile"
+                  holdToTalk
+                  quiet
+                  onBeforeToggle={beforeTalkToggle}
                 />
                 <button
                   type="button"
@@ -986,14 +1187,84 @@ export function Everything() {
                 data-testid="ask-output-panel"
                 aria-live="polite"
               >
-                {askStatus === "searching" && (
+                {outputMode === "talk" && (
+                  <div data-testid="talk-transcript" className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="hud-label text-[#ffcf7d]">Talk to Recall</p>
+                      <span className="text-[10px] text-[#8aa69c]">
+                        Grounded in your notes
+                      </span>
+                    </div>
+                    {talkTurns.map((turn) => (
+                      <div key={turn.id} className="space-y-2">
+                        <div className="rounded-lg border border-cyan-100/10 bg-black/15 px-3 py-2">
+                          <p className="hud-label text-[#8fd8c2]">You</p>
+                          <p className="mt-1 text-sm text-[#dce8e4]">
+                            {turn.question}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-amber-200/15 bg-amber-100/[0.04] px-3 py-2">
+                          <p className="hud-label text-[#ffcf7d]">Recall</p>
+                          <p className="mt-1 text-sm leading-6 text-[#f3f8f6]">
+                            {turn.answer}
+                          </p>
+                          {turn.sources.length > 0 && (
+                            <div
+                              className="mt-2 flex flex-wrap gap-2"
+                              data-testid="talk-source-chips"
+                            >
+                              {turn.sources.map((source) => {
+                                const date = talkSourceDate(source.date);
+                                return (
+                                  <button
+                                    key={source.itemId}
+                                    type="button"
+                                    className="hud-chip max-w-full text-left"
+                                    onClick={() =>
+                                      navigate(
+                                        `/everything/${encodeURIComponent(
+                                          source.itemId,
+                                        )}`,
+                                      )
+                                    }
+                                    data-testid="talk-source-chip"
+                                  >
+                                    <strong>{source.title}</strong>
+                                    {source.notebook
+                                      ? ` · ${source.notebook}`
+                                      : ""}
+                                    {date ? ` · ${date}` : ""}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {talkThinking && (
+                      <div className="space-y-2">
+                        <div className="rounded-lg border border-cyan-100/10 bg-black/15 px-3 py-2">
+                          <p className="hud-label text-[#8fd8c2]">You</p>
+                          <p className="mt-1 text-sm text-[#dce8e4]">{ask}</p>
+                        </div>
+                        <div className="inline-flex items-center gap-2 text-sm text-[#b8fff2]">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Recall is thinking…
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {outputMode === "search" && askStatus === "searching" && (
                   <div className="flex items-center gap-2 py-3 text-sm text-[#b8fff2]">
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Searching saved items and notes…
                   </div>
                 )}
 
-                {askStatus === "results" && (
+                {outputMode === "search" && askStatus === "results" && (
                   <>
                     <div className="mb-2 flex items-center justify-between">
                       <p className="hud-label text-[#8fd8c2]">
@@ -1047,84 +1318,85 @@ export function Everything() {
                   </>
                 )}
 
-                {(askStatus === "thinking" || askStatus === "ready") && (
-                  <>
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <p className="hud-label text-[#ffcf7d]">Ask AI</p>
-                      {askStatus === "thinking" && (
-                        <span className="inline-flex items-center gap-1.5 text-xs text-[#b8fff2]">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          Building an answer…
-                        </span>
-                      )}
-                    </div>
-                    {answer ? (
-                      <MarkdownAnswer value={answer} />
-                    ) : (
-                      <div
-                        className="space-y-2"
-                        aria-label="Loading Ask AI answer"
-                      >
-                        <div className="h-3 w-11/12 animate-pulse rounded bg-cyan-100/10" />
-                        <div className="h-3 w-9/12 animate-pulse rounded bg-cyan-100/10" />
-                        <div className="h-3 w-10/12 animate-pulse rounded bg-cyan-100/10" />
+                {outputMode === "ask" &&
+                  (askStatus === "thinking" || askStatus === "ready") && (
+                    <>
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <p className="hud-label text-[#ffcf7d]">Ask AI</p>
+                        {askStatus === "thinking" && (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-[#b8fff2]">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            Building an answer…
+                          </span>
+                        )}
                       </div>
-                    )}
-                    {askStatus === "ready" &&
-                      aiResult &&
-                      (aiResult.evidence.length > 0 ||
-                        aiResult.relatedRecords.length > 0) && (
-                        <div className="mt-4 border-t border-cyan-100/10 pt-3">
-                          <p className="hud-label mb-2 text-[#8fd8c2]">
-                            Sources
-                          </p>
-                          <div className="flex flex-wrap gap-2">
-                            {aiResult.evidence
-                              .filter((source) => Boolean(source.url))
-                              .slice(0, 5)
-                              .map((source) => (
-                                <a
-                                  key={source.id}
-                                  href={source.url!}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="hud-chip max-w-full truncate"
-                                >
-                                  {source.fileName ||
-                                    source.evidenceText ||
-                                    "Open source"}
-                                </a>
-                              ))}
-                            {aiResult.relatedRecords
-                              .slice(0, 6)
-                              .map((source) => (
-                                <button
-                                  key={`${source.entityType}:${source.entityId}`}
-                                  type="button"
-                                  className="hud-chip max-w-full truncate"
-                                  onClick={() =>
-                                    navigate(
-                                      `/everything/${encodeURIComponent(
-                                        source.entityType === "note"
-                                          ? `note:${source.entityId}`
-                                          : source.entityType ===
-                                              "source_record"
-                                            ? `evernote:${source.entityId}`
-                                            : source.entityId,
-                                      )}`,
-                                    )
-                                  }
-                                >
-                                  {source.title}
-                                </button>
-                              ))}
-                          </div>
+                      {answer ? (
+                        <MarkdownAnswer value={answer} />
+                      ) : (
+                        <div
+                          className="space-y-2"
+                          aria-label="Loading Ask AI answer"
+                        >
+                          <div className="h-3 w-11/12 animate-pulse rounded bg-cyan-100/10" />
+                          <div className="h-3 w-9/12 animate-pulse rounded bg-cyan-100/10" />
+                          <div className="h-3 w-10/12 animate-pulse rounded bg-cyan-100/10" />
                         </div>
                       )}
-                  </>
-                )}
+                      {askStatus === "ready" &&
+                        aiResult &&
+                        (aiResult.evidence.length > 0 ||
+                          aiResult.relatedRecords.length > 0) && (
+                          <div className="mt-4 border-t border-cyan-100/10 pt-3">
+                            <p className="hud-label mb-2 text-[#8fd8c2]">
+                              Sources
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              {aiResult.evidence
+                                .filter((source) => Boolean(source.url))
+                                .slice(0, 5)
+                                .map((source) => (
+                                  <a
+                                    key={source.id}
+                                    href={source.url!}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="hud-chip max-w-full truncate"
+                                  >
+                                    {source.fileName ||
+                                      source.evidenceText ||
+                                      "Open source"}
+                                  </a>
+                                ))}
+                              {aiResult.relatedRecords
+                                .slice(0, 6)
+                                .map((source) => (
+                                  <button
+                                    key={`${source.entityType}:${source.entityId}`}
+                                    type="button"
+                                    className="hud-chip max-w-full truncate"
+                                    onClick={() =>
+                                      navigate(
+                                        `/everything/${encodeURIComponent(
+                                          source.entityType === "note"
+                                            ? `note:${source.entityId}`
+                                            : source.entityType ===
+                                                "source_record"
+                                              ? `evernote:${source.entityId}`
+                                              : source.entityId,
+                                        )}`,
+                                      )
+                                    }
+                                  >
+                                    {source.title}
+                                  </button>
+                                ))}
+                            </div>
+                          </div>
+                        )}
+                    </>
+                  )}
 
-                {askStatus === "error" && (
+                {outputMode !== "talk" && askStatus === "error" && (
                   <p className="py-2 text-sm text-rose-200">
                     {answer || "Recall could not search just now."}
                   </p>
@@ -1152,7 +1424,7 @@ export function Everything() {
                 />
                 <MicButton
                   onTranscript={submitVoiceTranscript}
-                  controller={speechInput}
+                  controller={searchSpeechInput}
                   className="rounded-full p-2 text-[#7dffd9] hover:bg-cyan-200/10"
                   iconSize={16}
                   title="Voice input for free search"
