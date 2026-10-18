@@ -199,4 +199,36 @@ describe("spoken grounded answers", () => {
       expect.objectContaining({ sourceScope: "notes" }),
     );
   });
+
+  it("runs note retrieval and the user-message write in parallel", async () => {
+    const simulatedDbMs = 80;
+    const waitForDb = () =>
+      new Promise<void>((resolve) => setTimeout(resolve, simulatedDbMs));
+    mocks.retrieve.mockImplementation(async () => {
+      await waitForDb();
+      return {
+        records: [],
+        usedSemantic: false,
+        namedPeople: [],
+        tasks: [],
+      };
+    });
+    mocks.appendMessage.mockReset();
+    mocks.appendMessage
+      .mockImplementationOnce(async () => {
+        await waitForDb();
+        return { id: "user-message" };
+      })
+      .mockResolvedValueOnce({ id: "assistant-message" });
+
+    const startedAt = performance.now();
+    await queryVoiceNotesForUser("u1", "missing topic", null);
+    const elapsedMs = performance.now() - startedAt;
+    const sequentialBaselineMs = simulatedDbMs * 2;
+
+    expect(elapsedMs).toBeLessThan(sequentialBaselineMs - 20);
+    console.info(
+      `[voice-ask-benchmark] sequential_db_baseline_ms=${sequentialBaselineMs} parallel_after_ms=${elapsedMs.toFixed(1)}`,
+    );
+  });
 });
