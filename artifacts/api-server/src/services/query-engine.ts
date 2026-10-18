@@ -49,6 +49,7 @@ import {
   planGmailSearch,
 } from "./nl-gmail-query";
 import { isDriveSearchIntent, planDriveSearch } from "./nl-drive-query";
+import { isGoogleNeedsReauthError } from "../connectors/google";
 import { isHomeyAskIntent, planHomeyAsk } from "./nl-homey-query";
 import {
   isFlipperForceAskIntent,
@@ -954,21 +955,27 @@ async function runQueryForUser(
     }
 
     const emailOnlyLatest = sourcePlan.answerMode === "deterministic_email";
-    const [gmailHits, driveHits] = await Promise.all([
+    const [gmailSearch, driveSearch] = await Promise.all([
       gmailPlan?.query && !isRelationLiteral(gmailPlan.personName)
         ? liveSearchGmailForUser(userId, gmailPlan.query, {
             mailboxHint,
             maxPerMailbox: emailOnlyLatest ? 8 : 15,
             personName: gmailPlan.personName,
-          }).catch(() => [])
-        : Promise.resolve([]),
+          })
+            .then((hits) => ({ hits, error: null as unknown }))
+            .catch((error: unknown) => ({ hits: [], error }))
+        : Promise.resolve({ hits: [], error: null as unknown }),
       drivePlan?.query
         ? liveSearchDriveForUser(userId, drivePlan.query, {
             mailboxHint,
             maxPerAccount: 15,
-          }).catch(() => [])
-        : Promise.resolve([]),
+          })
+            .then((hits) => ({ hits, error: null as unknown }))
+            .catch((error: unknown) => ({ hits: [], error }))
+        : Promise.resolve({ hits: [], error: null as unknown }),
     ]);
+    const gmailHits = gmailSearch.hits;
+    const driveHits = driveSearch.hits;
 
     liveGmailHitCount = gmailHits.length;
     liveDriveHitCount = driveHits.length;
@@ -988,9 +995,14 @@ async function runQueryForUser(
       sourcesConsulted.push({
         id: "gmail",
         label: "Gmail",
-        status: gmailHits.length > 0 ? "ok" : "empty",
-        detail:
-          gmailHits.length > 0
+        status: isGoogleNeedsReauthError(gmailSearch.error)
+          ? "error"
+          : gmailHits.length > 0
+            ? "ok"
+            : "empty",
+        detail: isGoogleNeedsReauthError(gmailSearch.error)
+          ? "Google authorization expired. Reconnect Google in Connectors."
+          : gmailHits.length > 0
             ? emailOnlyLatest
               ? `Latest match · ${accountsLabel}`
               : `${gmailHits.length} message(s) · ${accountsLabel}`
@@ -1034,7 +1046,11 @@ async function runQueryForUser(
           );
         }
       }
-      if (gmailHits.length === 0 && !emailOnlyLatest) {
+      if (
+        gmailHits.length === 0 &&
+        !emailOnlyLatest &&
+        !isGoogleNeedsReauthError(gmailSearch.error)
+      ) {
         evidence.push(
           makeEvidence({
             claimType: "summary_based_on",
@@ -1054,9 +1070,14 @@ async function runQueryForUser(
       sourcesConsulted.push({
         id: "drive",
         label: "Google Drive",
-        status: driveHits.length > 0 ? "ok" : "empty",
-        detail:
-          driveHits.length > 0
+        status: isGoogleNeedsReauthError(driveSearch.error)
+          ? "error"
+          : driveHits.length > 0
+            ? "ok"
+            : "empty",
+        detail: isGoogleNeedsReauthError(driveSearch.error)
+          ? "Google authorization expired. Reconnect Google in Connectors."
+          : driveHits.length > 0
             ? `${driveHits.length} file(s)`
             : `No files for “${drivePlan.query}”`,
         hitCount: driveHits.length,
@@ -1094,7 +1115,10 @@ async function runQueryForUser(
           }),
         );
       }
-      if (driveHits.length === 0) {
+      if (
+        driveHits.length === 0 &&
+        !isGoogleNeedsReauthError(driveSearch.error)
+      ) {
         evidence.push(
           makeEvidence({
             claimType: "summary_based_on",

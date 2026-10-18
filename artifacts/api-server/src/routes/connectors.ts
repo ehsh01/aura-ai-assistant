@@ -32,6 +32,7 @@ import {
   createConnectorForUser,
   deleteConnectorForUser,
   enqueueEvernoteSyncForUser,
+  enqueueGoogleSyncForUser,
   upsertFlipperForceConnectorForUser,
   testFlipperForceConnectorForUser,
   createGoogleConnectorForUser,
@@ -51,6 +52,10 @@ import {
   writeHomeyConnectAudit,
   writeMicrosoftConnectAudit,
 } from "../services/connectors";
+import {
+  enqueueGoogleInitialSyncIfEnabled,
+  isGoogleAutoSyncEnabled,
+} from "../services/google-auto-sync";
 import { openSecret, sealSecret } from "../lib/secret-box";
 import {
   acknowledgeHomeyAlertForUser,
@@ -233,12 +238,23 @@ router.get("/connectors/google/oauth/callback", async (req, res) => {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       expiresIn: tokens.expiresIn,
+      scopes: tokens.scopes,
     });
 
     await writeGoogleConnectAudit(verified.userId, connector.id, tokens.email);
+    const initialSyncQueued = await enqueueGoogleInitialSyncIfEnabled(
+      verified.userId,
+      connector.id,
+    );
 
     res.clearCookie(OAUTH_STATE_COOKIE_GOOGLE, { path: "/" });
-    res.redirect(frontendRedirect({ google: "connected", connectorId: connector.id }));
+    res.redirect(
+      frontendRedirect({
+        google: "connected",
+        connectorId: connector.id,
+        initialSync: initialSyncQueued ? "queued" : "manual",
+      }),
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : "oauth_failed";
     const reason = message.includes("already connected")
@@ -597,6 +613,7 @@ router.get("/connectors", async (req, res, next) => {
     res.json({
       connectors: items,
       googleOAuthConfigured: isGoogleOAuthConfigured(),
+      googleAutoSyncEnabled: isGoogleAutoSyncEnabled(),
       microsoftOAuthConfigured: isMicrosoftOAuthConfigured(),
       homeyOAuthConfigured: isHomeyOAuthConfigured(),
       // MCP OAuth2+DCR is the default and requires no static consumer secret.
@@ -872,7 +889,20 @@ router.post("/connectors/:connectorId/sync", async (req, res, next) => {
       res.status(202).json(queued);
       return;
     }
-    const result = await syncConnectorForUser(req.user!.id, req.params.connectorId, body);
+    if (connector.type === "google") {
+      const queued = await enqueueGoogleSyncForUser(
+        req.user!.id,
+        req.params.connectorId,
+      );
+      if (!queued.deduped) nudgeJobWorker(queued.jobId);
+      res.status(202).json(queued);
+      return;
+    }
+    const result = await syncConnectorForUser(
+      req.user!.id,
+      req.params.connectorId,
+      body,
+    );
     res.json(result);
   } catch (err) {
     next(err);
