@@ -7,6 +7,7 @@ const BASE_CORE_WIDTH = 2;
 const MAX_CORE_WIDTH = 3;
 const GLOW_EXTRA_WIDTH = 3.2;
 const MAX_GLOW_WIDTH = 6;
+export const GRAPH_EDGE_OPACITY_SCALE = 0.75;
 
 /**
  * Edge widths are expressed in CSS pixels because the graph projects node
@@ -23,4 +24,9 @@ export function graphEdgeCoreWidth(scale: number): number {
 
 export function graphEdgeGlowWidth(coreWidth: number): number {
   return Math.min(MAX_GLOW_WIDTH, coreWidth + GLOW_EXTRA_WIDTH);
+}
+
+/** Apply the owner-selected brightness reduction uniformly to every edge state. */
+export function graphEdgeOpacity(alpha: number): number {
+  return alpha * GRAPH_EDGE_OPACITY_SCALE;
 }

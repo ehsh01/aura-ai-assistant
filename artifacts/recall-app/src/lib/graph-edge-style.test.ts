@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { graphEdgeCoreWidth, graphEdgeGlowWidth } from "./graph-edge-style";
+import {
+  graphEdgeCoreWidth,
+  graphEdgeGlowWidth,
+  graphEdgeOpacity,
+} from "./graph-edge-style";
 
 describe("knowledge graph edge styling", () => {
   it("renders a two-pixel core at default zoom", () => {
@@ -16,5 +20,14 @@ describe("knowledge graph edge styling", () => {
     const coreWidth = graphEdgeCoreWidth(100);
     expect(coreWidth).toBe(3);
     expect(graphEdgeGlowWidth(coreWidth)).toBe(6);
+  });
+
+  it.each([
+    ["default", 0.9, 0.675],
+    ["hover-highlighted", 1, 0.75],
+    ["selected/focused", 0.82, 0.615],
+    ["dimmed", 0.1, 0.075],
+  ])("reduces the %s edge alpha by exactly 25%%", (_state, input, output) => {
+    expect(graphEdgeOpacity(input)).toBeCloseTo(output, 8);
   });
 });

@@ -27,6 +27,7 @@ import {
   GRAPH_EDGE_HIGHLIGHT_COLOR,
   graphEdgeCoreWidth,
   graphEdgeGlowWidth,
+  graphEdgeOpacity,
 } from "@/lib/graph-edge-style";
 import {
   calculateGraphFit,
@@ -313,7 +314,7 @@ export function KnowledgeGraph({
               viewRef.current.stretchY,
         );
       }
-      context.globalAlpha = alpha;
+      context.globalAlpha = graphEdgeOpacity(alpha);
       context.lineWidth = lineWidth;
       context.strokeStyle = strokeStyle;
       context.stroke();

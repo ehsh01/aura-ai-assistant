@@ -629,7 +629,7 @@ test.describe("Everything capture, graph, grid, and search", () => {
     await page.goto("/");
     const graphCanvas = page.getByLabel("Interactive knowledge graph");
     await expect(graphCanvas).toBeVisible();
-    await page.waitForTimeout(1_800);
+    await page.waitForTimeout(screenshotDir ? 5_000 : 1_800);
     await page.getByRole("button", { name: "Fit graph to view" }).click();
     await page.waitForTimeout(1_200);
     if (screenshotDir) {
