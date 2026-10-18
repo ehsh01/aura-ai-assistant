@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildNotesTsQuery } from "./notes";
+import {
+  buildNotesTsQuery,
+  buildSplitTokenRegexes,
+  shouldExpandUrlTokens,
+} from "./notes";
 
 describe("buildNotesTsQuery", () => {
   it("builds prefix AND queries for short term lists", () => {
@@ -18,5 +22,15 @@ describe("buildNotesTsQuery", () => {
   it("rejects unsafe tokens", () => {
     expect(buildNotesTsQuery(["ok", "bad;drop"])).toBe("ok:*");
     expect(buildNotesTsQuery([])).toBeNull();
+  });
+
+  it("expands hostname and hyphen tokens without matching ordinary substrings", () => {
+    const [pattern] = buildSplitTokenRegexes(["psychiatry"]);
+    const regex = new RegExp(pattern!, "i");
+    expect(regex.test("psychiatry.med.miami.edu")).toBe(true);
+    expect(regex.test("portal-psychiatry.health")).toBe(true);
+    expect(regex.test("general psychiatry notes")).toBe(false);
+    expect(shouldExpandUrlTokens("khaila school portal link")).toBe(true);
+    expect(shouldExpandUrlTokens("ordinary note summary")).toBe(false);
   });
 });

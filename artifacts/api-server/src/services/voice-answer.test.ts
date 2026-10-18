@@ -96,6 +96,39 @@ const PSYCHIATRY_CASE_RECORDS = [
   PSYCHIATRY_REAL_LINK_RECORD,
 ] as const;
 
+const UM_MARKETPLACE_RECORDS = [
+  {
+    ...NOTE_RECORD,
+    entityId: "note-en-3mujtl",
+    title: "UM Marketplace link",
+    text: "https://secure.touchnet.net/central",
+    score: 9,
+  },
+  {
+    ...NOTE_RECORD,
+    entityId: "note-en-shcskr",
+    title: "My 981 lowered on HR",
+    text: "https://rennlist.com/forums/parts-marketplace/906069-techart-intake-gill-slats-for-981-cayman-s.html",
+    score: 8,
+  },
+] as const;
+
+const HALOGEN_RECORD = {
+  ...NOTE_RECORD,
+  entityId: "note-en-vmfbij",
+  title: "Halogen Portals",
+  text: "From: Riveron, Christopher [mailto:c.riveron@med.miami.edu]. Portal: halogen.med.miami.edu",
+  score: 9,
+} as const;
+
+const KHAILA_RECORD = {
+  ...NOTE_RECORD,
+  entityId: "khaila-school-portal",
+  title: "Khaila school portal",
+  text: "School access: khaila.schoolportal.com",
+  score: 9,
+} as const;
+
 beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "test-key");
   for (const mock of Object.values(mocks)) mock.mockReset();
@@ -324,6 +357,64 @@ describe("spoken grounded answers", () => {
     );
     expect(result.answer).not.toContain("policyemail");
     expect(result.answer).not.toContain("maps.google.com");
+    expect(mocks.completion).not.toHaveBeenCalled();
+  });
+
+  it("keeps the #1 UM Marketplace note ahead of a forums substring match", async () => {
+    mocks.retrieve.mockResolvedValue({
+      records: UM_MARKETPLACE_RECORDS,
+      usedSemantic: false,
+      namedPeople: [],
+      tasks: [],
+    });
+
+    const result = await queryVoiceNotesForUser(
+      "u1",
+      "what is the UM Marketplace link",
+      null,
+    );
+
+    expect(result.answer).toContain("https://secure.touchnet.net/central");
+    expect(result.answer).not.toContain("rennlist.com");
+    expect(result.sources[0]?.title).toBe("UM Marketplace link");
+    expect(mocks.completion).not.toHaveBeenCalled();
+  });
+
+  it("does not mistake the Halogen sender email for a bare domain", async () => {
+    mocks.retrieve.mockResolvedValue({
+      records: [HALOGEN_RECORD],
+      usedSemantic: false,
+      namedPeople: [],
+      tasks: [],
+    });
+
+    const result = await queryVoiceNotesForUser(
+      "u1",
+      "what is the Halogen portal link",
+      null,
+    );
+
+    expect(result.answer).toContain("https://halogen.med.miami.edu");
+    expect(result.answer).not.toContain("https://c.riveron");
+    expect(mocks.completion).not.toHaveBeenCalled();
+  });
+
+  it("answers the Khaila school portal from a subject-matching bare domain", async () => {
+    mocks.retrieve.mockResolvedValue({
+      records: [KHAILA_RECORD],
+      usedSemantic: false,
+      namedPeople: [],
+      tasks: [],
+    });
+
+    const result = await queryVoiceNotesForUser(
+      "u1",
+      "what is the khaila school portal link",
+      null,
+    );
+
+    expect(result.answer).toContain("https://khaila.schoolportal.com");
+    expect(result.sources[0]?.title).toBe("Khaila school portal");
     expect(mocks.completion).not.toHaveBeenCalled();
   });
 
