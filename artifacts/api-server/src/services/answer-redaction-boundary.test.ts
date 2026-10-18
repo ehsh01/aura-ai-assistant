@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { buildAskAnswerMetadata } from "./ask-answer-metadata";
 import { sanitizeAskMessageForStorage } from "./ask-threads";
+import { sanitizeAuditMetadata } from "./audit";
 
 describe("answer persistence and citation redaction", () => {
   it("redacts stored answer text and UI citation snippets", () => {
@@ -55,6 +56,13 @@ describe("answer persistence and citation redaction", () => {
     expect(JSON.stringify(stored)).not.toContain(secret);
     expect(JSON.stringify(metadata)).not.toContain(secret);
     expect(JSON.stringify(metadata)).toContain("[hidden credential]");
+    expect(
+      JSON.stringify(
+        sanitizeAuditMetadata({
+          question: `What is password: ${secret}`,
+        }),
+      ),
+    ).not.toContain(secret);
   });
 
   it("does not redact the raw note read service used by open-note/show-me", async () => {

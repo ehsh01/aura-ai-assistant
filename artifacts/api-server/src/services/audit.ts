@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { auditLog, type AuditLogEntry } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newAuditId } from "../lib/recall-format";
+import { redactSensitiveValue } from "./secret-redaction";
 
 export type AuditEntryDto = {
   id: string;
@@ -126,12 +127,18 @@ export async function writeAuditLog(input: {
       action: input.action,
       entityType: input.entityType ?? null,
       entityId: input.entityId ?? null,
-      metadata: input.metadata ?? {},
+      metadata: sanitizeAuditMetadata(input.metadata),
       createdAt: new Date(),
     });
   } catch {
     // Audit must never break primary flows.
   }
+}
+
+export function sanitizeAuditMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  return redactSensitiveValue(metadata ?? {});
 }
 
 export async function listAuditLogForUser(
