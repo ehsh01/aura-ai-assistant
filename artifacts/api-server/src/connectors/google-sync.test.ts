@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   exchangeGoogleCode,
   fetchGoogleBundle,
+  gmailIncrementalQuery,
+  GOOGLE_GMAIL_INCREMENTAL_OVERLAP_MS,
   GOOGLE_OAUTH_SCOPES,
   GoogleNeedsReauthError,
   refreshGoogleAccessToken,
@@ -32,6 +34,16 @@ function driveFiles(start: number, count: number) {
 }
 
 describe("fetchGoogleBundle", () => {
+  it("overlaps incremental Gmail queries to recover pre-fix skipped messages", () => {
+    const since = "2026-10-18T20:00:00.000Z";
+    expect(gmailIncrementalQuery(since)).toBe(
+      `after:${Math.floor(
+        (Date.parse(since) - GOOGLE_GMAIL_INCREMENTAL_OVERLAP_MS) / 1000,
+      )}`,
+    );
+    expect(gmailIncrementalQuery(null)).toBe("newer_than:365d");
+  });
+
   it("pages Drive past 50 rows, enforces the cap, and resumes from its cursor", async () => {
     const driveRequests: URL[] = [];
     globalThis.fetch = vi.fn(async (input) => {

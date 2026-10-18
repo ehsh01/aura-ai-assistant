@@ -364,11 +364,13 @@ describe("durable Google sync jobs", () => {
         url.hostname === "gmail.googleapis.com" &&
         url.pathname.endsWith("/messages")
       ) {
-        return jsonResponse({ messages: [{ id: "bad" }, { id: "good" }] });
-      }
-      if (url.pathname.endsWith("/messages/bad")) {
         return jsonResponse({
-          id: "bad",
+          messages: [{ id: "19fed3e39731646f" }, { id: "good" }],
+        });
+      }
+      if (url.pathname.endsWith("/messages/19fed3e39731646f")) {
+        return jsonResponse({
+          id: "19fed3e39731646f",
           snippet: "snippet\ud83d",
           payload: {
             headers: [
@@ -416,13 +418,19 @@ describe("durable Google sync jobs", () => {
       .orderBy(schema.sourceRecords.externalId);
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({
-      externalId: "gmail:bad",
+      externalId: "gmail:19fed3e39731646f",
       recordTitle: "subject\ufffd",
     });
     expect(JSON.stringify(rows[0]?.recordMetadata)).not.toMatch(
       /[\ud800-\udfff]/,
     );
     expect(rows[1]?.externalId).toBe("gmail:good");
+    const [run] = await pgliteDb.select().from(schema.syncRuns);
+    expect(run).toMatchObject({
+      status: "complete",
+      recordsCreated: 2,
+      recordsFailed: 0,
+    });
   });
 
   it("skips one constrained record by id and saves the rest of the slice", async () => {
