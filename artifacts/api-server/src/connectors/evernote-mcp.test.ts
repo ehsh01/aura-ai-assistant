@@ -189,7 +189,13 @@ describe("Evernote MCP read-only boundary", () => {
     expect(source).toContain("--full-discovery");
     expect(source).toContain("--persist-token-refresh");
     expect(source).toContain("--read-only-tx");
+    expect(source).toContain("--attachment-sample");
     expect(source).toContain("SET TRANSACTION READ ONLY");
+    expect(source).toContain("getEvernoteAttachmentDownloadUrl");
+    expect(source).toContain("knownSizeBytes");
+    expect(source).toContain("unknownSizeRows");
+    expect(source).toContain("wouldSkipBytes");
+    expect(source).toContain("localDiskFreeReason");
     expect(source).toContain("--notebook-guid");
     expect(source).toContain("startIndex");
   });

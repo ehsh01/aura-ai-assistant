@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   calculateEvernoteReport,
   evernoteAttachmentFailureTransition,
+  getEvernoteAttachmentDownloadUrl,
   interruptedAttachmentResetOutcome,
   isAllowedEvernoteAttachmentUrl,
+  isEvernoteMcpSchemaValidationError,
   shouldResetEvernoteAttachmentFailure,
 } from "./evernote-full-sync";
 import {
@@ -11,7 +14,10 @@ import {
   scheduledEvernoteLoadIsSafe,
 } from "./evernote-sync-scheduler";
 import {
-  processEvernoteSyncJob,
+  activeEvernoteRunForMode,
+  hasActiveEvernoteIncrementalRun,
+  isEvernoteAttachmentBackfill,
+  nextEvernotePhaseAfterListing,
   withEvernoteLookupProgress,
 } from "./connectors";
 
@@ -77,11 +83,80 @@ describe("Evernote completeness report", () => {
 describe("Evernote attachment URL boundary", () => {
   it("allows signed storage hosts and blocks internal redirect targets", () => {
     expect(
-      isAllowedEvernoteAttachmentUrl("https://storage.googleapis.com/bucket/file?sig=x"),
+      isAllowedEvernoteAttachmentUrl(
+        "https://storage.googleapis.com/bucket/file?sig=x",
+      ),
     ).toBe(true);
-    expect(isAllowedEvernoteAttachmentUrl("http://storage.googleapis.com/file")).toBe(false);
-    expect(isAllowedEvernoteAttachmentUrl("https://127.0.0.1/admin")).toBe(false);
-    expect(isAllowedEvernoteAttachmentUrl("https://metadata.google.internal/")).toBe(false);
+    expect(
+      isAllowedEvernoteAttachmentUrl("http://storage.googleapis.com/file"),
+    ).toBe(false);
+    expect(isAllowedEvernoteAttachmentUrl("https://127.0.0.1/admin")).toBe(
+      false,
+    );
+    expect(
+      isAllowedEvernoteAttachmentUrl("https://metadata.google.internal/"),
+    ).toBe(false);
+  });
+
+  it("uses the real get_attachment schema keys and accepts its response shape", async () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL(
+          "./fixtures/evernote-get-attachment.sanitized.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as {
+      inputSchema: {
+        required: string[];
+        additionalProperties: boolean;
+      };
+      request: { noteId: string; hash: string };
+      response: Record<string, unknown>;
+    };
+    const calls: unknown[] = [];
+    const previousPace = process.env.EVERNOTE_MCP_PACE_MS;
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    try {
+      const url = await getEvernoteAttachmentDownloadUrl(
+        {
+          async callTool(input) {
+            calls.push(input);
+            return fixture.response;
+          },
+        },
+        fixture.request,
+      );
+      expect(fixture.inputSchema.required).toEqual(["noteId", "hash"]);
+      expect(fixture.inputSchema.additionalProperties).toBe(false);
+      expect(calls).toEqual([
+        {
+          name: "get_attachment",
+          arguments: {
+            noteId: fixture.request.noteId,
+            hash: fixture.request.hash,
+          },
+        },
+      ]);
+      expect(url).toBe(
+        "https://storage.googleapis.com/sanitized-evernote/attachment?signature=redacted",
+      );
+    } finally {
+      if (previousPace == null) delete process.env.EVERNOTE_MCP_PACE_MS;
+      else process.env.EVERNOTE_MCP_PACE_MS = previousPace;
+    }
+  });
+
+  it("classifies MCP argument schema failures as code errors", () => {
+    expect(
+      isEvernoteMcpSchemaValidationError(
+        new Error("Required: noteId; Unrecognized key(s): attachmentId"),
+      ),
+    ).toBe(true);
+    expect(
+      isEvernoteMcpSchemaValidationError(new Error("503 backend read error")),
+    ).toBe(false);
   });
 });
 
@@ -149,6 +224,37 @@ describe("Evernote unattended schedule", () => {
     ).toBe("full");
   });
 
+  it("starts incremental notes when the initial full run is backfilling attachments", () => {
+    expect(
+      evernoteScheduleDecision({
+        now: new Date("2026-10-18T14:00:00Z"),
+        lastSyncAt: null,
+        lastFullReconcileAt: null,
+        incrementalEnabled: true,
+        fullReconcileEnabled: true,
+        autoFullImportEnabled: false,
+        inNightWindow: false,
+        attachmentBackfillInProgress: true,
+        incrementalMinutes: 15,
+        fullReconcileMinutes: 1440,
+      }),
+    ).toBe("incremental");
+    expect(
+      evernoteScheduleDecision({
+        now: new Date("2026-10-18T06:00:00Z"),
+        lastSyncAt: null,
+        lastFullReconcileAt: null,
+        incrementalEnabled: true,
+        fullReconcileEnabled: true,
+        autoFullImportEnabled: false,
+        inNightWindow: true,
+        attachmentBackfillInProgress: true,
+        incrementalMinutes: 15,
+        fullReconcileMinutes: 1440,
+      }),
+    ).toBe("incremental");
+  });
+
   it("requires a passing load check before scheduled work", async () => {
     expect(
       await scheduledEvernoteLoadIsSafe(async () => ({
@@ -198,27 +304,99 @@ describe("Evernote attachment retry policy", () => {
     });
     expect(shouldResetEvernoteAttachmentFailure("failed", 2)).toBe(true);
     expect(shouldResetEvernoteAttachmentFailure("failed", 3)).toBe(false);
-    expect(
-      shouldResetEvernoteAttachmentFailure("failed_oom", 1),
-    ).toBe(false);
-    expect(
-      shouldResetEvernoteAttachmentFailure("skipped_too_large", 0),
-    ).toBe(false);
+    expect(shouldResetEvernoteAttachmentFailure("failed_oom", 1)).toBe(false);
+    expect(shouldResetEvernoteAttachmentFailure("skipped_too_large", 0)).toBe(
+      false,
+    );
   });
 });
 
 describe("Evernote import AI boundary", () => {
   it("contains no OpenAI or embedding invocation in the worker entrypoint", () => {
-    const implementation = processEvernoteSyncJob.toString().toLowerCase();
-    expect(implementation).not.toContain("openai");
-    expect(implementation).not.toContain("embeditem");
-    expect(implementation).not.toContain("warmentityembedding");
+    const source = readFileSync(
+      new URL("./connectors.ts", import.meta.url),
+      "utf8",
+    );
+    const implementation = source
+      .slice(
+        source.indexOf("async function processEvernoteSyncJobLocked"),
+        source.indexOf("export async function failEvernoteSyncRun"),
+      )
+      .toLowerCase();
+    expect(implementation).toContain("processevernotesyncjoblocked");
+    expect(implementation).not.toMatch(
+      /openai\s*\.|embeditem\s*\(|warmentityembedding\s*\(/,
+    );
   });
 
   it("rechecks the night window on every scheduled full-import slice", () => {
-    const implementation = processEvernoteSyncJob.toString();
+    const implementation = readFileSync(
+      new URL("./connectors.ts", import.meta.url),
+      "utf8",
+    );
     expect(implementation).toContain("evernoteScheduled");
     expect(implementation).toContain("isEvernoteNightWindow");
+    expect(implementation).toContain('persistedPhase === "attachments"');
+  });
+});
+
+describe("Evernote attachment backfill coexistence", () => {
+  const backfill = {
+    id: "sync-full",
+    status: "running",
+    metadata: {
+      evernoteSyncMode: "full",
+      evernotePhase: "attachments",
+      evernoteCheckpoint: { startIndex: 4927 },
+    },
+  };
+
+  it("allows one incremental run beside a full attachment backfill", () => {
+    expect(isEvernoteAttachmentBackfill(backfill.metadata)).toBe(true);
+    expect(activeEvernoteRunForMode([backfill], "incremental")).toBeNull();
+
+    const incremental = {
+      id: "sync-incremental",
+      status: "queued",
+      metadata: {
+        evernoteSyncMode: "incremental",
+        evernotePhase: "notes",
+      },
+    };
+    expect(
+      activeEvernoteRunForMode([incremental, backfill], "incremental"),
+    ).toBe(incremental);
+    expect(activeEvernoteRunForMode([incremental, backfill], "full")).toBe(
+      backfill,
+    );
+    expect(
+      hasActiveEvernoteIncrementalRun([incremental, backfill], backfill.id),
+    ).toBe(true);
+  });
+
+  it("does not overlap incremental note writers", () => {
+    const activeNotes = {
+      ...backfill,
+      metadata: { ...backfill.metadata, evernotePhase: "notes" },
+    };
+    expect(activeEvernoteRunForMode([activeNotes], "incremental")).toBe(
+      activeNotes,
+    );
+  });
+
+  it("runs incremental active and trash listings without entering attachments", () => {
+    expect(nextEvernotePhaseAfterListing("incremental", false)).toBe("trash");
+    expect(nextEvernotePhaseAfterListing("incremental", true)).toBe(
+      "incremental_complete",
+    );
+    expect(nextEvernotePhaseAfterListing("full", true)).toBe("attachments");
+    const implementation = readFileSync(
+      new URL("./connectors.ts", import.meta.url),
+      "utf8",
+    );
+    expect(implementation).toMatch(
+      /stopAtFirstUnchanged:\s*syncMode === "incremental" && !trashPhase/,
+    );
   });
 });
 

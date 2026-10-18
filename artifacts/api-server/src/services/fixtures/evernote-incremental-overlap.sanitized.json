@@ -1,0 +1,56 @@
+{
+  "fullRun": {
+    "id": "sync-1792271256921-4s1bym",
+    "status": "running",
+    "recordsFetched": 4927,
+    "metadata": {
+      "evernoteSyncMode": "full",
+      "evernoteScheduled": true,
+      "evernotePhase": "attachments",
+      "evernoteCheckpoint": {
+        "startIndex": 4927,
+        "expectedTotal": 4927,
+        "recordsFetched": 4927,
+        "recordsSkipped": 0,
+        "recordsFailed": 0,
+        "batchesProcessed": 4927,
+        "listingAuthoritative": true
+      },
+      "evernoteTrashCheckpoint": {
+        "startIndex": 18,
+        "expectedTotal": 18,
+        "recordsFetched": 18,
+        "recordsSkipped": 0,
+        "recordsFailed": 0,
+        "batchesProcessed": 18,
+        "listingAuthoritative": true
+      }
+    }
+  },
+  "changedNote": {
+    "listing": {
+      "id": "9d8c7b6a-0000-4000-8000-000000000001",
+      "title": "Sanitized project note",
+      "updated": "2026-10-18T08:45:00.000Z"
+    },
+    "note": {
+      "id": "9d8c7b6a-0000-4000-8000-000000000001",
+      "title": "Sanitized project note",
+      "content": "<en-note>Sanitized content</en-note>",
+      "updated": "2026-10-18T08:45:00.000Z",
+      "resources": [
+        {
+          "guid": "resource-sanitized-1",
+          "mime": "application/pdf",
+          "data": {
+            "bodyHash": "0123456789abcdef0123456789abcdef",
+            "size": 24576
+          },
+          "attributes": {
+            "fileName": "sanitized.pdf"
+          }
+        }
+      ]
+    }
+  }
+}

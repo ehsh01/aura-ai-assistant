@@ -1,9 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, sql } from "drizzle-orm";
 import {
   connectors,
+  evernoteAttachments,
   sourceRecords,
   syncRuns,
 } from "@workspace/db/schema";
@@ -52,6 +53,17 @@ function optionalArgument(name: string): string | null {
   return index >= 0 ? process.argv[index + 1]?.trim() || null : null;
 }
 
+function optionalCountArgument(name: string): number | null {
+  const index = process.argv.indexOf(name);
+  if (index < 0) return null;
+  const raw = process.argv[index + 1]?.trim();
+  const parsed = Number(raw);
+  if (!raw || !Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
+    throw new Error(`${name} requires an integer from 1 to 100`);
+  }
+  return parsed;
+}
+
 function hasFlag(name: string): boolean {
   return process.argv.includes(name);
 }
@@ -90,6 +102,12 @@ function numberValue(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function queryRows(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) return value.map(record);
+  const rows = record(value).rows;
+  return Array.isArray(rows) ? rows.map(record) : [];
+}
+
 function configuredBytes(
   name: string,
   fallback: number,
@@ -101,13 +119,18 @@ function configuredBytes(
     : fallback;
 }
 
+function formatBytes(value: number): string {
+  return `${value.toLocaleString("en-US")} bytes (${(
+    value /
+    1024 /
+    1024
+  ).toFixed(2)} MiB)`;
+}
+
 function listedGuid(value: unknown): string | null {
   const row = record(value);
   return (
-    text(row.id) ??
-    text(row.guid) ??
-    text(row.noteId) ??
-    text(row.noteGuid)
+    text(row.id) ?? text(row.guid) ?? text(row.noteId) ?? text(row.noteGuid)
   );
 }
 
@@ -132,7 +155,9 @@ function noteDryRunMetadata(
   const notebookGuid =
     text(root.notebookGuid) ??
     text(root.notebookId) ??
-    graph.map((row) => text(row.notebookGuid ?? row.notebookId)).find(Boolean) ??
+    graph
+      .map((row) => text(row.notebookGuid ?? row.notebookId))
+      .find(Boolean) ??
     null;
   const title =
     text(root.title) ??
@@ -205,9 +230,8 @@ function noteDryRunMetadata(
 loadDotEnv();
 
 const { getDb, closeDb } = await import("./lib/db.js");
-const { openConnectorSettings, sealConnectorSettings } = await import(
-  "./lib/secret-box.js"
-);
+const { openConnectorSettings, sealConnectorSettings } =
+  await import("./lib/secret-box.js");
 const {
   callEvernoteReadTool,
   discoverEvernoteNotebooks,
@@ -217,10 +241,25 @@ const {
   planEvernoteNotebookRanges,
   withEvernoteMcpClient,
 } = await import("./connectors/evernote-mcp.js");
+const { fetchEvernoteAttachmentUrl, getEvernoteAttachmentDownloadUrl } =
+  await import("./services/evernote-full-sync.js");
+const { responseBytesInMemory } =
+  await import("./services/evernote-attachment-extract.js");
 
 try {
   const connectorId = connectorIdArgument();
-  const readOnlyTx = hasFlag("--read-only-tx");
+  const attachmentSampleSize = optionalCountArgument("--attachment-sample");
+  const readOnlyTx = hasFlag("--read-only-tx") || attachmentSampleSize != null;
+  const attachmentMaxBytes = configuredBytes(
+    "EVERNOTE_ATTACHMENT_MAX_BYTES",
+    20 * 1024 * 1024,
+    50 * 1024 * 1024,
+  );
+  const pdfMaxBytes = configuredBytes(
+    "EVERNOTE_PDF_PARSE_MAX_BYTES",
+    15 * 1024 * 1024,
+    15 * 1024 * 1024,
+  );
   type DbReader = Pick<ReturnType<typeof getDb>, "select" | "execute">;
   const loadDbState = async (database: DbReader) => {
     const connectorRows = await database
@@ -231,14 +270,8 @@ try {
       .from(connectors)
       .where(
         connectorId
-          ? and(
-              eq(connectors.id, connectorId),
-              eq(connectors.type, "evernote"),
-            )
-          : and(
-              eq(connectors.type, "evernote"),
-              eq(connectors.enabled, true),
-            ),
+          ? and(eq(connectors.id, connectorId), eq(connectors.type, "evernote"))
+          : and(eq(connectors.type, "evernote"), eq(connectors.enabled, true)),
       )
       .orderBy(desc(connectors.updatedAt))
       .limit(connectorId ? 1 : 2);
@@ -248,8 +281,12 @@ try {
           .select({
             externalId: sourceRecords.externalId,
             title: sourceRecords.recordTitle,
-            notebookGuid: sql<string | null>`${sourceRecords.recordMetadata}->>'notebookGuid'`,
-            notebookName: sql<string | null>`${sourceRecords.recordMetadata}->>'notebookName'`,
+            notebookGuid: sql<
+              string | null
+            >`${sourceRecords.recordMetadata}->>'notebookGuid'`,
+            notebookName: sql<
+              string | null
+            >`${sourceRecords.recordMetadata}->>'notebookName'`,
           })
           .from(sourceRecords)
           .where(
@@ -273,7 +310,81 @@ try {
           .orderBy(desc(syncRuns.startedAt))
           .limit(25)
       : [];
-    return { connectorRows, existingRows, recentRuns };
+    const pendingAttachmentStats =
+      selectedConnectorId && attachmentSampleSize != null
+        ? await database.execute(sql`
+          SELECT
+            cast(count(*) as int) AS pending_count,
+            cast(count(*) FILTER (WHERE size_bytes IS NULL) as int)
+              AS unknown_size_count,
+            cast(coalesce(sum(size_bytes), 0) as bigint) AS known_size_bytes,
+            cast(count(*) FILTER (
+              WHERE size_bytes > ${attachmentMaxBytes}
+                OR (
+                  size_bytes > ${pdfMaxBytes}
+                  AND (
+                    lower(coalesce(mime, '')) = 'application/pdf'
+                    OR lower(coalesce(file_name, '')) LIKE '%.pdf'
+                  )
+                )
+            ) as int) AS skipped_count,
+            cast(coalesce(sum(size_bytes) FILTER (
+              WHERE size_bytes > ${attachmentMaxBytes}
+                OR (
+                  size_bytes > ${pdfMaxBytes}
+                  AND (
+                    lower(coalesce(mime, '')) = 'application/pdf'
+                    OR lower(coalesce(file_name, '')) LIKE '%.pdf'
+                  )
+                )
+            ), 0) as bigint) AS skipped_bytes
+          FROM evernote_attachments
+          WHERE connector_id = ${selectedConnectorId}
+            AND fetch_state = 'pending'
+          `)
+        : null;
+    const attachmentCandidates =
+      selectedConnectorId && attachmentSampleSize != null
+        ? await database
+            .select({
+              id: evernoteAttachments.id,
+              noteId: sourceRecords.externalId,
+              hash: evernoteAttachments.evernoteHash,
+              sizeBytes: evernoteAttachments.sizeBytes,
+              mime: evernoteAttachments.mime,
+              fileName: evernoteAttachments.fileName,
+            })
+            .from(evernoteAttachments)
+            .innerJoin(
+              sourceRecords,
+              eq(sourceRecords.id, evernoteAttachments.sourceRecordId),
+            )
+            .where(
+              and(
+                eq(evernoteAttachments.connectorId, selectedConnectorId),
+                eq(evernoteAttachments.fetchState, "pending"),
+                isNotNull(evernoteAttachments.evernoteHash),
+                isNotNull(evernoteAttachments.sizeBytes),
+                sql`${evernoteAttachments.sizeBytes} <= ${attachmentMaxBytes}`,
+                sql`not (
+                  ${evernoteAttachments.sizeBytes} > ${pdfMaxBytes}
+                  and (
+                    lower(coalesce(${evernoteAttachments.mime}, '')) = 'application/pdf'
+                    or lower(coalesce(${evernoteAttachments.fileName}, '')) like '%.pdf'
+                  )
+                )`,
+              ),
+            )
+            .orderBy(asc(evernoteAttachments.sizeBytes))
+            .limit(attachmentSampleSize)
+        : [];
+    return {
+      connectorRows,
+      existingRows,
+      recentRuns,
+      pendingAttachmentStats,
+      attachmentCandidates,
+    };
   };
   const dbState = readOnlyTx
     ? await getDb().transaction(async (tx) => {
@@ -300,23 +411,13 @@ try {
     hasFlag("--full-discovery") || !process.argv.includes("--notebook-guid");
   const persistTokenRefresh = hasFlag("--persist-token-refresh");
   const printNotebookShape = hasFlag("--print-notebook-shape");
-  const attachmentMaxBytes = configuredBytes(
-    "EVERNOTE_ATTACHMENT_MAX_BYTES",
-    20 * 1024 * 1024,
-    50 * 1024 * 1024,
-  );
-  const pdfMaxBytes = configuredBytes(
-    "EVERNOTE_PDF_PARSE_MAX_BYTES",
-    15 * 1024 * 1024,
-    15 * 1024 * 1024,
-  );
   const requestedSampleSize = Number(
     optionalArgument("--get-note-sample") ?? 8,
   );
   const getNoteSampleSize = Number.isFinite(requestedSampleSize)
     ? Math.min(100, Math.max(5, Math.floor(requestedSampleSize)))
     : 8;
-  if (!persistTokenRefresh) {
+  if (!persistTokenRefresh && attachmentSampleSize == null) {
     throw new Error(
       "Pass --persist-token-refresh before connecting so any rotated OAuth state is saved exactly as it is in the worker.",
     );
@@ -348,12 +449,69 @@ try {
   const result = await withEvernoteMcpClient(
     settings,
     async (client) => {
+      if (attachmentSampleSize != null) {
+        const stats = queryRows(dbState.pendingAttachmentStats)[0] ?? {};
+        const samples: Array<{
+          noteId: string;
+          hash: string;
+          metadataBytes: number;
+          fetchedBytes: number;
+          mime: string;
+        }> = [];
+        for (const attachment of dbState.attachmentCandidates) {
+          const downloadUrl = await getEvernoteAttachmentDownloadUrl(client, {
+            noteId: attachment.noteId,
+            hash: attachment.hash!,
+          });
+          const response = await fetchEvernoteAttachmentUrl(downloadUrl);
+          const responseMime =
+            text(response.headers.get("content-type")?.split(";")[0]) ??
+            attachment.mime ??
+            "application/octet-stream";
+          const { data } = await responseBytesInMemory(
+            response,
+            attachmentMaxBytes,
+            attachment.sizeBytes,
+          );
+          samples.push({
+            noteId: `${attachment.noteId.slice(0, 8)}…${attachment.noteId.slice(-4)}`,
+            hash: `${attachment.hash!.slice(0, 8)}…${attachment.hash!.slice(-4)}`,
+            metadataBytes: attachment.sizeBytes!,
+            fetchedBytes: data.length,
+            mime: responseMime,
+          });
+        }
+        return {
+          mode: "attachment-sample" as const,
+          requested: attachmentSampleSize,
+          fetched: samples.length,
+          samples,
+          pending: {
+            count: numberValue(stats.pending_count) ?? 0,
+            knownSizeBytes: numberValue(stats.known_size_bytes) ?? 0,
+            unknownSizeRows: numberValue(stats.unknown_size_count) ?? 0,
+            wouldSkipCount: numberValue(stats.skipped_count) ?? 0,
+            wouldSkipBytes: numberValue(stats.skipped_bytes) ?? 0,
+            attachmentMaxBytes,
+            pdfMaxBytes,
+          },
+          storage: {
+            target: "none (transient process memory only)",
+            detail:
+              "Raw attachment bytes are held in a Buffer for hashing/text extraction and are then discarded; only SHA-256, size, and extracted text metadata are stored in evernote_attachments. There is no local-disk path, Spaces bucket/prefix, or DB bytea for these bytes.",
+            citation:
+              "artifacts/api-server/src/services/evernote-attachment-extract.ts:74-108 (in-memory Buffer); artifacts/api-server/src/services/evernote-full-sync.ts:774-828 (only derived metadata persisted)",
+            localDiskFreeBytes: null,
+            localDiskFreeReason:
+              "not applicable because this code path has no local-disk storage target",
+          },
+        };
+      }
       if (!fullDiscovery) {
         const notebookGuid = requiredArgument("--notebook-guid");
-        const notebookName =
-          process.argv.includes("--notebook-name")
-            ? requiredArgument("--notebook-name")
-            : notebookGuid;
+        const notebookName = process.argv.includes("--notebook-name")
+          ? requiredArgument("--notebook-name")
+          : notebookGuid;
         const scope = { notebookGuid, notebookName };
         const ranges = await planEvernoteNotebookRanges(client, scope);
         const output: Array<{
@@ -635,10 +793,8 @@ try {
               title: listedTitle(item),
               notebookGuid:
                 text(row.notebookGuid) ?? text(row.notebookId) ?? null,
-              created:
-                text(row.created) ?? text(row.createdAt) ?? null,
-              updated:
-                text(row.updated) ?? text(row.updatedAt) ?? null,
+              created: text(row.created) ?? text(row.createdAt) ?? null,
+              updated: text(row.updated) ?? text(row.updatedAt) ?? null,
             });
           }
           rangeListed += page.rows.length;
@@ -678,7 +834,9 @@ try {
       );
       console.log("GUIDs supplied by the global fallback:");
       console.table(
-        missingFromNotebookUnion.map(({ fullGuid: _fullGuid, ...item }) => item),
+        missingFromNotebookUnion.map(
+          ({ fullGuid: _fullGuid, ...item }) => item,
+        ),
       );
       for (const [guid, item] of globalListed) {
         if (!listedByGuid.has(guid)) {
@@ -951,20 +1109,20 @@ try {
         validationErrors,
       };
     },
-    persistMcpState,
+    attachmentSampleSize == null ? persistMcpState : undefined,
   );
 
   const loadSourceRecordCount = async (database: DbReader) =>
     (
       await database
-      .select({ count: sql<number>`cast(count(*) as int)` })
-      .from(sourceRecords)
-      .where(
-        and(
-          eq(sourceRecords.connectorId, selectedConnectorId),
-          eq(sourceRecords.recordType, "evernote_note"),
-        ),
-      )
+        .select({ count: sql<number>`cast(count(*) as int)` })
+        .from(sourceRecords)
+        .where(
+          and(
+            eq(sourceRecords.connectorId, selectedConnectorId),
+            eq(sourceRecords.recordType, "evernote_note"),
+          ),
+        )
     )[0]?.count ?? 0;
   const sourceRecordCountAfter = readOnlyTx
     ? await getDb().transaction(async (tx) => {
@@ -977,7 +1135,26 @@ try {
       `Dry-run changed source_records: ${sourceRecordCountBefore} before, ${sourceRecordCountAfter} after`,
     );
   }
-  if (result.value.mode === "full-discovery") {
+  if (result.value.mode === "attachment-sample") {
+    console.log("Read-only Evernote attachment samples:");
+    console.table(result.value.samples);
+    console.log(
+      `Pending attachments: ${result.value.pending.count}; expected known bytes=${formatBytes(result.value.pending.knownSizeBytes)}; unknown-size rows=${result.value.pending.unknownSizeRows}`,
+    );
+    console.log(
+      `Would skip before fetch: ${result.value.pending.wouldSkipCount} rows / ${formatBytes(result.value.pending.wouldSkipBytes)} (attachment limit=${formatBytes(result.value.pending.attachmentMaxBytes)}, PDF limit=${formatBytes(result.value.pending.pdfMaxBytes)})`,
+    );
+    console.log(
+      `Fetched ${result.value.fetched}/${result.value.requested} requested small attachments.`,
+    );
+    console.log(
+      `Attachment byte storage: ${result.value.storage.target}. ${result.value.storage.detail}`,
+    );
+    console.log(`Storage code: ${result.value.storage.citation}`);
+    console.log(
+      `Free disk on storage target: ${result.value.storage.localDiskFreeReason}`,
+    );
+  } else if (result.value.mode === "full-discovery") {
     console.log(
       `Discovery: ${result.value.notebookDiscovery.notebooks.length}/${result.value.notebookDiscovery.totalResultCount} notebooks across ${result.value.notebookDiscovery.pages} query partitions`,
     );

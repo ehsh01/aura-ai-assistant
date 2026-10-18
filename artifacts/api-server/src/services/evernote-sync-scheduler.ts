@@ -1,8 +1,16 @@
-import { and, eq } from "drizzle-orm";
-import { connectors, evernoteSyncState } from "@workspace/db/schema";
+import { and, eq, inArray } from "drizzle-orm";
+import {
+  connectors,
+  evernoteSyncState,
+  jobs,
+  syncRuns,
+} from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { logger } from "../lib/logger";
-import { enqueueEvernoteSyncForUser } from "./connectors";
+import {
+  enqueueEvernoteSyncForUser,
+  isEvernoteAttachmentBackfill,
+} from "./connectors";
 import {
   isEvernoteAutoFullImportEnabled,
   isEvernoteFullReconcileEnabled,
@@ -18,7 +26,9 @@ let running = false;
 
 function envMinutes(name: string, fallback: number): number {
   const value = Number(process.env[name]);
-  return Number.isFinite(value) ? Math.min(10_080, Math.max(1, value)) : fallback;
+  return Number.isFinite(value)
+    ? Math.min(10_080, Math.max(1, value))
+    : fallback;
 }
 
 export type EvernoteScheduleDecision = "full" | "incremental" | null;
@@ -37,11 +47,16 @@ export function evernoteScheduleDecision(input: {
   fullReconcileEnabled: boolean;
   autoFullImportEnabled: boolean;
   inNightWindow: boolean;
+  attachmentBackfillInProgress?: boolean;
   incrementalMinutes: number;
   fullReconcileMinutes: number;
 }): EvernoteScheduleDecision {
   const { now } = input;
-  const hasCompletedSync = Boolean(input.lastSyncAt || input.lastFullReconcileAt);
+  const hasCompletedSync = Boolean(
+    input.lastSyncAt ||
+    input.lastFullReconcileAt ||
+    input.attachmentBackfillInProgress,
+  );
   if (!hasCompletedSync) {
     return input.autoFullImportEnabled &&
       input.fullReconcileEnabled &&
@@ -50,6 +65,7 @@ export function evernoteScheduleDecision(input: {
       : null;
   }
   if (
+    !input.attachmentBackfillInProgress &&
     input.fullReconcileEnabled &&
     input.inNightWindow &&
     (!input.lastFullReconcileAt ||
@@ -69,7 +85,9 @@ export function evernoteScheduleDecision(input: {
   return null;
 }
 
-export async function scheduleDueEvernoteSyncs(now = new Date()): Promise<number> {
+export async function scheduleDueEvernoteSyncs(
+  now = new Date(),
+): Promise<number> {
   if (!isEvernoteSchedulerEnabled()) return 0;
   const rows = await getDb()
     .select({
@@ -82,6 +100,24 @@ export async function scheduleDueEvernoteSyncs(now = new Date()): Promise<number
       eq(evernoteSyncState.connectorId, connectors.id),
     )
     .where(and(eq(connectors.type, "evernote"), eq(connectors.enabled, true)));
+  const activeRuns = await getDb()
+    .select({
+      connectorId: syncRuns.connectorId,
+      metadata: syncRuns.metadata,
+    })
+    .from(syncRuns)
+    .innerJoin(jobs, eq(jobs.id, syncRuns.id))
+    .where(
+      and(
+        inArray(syncRuns.status, ["queued", "running"]),
+        inArray(jobs.status, ["queued", "processing"]),
+      ),
+    );
+  const attachmentBackfills = new Set(
+    activeRuns
+      .filter((run) => isEvernoteAttachmentBackfill(run.metadata))
+      .map((run) => run.connectorId),
+  );
   let queued = 0;
   for (const { connector, state } of rows) {
     const inNightWindow = isEvernoteNightWindow(now);
@@ -93,6 +129,7 @@ export async function scheduleDueEvernoteSyncs(now = new Date()): Promise<number
       fullReconcileEnabled: isEvernoteFullReconcileEnabled(),
       autoFullImportEnabled: isEvernoteAutoFullImportEnabled(),
       inNightWindow,
+      attachmentBackfillInProgress: attachmentBackfills.has(connector.id),
       incrementalMinutes: envMinutes("EVERNOTE_INCREMENTAL_SYNC_MINUTES", 15),
       fullReconcileMinutes: envMinutes(
         "EVERNOTE_FULL_RECONCILE_MINUTES",

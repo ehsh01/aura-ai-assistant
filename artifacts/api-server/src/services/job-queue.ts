@@ -44,6 +44,15 @@ export function attemptsAfterDeferredClaim(claimedAttempts: number): number {
   return Math.max(0, Math.floor(claimedAttempts) - 1);
 }
 
+export function isNonRetryableCodeError(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "nonRetryable" in error &&
+      error.nonRetryable === true,
+  );
+}
+
 export function evernoteTransientDeferral(error: unknown): {
   retryAfterMs: number;
 } | null {
@@ -294,14 +303,16 @@ export async function deferJob(jobId: string, delayMs: number, reason: string): 
 export async function failJob(
   jobId: string,
   error: string,
-  options?: { retryAfterMs?: number },
+  options?: { retryAfterMs?: number; forceTerminal?: boolean },
 ): Promise<boolean> {
   const rows = await getDb().select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
   const job = rows[0];
   if (!job) return true;
 
   const now = new Date();
-  const terminal = jobFailureIsTerminal(job.attempts, job.maxAttempts);
+  const terminal =
+    options?.forceTerminal === true ||
+    jobFailureIsTerminal(job.attempts, job.maxAttempts);
 
   if (terminal) {
     await getDb()
