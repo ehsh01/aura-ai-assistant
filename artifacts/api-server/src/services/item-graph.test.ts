@@ -1,13 +1,31 @@
 import { describe, expect, it } from "vitest";
 import {
   buildKnowledgeGraph,
+  graphSearchTsQuery,
   hideNativeNotesWithEvernoteTwin,
+  maskGraphLabel,
   parseGraphQuery,
   sourceQuotasForQuery,
   type GraphQuery,
   type GraphNodeType,
 } from "./item-graph";
 import type { SavedItemDto } from "./items";
+
+const GRAPH_SOURCE_TYPES: GraphNodeType[] = [
+  "notes",
+  "links",
+  "files",
+  "evernote",
+  "gmail",
+  "drive",
+  "calendar",
+  "finance",
+  "flipperforce",
+  "homey",
+  "memories",
+  "tasks",
+  "contacts",
+];
 
 function item(id: string, overrides: Partial<SavedItemDto> = {}): SavedItemDto {
   return {
@@ -129,6 +147,43 @@ describe("knowledge graph caps and filters", () => {
     expect(Object.values(tiny).reduce((sum, value) => sum + value, 0)).toBe(1);
     expect(tiny.evernote_note).toBe(0);
     expect(tiny.items).toBe(0);
+  });
+
+  it("returns unused source shares to sources that have rows", () => {
+    const query = graphQuery({
+      limit: 350,
+      types: [...GRAPH_SOURCE_TYPES, "notebooks", "tags"],
+    });
+    const counts = Object.fromEntries(
+      Object.keys(sourceQuotasForQuery(query)).map((key) => [key, 0]),
+    );
+    Object.assign(counts, {
+      evernote_note: 4_927,
+      notes: 31,
+      gmail_message: 393,
+      drive_file: 150,
+      finance_transaction: 3_261,
+      flipperforce_project: 2,
+      homey_device: 1,
+      memories: 224,
+      tasks: 18,
+      google_contact: 213,
+    });
+    const quotas = sourceQuotasForQuery(query, counts);
+    expect(Object.values(quotas).reduce((sum, value) => sum + value, 0)).toBe(
+      280,
+    );
+    expect(quotas.flipperforce_project).toBe(2);
+    expect(quotas.homey_device).toBe(1);
+    expect(quotas.evernote_note).toBeGreaterThan(43);
+  });
+
+  it("uses deterministic any-word terms for graph search", () => {
+    expect(
+      graphSearchTsQuery(
+        "When does my Psychiatry website registration expire?",
+      ),
+    ).toBe("psychiatry | website | registration | expire");
   });
 
   it("returns only requested node types", () => {
@@ -254,6 +309,59 @@ describe("knowledge graph caps and filters", () => {
     );
     expect(graph.nodes.map((node) => node.type).sort()).toEqual(
       sources.map(([, type]) => type).sort(),
+    );
+  });
+
+  it("masks every digit run in labels for every graph source and hub", () => {
+    expect(maskGraphLabel("Policy 12 / account 12345678")).toBe(
+      "Policy ****12 / account ****5678",
+    );
+    expect(maskGraphLabel("Policy ****5678")).toBe("Policy ****5678");
+    const sources = [
+      "recall",
+      "evernote",
+      "gmail",
+      "drive",
+      "calendar",
+      "finance",
+      "flipperforce",
+      "homey",
+      "memory",
+      "task",
+      "contact",
+    ];
+    const graph = buildKnowledgeGraph(
+      sources.flatMap((source, index) => [
+        item(`${source}-a`, {
+          source,
+          title: `${source} account ${index + 1} 12345678`,
+          notebook: "Garage 2026",
+          tags: ["policy 987654"],
+        }),
+        item(`${source}-b`, {
+          source,
+          title: `${source} invoice 42`,
+          notebook: "Garage 2026",
+          tags: ["policy 987654"],
+        }),
+      ]),
+      graphQuery({
+        limit: 100,
+        types: [...GRAPH_SOURCE_TYPES, "notebooks", "tags"],
+      }),
+      { noisyNotebookKeys: new Set() },
+    );
+    expect(graph.nodes.length).toBeGreaterThan(0);
+    expect(
+      graph.nodes.every(
+        (node) => !/\d/.test(node.label.replace(/\*{4}\d{1,4}/g, "")),
+      ),
+    ).toBe(true);
+    expect(graph.nodes.some((node) => node.label.includes("****5678"))).toBe(
+      true,
+    );
+    expect(graph.nodes.some((node) => node.label.includes("****2026"))).toBe(
+      true,
     );
   });
 

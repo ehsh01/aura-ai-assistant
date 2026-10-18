@@ -84,27 +84,46 @@ async function mockRecall(page: Page) {
       });
       const graphLimit = Number(url.searchParams.get("limit") ?? 350);
       const graphOffset = Number(url.searchParams.get("offset") ?? 0);
+      const graphQuery = url.searchParams.get("q") ?? "";
+      const graphNode =
+        graphQuery === "psychiatry"
+          ? {
+              id: "item-node:psychiatry",
+              itemId: "source-record:psychiatry",
+              type: "evernote",
+              label: "Adding and editing a web link on the Psychiatry website",
+              value: 4,
+              hub: false,
+              href: "/everything/source-record%3Apsychiatry",
+            }
+          : graphQuery === "no graph match"
+            ? null
+            : graphQuery
+              ? {
+                  id: "item-node:gmail-roofer",
+                  itemId: "source-record:gmail-roofer",
+                  type: "gmail",
+                  label: "Roof contract 12345678",
+                  value: 4,
+                  hub: false,
+                  href: "/everything/source-record%3Agmail-roofer",
+                }
+              : {
+                  id: "item-node:item-permit",
+                  itemId: "item-permit",
+                  type: "notes",
+                  label: "Permit revision",
+                  value: 4,
+                  hub: false,
+                  href: "/everything/item-permit",
+                };
       return json(route, {
-        nodes: url.searchParams.get("q")
-          ? [
-              {
-                id: "item-node:gmail-roofer",
-                itemId: "source-record:gmail-roofer",
-                type: "gmail",
-                label: "Roof contract",
-                value: 4,
-                hub: false,
-                href: "/everything/source-record%3Agmail-roofer",
-              },
-            ]
-          : [],
+        nodes: graphNode ? [graphNode] : [],
         edges: [],
         page: {
           offset: graphOffset,
           limit: graphLimit,
-          nextOffset: url.searchParams.get("q")
-            ? graphOffset + graphLimit
-            : null,
+          nextOffset: graphQuery && graphNode ? graphOffset + graphLimit : null,
         },
       });
     }
@@ -395,6 +414,16 @@ test.describe("Recall one-box Phase 1", () => {
     await expect(page.getByTestId("keyword-results")).toContainText("Gmail");
     await expect(page.getByTestId("keyword-results")).toContainText("Drive");
     expect(calls.searches).toEqual(["when does my roof warranty expire?"]);
+    await expect
+      .poll(() =>
+        calls.graphQueries.some((entry) => entry.q === "roof warranty expire"),
+      )
+      .toBe(true);
+    expect(
+      calls.graphQueries.some(
+        (entry) => entry.q === "when does my roof warranty expire?",
+      ),
+    ).toBe(false);
     expect(calls.ai).toBe(0);
   });
 
@@ -419,11 +448,68 @@ test.describe("Recall one-box Phase 1", () => {
       )
       .toBe(true);
     const canvas = page.getByLabel(/Interactive knowledge graph/);
+    await expect(canvas).toHaveAttribute(
+      "aria-label",
+      /Roof contract \*{4}5678/,
+    );
     await canvas.focus();
     await canvas.press("Enter");
     await expect(page.locator(".hud-detail")).toContainText("Roof contract");
     await expect(page.locator(".hud-detail")).toContainText("Gmail");
+    await page.getByRole("button", { name: "Close item" }).click();
+    const unseededBefore = calls.graphQueries.filter(
+      (entry) => entry.q === "",
+    ).length;
+    await page.getByRole("button", { name: "Clear graph search" }).click();
+    await expect
+      .poll(() => calls.graphQueries.filter((entry) => entry.q === "").length)
+      .toBeGreaterThan(unseededBefore);
+    await expect(
+      page.getByRole("button", { name: "Clear graph search" }),
+    ).toHaveCount(0);
     expect(calls.ai).toBe(0);
+  });
+
+  test("Psychiatry search seeds its matching note on page one", async ({
+    page,
+  }) => {
+    const calls = await mockRecall(page);
+    await page.goto("/");
+    await page.getByLabel("Tell or ask Recall").fill("psychiatry");
+    await page.getByLabel("Tell or ask Recall").press("Enter");
+    await expect
+      .poll(() =>
+        calls.graphQueries.some(
+          (entry) => entry.q === "psychiatry" && entry.offset === "0",
+        ),
+      )
+      .toBe(true);
+    await expect(
+      page.getByLabel(/Interactive knowledge graph/),
+    ).toHaveAttribute("aria-label", /Psychiatry website/);
+  });
+
+  test("an empty seeded graph falls back to the unseeded page", async ({
+    page,
+  }) => {
+    const calls = await mockRecall(page);
+    await page.goto("/");
+    const unseededBefore = calls.graphQueries.filter(
+      (entry) => entry.q === "",
+    ).length;
+    await page.getByLabel("Tell or ask Recall").fill("no graph match");
+    await page.getByLabel("Tell or ask Recall").press("Enter");
+    await expect
+      .poll(() =>
+        calls.graphQueries.some((entry) => entry.q === "no graph match"),
+      )
+      .toBe(true);
+    await expect
+      .poll(() => calls.graphQueries.filter((entry) => entry.q === "").length)
+      .toBeGreaterThan(unseededBefore);
+    await expect(
+      page.getByLabel(/Interactive knowledge graph/),
+    ).toHaveAttribute("aria-label", /Permit revision/);
   });
 
   test("mobile graph paging uses the visible 180-row page", async ({

@@ -78,16 +78,12 @@ function firstString(value: unknown): string | null {
 
 function strings(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.filter(
-    (item): item is string => typeof item === "string" && Boolean(item.trim()),
-  );
+  return value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()));
 }
 
 function iso(value: unknown): string {
   const date = value instanceof Date ? value : new Date(String(value));
-  return Number.isNaN(date.getTime())
-    ? new Date(0).toISOString()
-    : date.toISOString();
+  return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
 }
 
 function toDto(row: ProjectedRow): SavedItemDto {
@@ -116,23 +112,16 @@ function toDto(row: ProjectedRow): SavedItemDto {
 
 function rowsFrom(result: unknown): ProjectedRow[] {
   const possible = result as { rows?: ProjectedRow[] };
-  return (
-    possible.rows ?? (Array.isArray(result) ? (result as ProjectedRow[]) : [])
-  );
+  return possible.rows ?? (Array.isArray(result) ? (result as ProjectedRow[]) : []);
 }
 
 function parseDate(value: unknown, endOfDay = false): Date | null {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value))
-    return null;
-  const date = new Date(
-    `${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z`,
-  );
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = new Date(`${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z`);
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-export function parseItemSearchFilters(
-  query: Record<string, unknown>,
-): ItemSearchFilters {
+export function parseItemSearchFilters(query: Record<string, unknown>): ItemSearchFilters {
   const type =
     typeof query.type === "string" &&
     (ITEM_KINDS as readonly string[]).includes(query.type.toLowerCase())
@@ -147,30 +136,21 @@ export function parseItemSearchFilters(
   return {
     q: typeof query.q === "string" ? query.q.trim().slice(0, 300) : "",
     type,
-    tag:
-      typeof query.tag === "string"
-        ? query.tag.trim().slice(0, 100) || null
-        : null,
+    tag: typeof query.tag === "string" ? query.tag.trim().slice(0, 100) || null : null,
     dateFrom: parseDate(query.dateFrom),
     dateTo: parseDate(query.dateTo, true),
     source,
     notebook:
-      typeof query.notebook === "string"
-        ? query.notebook.trim().slice(0, 500) || null
-        : null,
+      typeof query.notebook === "string" ? query.notebook.trim().slice(0, 500) || null : null,
     trash: query.trash === "true" || query.trash === true,
-    limit: Number.isFinite(rawLimit)
-      ? Math.min(Math.max(Math.floor(rawLimit), 1), 200)
-      : 100,
+    limit: Number.isFinite(rawLimit) ? Math.min(Math.max(Math.floor(rawLimit), 1), 200) : 100,
     bodyTextLimit: ITEM_LIST_BODY_MAX_CHARS,
   };
 }
 
 function commonNativeConditions(userId: string, filters: ItemSearchFilters) {
   const clauses = [sql`i.user_id = ${userId}::uuid`];
-  clauses.push(
-    filters.trash ? sql`i.deleted_at IS NOT NULL` : sql`i.deleted_at IS NULL`,
-  );
+  clauses.push(filters.trash ? sql`i.deleted_at IS NOT NULL` : sql`i.deleted_at IS NULL`);
   if (filters.q) {
     clauses.push(
       sql`i.search_tsv @@ websearch_to_tsquery('simple', ${filters.q})`,
@@ -178,8 +158,7 @@ function commonNativeConditions(userId: string, filters: ItemSearchFilters) {
   }
   if (filters.type) clauses.push(sql`i.kind = ${filters.type}`);
   if (filters.source) clauses.push(sql`i.source = ${filters.source}`);
-  if (filters.notebook)
-    clauses.push(sql`lower(i.notebook) = lower(${filters.notebook})`);
+  if (filters.notebook) clauses.push(sql`lower(i.notebook) = lower(${filters.notebook})`);
   if (filters.tag) {
     clauses.push(
       sql`EXISTS (
@@ -193,10 +172,7 @@ function commonNativeConditions(userId: string, filters: ItemSearchFilters) {
   return clauses;
 }
 
-async function listNativeItems(
-  userId: string,
-  filters: ItemSearchFilters,
-): Promise<SavedItemDto[]> {
+async function listNativeItems(userId: string, filters: ItemSearchFilters): Promise<SavedItemDto[]> {
   if (filters.source === "evernote") return [];
   const where = sql.join(commonNativeConditions(userId, filters), sql` AND `);
   const result = await getDb().execute(sql`
@@ -213,19 +189,12 @@ async function listNativeItems(
   return rowsFrom(result).map(toDto);
 }
 
-async function listNoteItems(
-  userId: string,
-  filters: ItemSearchFilters,
-): Promise<SavedItemDto[]> {
+async function listNoteItems(userId: string, filters: ItemSearchFilters): Promise<SavedItemDto[]> {
   if (filters.trash || filters.source === "evernote") return [];
   if (filters.type && filters.type !== "note") return [];
   const clauses = [sql`n.user_id = ${userId}::uuid`];
-  if (filters.q)
-    clauses.push(
-      sql`n.search_tsv @@ websearch_to_tsquery('simple', ${filters.q})`,
-    );
-  if (filters.notebook)
-    clauses.push(sql`lower(nb.name) = lower(${filters.notebook})`);
+  if (filters.q) clauses.push(sql`n.search_tsv @@ websearch_to_tsquery('simple', ${filters.q})`);
+  if (filters.notebook) clauses.push(sql`lower(nb.name) = lower(${filters.notebook})`);
   if (filters.tag) {
     clauses.push(
       sql`EXISTS (
@@ -280,9 +249,7 @@ async function listEvernoteItems(
     sr.record_metadata->>'deleted',
     'false'
   )) IN ('true', '1', 'yes')`;
-  clauses.push(
-    filters.trash ? sql`${trashed} = true` : sql`${trashed} = false`,
-  );
+  clauses.push(filters.trash ? sql`${trashed} = true` : sql`${trashed} = false`);
   if (filters.q) {
     clauses.push(sql`to_tsvector(
       'simple',
@@ -316,14 +283,10 @@ async function listEvernoteItems(
     )`);
   }
   if (filters.dateFrom) {
-    clauses.push(
-      sql`coalesce(sr.source_created_at, sr.created_at) >= ${filters.dateFrom}`,
-    );
+    clauses.push(sql`coalesce(sr.source_created_at, sr.created_at) >= ${filters.dateFrom}`);
   }
   if (filters.dateTo) {
-    clauses.push(
-      sql`coalesce(sr.source_created_at, sr.created_at) <= ${filters.dateTo}`,
-    );
+    clauses.push(sql`coalesce(sr.source_created_at, sr.created_at) <= ${filters.dateTo}`);
   }
 
   const result = await getDb().execute(sql`
@@ -562,10 +525,7 @@ async function getProjectedItem(
   return dto;
 }
 
-export async function getItemForUser(
-  userId: string,
-  id: string,
-): Promise<SavedItemDto | null> {
+export async function getItemForUser(userId: string, id: string): Promise<SavedItemDto | null> {
   if (
     id.startsWith("note:") ||
     id.startsWith("evernote:") ||
@@ -622,13 +582,8 @@ function itemId(): string {
   return `item-${randomUUID()}`;
 }
 
-async function finishRawCapture(
-  userId: string,
-  captureId: string,
-): Promise<void> {
-  await updateCaptureStatusForUser(userId, captureId, {
-    processedStatus: "ignored",
-  });
+async function finishRawCapture(userId: string, captureId: string): Promise<void> {
+  await updateCaptureStatusForUser(userId, captureId, { processedStatus: "ignored" });
 }
 
 export async function saveTextItemForUser(
@@ -636,10 +591,7 @@ export async function saveTextItemForUser(
   value: string,
 ): Promise<SavedItemDto> {
   const text = value.trim();
-  if (!text)
-    throw Object.assign(new Error("Enter a note or link to save"), {
-      status: 400,
-    });
+  if (!text) throw Object.assign(new Error("Enter a note or link to save"), { status: 400 });
   if (text.length > 1_000_000) {
     throw Object.assign(new Error("Saved text is too large"), { status: 413 });
   }
@@ -685,50 +637,46 @@ export async function saveTextItemForUser(
     }
     const domain = metadata?.domain ?? url.hostname.replace(/^www\./, "");
     const id = itemId();
-    await getDb()
-      .insert(items)
-      .values({
-        id,
-        userId,
-        captureId: capture.id,
-        kind: "link",
-        state: "ready",
-        source: "recall",
-        title: metadata?.title ?? domain,
-        description: metadata?.description ?? null,
-        domain,
-        sourceUrl: canonicalUrl,
-        canonicalUrl: metadata?.canonicalUrl ?? canonicalUrl,
-        urlHash,
-        bodyText: "",
-        media: metadata?.imageUrl ? { remoteUrl: metadata.imageUrl } : {},
-        tags: heuristicItemTags({ url: canonicalUrl, date: now }),
-        bumpedAt: now,
-        createdAt: now,
-        updatedAt: now,
-      });
+    await getDb().insert(items).values({
+      id,
+      userId,
+      captureId: capture.id,
+      kind: "link",
+      state: "ready",
+      source: "recall",
+      title: metadata?.title ?? domain,
+      description: metadata?.description ?? null,
+      domain,
+      sourceUrl: canonicalUrl,
+      canonicalUrl: metadata?.canonicalUrl ?? canonicalUrl,
+      urlHash,
+      bodyText: "",
+      media: metadata?.imageUrl ? { remoteUrl: metadata.imageUrl } : {},
+      tags: heuristicItemTags({ url: canonicalUrl, date: now }),
+      bumpedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
     await finishRawCapture(userId, capture.id);
     return (await getItemForUser(userId, id))!;
   }
 
   const id = itemId();
   const title = text.split(/\r?\n/, 1)[0]!.slice(0, 500) || "Untitled note";
-  await getDb()
-    .insert(items)
-    .values({
-      id,
-      userId,
-      captureId: capture.id,
-      kind: "note",
-      state: "ready",
-      source: "recall",
-      title,
-      bodyText: text,
-      tags: heuristicItemTags({ date: now }),
-      bumpedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    });
+  await getDb().insert(items).values({
+    id,
+    userId,
+    captureId: capture.id,
+    kind: "note",
+    state: "ready",
+    source: "recall",
+    title,
+    bodyText: text,
+    tags: heuristicItemTags({ date: now }),
+    bumpedAt: now,
+    createdAt: now,
+    updatedAt: now,
+  });
   await finishRawCapture(userId, capture.id);
   return (await getItemForUser(userId, id))!;
 }
@@ -745,20 +693,12 @@ function imageKind(mimeType: string): "image" | "pdf" | "file" {
 
 export async function saveFileItemForUser(
   userId: string,
-  file: {
-    originalname: string;
-    mimetype: string;
-    size: number;
-    buffer: Buffer;
-  },
+  file: { originalname: string; mimetype: string; size: number; buffer: Buffer },
   caption = "",
 ): Promise<SavedItemDto> {
-  if (!file.buffer.length)
-    throw Object.assign(new Error("File is empty"), { status: 400 });
+  if (!file.buffer.length) throw Object.assign(new Error("File is empty"), { status: 400 });
   if (file.size > config.attachmentMaxBytes) {
-    throw Object.assign(new Error("File exceeds the upload size cap"), {
-      status: 413,
-    });
+    throw Object.assign(new Error("File exceeds the upload size cap"), { status: 413 });
   }
 
   const fileName = safeFileName(file.originalname);
@@ -787,33 +727,29 @@ export async function saveFileItemForUser(
         });
 
     const now = new Date();
-    await getDb()
-      .insert(items)
-      .values({
-        id,
-        userId,
-        captureId: capture.id,
-        kind: imageKind(file.mimetype),
-        state: "ready",
-        source: "recall",
-        title: fileName.replace(/\.[^.]+$/, "") || fileName,
-        description: cleanCaption || null,
-        bodyText: [cleanCaption, extractedText].filter(Boolean).join("\n\n"),
-        media: {
-          storagePath,
-          fileName,
-          mimeType: file.mimetype,
-          sizeBytes: file.size,
-        },
-        tags: heuristicItemTags({ mimeType: file.mimetype, date: now }),
-        bumpedAt: now,
-        createdAt: now,
-        updatedAt: now,
-      });
+    await getDb().insert(items).values({
+      id,
+      userId,
+      captureId: capture.id,
+      kind: imageKind(file.mimetype),
+      state: "ready",
+      source: "recall",
+      title: fileName.replace(/\.[^.]+$/, "") || fileName,
+      description: cleanCaption || null,
+      bodyText: [cleanCaption, extractedText].filter(Boolean).join("\n\n"),
+      media: {
+        storagePath,
+        fileName,
+        mimeType: file.mimetype,
+        sizeBytes: file.size,
+      },
+      tags: heuristicItemTags({ mimeType: file.mimetype, date: now }),
+      bumpedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
   } catch (error) {
-    await rm(absoluteDir, { recursive: true, force: true }).catch(
-      () => undefined,
-    );
+    await rm(absoluteDir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
   await finishRawCapture(userId, capture.id);
@@ -877,19 +813,10 @@ export async function listItemFacetsForUser(userId: string): Promise<{
   tags: string[];
   notebooks: string[];
 }> {
-  const recent = await listItemsForUser(
-    userId,
-    parseItemSearchFilters({ limit: 200 }),
-  );
+  const recent = await listItemsForUser(userId, parseItemSearchFilters({ limit: 200 }));
   return {
-    tags: [...new Set(recent.flatMap((item) => item.tags))]
-      .sort()
-      .slice(0, 100),
-    notebooks: [
-      ...new Set(
-        recent.map((item) => item.notebook).filter(Boolean) as string[],
-      ),
-    ]
+    tags: [...new Set(recent.flatMap((item) => item.tags))].sort().slice(0, 100),
+    notebooks: [...new Set(recent.map((item) => item.notebook).filter(Boolean) as string[])]
       .sort()
       .slice(0, 100),
   };

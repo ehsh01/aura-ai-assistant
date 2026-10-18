@@ -53,6 +53,13 @@ type GraphTooltip = {
   touch: boolean;
 };
 
+function maskGraphDisplayText(value: string): string {
+  return value.replace(/(?:\*{4})?\d+/g, (match) => {
+    const digits = match.replace(/\*/g, "");
+    return `****${digits.slice(-4)}`;
+  });
+}
+
 const COLORS: Record<KnowledgeGraphNodeType, string> = {
   notes: "#75baff",
   notebooks: "#6dffe0",
@@ -192,6 +199,7 @@ export function KnowledgeGraph({
       const lane = laneOffset(node.type);
       return {
         ...node,
+        label: maskGraphDisplayText(node.label),
         radius: Math.max(3, Math.min(node.hub ? 13 : 9, node.value)),
         // Stable seeded positions prevent same-name tag/notebook hubs from
         // starting on top of each other before collision forces settle.
@@ -779,7 +787,7 @@ export function KnowledgeGraph({
         className="block h-full w-full touch-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#7dffd9]/70"
         aria-label={
           keyboardNode
-            ? `Interactive knowledge graph. Selected ${keyboardNode.label}, ${TYPE_BADGES[keyboardNode.type]}. Use left and right arrows to choose a node and Enter to open it.`
+            ? `Interactive knowledge graph. Selected ${maskGraphDisplayText(keyboardNode.label)}, ${TYPE_BADGES[keyboardNode.type]}. Use left and right arrows to choose a node and Enter to open it.`
             : "Interactive knowledge graph"
         }
         tabIndex={0}
@@ -807,7 +815,7 @@ export function KnowledgeGraph({
       />
       <span className="sr-only" aria-live="polite">
         {keyboardNode
-          ? `${keyboardNode.label}, ${TYPE_BADGES[keyboardNode.type]}`
+          ? `${maskGraphDisplayText(keyboardNode.label)}, ${TYPE_BADGES[keyboardNode.type]}`
           : ""}
       </span>
       <button
@@ -836,7 +844,8 @@ export function KnowledgeGraph({
           data-testid="graph-tooltip"
         >
           <p className="truncate font-medium">
-            {hover.node.label} · {hover.links} links
+            {hover.node.label} · {maskGraphDisplayText(String(hover.links))}{" "}
+            links
           </p>
           <span className="mt-1 inline-flex rounded-full border border-cyan-100/20 px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-[0.12em] text-[#8fd8c2]">
             {TYPE_BADGES[hover.node.type]}

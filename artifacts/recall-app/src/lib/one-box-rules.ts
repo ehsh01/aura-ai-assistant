@@ -17,11 +17,60 @@ export type OneBoxDecision = {
 };
 
 const SAVE_VERB = /^(?:save|remember|note|keep|add)\b[\s,:-]*/i;
-const SEARCH_VERB =
-  /^(?:find|look\s+up|search|show(?:\s+me)?)\b[\s,:-]*/i;
+const SEARCH_VERB = /^(?:find|look\s+up|search|show(?:\s+me)?)\b[\s,:-]*/i;
 const QUESTION_WORD =
   /^(?:who|what|when|where|why|how|which|is|are|do|does|did|can|could|should|will|was|were|has|have|any)\b/i;
 const DOCUMENT_WORD = /\b(?:doc|document|file|pdf|contract|policy|receipt)\b/i;
+const GRAPH_SEED_STOPWORDS = new Set([
+  "a",
+  "about",
+  "an",
+  "and",
+  "any",
+  "are",
+  "can",
+  "could",
+  "did",
+  "do",
+  "does",
+  "for",
+  "find",
+  "from",
+  "has",
+  "have",
+  "how",
+  "i",
+  "if",
+  "in",
+  "is",
+  "it",
+  "look",
+  "me",
+  "my",
+  "note",
+  "notes",
+  "of",
+  "on",
+  "or",
+  "please",
+  "recall",
+  "search",
+  "show",
+  "tell",
+  "the",
+  "there",
+  "this",
+  "to",
+  "was",
+  "what",
+  "when",
+  "where",
+  "which",
+  "who",
+  "why",
+  "with",
+  "you",
+]);
 
 function withoutWakeWord(value: string): string {
   return value
@@ -39,6 +88,20 @@ export function isBareUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Deterministic any-word graph seed; never sends a full natural-language question. */
+export function graphSeedQuery(value: string): string {
+  const terms =
+    value
+      .toLowerCase()
+      .match(/[a-z0-9]+/g)
+      ?.filter(
+        (term) =>
+          (term.length >= 2 || /^\d+$/.test(term)) &&
+          !GRAPH_SEED_STOPWORDS.has(term),
+      ) ?? [];
+  return [...new Set(terms)].slice(0, 8).join(" ");
 }
 
 export function classifyOneBoxInput(input: {

@@ -29,14 +29,17 @@ Status: implemented on top of Recall one-box Phase 1.
 - Google contacts
 
 The existing `limit`, `offset`, and `types` parameters remain supported. `q`
-adds free Postgres full-text search seeding. Each page allocates a fixed
-fraction of its item budget to every source and applies a per-source
-`LIMIT/OFFSET`; the server never builds the full corpus in memory. The maximum
-response stays 500 nodes, the standard desktop page is 350, and mobile uses an
-explicit 180-node page with Newer/Older controls.
+adds free Postgres full-text search seeding with deterministic any-word terms.
+Each page starts with a weighted source budget, caps shares at the source row
+count, and gives unused shares back to sources with remaining rows. The eight
+connector record types use one narrow ranked query. The maximum response stays
+500 nodes, the standard desktop page is 350, and mobile uses an explicit
+180-node page with Newer/Older controls.
 
-Submitting a free one-box search also loads `q` into the graph. Paging preserves
-that query. Search still does not invoke AI.
+Submitting a free one-box search extracts up to eight keywords for the graph;
+natural-language filler is never sent as an ANDed graph query. Paging preserves
+the seed, a zero-match page falls back to the unseeded graph, and Clear returns
+to the unseeded graph. Search still does not invoke AI.
 
 ## Display-only twin suppression
 
@@ -45,6 +48,13 @@ user has an exact title after trim/case normalization. The anti-join runs before
 the native-note source cap, so July import twins do not consume graph slots.
 Saved `items` are not suppressed. Trashed Evernote records do not suppress a
 native note.
+
+The Evernote title side is a `MATERIALIZED` normalized-title CTE joined with
+`LEFT JOIN ... IS NULL`, allowing a hash anti-join instead of a regexp nested
+loop. Every graph read runs in a transaction with
+`SET LOCAL statement_timeout = '5s'`. The noisy-notebook set is cached per user
+for 30 seconds with a 100-user process cap. Exact production EXPLAIN SQL is in
+`docs/RECALL_GRAPH_P25_EXPLAIN.sql`.
 
 ## Hub de-noising
 
@@ -60,6 +70,10 @@ native note.
   ceiling.
 
 The existing graph edge width and opacity treatment is unchanged.
+
+Every digit run in every graph label (including hubs and all source types) is
+masked before it reaches canvas labels, tooltips, or accessibility text. The
+display keeps at most the last four digits and prefixes them with `****`.
 
 ## Verification
 

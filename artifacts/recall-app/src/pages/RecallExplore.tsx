@@ -30,6 +30,7 @@ import { toast } from "@/hooks/use-toast";
 import { shouldUseGridFallback } from "@/lib/graph-performance";
 import {
   classifyOneBoxInput,
+  graphSeedQuery,
   isShowMeFollowUp,
   voiceAnswerForSpeech,
   voicePresentationFor,
@@ -391,6 +392,17 @@ export function RecallExplore() {
     }
   }, []);
 
+  const loadSeededGraph = useCallback(
+    async (rawQuery: string) => {
+      const seed = graphSeedQuery(rawQuery);
+      if (!seed) return loadGraph("", 0);
+      const seeded = await loadGraph(seed, 0);
+      if (seeded.nodes.some((node) => node.itemId)) return seeded;
+      return loadGraph("", 0);
+    },
+    [loadGraph],
+  );
+
   const loadWorkspace = useCallback(async () => {
     const [listed] = await Promise.all([
       listSavedItems({ limit: 150 }),
@@ -484,7 +496,7 @@ export function RecallExplore() {
       setVoiceTurn(null);
       showChip({ kind: "search", value: clean }, 0);
       try {
-        const graphLoad = loadGraph(clean, 0).catch(() => null);
+        const graphLoad = loadSeededGraph(clean).catch(() => null);
         const response = await searchExplore(clean, 20);
         setResults(response.results);
         void graphLoad;
@@ -501,7 +513,7 @@ export function RecallExplore() {
         setBusy(false);
       }
     },
-    [busy, loadGraph, showChip],
+    [busy, loadSeededGraph, showChip],
   );
 
   const submit = useCallback(
@@ -537,7 +549,7 @@ export function RecallExplore() {
       showChip({ kind: "search", value: question }, 0);
       setValue(question);
       try {
-        const graphLoad = loadGraph(question, 0).catch(() => null);
+        const graphLoad = loadSeededGraph(question).catch(() => null);
         const free = await searchExplore(question, 20).catch(() => ({
           results: [] as ExploreSearchResult[],
         }));
@@ -622,7 +634,7 @@ export function RecallExplore() {
         setBusy(false);
       }
     },
-    [busy, loadGraph, showChip, voiceThreadId],
+    [busy, loadSeededGraph, showChip, voiceThreadId],
   );
 
   const submitVoice = useCallback(
@@ -820,12 +832,22 @@ export function RecallExplore() {
               aria-label="Graph pages"
             >
               {graphQuery && (
-                <span
-                  className="hidden max-w-44 truncate text-[10px] text-[#9fb4ab] sm:block"
-                  title={graphQuery}
-                >
-                  Matches: {graphQuery}
-                </span>
+                <>
+                  <span
+                    className="hidden max-w-44 truncate text-[10px] text-[#9fb4ab] sm:block"
+                    title={graphQuery}
+                  >
+                    Matches: {graphQuery}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void loadGraph("", 0)}
+                    disabled={graphLoading}
+                    aria-label="Clear graph search"
+                  >
+                    Clear
+                  </button>
+                </>
               )}
               <button
                 type="button"
