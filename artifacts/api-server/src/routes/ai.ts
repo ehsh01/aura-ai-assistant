@@ -55,8 +55,11 @@ import {
 } from "../services/voice-first";
 import { askAiAvailabilityForUser } from "../services/ask-ai-availability";
 import { isEnabled } from "../lib/feature-flags";
-import { voiceAiAllowance } from "../services/ai-usage";
-import { buildVoiceAnswer, VOICE_LIMIT_REPLY } from "../services/voice-answer";
+import { voiceAiAllowance, withVoiceAiLock } from "../services/ai-usage";
+import {
+  queryVoiceNotesForUser,
+  VOICE_LIMIT_REPLY,
+} from "../services/voice-answer";
 
 const voiceAudioUpload = multer({
   storage: multer.memoryStorage(),
@@ -244,34 +247,25 @@ router.get("/ai/voice/availability", async (req, res, next) => {
 router.post("/ai/voice/query", async (req, res, next) => {
   try {
     const body = AiQueryBody.parse(req.body);
-    const allowance = await voiceAiAllowance("voice_ask", req.user!.id);
-    if (!allowance.allowed) {
-      const dailyLimit = allowance.reason === "daily_limit";
-      res.status(dailyLimit ? 429 : 503).json({
-        error: dailyLimit ? "VOICE_DAILY_LIMIT" : "VOICE_AI_UNAVAILABLE",
-        reason: allowance.reason,
-        message: dailyLimit ? VOICE_LIMIT_REPLY : "Voice AI is unavailable",
-      });
-      return;
-    }
+    await withVoiceAiLock(req.user!.id, async () => {
+      const allowance = await voiceAiAllowance("voice_ask", req.user!.id);
+      if (!allowance.allowed) {
+        const dailyLimit = allowance.reason === "daily_limit";
+        res.status(dailyLimit ? 429 : 503).json({
+          error: dailyLimit ? "VOICE_DAILY_LIMIT" : "VOICE_AI_UNAVAILABLE",
+          reason: allowance.reason,
+          message: dailyLimit ? VOICE_LIMIT_REPLY : "Voice AI is unavailable",
+        });
+        return;
+      }
 
-    const result = await queryRecallForUser(req.user!.id, body.question, {
-      threadId: body.threadId ?? null,
-      usageFeature: "voice_ask",
+      const result = await queryVoiceNotesForUser(
+        req.user!.id,
+        body.question,
+        body.threadId ?? null,
+      );
+      res.json(result);
     });
-    if (
-      result.privacy.model == null &&
-      /daily ai (budget|allowance)/i.test(result.answer)
-    ) {
-      res.status(429).json({
-        error: "VOICE_DAILY_LIMIT",
-        reason: "daily_limit",
-        message: VOICE_LIMIT_REPLY,
-      });
-      return;
-    }
-    const spoken = await buildVoiceAnswer(req.user!.id, result);
-    res.json({ ...result, ...spoken });
   } catch (err) {
     next(err);
   }

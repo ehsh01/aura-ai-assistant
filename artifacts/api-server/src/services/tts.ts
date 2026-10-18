@@ -1,6 +1,6 @@
 import { isEnabled } from "../lib/feature-flags";
 import { createOpenAiClient } from "./openai-client";
-import { voiceAiAllowance } from "./ai-usage";
+import { voiceAiAllowance, withVoiceAiLock } from "./ai-usage";
 
 export const OPENAI_TTS_VOICES = [
   "alloy",
@@ -100,29 +100,34 @@ export async function synthesizeSpeech(
     throw err;
   }
 
-  const allowance = await voiceAiAllowance("voice_tts", userId, cleaned.length);
-  if (!allowance.allowed) {
-    const message =
-      allowance.reason === "daily_limit"
-        ? "Daily voice limit reached. Free search still works."
-        : "Server TTS is unavailable";
-    throw Object.assign(new Error(message), {
-      status: allowance.reason === "daily_limit" ? 429 : 503,
-      code: allowance.reason,
+  return withVoiceAiLock(userId, async () => {
+    const allowance = await voiceAiAllowance(
+      "voice_tts",
+      userId,
+      cleaned.length,
+    );
+    if (!allowance.allowed) {
+      const message =
+        allowance.reason === "daily_limit"
+          ? "Daily voice limit reached. Free search still works."
+          : "Server TTS is unavailable";
+      throw Object.assign(new Error(message), {
+        status: allowance.reason === "daily_limit" ? 429 : 503,
+        code: allowance.reason,
+      });
+    }
+
+    const settings = getOpenAiTtsSettings();
+    const client = createOpenAiClient({ apiKey, feature: "voice_tts", userId });
+    const response = await client.audio.speech.create({
+      model: settings.model,
+      voice: settings.voice,
+      input: cleaned,
+      response_format: "mp3",
+      ...(settings.instructions ? { instructions: settings.instructions } : {}),
     });
-  }
 
-  const settings = getOpenAiTtsSettings();
-
-  const client = createOpenAiClient({ apiKey, feature: "voice_tts", userId });
-  const response = await client.audio.speech.create({
-    model: settings.model,
-    voice: settings.voice,
-    input: cleaned,
-    response_format: "mp3",
-    ...(settings.instructions ? { instructions: settings.instructions } : {}),
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return { buffer, contentType: "audio/mpeg" };
   });
-
-  const buffer = Buffer.from(await response.arrayBuffer());
-  return { buffer, contentType: "audio/mpeg" };
 }

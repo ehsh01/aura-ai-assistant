@@ -10,6 +10,7 @@ vi.mock("../lib/db", () => ({
     insert: mocks.insert,
     select: mocks.select,
   }),
+  withDbAdvisoryLock: (_key: string, fn: () => Promise<unknown>) => fn(),
 }));
 
 import {
@@ -34,6 +35,7 @@ import {
   voiceAskDailyLimit,
   voiceTtsDailyCharacters,
   withAiFeature,
+  withVoiceAiLock,
 } from "./ai-usage";
 
 /** Stub the drizzle chain used by spendTodayUsd(). */
@@ -428,6 +430,33 @@ describe("voice AI caps", () => {
       allowed: false,
       reason: "daily_limit",
     });
+  });
+
+  it("serializes concurrent paid voice checks for one user", async () => {
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const first = withVoiceAiLock("u1", async () => {
+      events.push("first:start");
+      await firstGate;
+      events.push("first:end");
+    });
+    const second = withVoiceAiLock("u1", async () => {
+      events.push("second:start");
+      events.push("second:end");
+    });
+    await Promise.resolve();
+    expect(events).toEqual(["first:start"]);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(events).toEqual([
+      "first:start",
+      "first:end",
+      "second:start",
+      "second:end",
+    ]);
   });
 });
 

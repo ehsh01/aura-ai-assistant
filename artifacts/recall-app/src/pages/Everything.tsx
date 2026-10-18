@@ -541,6 +541,8 @@ export function Everything() {
     async (rawQuestion: string) => {
       const question = rawQuestion.trim();
       if (!question || askStatus === "searching") return;
+      stopSpeaking();
+      setTalkSpeaking(false);
       setOutputMode("search");
       setAskStatus("searching");
       setAnswer("");
@@ -725,6 +727,8 @@ export function Everything() {
     const question = ask.trim();
     if (!question || askStatus === "thinking" || !aiAvailability?.allowed)
       return;
+    stopSpeaking();
+    setTalkSpeaking(false);
     setOutputMode("ask");
     setAskStatus("thinking");
     setAnswer("");
@@ -1099,11 +1103,11 @@ export function Everything() {
                   disabled={!voiceAnswer.supported}
                   aria-label={
                     voiceAnswer.enabled
-                      ? "Turn voice answers off"
-                      : "Turn voice answers on"
+                      ? "Turn automatic Ask AI speech off"
+                      : "Turn automatic Ask AI speech on"
                   }
                   aria-pressed={voiceAnswer.enabled}
-                  title="Voice answers use your browser's free speaker"
+                  title="Automatic Ask AI speech uses your browser's free speaker; Talk to Recall always speaks"
                   data-testid="speaker-toggle-desktop"
                 >
                   {voiceAnswer.enabled ? (
@@ -1153,11 +1157,11 @@ export function Everything() {
                   disabled={!voiceAnswer.supported}
                   aria-label={
                     voiceAnswer.enabled
-                      ? "Turn voice answers off"
-                      : "Turn voice answers on"
+                      ? "Turn automatic Ask AI speech off"
+                      : "Turn automatic Ask AI speech on"
                   }
                   aria-pressed={voiceAnswer.enabled}
-                  title="Voice answers use your browser's free speaker"
+                  title="Automatic Ask AI speech uses your browser's free speaker; Talk to Recall always speaks"
                   data-testid="speaker-toggle-mobile"
                 >
                   {voiceAnswer.enabled ? (

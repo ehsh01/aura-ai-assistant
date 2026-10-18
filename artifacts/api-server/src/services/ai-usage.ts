@@ -10,7 +10,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { and, eq, gte, sql } from "drizzle-orm";
 import { aiUsage } from "@workspace/db/schema";
-import { getDb } from "../lib/db";
+import { getDb, withDbAdvisoryLock } from "../lib/db";
 import { isEnabled } from "../lib/feature-flags";
 import { logger } from "../lib/logger";
 
@@ -535,6 +535,32 @@ export type VoiceAiAllowance =
       allowed: false;
       reason: "disabled" | "daily_limit" | "unavailable";
     };
+
+const voiceLocks = new Map<string, Promise<void>>();
+
+/**
+ * Serialize paid voice checks/calls per user in-process and across API
+ * processes so concurrent tabs cannot race the daily caps.
+ */
+export async function withVoiceAiLock<T>(
+  userId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const previous = voiceLocks.get(userId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const chain = previous.then(() => current);
+  voiceLocks.set(userId, chain);
+  await previous;
+  try {
+    return await withDbAdvisoryLock("voice-ai:global", fn);
+  } finally {
+    release();
+    if (voiceLocks.get(userId) === chain) voiceLocks.delete(userId);
+  }
+}
 
 /**
  * Paid voice calls are fail-closed and checked immediately before each call.

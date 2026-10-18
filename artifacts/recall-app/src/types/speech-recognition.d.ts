@@ -3,6 +3,7 @@ interface SpeechRecognition extends EventTarget {
   continuous: boolean;
   interimResults: boolean;
   lang: string;
+  processLocally?: boolean;
   start(): void;
   stop(): void;
   abort(): void;

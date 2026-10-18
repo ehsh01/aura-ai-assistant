@@ -369,6 +369,9 @@ async function installVoiceHarness(
     });
 
     class FakeSpeechRecognition {
+      static async available() {
+        return "available";
+      }
       continuous = false;
       interimResults = false;
       lang = "";
