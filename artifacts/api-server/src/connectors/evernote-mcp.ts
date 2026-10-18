@@ -1783,6 +1783,7 @@ export type EvernoteNotebookScope = {
   notebookGuid: string | null;
   notebookName: string;
   expectedTotal: number;
+  queryMode?: "notebook" | "global";
 };
 
 export type EvernoteDateRange = {
@@ -1880,15 +1881,17 @@ function quoteEvernoteSearchValue(value: string): string {
 }
 
 export function evernoteNotebookRangeQuery(
-  scope: Pick<EvernoteNotebookScope, "notebookGuid">,
+  scope: Pick<EvernoteNotebookScope, "notebookGuid" | "queryMode">,
   range?: Pick<EvernoteDateRange, "field" | "from" | "before"> | null,
   baseQuery = "",
 ): string {
   return [
     baseQuery.trim(),
-    scope.notebookGuid
-      ? `nbGuid:${quoteEvernoteSearchValue(scope.notebookGuid)}`
-      : "-nbGuid:*",
+    scope.queryMode === "global"
+      ? ""
+      : scope.notebookGuid
+        ? `nbGuid:${quoteEvernoteSearchValue(scope.notebookGuid)}`
+        : "-nbGuid:*",
     range?.from ? `${range.field}:${evernoteDateSearchValue(range.from)}` : "",
     range?.before
       ? `-${range.field}:${evernoteDateSearchValue(range.before)}`
@@ -2213,7 +2216,7 @@ function initialCheckpoint(
           version: 2 as const,
           notebookCursor: {
             scopes: asArray(notebookCursor.scopes)
-              .map((value) => {
+              .map((value): EvernoteNotebookScope | null => {
                 const item = asRecord(value);
                 const notebookGuid = asString(item.notebookGuid);
                 const notebookName =
@@ -2226,6 +2229,8 @@ function initialCheckpoint(
                       notebookGuid,
                       notebookName,
                       expectedTotal: Math.max(0, Math.floor(expectedTotal)),
+                      queryMode:
+                        item.queryMode === "global" ? "global" : undefined,
                     };
               })
               .filter((value): value is EvernoteNotebookScope =>
@@ -2535,6 +2540,7 @@ async function streamEvernoteByNotebook(
       });
     }
     const unassigned = Math.max(0, globalTotal - assigned);
+    let noNotebookTotal = 0;
     if (unassigned > 0) {
       const page = await fetchEvernoteNoteListingPageWithRetry(
         client,
@@ -2553,13 +2559,28 @@ async function streamEvernoteByNotebook(
           notebookGuid: null,
         },
       );
+      const reportedNoNotebook = Math.max(
+        0,
+        Math.floor(page.totalResultCount ?? page.rows.length),
+      );
+      noNotebookTotal =
+        assigned + reportedNoNotebook <= globalTotal
+          ? reportedNoNotebook
+          : 0;
+      if (noNotebookTotal > 0) {
+        scopes.push({
+          notebookGuid: null,
+          notebookName: "No notebook",
+          expectedTotal: noNotebookTotal,
+        });
+      }
+    }
+    if (assigned + noNotebookTotal < globalTotal) {
       scopes.push({
         notebookGuid: null,
-        notebookName: "No notebook",
-        expectedTotal: Math.max(
-          0,
-          Math.floor(page.totalResultCount ?? unassigned),
-        ),
+        notebookName: "Global fallback",
+        expectedTotal: globalTotal,
+        queryMode: "global",
       });
     }
     const oldStartIndex = checkpoint.startIndex;
@@ -2605,6 +2626,22 @@ async function streamEvernoteByNotebook(
   }
 
   const cursor = checkpoint.notebookCursor!;
+  if (
+    checkpoint.expectedTotal != null &&
+    !cursor.scopes.some((scope) => scope.queryMode === "global") &&
+    cursor.scopes.reduce((sum, scope) => sum + scope.expectedTotal, 0) <
+      checkpoint.expectedTotal
+  ) {
+    // Upgrade v2 cursors written before global coverage was introduced.
+    // Appending preserves the current scope/range cursor; a cursor that had
+    // finished its prior scopes naturally points at this new fallback.
+    cursor.scopes.push({
+      notebookGuid: null,
+      notebookName: "Global fallback",
+      expectedTotal: checkpoint.expectedTotal,
+      queryMode: "global",
+    });
+  }
   const pageSize = evernoteMcpBackfillChunkSize();
 
   while (
@@ -2855,9 +2892,20 @@ async function streamEvernoteByNotebook(
       .map((summary) => summary.guid)
       .filter((guid): guid is string => Boolean(guid));
     const knownNotes = await options.loadKnownNotes([...new Set(ids)]);
+    let lastEmittedRangeStart = range.startIndex;
 
     for (const summary of summaries) {
       if (invocationBatches >= maxBatches) break;
+      const known = summary.guid ? knownNotes.get(summary.guid) : undefined;
+      const processedHere =
+        known?.evernoteProcessedSyncRunId === options.syncRunId;
+      if (scope.queryMode === "global" && processedHere) {
+        // The global coverage scope is a dedupe backstop. Advance its remote
+        // cursor without counting or rewriting GUIDs already covered by a
+        // notebook scope; persist trailing duplicate-only progress once/page.
+        range.startIndex += 1;
+        continue;
+      }
       const listingIndex = checkpoint.startIndex;
       const records: EvernoteRawRecord[] = [];
       const seen =
@@ -2874,9 +2922,6 @@ async function streamEvernoteByNotebook(
         errors.push("Evernote MCP note summary is missing a GUID");
         checkpoint.listingAuthoritative = false;
       } else {
-        const known = knownNotes.get(summary.guid);
-        const processedHere =
-          known?.evernoteProcessedSyncRunId === options.syncRunId;
         const seenHere = known?.evernoteSeenSyncRunId === options.syncRunId;
         if (seenHere && !processedHere) replayExternalIds.push(summary.guid);
         if (
@@ -2922,6 +2967,20 @@ async function streamEvernoteByNotebook(
         replayExternalIds,
         errors,
         failedNotes,
+      });
+      lastEmittedRangeStart = range.startIndex;
+    }
+    if (
+      range.startIndex > lastEmittedRangeStart &&
+      invocationBatches < maxBatches
+    ) {
+      checkpoint.batchesProcessed += 1;
+      await emit({
+        records: [],
+        seen: [],
+        replayExternalIds: [],
+        errors: [],
+        failedNotes: [],
       });
     }
     if (range.startIndex >= range.expectedTotal) {

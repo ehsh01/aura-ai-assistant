@@ -188,6 +188,8 @@ describe("Evernote MCP read-only boundary", () => {
     expect(source).toContain("rowsBeyondFirst2000");
     expect(source).toContain("--full-discovery");
     expect(source).toContain("--persist-token-refresh");
+    expect(source).toContain("--read-only-tx");
+    expect(source).toContain("SET TRANSACTION READ ONLY");
     expect(source).toContain("--notebook-guid");
     expect(source).toContain("startIndex");
   });
@@ -794,6 +796,207 @@ describe("Evernote MCP read sync", () => {
     expect(second.listingComplete).toBe(true);
     expect(notebookCalls).toBe(1);
     expect(persisted).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a deduped global fallback when notebook scopes miss notes", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const known = new Map<
+      string,
+      {
+        updateSequenceNum: null;
+        contentHash: string;
+        evernoteSeenSyncRunId: string;
+        evernoteProcessedSyncRunId: string;
+      }
+    >();
+    const bodyCalls: string[] = [];
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notebooks") {
+          return {
+            structuredContent: {
+              totalResultCount: 1,
+              notebooks: [{ id: "nb-visible", name: "Visible notebook" }],
+            },
+          };
+        }
+        if (input.name === "search_notes") {
+          const query = String(input.arguments?.query ?? "");
+          if (query.includes("-nbGuid:*")) {
+            return { structuredContent: { totalResultCount: 0, notes: [] } };
+          }
+          const ids = query.includes("nbGuid:")
+            ? ["note-1", "note-2"]
+            : ["note-1", "note-2", "note-hidden"];
+          return {
+            structuredContent: {
+              totalResultCount: ids.length,
+              notes: ids.map((id) => ({ id })),
+            },
+          };
+        }
+        if (input.name === "get_note") {
+          const id = String(input.arguments?.noteId);
+          bodyCalls.push(id);
+          return {
+            structuredContent: {
+              id,
+              title: id,
+              content: "<en-note>Sanitized</en-note>",
+              notebookId:
+                id === "note-hidden" ? "nb-hidden" : "nb-visible",
+              notebookName:
+                id === "note-hidden"
+                  ? "Linked notebook"
+                  : "Visible notebook",
+            },
+          };
+        }
+        if (input.name === "search_tags") {
+          return { structuredContent: { tags: [] } };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+
+    const result = await streamEvernoteViaMcp(client, {
+      syncRunId: "global-fallback",
+      partitionByNotebook: true,
+      taxonomy: { notebooks: [], tags: [], spaces: [] },
+      loadKnownNotes: async (ids) =>
+        new Map(ids.filter((id) => known.has(id)).map((id) => [id, known.get(id)!])),
+      processBatch: async (batch) => {
+        for (const item of batch.seen) {
+          known.set(item.externalId, {
+            updateSequenceNum: null,
+            contentHash: "stored",
+            evernoteSeenSyncRunId: "global-fallback",
+            evernoteProcessedSyncRunId: "global-fallback",
+          });
+        }
+      },
+    });
+
+    expect(bodyCalls).toEqual(["note-1", "note-2", "note-hidden"]);
+    expect(result).toMatchObject({
+      startIndex: 3,
+      expectedTotal: 3,
+      recordsDeferred: 0,
+      listingComplete: true,
+    });
+  });
+
+  it("upgrades an existing v2 cursor with residual global coverage", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const known = new Map([
+      [
+        "note-1",
+        {
+          updateSequenceNum: null,
+          contentHash: "stored",
+          evernoteSeenSyncRunId: "v2-upgrade",
+          evernoteProcessedSyncRunId: "v2-upgrade",
+        },
+      ],
+      [
+        "note-2",
+        {
+          updateSequenceNum: null,
+          contentHash: "stored",
+          evernoteSeenSyncRunId: "v2-upgrade",
+          evernoteProcessedSyncRunId: "v2-upgrade",
+        },
+      ],
+    ]);
+    const bodyCalls: string[] = [];
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notes") {
+          return {
+            structuredContent: {
+              totalResultCount: 3,
+              notes: ["note-1", "note-2", "note-hidden"].map((id) => ({
+                id,
+              })),
+            },
+          };
+        }
+        if (input.name === "get_note") {
+          const id = String(input.arguments?.noteId);
+          bodyCalls.push(id);
+          return {
+            structuredContent: {
+              id,
+              title: "Recovered linked note",
+              content: "<en-note>Sanitized</en-note>",
+              notebookId: "nb-hidden",
+              notebookName: "Linked notebook",
+            },
+          };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+
+    const result = await streamEvernoteViaMcp(client, {
+      syncRunId: "v2-upgrade",
+      partitionByNotebook: true,
+      checkpoint: {
+        version: 2,
+        startIndex: 2,
+        expectedTotal: 3,
+        recordsFetched: 2,
+        recordsSkipped: 0,
+        recordsFailed: 0,
+        batchesProcessed: 2,
+        listingAuthoritative: false,
+        notebookCursor: {
+          scopes: [
+            {
+              notebookGuid: "nb-visible",
+              notebookName: "Visible",
+              expectedTotal: 2,
+            },
+          ],
+          scopeIndex: 1,
+          pendingRanges: [],
+          activeRange: null,
+          legacyPrefixEnd: 0,
+          legacyScanIndex: 0,
+          legacyRetryIndex: 0,
+          legacyRetryNotes: [],
+          retryReport: [],
+          skipExistingSourceRecords: false,
+        },
+      },
+      taxonomy: { notebooks: [], tags: [], spaces: [] },
+      loadKnownNotes: async (ids) =>
+        new Map(ids.filter((id) => known.has(id)).map((id) => [id, known.get(id)!])),
+      processBatch: async (batch) => {
+        for (const item of batch.seen) {
+          known.set(item.externalId, {
+            updateSequenceNum: null,
+            contentHash: "stored",
+            evernoteSeenSyncRunId: "v2-upgrade",
+            evernoteProcessedSyncRunId: "v2-upgrade",
+          });
+        }
+      },
+    });
+
+    expect(bodyCalls).toEqual(["note-hidden"]);
+    expect(result).toMatchObject({
+      startIndex: 3,
+      expectedTotal: 3,
+      recordsDeferred: 0,
+      listingComplete: true,
+    });
   });
 
   it("migrates a 2,000-row checkpoint, retries the named failure, and never requests the capped offset", async () => {
