@@ -8,6 +8,7 @@ let pgliteDb: ReturnType<typeof drizzle<typeof schema>>;
 vi.mock("../lib/db", () => ({ getDb: () => pgliteDb }));
 
 const {
+  persistEvernoteRecordChildren,
   persistEvernoteTaxonomy,
   processOneEvernoteAttachment,
   resetInterruptedEvernoteAttachments,
@@ -305,5 +306,94 @@ describe("Evernote full-fidelity migration", () => {
     expect(result.rows[0]?.fetch_error).toContain(
       "non-retryable get_attachment code error",
     );
+  });
+
+  it("queues changed-note attachments without fetching them", async () => {
+    const fixture = JSON.parse(
+      await readFile(
+        new URL(
+          "./fixtures/evernote-incremental-overlap.sanitized.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as {
+      changedNote: {
+        note: {
+          id: string;
+          resources: Array<{
+            guid: string;
+            mime: string;
+            data: { bodyHash: string; size: number };
+            attributes: { fileName: string };
+          }>;
+        };
+      };
+    };
+    const userId = "66666666-6666-4666-8666-666666666666";
+    const resource = fixture.changedNote.note.resources[0]!;
+    await db.exec(`
+      INSERT INTO users (id) VALUES ('${userId}');
+      INSERT INTO connectors (id, user_id) VALUES ('connector', '${userId}');
+      INSERT INTO source_records (
+        id, user_id, connector_id, external_id, record_type
+      ) VALUES (
+        'source-incremental', '${userId}', 'connector',
+        '${fixture.changedNote.note.id}', 'evernote_note'
+      );
+    `);
+    const persist = (hash: string) =>
+      persistEvernoteRecordChildren({
+        userId,
+        connectorId: "connector",
+        sourceRecordId: "source-incremental",
+        sourceUrl: "evernote:///view/sanitized",
+        metadata: {
+          attachments: [
+            {
+              id: resource.guid,
+              hash,
+              mime: resource.mime,
+              name: resource.attributes.fileName,
+              sizeBytes: resource.data.size,
+            },
+          ],
+        },
+      });
+
+    await persist(resource.data.bodyHash);
+    await db.exec(`
+      UPDATE evernote_attachments
+      SET fetch_state = 'complete', sha256 = repeat('a', 64),
+          extracted_text = 'already extracted', extracted_at = now()
+      WHERE source_record_id = 'source-incremental'
+    `);
+    await persist(resource.data.bodyHash);
+    let result = await db.query<{
+      fetch_state: string;
+      sha256: string | null;
+    }>(`
+      SELECT fetch_state, sha256
+      FROM evernote_attachments
+      WHERE source_record_id = 'source-incremental'
+    `);
+    expect(result.rows[0]).toMatchObject({
+      fetch_state: "complete",
+      sha256: "a".repeat(64),
+    });
+
+    await persist("fedcba9876543210fedcba9876543210");
+    result = await db.query<{
+      fetch_state: string;
+      sha256: string | null;
+    }>(`
+      SELECT fetch_state, sha256
+      FROM evernote_attachments
+      WHERE source_record_id = 'source-incremental'
+    `);
+    expect(result.rows[0]).toEqual({
+      fetch_state: "pending",
+      sha256: null,
+    });
   });
 });

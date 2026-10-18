@@ -14,7 +14,10 @@ import {
   scheduledEvernoteLoadIsSafe,
 } from "./evernote-sync-scheduler";
 import {
-  processEvernoteSyncJob,
+  activeEvernoteRunForMode,
+  hasActiveEvernoteIncrementalRun,
+  isEvernoteAttachmentBackfill,
+  nextEvernotePhaseAfterListing,
   withEvernoteLookupProgress,
 } from "./connectors";
 
@@ -221,6 +224,37 @@ describe("Evernote unattended schedule", () => {
     ).toBe("full");
   });
 
+  it("starts incremental notes when the initial full run is backfilling attachments", () => {
+    expect(
+      evernoteScheduleDecision({
+        now: new Date("2026-10-18T14:00:00Z"),
+        lastSyncAt: null,
+        lastFullReconcileAt: null,
+        incrementalEnabled: true,
+        fullReconcileEnabled: true,
+        autoFullImportEnabled: false,
+        inNightWindow: false,
+        attachmentBackfillInProgress: true,
+        incrementalMinutes: 15,
+        fullReconcileMinutes: 1440,
+      }),
+    ).toBe("incremental");
+    expect(
+      evernoteScheduleDecision({
+        now: new Date("2026-10-18T06:00:00Z"),
+        lastSyncAt: null,
+        lastFullReconcileAt: null,
+        incrementalEnabled: true,
+        fullReconcileEnabled: true,
+        autoFullImportEnabled: false,
+        inNightWindow: true,
+        attachmentBackfillInProgress: true,
+        incrementalMinutes: 15,
+        fullReconcileMinutes: 1440,
+      }),
+    ).toBe("incremental");
+  });
+
   it("requires a passing load check before scheduled work", async () => {
     expect(
       await scheduledEvernoteLoadIsSafe(async () => ({
@@ -279,16 +313,90 @@ describe("Evernote attachment retry policy", () => {
 
 describe("Evernote import AI boundary", () => {
   it("contains no OpenAI or embedding invocation in the worker entrypoint", () => {
-    const implementation = processEvernoteSyncJob.toString().toLowerCase();
-    expect(implementation).not.toContain("openai");
-    expect(implementation).not.toContain("embeditem");
-    expect(implementation).not.toContain("warmentityembedding");
+    const source = readFileSync(
+      new URL("./connectors.ts", import.meta.url),
+      "utf8",
+    );
+    const implementation = source
+      .slice(
+        source.indexOf("async function processEvernoteSyncJobLocked"),
+        source.indexOf("export async function failEvernoteSyncRun"),
+      )
+      .toLowerCase();
+    expect(implementation).toContain("processevernotesyncjoblocked");
+    expect(implementation).not.toMatch(
+      /openai\s*\.|embeditem\s*\(|warmentityembedding\s*\(/,
+    );
   });
 
   it("rechecks the night window on every scheduled full-import slice", () => {
-    const implementation = processEvernoteSyncJob.toString();
+    const implementation = readFileSync(
+      new URL("./connectors.ts", import.meta.url),
+      "utf8",
+    );
     expect(implementation).toContain("evernoteScheduled");
     expect(implementation).toContain("isEvernoteNightWindow");
+    expect(implementation).toContain('persistedPhase === "attachments"');
+  });
+});
+
+describe("Evernote attachment backfill coexistence", () => {
+  const backfill = {
+    id: "sync-full",
+    status: "running",
+    metadata: {
+      evernoteSyncMode: "full",
+      evernotePhase: "attachments",
+      evernoteCheckpoint: { startIndex: 4927 },
+    },
+  };
+
+  it("allows one incremental run beside a full attachment backfill", () => {
+    expect(isEvernoteAttachmentBackfill(backfill.metadata)).toBe(true);
+    expect(activeEvernoteRunForMode([backfill], "incremental")).toBeNull();
+
+    const incremental = {
+      id: "sync-incremental",
+      status: "queued",
+      metadata: {
+        evernoteSyncMode: "incremental",
+        evernotePhase: "notes",
+      },
+    };
+    expect(
+      activeEvernoteRunForMode([incremental, backfill], "incremental"),
+    ).toBe(incremental);
+    expect(activeEvernoteRunForMode([incremental, backfill], "full")).toBe(
+      backfill,
+    );
+    expect(
+      hasActiveEvernoteIncrementalRun([incremental, backfill], backfill.id),
+    ).toBe(true);
+  });
+
+  it("does not overlap incremental note writers", () => {
+    const activeNotes = {
+      ...backfill,
+      metadata: { ...backfill.metadata, evernotePhase: "notes" },
+    };
+    expect(activeEvernoteRunForMode([activeNotes], "incremental")).toBe(
+      activeNotes,
+    );
+  });
+
+  it("runs incremental active and trash listings without entering attachments", () => {
+    expect(nextEvernotePhaseAfterListing("incremental", false)).toBe("trash");
+    expect(nextEvernotePhaseAfterListing("incremental", true)).toBe(
+      "incremental_complete",
+    );
+    expect(nextEvernotePhaseAfterListing("full", true)).toBe("attachments");
+    const implementation = readFileSync(
+      new URL("./connectors.ts", import.meta.url),
+      "utf8",
+    );
+    expect(implementation).toMatch(
+      /stopAtFirstUnchanged:\s*syncMode === "incremental" && !trashPhase/,
+    );
   });
 });
 

@@ -9,7 +9,11 @@ import {
   syncRuns,
   type Connector,
 } from "@workspace/db/schema";
-import { getDb } from "../lib/db";
+import {
+  DatabaseAdvisoryLockBusyError,
+  getDb,
+  withDbAdvisoryLock,
+} from "../lib/db";
 import { logger } from "../lib/logger";
 import { newConnectorId, newSourceRecordId, newSyncRunId } from "../lib/recall-format";
 import { csvImportConnector, parseCsvText } from "../connectors/csv-import";
@@ -1951,21 +1955,28 @@ export async function enqueueEvernoteSyncForUser(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${`evernote-sync:${connectorId}`}, 0))`,
     );
     const active = await tx
-      .select({ id: syncRuns.id, status: syncRuns.status })
+      .select({
+        id: syncRuns.id,
+        status: syncRuns.status,
+        metadata: syncRuns.metadata,
+      })
       .from(syncRuns)
+      .innerJoin(jobs, eq(jobs.id, syncRuns.id))
       .where(
         and(
           eq(syncRuns.userId, userId),
           eq(syncRuns.connectorId, connectorId),
           inArray(syncRuns.status, ["queued", "running"]),
+          inArray(jobs.status, ["queued", "processing"]),
         ),
       )
-      .limit(1);
-    if (active[0]) {
+      .orderBy(desc(syncRuns.startedAt));
+    const reusable = activeEvernoteRunForMode(active, mode);
+    if (reusable) {
       return {
-        syncRunId: active[0].id,
-        jobId: active[0].id,
-        status: active[0].status,
+        syncRunId: reusable.id,
+        jobId: reusable.id,
+        status: reusable.status,
       };
     }
 
@@ -2019,6 +2030,61 @@ export async function enqueueEvernoteSyncForUser(
   return queued;
 }
 
+type ActiveEvernoteRun = {
+  id: string;
+  status: string;
+  metadata: Record<string, unknown>;
+};
+
+export function isEvernoteAttachmentBackfill(
+  metadata: Record<string, unknown> | null | undefined,
+): boolean {
+  return (
+    metadata?.evernoteSyncMode !== "incremental" &&
+    metadata?.evernotePhase === "attachments"
+  );
+}
+
+export function activeEvernoteRunForMode(
+  active: ActiveEvernoteRun[],
+  mode: "full" | "incremental",
+): ActiveEvernoteRun | null {
+  if (active.length === 0) return null;
+  if (mode === "full") {
+    return (
+      active.find((run) => run.metadata?.evernoteSyncMode !== "incremental") ??
+      active[0] ??
+      null
+    );
+  }
+  const incremental = active.find(
+    (run) => run.metadata?.evernoteSyncMode === "incremental",
+  );
+  if (incremental) return incremental;
+  return (
+    active.find((run) => !isEvernoteAttachmentBackfill(run.metadata)) ?? null
+  );
+}
+
+export function hasActiveEvernoteIncrementalRun(
+  active: Array<{ id: string; metadata: Record<string, unknown> }>,
+  excludingRunId?: string,
+): boolean {
+  return active.some(
+    (run) =>
+      run.id !== excludingRunId &&
+      run.metadata?.evernoteSyncMode === "incremental",
+  );
+}
+
+export function nextEvernotePhaseAfterListing(
+  mode: "full" | "incremental",
+  trashPhase: boolean,
+): "trash" | "attachments" | "incremental_complete" {
+  if (!trashPhase) return "trash";
+  return mode === "incremental" ? "incremental_complete" : "attachments";
+}
+
 export function withEvernoteLookupProgress(
   metadata: Record<string, unknown>,
   progress: {
@@ -2039,6 +2105,27 @@ export function withEvernoteLookupProgress(
 }
 
 export async function processEvernoteSyncJob(
+  userId: string,
+  connectorId: string,
+  syncRunId: string,
+  heartbeat?: () => Promise<void>,
+): Promise<boolean> {
+  try {
+    return await withDbAdvisoryLock(`evernote-sync:${connectorId}`, () =>
+      processEvernoteSyncJobLocked(userId, connectorId, syncRunId, heartbeat),
+    );
+  } catch (error) {
+    if (error instanceof DatabaseAdvisoryLockBusyError) {
+      throw evernoteDeferredError(
+        "another Evernote sync slice holds the connector lock",
+        1_000,
+      );
+    }
+    throw error;
+  }
+}
+
+async function processEvernoteSyncJobLocked(
   userId: string,
   connectorId: string,
   syncRunId: string,
@@ -2069,13 +2156,20 @@ export async function processEvernoteSyncJob(
   if (!connector || !run) throw new Error("Evernote sync job target not found");
   if (run.status === "complete" || run.status === "partial_success") return true;
   if (!connector.enabled) throw new Error("Evernote connector is paused");
+  const persistedPhase =
+    typeof run.metadata?.evernotePhase === "string"
+      ? run.metadata.evernotePhase
+      : "active";
   if (
-    run.metadata?.evernoteScheduled === true &&
-    run.metadata?.evernoteSyncMode !== "incremental" &&
+    (persistedPhase === "attachments" ||
+      (run.metadata?.evernoteScheduled === true &&
+        run.metadata?.evernoteSyncMode !== "incremental")) &&
     !isEvernoteNightWindow()
   ) {
     throw evernoteDeferredError(
-      "scheduled full reconcile is outside the Evernote night window",
+      persistedPhase === "attachments"
+        ? "Evernote attachment backfill is outside the night window"
+        : "scheduled full reconcile is outside the Evernote night window",
       60 * 60_000,
     );
   }
@@ -2165,12 +2259,70 @@ export async function processEvernoteSyncJob(
       .where(eq(connectors.id, connector.id));
   };
 
-  const phase =
-    typeof metadata.evernotePhase === "string"
-      ? metadata.evernotePhase
-      : "active";
+  const phase = persistedPhase;
   const syncMode =
     metadata.evernoteSyncMode === "incremental" ? "incremental" : "full";
+  if (phase === "incremental_complete") {
+    const completedAt = new Date();
+    const recordsFailed = Number(run.recordsFailed);
+    const status = recordsFailed > 0 ? "partial_success" : "complete";
+    const activeRuns = await getDb()
+      .select({ id: syncRuns.id, metadata: syncRuns.metadata })
+      .from(syncRuns)
+      .innerJoin(jobs, eq(jobs.id, syncRuns.id))
+      .where(
+        and(
+          eq(syncRuns.connectorId, connectorId),
+          inArray(syncRuns.status, ["queued", "running"]),
+          inArray(jobs.status, ["queued", "processing"]),
+        ),
+      );
+    const statePhase = activeRuns.some(
+      (active) =>
+        active.id !== syncRunId &&
+        isEvernoteAttachmentBackfill(active.metadata),
+    )
+      ? "attachments"
+      : "complete";
+    metadata = { ...metadata, evernotePhase: "complete" };
+    await getDb()
+      .update(syncRuns)
+      .set({
+        status,
+        completedAt,
+        errorMessage: null,
+        metadata,
+      })
+      .where(eq(syncRuns.id, syncRunId));
+    await getDb()
+      .update(connectors)
+      .set({
+        syncStatus: status === "complete" ? "connected" : "partial_success",
+        lastSyncAt: completedAt,
+        updatedAt: completedAt,
+      })
+      .where(eq(connectors.id, connectorId));
+    await getDb()
+      .insert(evernoteSyncState)
+      .values({
+        connectorId,
+        userId,
+        phase: statePhase,
+        lastIncrementalAt: completedAt,
+        updatedAt: completedAt,
+      })
+      .onConflictDoUpdate({
+        target: evernoteSyncState.connectorId,
+        set: {
+          phase: statePhase,
+          lastIncrementalAt: completedAt,
+          watchdogPausedAt: null,
+          watchdogReason: null,
+          updatedAt: completedAt,
+        },
+      });
+    return true;
+  }
   if (phase === "attachments") {
     await resetInterruptedEvernoteAttachments(connectorId);
     const processed = await withEvernoteMcpClient(
@@ -2186,6 +2338,23 @@ export async function processEvernoteSyncJob(
       })
       .where(eq(connectors.id, connectorId));
     if (processed.value) {
+      await heartbeat?.();
+      return false;
+    }
+    const activeRuns = await getDb()
+      .select({ id: syncRuns.id, metadata: syncRuns.metadata })
+      .from(syncRuns)
+      .innerJoin(jobs, eq(jobs.id, syncRuns.id))
+      .where(
+        and(
+          eq(syncRuns.connectorId, connectorId),
+          inArray(syncRuns.status, ["queued", "running"]),
+          inArray(jobs.status, ["queued", "processing"]),
+        ),
+      );
+    if (hasActiveEvernoteIncrementalRun(activeRuns, syncRunId)) {
+      // An incremental note slice may still add/reset pending attachment rows.
+      // Keep this durable backfill open until that run has checkpointed.
       await heartbeat?.();
       return false;
     }
@@ -2411,6 +2580,9 @@ export async function processEvernoteSyncJob(
         query: trashPhase ? "intrash:true" : "",
         forceTrashed: trashPhase,
         partitionByNotebook: syncMode === "full",
+        // Trash order is not guaranteed to reflect when a note was deleted.
+        // Scan all trash summaries so an older newly trashed note cannot hide
+        // behind an unchanged row; unchanged full notes are still not fetched.
         stopAtFirstUnchanged: syncMode === "incremental" && !trashPhase,
         taxonomy,
         taxonomyLookupProgress:
@@ -2621,7 +2793,7 @@ export async function processEvernoteSyncJob(
         batchesProcessed: 0,
         listingAuthoritative: true,
       },
-      evernotePhase: syncMode === "incremental" ? "attachments" : "trash",
+      evernotePhase: nextEvernotePhaseAfterListing(syncMode, false),
     };
     await getDb()
       .update(syncRuns)
@@ -2643,7 +2815,7 @@ export async function processEvernoteSyncJob(
   metadata = {
     ...metadata,
     evernoteTrashCheckpoint: streamed.value,
-    evernotePhase: "attachments",
+    evernotePhase: nextEvernotePhaseAfterListing(syncMode, true),
     contentHashSkipped,
     processingFailures,
     recordsDeferred: 0,

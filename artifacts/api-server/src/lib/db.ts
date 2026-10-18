@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "@workspace/db/schema";
@@ -6,6 +7,16 @@ type Db = NodePgDatabase<typeof schema>;
 
 let pool: pg.Pool | null = null;
 let db: Db | null = null;
+const scopedDb = new AsyncLocalStorage<Db>();
+
+export class DatabaseAdvisoryLockBusyError extends Error {
+  readonly status = 503;
+
+  constructor(key: string) {
+    super(`Database advisory lock is busy: ${key}`);
+    this.name = "DatabaseAdvisoryLockBusyError";
+  }
+}
 
 export function isDatabaseConfigured(): boolean {
   return Boolean(process.env.DATABASE_URL?.trim());
@@ -40,6 +51,8 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
 }
 
 export function getDb(): Db {
+  const scoped = scopedDb.getStore();
+  if (scoped) return scoped;
   const url = process.env.DATABASE_URL?.trim();
   if (!url) {
     throw new Error("DATABASE_URL is not configured");
@@ -64,6 +77,47 @@ export function getDb(): Db {
     db = drizzle(pool as never, { schema });
   }
   return db;
+}
+
+/**
+ * Serialize connector work across API/worker processes while keeping every
+ * query in the callback on the connection that owns the session lock.
+ */
+export async function withDbAdvisoryLock<T>(
+  key: string,
+  callback: () => Promise<T>,
+): Promise<T> {
+  getDb();
+  if (!pool) throw new Error("Database pool is not initialized");
+  const client = await pool.connect();
+  let locked = false;
+  try {
+    const result = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
+      [key],
+    );
+    locked = result.rows[0]?.locked === true;
+    if (!locked) throw new DatabaseAdvisoryLockBusyError(key);
+    const lockedDb = drizzle(client as never, { schema }) as Db;
+    return await scopedDb.run(lockedDb, callback);
+  } finally {
+    if (locked) {
+      try {
+        await client.query(
+          "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
+          [key],
+        );
+      } catch (error) {
+        client.release(
+          error instanceof Error
+            ? error
+            : new Error("Could not release database advisory lock"),
+        );
+        throw error;
+      }
+    }
+    client.release();
+  }
 }
 
 export async function closeDb(): Promise<void> {
