@@ -4,9 +4,11 @@
   "version": "0.0.0",
   "scripts": {
     "test": "playwright test",
-    "test:ui": "playwright test --ui"
+    "test:ui": "playwright test --ui",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
-    "@playwright/test": "^1.52.0"
+    "@playwright/test": "^1.52.0",
+    "@types/node": "^26.6.5"
   }
 }

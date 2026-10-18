@@ -868,6 +868,15 @@
     color: #dffdf4;
     box-shadow: inset 0 0 0 1px rgba(125, 255, 217, 0.18);
   }
+  .graph-fit-control {
+    border: 1px solid rgba(125, 255, 217, 0.2);
+    border-radius: 8px;
+    background: rgba(7, 17, 15, 0.88);
+    padding: 5px 8px;
+    font-family: var(--app-font-mono);
+    font-size: 10px;
+    color: #a9d8ca;
+  }
   .hud-field {
     min-width: 0;
     border: 1px solid rgba(125, 255, 217, 0.16);
@@ -1082,6 +1091,212 @@
   .assistant-status-mobile {
     margin: 0;
     padding: 4px 7px;
+  }
+
+  .recall-one-box-wrap {
+    filter: drop-shadow(0 20px 38px rgba(0, 0, 0, 0.62));
+  }
+  .recall-one-box {
+    position: relative;
+    display: flex;
+    min-height: 66px;
+    align-items: center;
+    gap: 10px;
+    border: 1px solid rgba(125, 255, 217, 0.34);
+    border-radius: 22px;
+    background: rgba(6, 15, 16, 0.96);
+    padding: 10px 154px 10px 12px;
+    box-shadow:
+      0 0 0 1px rgba(125, 255, 217, 0.04),
+      0 0 34px rgba(109, 255, 224, 0.12);
+  }
+  .recall-one-box:focus-within {
+    border-color: rgba(125, 255, 217, 0.66);
+    box-shadow:
+      0 0 0 1px rgba(125, 255, 217, 0.1),
+      0 0 42px rgba(109, 255, 224, 0.16);
+  }
+  .recall-one-box-ring {
+    position: absolute;
+    right: -4px;
+    bottom: -2px;
+    width: 136px;
+    height: 136px;
+    z-index: 2;
+  }
+  .recall-plus,
+  .recall-send {
+    display: grid;
+    flex: none;
+    place-items: center;
+    border-radius: 999px;
+    color: #7dffd9;
+  }
+  .recall-plus {
+    width: 38px;
+    height: 38px;
+    border: 1px solid rgba(125, 255, 217, 0.2);
+    background: rgba(125, 255, 217, 0.07);
+  }
+  .recall-send {
+    width: 36px;
+    height: 36px;
+    background: rgba(125, 255, 217, 0.12);
+  }
+  .recall-send:disabled {
+    opacity: 0.35;
+  }
+  .recall-attachment {
+    margin-bottom: 5px;
+    display: flex;
+    max-width: 100%;
+    width: fit-content;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid rgba(255, 207, 125, 0.22);
+    border-radius: 999px;
+    background: rgba(255, 207, 125, 0.07);
+    padding: 3px 7px;
+    font-size: 10px;
+    color: #ffdc9e;
+  }
+  .recall-action-chip {
+    margin: 0 146px 7px 10px;
+    display: flex;
+    width: fit-content;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid rgba(125, 255, 217, 0.24);
+    border-radius: 999px;
+    background: rgba(6, 15, 16, 0.96);
+    padding: 5px 9px;
+    font-family: var(--app-font-mono);
+    font-size: 10px;
+    color: #b8fff2;
+  }
+  .recall-action-chip button {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: #ffcf7d;
+    font-weight: 700;
+  }
+  .recall-one-box-output {
+    bottom: 164px;
+    max-height: min(52vh, 450px);
+  }
+  .recall-source-label {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--app-font-mono);
+    font-size: 9px;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #8fd8c2;
+  }
+  .recall-result-card {
+    min-width: 0;
+    border: 1px solid rgba(125, 255, 217, 0.12);
+    border-radius: 11px;
+    background: rgba(0, 0, 0, 0.18);
+    padding: 11px;
+  }
+  .recall-result-card.is-document {
+    border-color: rgba(255, 207, 125, 0.22);
+    background: rgba(255, 207, 125, 0.035);
+  }
+  .recall-document-hero {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    border: 1px solid rgba(255, 207, 125, 0.28);
+    border-radius: 14px;
+    background:
+      linear-gradient(135deg, rgba(255, 207, 125, 0.09), transparent 65%),
+      rgba(0, 0, 0, 0.2);
+    padding: 15px;
+  }
+  .recall-document-icon {
+    display: grid;
+    width: 56px;
+    height: 68px;
+    flex: none;
+    place-items: center;
+    border: 1px solid rgba(255, 207, 125, 0.28);
+    border-radius: 8px;
+    color: #ffcf7d;
+  }
+  .recall-document-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid rgba(125, 255, 217, 0.2);
+    border-radius: 999px;
+    padding: 5px 9px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #b8fff2;
+  }
+  .recall-document-action.is-primary {
+    border-color: rgba(125, 255, 217, 0.48);
+    background: #7dffd9;
+    color: #04100d;
+  }
+  .recall-preview-backdrop {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: rgba(0, 0, 0, 0.74);
+    padding: 20px;
+  }
+  .recall-preview {
+    width: min(940px, 100%);
+    height: min(720px, 92%);
+    overflow: hidden;
+    border: 1px solid rgba(125, 255, 217, 0.25);
+    border-radius: 15px;
+    background: #07100f;
+  }
+  .recall-preview iframe {
+    width: 100%;
+    height: calc(100% - 49px);
+    border: 0;
+    background: white;
+  }
+
+  @media (max-width: 640px) {
+    .recall-one-box {
+      min-height: 58px;
+      padding: 8px 102px 8px 8px;
+    }
+    .recall-one-box-ring {
+      right: -3px;
+      bottom: -2px;
+      width: 94px;
+      height: 94px;
+      padding: 12px;
+    }
+    .recall-one-box-ring > svg {
+      width: 32px;
+      height: 32px;
+    }
+    .recall-one-box-ring::before {
+      inset: 5px;
+    }
+    .recall-one-box-ring::after {
+      inset: 12px;
+    }
+    .recall-action-chip {
+      margin-right: 98px;
+    }
+    .recall-one-box-output {
+      bottom: 118px;
+      max-height: min(53vh, 430px);
+    }
   }
 
   @media (max-width: 640px), (prefers-reduced-transparency: reduce) {

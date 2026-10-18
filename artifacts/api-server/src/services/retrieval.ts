@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { connectors, sourceRecords } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { listTasksForUser } from "./tasks";
@@ -672,11 +672,13 @@ async function loadSourceRecordsBalanced(
     const rows = await getDb()
       .select({
         id: sourceRecords.id,
+        externalId: sourceRecords.externalId,
         recordType: sourceRecords.recordType,
         recordTitle: sourceRecords.recordTitle,
         recordText: sql<string>`left(${sourceRecords.recordText}, 4000)`,
         updatedAt: sourceRecords.updatedAt,
         sourceCreatedAt: sourceRecords.sourceCreatedAt,
+        sourceUrl: sourceRecords.sourceUrl,
         metadata: sourceRecords.recordMetadata,
       })
       .from(sourceRecords)
@@ -706,11 +708,13 @@ async function loadSourceRecordsBalanced(
     const rows = await getDb()
       .select({
         id: sourceRecords.id,
+        externalId: sourceRecords.externalId,
         recordType: sourceRecords.recordType,
         recordTitle: sourceRecords.recordTitle,
         recordText: sql<string>`left(${sourceRecords.recordText}, 4000)`,
         updatedAt: sourceRecords.updatedAt,
         sourceCreatedAt: sourceRecords.sourceCreatedAt,
+        sourceUrl: sourceRecords.sourceUrl,
         connectorId: sourceRecords.connectorId,
         metadata: sourceRecords.recordMetadata,
       })
@@ -739,6 +743,8 @@ async function loadSourceRecordsBalanced(
         recordText: r.recordText,
         updatedAt: r.updatedAt,
         sourceCreatedAt: r.sourceCreatedAt,
+        sourceUrl: r.sourceUrl,
+        externalId: r.externalId,
         mailbox: mailboxByConnector.get(r.connectorId) ?? null,
         metadata: r.metadata,
       })),
@@ -845,9 +851,7 @@ export function evernoteMatchedText(input: {
   return `${sourceTypeAliases(input.recordType)} source=${input.recordType} ${input.title}${
     input.tagText ? ` tags=${input.tagText}` : ""
   }\nMatched passage: ${input.excerpt}${
-    input.attachmentText
-      ? `\nMatched attachment: ${input.attachmentText}`
-      : ""
+    input.attachmentText ? `\nMatched attachment: ${input.attachmentText}` : ""
   }`;
 }
 
@@ -968,6 +972,64 @@ export async function searchEvernoteSourceRecordsForUser(
       }),
     };
   });
+}
+
+/** Full-library free FTS for Gmail, Drive, Calendar, finance, and other connectors. */
+export async function searchSourceRecordsForUser(
+  userId: string,
+  query: string,
+  limit = 30,
+): Promise<ContextRecord[]> {
+  const terms = sourceRecordSearchTerms(query);
+  const tsQueries = sourceRecordTsQueries(terms);
+  if (!tsQueries) return [];
+  const rows = await getDb()
+    .select({
+      id: sourceRecords.id,
+      externalId: sourceRecords.externalId,
+      recordType: sourceRecords.recordType,
+      recordTitle: sourceRecords.recordTitle,
+      recordText: sql<string>`left(
+        ts_headline(
+          'simple',
+          ${sourceRecords.searchDocument},
+          to_tsquery('simple', ${tsQueries.any}),
+          'MaxWords=80, MinWords=20, ShortWord=2, HighlightAll=false'
+        ),
+        1200
+      )`,
+      updatedAt: sourceRecords.updatedAt,
+      sourceCreatedAt: sourceRecords.sourceCreatedAt,
+      sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
+      sourceUrl: sourceRecords.sourceUrl,
+      metadata: sourceRecords.recordMetadata,
+    })
+    .from(sourceRecords)
+    .innerJoin(
+      connectors,
+      and(
+        eq(connectors.id, sourceRecords.connectorId),
+        eq(connectors.enabled, true),
+      ),
+    )
+    .where(
+      and(
+        eq(sourceRecords.userId, userId),
+        ne(sourceRecords.recordType, "evernote_note"),
+        sql`${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.any})`,
+      ),
+    )
+    .orderBy(
+      sql`CASE WHEN to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')) @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
+      sql`CASE WHEN ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
+      sql`(
+        ts_rank_cd(to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')), to_tsquery('simple', ${tsQueries.any})) * 4
+        + ts_rank_cd(coalesce(${sourceRecords.searchTsv}, ''::tsvector), to_tsquery('simple', ${tsQueries.any}))
+      ) DESC`,
+      desc(sourceRecords.sourceUpdatedAt),
+    )
+    .limit(Math.min(Math.max(limit, 1), 60));
+  return rows.map((row) => sourceRowToContext({ ...row, mailbox: null }));
 }
 
 /**
@@ -1341,14 +1403,19 @@ export async function retrieveRelevantRecords(
   }
   // Embed the query in parallel with the corpus load — it doesn't depend on the
   // corpus, so this removes a sequential OpenAI round-trip from the critical path.
-  const [{ records: baseCorpus, people, tasks }, noteSearchHits, queryVec] =
-    await Promise.all([
-      collectCorpus(userId),
-      retrieveFreeNoteRecordsForUser(userId, noteQuery, 20),
-      options?.semantic === false
-        ? Promise.resolve(null)
-        : embedQuery(question).catch(() => null),
-    ]);
+  const [
+    { records: baseCorpus, people, tasks },
+    noteSearchHits,
+    sourceSearchHits,
+    queryVec,
+  ] = await Promise.all([
+    collectCorpus(userId),
+    retrieveFreeNoteRecordsForUser(userId, noteQuery, 20),
+    searchSourceRecordsForUser(userId, question, 30).catch(() => []),
+    options?.semantic === false
+      ? Promise.resolve(null)
+      : embedQuery(question).catch(() => null),
+  ]);
   const corpus = [...baseCorpus];
   // Full-library note search covers older notes outside the recency corpus cap.
   // Replace recent-prefix copies so ranking and grounding use match-centered text.
@@ -1364,6 +1431,15 @@ export async function retrieveRelevantRecords(
     } else {
       corpus.push(record);
     }
+  }
+  for (const record of sourceSearchHits) {
+    const existingIndex = corpus.findIndex(
+      (candidate) =>
+        candidate.entityType === record.entityType &&
+        candidate.entityId === record.entityId,
+    );
+    if (existingIndex >= 0) corpus[existingIndex] = record;
+    else corpus.push(record);
   }
   if (corpus.length === 0) {
     return { records: [], usedSemantic: false, namedPeople: [], tasks };

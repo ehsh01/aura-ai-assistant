@@ -586,6 +586,29 @@ export async function fetchDriveFileText(
   }
 }
 
+export async function fetchDriveFileDownload(
+  accessToken: string,
+  fileId: string,
+  mimeType: string | null | undefined,
+): Promise<Response> {
+  const googleNative = (mimeType ?? "").startsWith(
+    "application/vnd.google-apps.",
+  );
+  const url = googleNative
+    ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/export?mimeType=${encodeURIComponent("application/pdf")}`
+    : `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`;
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    throw Object.assign(new Error("Drive file could not be opened"), {
+      status: response.status === 404 ? 404 : 502,
+    });
+  }
+  return response;
+}
+
 /**
  * Live Drive search across a single account. Uses Drive's own full-text index
  * (`fullText contains`) which matches content inside Docs, Sheets, Slides, PDFs,

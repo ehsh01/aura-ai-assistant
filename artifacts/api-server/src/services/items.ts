@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -11,6 +11,7 @@ import { getDb } from "../lib/db";
 import { createCaptureForUser, updateCaptureStatusForUser } from "./captures";
 import { canonicalizeUrl, fetchLinkMetadata } from "./link-metadata";
 import { evernoteDisplayTags, heuristicItemTags } from "./item-tags";
+import { extractTextFromAttachmentFile } from "./attachment-text-extract";
 
 export const ITEM_KINDS = ["note", "link", "image", "pdf", "file"] as const;
 export const ITEM_SOURCES = ["recall", "evernote"] as const;
@@ -581,19 +582,18 @@ function imageKind(mimeType: string): "image" | "pdf" | "file" {
 export async function saveFileItemForUser(
   userId: string,
   file: { originalname: string; mimetype: string; size: number; buffer: Buffer },
+  caption = "",
 ): Promise<SavedItemDto> {
-  if (!file.buffer.length) throw Object.assign(new Error("Image file is empty"), { status: 400 });
-  if (!file.mimetype.startsWith("image/")) {
-    throw Object.assign(new Error("The save box currently accepts image uploads"), { status: 415 });
-  }
+  if (!file.buffer.length) throw Object.assign(new Error("File is empty"), { status: 400 });
   if (file.size > config.attachmentMaxBytes) {
-    throw Object.assign(new Error("Image exceeds the upload size cap"), { status: 413 });
+    throw Object.assign(new Error("File exceeds the upload size cap"), { status: 413 });
   }
 
   const fileName = safeFileName(file.originalname);
+  const cleanCaption = caption.trim().slice(0, 20_000);
   const capture = await createCaptureForUser(userId, {
-    rawText: `[image] ${fileName}`,
-    sourceType: "item_image",
+    rawText: `${cleanCaption ? `${cleanCaption}\n` : ""}[file] ${fileName}`,
+    sourceType: file.mimetype.startsWith("image/") ? "item_image" : "item_file",
     title: fileName,
     rawMetadata: { fileName, mimeType: file.mimetype, sizeBytes: file.size },
   });
@@ -602,7 +602,16 @@ export async function saveFileItemForUser(
   const absoluteDir = path.join(config.attachmentsDir, relativeDir);
   await mkdir(absoluteDir, { recursive: true });
   const storagePath = path.join(relativeDir, fileName);
-  await pipeline(Readable.from(file.buffer), createWriteStream(path.join(config.attachmentsDir, storagePath)));
+  const absolutePath = path.join(config.attachmentsDir, storagePath);
+  await pipeline(Readable.from(file.buffer), createWriteStream(absolutePath));
+  const extractedText = file.mimetype.startsWith("image/")
+    ? ""
+    : await extractTextFromAttachmentFile({
+        absPath: absolutePath,
+        mimeType: file.mimetype,
+        fileName,
+        sizeBytes: file.size,
+      });
 
   const now = new Date();
   await getDb().insert(items).values({
@@ -613,7 +622,8 @@ export async function saveFileItemForUser(
     state: "ready",
     source: "recall",
     title: fileName.replace(/\.[^.]+$/, "") || fileName,
-    bodyText: "",
+    description: cleanCaption || null,
+    bodyText: [cleanCaption, extractedText].filter(Boolean).join("\n\n"),
     media: {
       storagePath,
       fileName,
@@ -627,6 +637,29 @@ export async function saveFileItemForUser(
   });
   await finishRawCapture(userId, capture.id);
   return (await getItemForUser(userId, id))!;
+}
+
+export async function deleteItemForUser(
+  userId: string,
+  id: string,
+): Promise<boolean> {
+  if (id.startsWith("note:") || id.startsWith("evernote:")) return false;
+  const deleted = await getDb()
+    .delete(items)
+    .where(and(eq(items.id, id), eq(items.userId, userId)))
+    .returning({ media: items.media });
+  const storagePath = deleted[0]?.media?.storagePath;
+  if (storagePath) {
+    const absolute = path.resolve(config.attachmentsDir, storagePath);
+    const root = `${path.resolve(config.attachmentsDir)}${path.sep}`;
+    if (absolute.startsWith(root)) {
+      await rm(absolute, { force: true }).catch(() => undefined);
+      await rm(path.dirname(absolute), { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
+  }
+  return deleted.length > 0;
 }
 
 export async function getItemMediaForUser(
