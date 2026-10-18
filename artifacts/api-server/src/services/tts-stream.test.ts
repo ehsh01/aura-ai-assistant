@@ -1,3 +1,5 @@
+import { PassThrough } from "node:stream";
+
 const mocks = vi.hoisted(() => ({
   speechCreate: vi.fn(),
   allowance: vi.fn(),
@@ -68,17 +70,17 @@ describe("streamSynthesizeSpeech", () => {
     await streamSynthesizeSpeech(
       "A short grounded answer.",
       "user-1",
-      async ({ stream: body, contentType }) => {
+      async ({ chunks: body, contentType }) => {
         expect(mocks.insideLock).toBe(false);
         expect(contentType).toBe("audio/mpeg");
-        const reader = body.getReader();
-        const first = await reader.read();
+        const reader = body[Symbol.asyncIterator]();
+        const first = await reader.next();
         firstChunkMs = performance.now() - startedAt;
         chunks.push([...first.value!]);
         expect(chunks).toEqual([[1, 2, 3]]);
-        const second = await reader.read();
+        const second = await reader.next();
         chunks.push([...second.value!]);
-        expect((await reader.read()).done).toBe(true);
+        expect((await reader.next()).done).toBe(true);
       },
     );
     const completeMs = performance.now() - startedAt;
@@ -92,5 +94,53 @@ describe("streamSynthesizeSpeech", () => {
     console.info(
       `[tts-stream-benchmark] buffered_first_sound_ms=${completeMs.toFixed(1)} streamed_first_chunk_ms=${firstChunkMs.toFixed(1)} complete_ms=${completeMs.toFixed(1)}`,
     );
+  });
+
+  it("streams a real Node PassThrough body", async () => {
+    const body = new PassThrough();
+    mocks.speechCreate.mockResolvedValue({
+      body,
+      arrayBuffer: vi.fn(),
+    });
+    queueMicrotask(() => {
+      body.write(Buffer.from([10, 11]));
+      body.end(Buffer.from([12, 13]));
+    });
+
+    const received: number[] = [];
+    await streamSynthesizeSpeech(
+      "Node stream answer",
+      "user-1",
+      async ({ chunks }) => {
+        for await (const chunk of chunks) received.push(...chunk);
+      },
+    );
+
+    expect(received).toEqual([10, 11, 12, 13]);
+  });
+
+  it("propagates a Node stream error after the first chunk", async () => {
+    const body = new PassThrough();
+    mocks.speechCreate.mockResolvedValue({
+      body,
+      arrayBuffer: vi.fn(),
+    });
+
+    await expect(
+      streamSynthesizeSpeech(
+        "Interrupted answer",
+        "user-1",
+        async ({ chunks }) => {
+          const iterator = chunks[Symbol.asyncIterator]();
+          body.write(Buffer.from([1, 2, 3]));
+          expect([...(await iterator.next()).value!]).toEqual([1, 2, 3]);
+          body.destroy(new Error("upstream reset"));
+          await iterator.next();
+        },
+      ),
+    ).rejects.toMatchObject({
+      message: "OpenAI TTS stream failed",
+      status: 502,
+    });
   });
 });

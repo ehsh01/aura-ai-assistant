@@ -93,8 +93,85 @@ export async function synthesizeSpeech(
 
 type SpeechResponse = {
   arrayBuffer(): Promise<ArrayBuffer>;
-  body: ReadableStream<Uint8Array> | null;
+  body: unknown;
 };
+
+type WebAudioStream = {
+  getReader(): {
+    read(): Promise<{ done: boolean; value?: Uint8Array }>;
+    cancel(reason?: unknown): Promise<void>;
+    releaseLock(): void;
+  };
+};
+
+function audioChunk(value: unknown): Uint8Array {
+  if (typeof value === "string") return Buffer.from(value);
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  throw Object.assign(new Error("OpenAI TTS returned an invalid audio chunk"), {
+    status: 502,
+  });
+}
+
+function streamFailure(error: unknown): Error & { status: number } {
+  return Object.assign(new Error("OpenAI TTS stream failed", { cause: error }), {
+    status: 502,
+  });
+}
+
+/**
+ * OpenAI SDK v4 can expose Response.body as either a Node Readable/PassThrough
+ * or a WHATWG ReadableStream depending on its runtime transport.
+ */
+export function speechBodyChunks(body: unknown): AsyncIterable<Uint8Array> {
+  if (
+    body &&
+    typeof body === "object" &&
+    Symbol.asyncIterator in body &&
+    typeof body[Symbol.asyncIterator] === "function"
+  ) {
+    return {
+      async *[Symbol.asyncIterator]() {
+        try {
+          for await (const chunk of body as AsyncIterable<unknown>) {
+            yield audioChunk(chunk);
+          }
+        } catch (error) {
+          throw streamFailure(error);
+        }
+      },
+    };
+  }
+
+  if (
+    body &&
+    typeof body === "object" &&
+    "getReader" in body &&
+    typeof body.getReader === "function"
+  ) {
+    return {
+      async *[Symbol.asyncIterator]() {
+        const reader = (body as WebAudioStream).getReader();
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) yield audioChunk(value);
+          }
+        } catch (error) {
+          throw streamFailure(error);
+        } finally {
+          await reader.cancel().catch(() => undefined);
+          reader.releaseLock();
+        }
+      },
+    };
+  }
+
+  throw Object.assign(new Error("OpenAI TTS returned no readable audio stream"), {
+    status: 502,
+  });
+}
 
 async function createSpeechForUser(
   text: string,
@@ -157,15 +234,11 @@ export async function streamSynthesizeSpeech(
   text: string,
   userId: string,
   consume: (input: {
-    stream: ReadableStream<Uint8Array>;
+    chunks: AsyncIterable<Uint8Array>;
     contentType: string;
   }) => Promise<void>,
 ): Promise<void> {
   const response = await createSpeechForUser(text, userId);
-  if (!response.body) {
-    throw Object.assign(new Error("OpenAI TTS returned no audio stream"), {
-      status: 502,
-    });
-  }
-  await consume({ stream: response.body, contentType: "audio/mpeg" });
+  const chunks = speechBodyChunks(response.body);
+  await consume({ chunks, contentType: "audio/mpeg" });
 }

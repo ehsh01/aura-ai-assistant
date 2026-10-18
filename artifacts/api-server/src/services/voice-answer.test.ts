@@ -56,6 +56,14 @@ const NOTE_RECORD = {
   sourceMetadata: { notebookName: "Home" },
 } as const;
 
+const PSYCHIATRY_LINK_RECORD = {
+  ...NOTE_RECORD,
+  entityId: "psychiatry-link",
+  title: "Adding and editing a web link on the Psychiatry website",
+  text: `${"intro ".repeat(34)}https://psychiatry.example.com/edit-links`,
+  score: 8,
+} as const;
+
 beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "test-key");
   for (const mock of Object.values(mocks)) mock.mockReset();
@@ -182,6 +190,92 @@ describe("spoken grounded answers", () => {
     const voice = await queryVoiceNotesForUser("u1", "warranty?", null);
     expect(voice.answer).toBe(VOICE_NO_MATCH_REPLY);
     expect(voice.sources).toEqual([]);
+  });
+
+  it("puts a retrieved Psychiatry URL front and center and requires a citation", async () => {
+    mocks.retrieve.mockResolvedValue({
+      records: [PSYCHIATRY_LINK_RECORD],
+      usedSemantic: false,
+      namedPeople: [],
+      tasks: [],
+    });
+    mocks.completion.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              answer: "The link is https://psychiatry.example.com/edit-links.",
+              sourceIds: ["n1"],
+            }),
+          },
+        },
+      ],
+    });
+
+    const result = await queryVoiceNotesForUser(
+      "u1",
+      'What does my note "Adding and editing a web link on the Psychiatry website" say?',
+      null,
+    );
+    const request = mocks.completion.mock.calls[0]![0];
+    expect(request.messages[0].content).toContain(
+      "including a URL—you must answer the question and cite that note",
+    );
+    expect(request.messages[1].content).toContain(
+      "Link found: https://psychiatry.example.com/edit-links (from Adding and editing a web link on the Psychiatry website)",
+    );
+    expect(result.answer).toContain(
+      "https://psychiatry.example.com/edit-links",
+    );
+    expect(result.sources[0]?.title).toBe(
+      "Adding and editing a web link on the Psychiatry website",
+    );
+  });
+
+  it.each(["AI off", "daily cap exhausted"])(
+    "returns the deterministic Psychiatry link with 0 LLM calls when %s",
+    async () => {
+      mocks.retrieve.mockResolvedValue({
+        records: [PSYCHIATRY_LINK_RECORD],
+        usedSemantic: false,
+        namedPeople: [],
+        tasks: [],
+      });
+
+      const result = await queryVoiceNotesForUser(
+        "u1",
+        "What's my Psychiatry link?",
+        null,
+        { allowModel: false },
+      );
+
+      expect(result?.answer).toBe(
+        "Your Psychiatry website link is https://psychiatry.example.com/edit-links, from your note Adding and editing a web link on the Psychiatry website.",
+      );
+      expect(result?.privacy.model).toBeNull();
+      expect(mocks.completion).not.toHaveBeenCalled();
+    },
+  );
+
+  it("falls back to the deterministic link after an OpenAI error", async () => {
+    mocks.retrieve.mockResolvedValue({
+      records: [PSYCHIATRY_LINK_RECORD],
+      usedSemantic: false,
+      namedPeople: [],
+      tasks: [],
+    });
+    mocks.completion.mockRejectedValue(new Error("OpenAI unavailable"));
+
+    const result = await queryVoiceNotesForUser(
+      "u1",
+      "What's my Psychiatry link?",
+      null,
+    );
+
+    expect(result.answer).toContain(
+      "Your Psychiatry website link is https://psychiatry.example.com/edit-links",
+    );
+    expect(mocks.completion).toHaveBeenCalledOnce();
   });
 
   it("does not let prior unrelated turns dilute a current title query", async () => {

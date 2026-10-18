@@ -61,6 +61,7 @@ import { askAiAvailabilityForUser } from "../services/ask-ai-availability";
 import { isEnabled } from "../lib/feature-flags";
 import { voiceAiAllowance, withVoiceAiLock } from "../services/ai-usage";
 import {
+  isVoiceLinkQuestion,
   queryVoiceNotesForUser,
   VOICE_LIMIT_REPLY,
 } from "../services/voice-answer";
@@ -229,21 +230,35 @@ router.post("/ai/tts", async (req, res, next) => {
     await streamSynthesizeSpeech(
       body.text,
       req.user!.id,
-      async ({ stream, contentType }) => {
+      async ({ chunks, contentType }) => {
+        const iterator = chunks[Symbol.asyncIterator]();
+        let first = await iterator.next();
+        while (!first.done && first.value.byteLength === 0) {
+          first = await iterator.next();
+        }
+        if (first.done) {
+          await iterator.return?.();
+          throw Object.assign(new Error("OpenAI TTS returned no audio"), {
+            status: 502,
+          });
+        }
+
         res.status(200);
         res.setHeader("Content-Type", contentType);
         res.setHeader("Cache-Control", "no-store");
         res.setHeader("X-Content-Type-Options", "nosniff");
         res.flushHeaders();
 
-        const reader = stream.getReader();
-        const cancelReader = () => {
-          void reader.cancel().catch(() => undefined);
+        const cancelStream = () => {
+          void iterator.return?.().catch(() => undefined);
         };
-        res.once("close", cancelReader);
+        res.once("close", cancelStream);
         try {
+          if (!res.write(Buffer.from(first.value))) {
+            await Promise.race([once(res, "drain"), once(res, "close")]);
+          }
           while (!res.destroyed) {
-            const { done, value } = await reader.read();
+            const { done, value } = await iterator.next();
             if (done) break;
             if (value.byteLength > 0 && !res.write(Buffer.from(value))) {
               await Promise.race([once(res, "drain"), once(res, "close")]);
@@ -251,9 +266,8 @@ router.post("/ai/tts", async (req, res, next) => {
           }
           if (!res.destroyed) res.end();
         } finally {
-          res.off("close", cancelReader);
-          if (res.destroyed) await reader.cancel().catch(() => undefined);
-          reader.releaseLock();
+          res.off("close", cancelStream);
+          if (res.destroyed) await iterator.return?.().catch(() => undefined);
         }
       },
     );
@@ -296,6 +310,18 @@ router.post("/ai/voice/query", async (req, res, next) => {
     await withVoiceAiLock(req.user!.id, async () => {
       const allowance = await voiceAiAllowance("voice_ask", req.user!.id);
       if (!allowance.allowed) {
+        const linkFallback = isVoiceLinkQuestion(body.question)
+          ? await queryVoiceNotesForUser(
+              req.user!.id,
+              body.question,
+              body.threadId ?? null,
+              { allowModel: false },
+            )
+          : null;
+        if (linkFallback) {
+          res.json(linkFallback);
+          return;
+        }
         const dailyLimit = allowance.reason === "daily_limit";
         res.status(dailyLimit ? 429 : 503).json({
           error: dailyLimit ? "VOICE_DAILY_LIMIT" : "VOICE_AI_UNAVAILABLE",
