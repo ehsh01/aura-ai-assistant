@@ -1,8 +1,13 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { connectors, sourceRecords } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { listTasksForUser } from "./tasks";
-import { listNotesForUser, searchNotesForUser } from "./notes";
+import {
+  buildSplitTokenRegexes,
+  listNotesForUser,
+  searchNoteRecordsForUser,
+  shouldExpandUrlTokens,
+} from "./notes";
 import { listPeopleForUser } from "./people";
 import { listVehiclesForUser } from "./vehicles";
 import { listHomesForUser } from "./homes";
@@ -10,13 +15,12 @@ import { listOrganizationsForUser } from "./organizations";
 import { listInvoicesForUser } from "./invoices";
 import { listWarrantiesForUser } from "./warranties";
 import { listProjectsForRetrieval } from "./projects";
-import { listPersonNameAliases, peopleWithAliasNames } from "./user-corrections";
 import {
-  linkedEntityKeySet,
-} from "./entity-links";
-import {
-  loadLinkedContextRecordsForPeople,
-} from "./shared-context";
+  listPersonNameAliases,
+  peopleWithAliasNames,
+} from "./user-corrections";
+import { linkedEntityKeySet } from "./entity-links";
+import { loadLinkedContextRecordsForPeople } from "./shared-context";
 import { listKnowledgeForUser } from "./knowledge";
 import { listDocumentsForUser } from "./documents";
 import { listCapturesForUser } from "./captures";
@@ -24,9 +28,11 @@ import { listAttentionForToday } from "./attention";
 import { listMemoriesForUser } from "./life-memory";
 import { noteRetrievalText } from "./note-retrieval";
 import {
-  KEYWORD_STOP_WORDS,
+  freeRetrievalTerms,
+  freeTextRelevance,
   keywordScore,
   normalizeKeywordToken,
+  rankFreeTextMatches,
 } from "./keyword-match";
 import {
   cosineSimilarity,
@@ -45,8 +51,11 @@ import { logger } from "../lib/logger";
 
 export {
   extractVinCandidates,
+  freeRetrievalTerms,
+  freeTextRelevance,
   keywordScore,
   normalizeKeywordToken,
+  rankFreeTextMatches,
 } from "./keyword-match";
 
 export type RetrievedRecord = {
@@ -98,7 +107,12 @@ function typeBoost(entityType: string, pinned?: boolean): number {
   if (entityType === "note") return 0.1;
   if (entityType === "knowledge") return 0.08;
   if (entityType === "person") return 0.05;
-  if (entityType === "vehicle" || entityType === "warranty" || entityType === "home") return 0.12;
+  if (
+    entityType === "vehicle" ||
+    entityType === "warranty" ||
+    entityType === "home"
+  )
+    return 0.12;
   if (entityType === "organization" || entityType === "invoice") return 0.1;
   if (entityType === "attention_item") return 0.15;
   return 0;
@@ -113,9 +127,16 @@ function googleIntent(question: string): {
 } {
   const q = question.toLowerCase();
   return {
-    email: /\b(email|emails|e-mail|gmail|inbox|mail|message|messages)\b/.test(q),
-    drive: /\b(drive|google\s*doc|docs|spreadsheet|sheets|file|files)\b/.test(q),
-    calendar: /\b(calendar|meeting|meetings|event|events|schedule|appointment)\b/.test(q),
+    email: /\b(email|emails|e-mail|gmail|inbox|mail|message|messages)\b/.test(
+      q,
+    ),
+    drive: /\b(drive|google\s*doc|docs|spreadsheet|sheets|file|files)\b/.test(
+      q,
+    ),
+    calendar:
+      /\b(calendar|meeting|meetings|event|events|schedule|appointment)\b/.test(
+        q,
+      ),
     contacts: /\b(contact|contacts|phone\s*number|address\s*book)\b/.test(q),
   };
 }
@@ -271,7 +292,9 @@ export function textFuzzyHasName(hay: string, needle: string): boolean {
 }
 
 /** Parse Gmail "From:" line into display name + email. */
-export function parseGmailFrom(text: string): { name: string; email: string } | null {
+export function parseGmailFrom(
+  text: string,
+): { name: string; email: string } | null {
   const line = text.match(/From:\s*(.+)/i)?.[1]?.trim();
   if (!line) return null;
   const angle = line.match(/^(.*?)\s*<([^>]+)>/);
@@ -320,7 +343,8 @@ function gmailSenderMatchScore(
   named: PersonRef[],
   nameTokens: string[],
 ): number {
-  if (r.entityType !== "source_record" || r.recordType !== "gmail_message") return 0;
+  if (r.entityType !== "source_record" || r.recordType !== "gmail_message")
+    return 0;
 
   const from = parseGmailFrom(r.text);
   if (!from) return 0;
@@ -342,7 +366,10 @@ function gmailSenderMatchScore(
       .filter((x): x is string => Boolean(x && String(x).trim().length >= 2))
       .map((x) => String(x).toLowerCase());
     for (const n of needles) {
-      if (n.includes("@") && (fromEmail === n || namesFuzzyMatch(fromEmail, n))) {
+      if (
+        n.includes("@") &&
+        (fromEmail === n || namesFuzzyMatch(fromEmail, n))
+      ) {
         score = Math.max(score, 1);
       } else if (
         namesFuzzyMatch(fromName, n) ||
@@ -356,7 +383,10 @@ function gmailSenderMatchScore(
   }
 
   for (const token of nameTokens) {
-    if (token.includes("@") && (fromEmail === token || fromEmail.includes(token))) {
+    if (
+      token.includes("@") &&
+      (fromEmail === token || fromEmail.includes(token))
+    ) {
       score = Math.max(score, 1);
     } else if (
       fromParts.some((part) => namesFuzzyMatch(part, token)) ||
@@ -399,7 +429,10 @@ export function mentionedPeople(
     }
 
     // Fuzzy full display name (typos like "sandrra hernandez").
-    if (qTokens.length > 0 && namesFuzzyMatch(qTokens.join(" "), name.toLowerCase())) {
+    if (
+      qTokens.length > 0 &&
+      namesFuzzyMatch(qTokens.join(" "), name.toLowerCase())
+    ) {
       fullHits.push(p);
       continue;
     }
@@ -416,10 +449,13 @@ export function mentionedPeople(
       continue;
     }
 
-    const first = (p.firstName?.trim() || name.split(/\s+/)[0] || "");
+    const first = p.firstName?.trim() || name.split(/\s+/)[0] || "";
     if (first.length < 3 || AMBIGUOUS_FIRST.test(first)) continue;
     if (
-      new RegExp(`\\b${first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(question) ||
+      new RegExp(
+        `\\b${first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+        "i",
+      ).test(question) ||
       qTokens.some((t) => namesFuzzyMatch(t, first))
     ) {
       firstHits.push(p);
@@ -496,7 +532,10 @@ function memoryNameMatchScore(r: ContextRecord, nameTokens: string[]): number {
 }
 
 /** Family facts often land in domain=other — match by relation words in the text too. */
-function isFamilyRelevantMemory(r: ContextRecord, relations: string[]): boolean {
+function isFamilyRelevantMemory(
+  r: ContextRecord,
+  relations: string[],
+): boolean {
   if (r.entityType !== "memory") return false;
   if (isFamilyDomainMemory(r)) return true;
   return relationMatchScore(r, relations) > 0;
@@ -535,7 +574,10 @@ function connectorGoogleEmail(settings: unknown): string | null {
 }
 
 /** If the question names a connected mailbox (full or local-part), return it. */
-export function extractMailboxHint(question: string, mailboxes: string[]): string | null {
+export function extractMailboxHint(
+  question: string,
+  mailboxes: string[],
+): string | null {
   const q = question.toLowerCase();
   for (const mailbox of mailboxes) {
     const m = mailbox.toLowerCase();
@@ -563,18 +605,21 @@ type SourceRow = {
 function sourceRowToContext(s: SourceRow): ContextRecord {
   const title = s.recordTitle || s.recordType || "Source record";
   const aliases = sourceTypeAliases(s.recordType);
-  const from = s.recordType === "gmail_message" ? parseGmailFrom(s.recordText ?? "") : null;
+  const from =
+    s.recordType === "gmail_message"
+      ? parseGmailFrom(s.recordText ?? "")
+      : null;
   const senderBits = from
     ? ` sender_name=${from.name} sender_email=${from.email}`
     : "";
   const mailboxBit = s.mailbox ? ` mailbox=${s.mailbox}` : "";
   const sourceDate = s.sourceUpdatedAt ?? s.sourceCreatedAt ?? s.updatedAt;
-  const sourceIso = sourceDate
-    ? new Date(sourceDate).toISOString()
-    : undefined;
+  const sourceIso = sourceDate ? new Date(sourceDate).toISOString() : undefined;
   const dateLabel = formatInstantForUser(sourceIso);
   const titleWithDate =
-    dateLabel && s.recordType === "gmail_message" ? `${title} · ${dateLabel}` : title;
+    dateLabel && s.recordType === "gmail_message"
+      ? `${title} · ${dateLabel}`
+      : title;
   const metaDigest =
     typeof s.metadata?.digest === "string" ? s.metadata.digest.trim() : "";
   return {
@@ -598,7 +643,9 @@ function sourceRowToContext(s: SourceRow): ContextRecord {
  * Load Google + other connector records without letting contacts (or one mailbox)
  * crowd out mail from every connected account.
  */
-async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[]> {
+async function loadSourceRecordsBalanced(
+  userId: string,
+): Promise<ContextRecord[]> {
   const googleConns = await getDb()
     .select({
       id: connectors.id,
@@ -630,11 +677,13 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
     const rows = await getDb()
       .select({
         id: sourceRecords.id,
+        externalId: sourceRecords.externalId,
         recordType: sourceRecords.recordType,
         recordTitle: sourceRecords.recordTitle,
         recordText: sql<string>`left(${sourceRecords.recordText}, 4000)`,
         updatedAt: sourceRecords.updatedAt,
         sourceCreatedAt: sourceRecords.sourceCreatedAt,
+        sourceUrl: sourceRecords.sourceUrl,
         metadata: sourceRecords.recordMetadata,
       })
       .from(sourceRecords)
@@ -646,7 +695,9 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
         ),
       )
       .orderBy(
-        desc(sql`coalesce(${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`),
+        desc(
+          sql`coalesce(${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`,
+        ),
       )
       .limit(CORPUS.gmailPerMailbox);
 
@@ -662,20 +713,27 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
     const rows = await getDb()
       .select({
         id: sourceRecords.id,
+        externalId: sourceRecords.externalId,
         recordType: sourceRecords.recordType,
         recordTitle: sourceRecords.recordTitle,
         recordText: sql<string>`left(${sourceRecords.recordText}, 4000)`,
         updatedAt: sourceRecords.updatedAt,
         sourceCreatedAt: sourceRecords.sourceCreatedAt,
+        sourceUrl: sourceRecords.sourceUrl,
         connectorId: sourceRecords.connectorId,
         metadata: sourceRecords.recordMetadata,
       })
       .from(sourceRecords)
       .where(
-        and(eq(sourceRecords.userId, userId), eq(sourceRecords.recordType, recordType)),
+        and(
+          eq(sourceRecords.userId, userId),
+          eq(sourceRecords.recordType, recordType),
+        ),
       )
       .orderBy(
-        desc(sql`coalesce(${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`),
+        desc(
+          sql`coalesce(${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`,
+        ),
       )
       .limit(limit);
 
@@ -690,6 +748,8 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
         recordText: r.recordText,
         updatedAt: r.updatedAt,
         sourceCreatedAt: r.sourceCreatedAt,
+        sourceUrl: r.sourceUrl,
+        externalId: r.externalId,
         mailbox: mailboxByConnector.get(r.connectorId) ?? null,
         metadata: r.metadata,
       })),
@@ -701,60 +761,68 @@ async function loadSourceRecordsBalanced(userId: string): Promise<ContextRecord[
   const evernoteRows = !isEvernoteAskEnabled()
     ? []
     : await getDb()
-    .select({
-      id: sourceRecords.id,
-      externalId: sourceRecords.externalId,
-      recordType: sourceRecords.recordType,
-      recordTitle: sourceRecords.recordTitle,
-      recordText: sql<string>`left(${sourceRecords.recordText}, 4000)`,
-      updatedAt: sourceRecords.updatedAt,
-      sourceCreatedAt: sourceRecords.sourceCreatedAt,
-      sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
-      sourceUrl: sourceRecords.sourceUrl,
-      metadata: sourceRecords.recordMetadata,
-    })
-    .from(sourceRecords)
-    .innerJoin(
-      connectors,
-      and(
-        eq(connectors.id, sourceRecords.connectorId),
-        eq(connectors.enabled, true),
-      ),
-    )
-    .where(
-      and(
-        eq(sourceRecords.userId, userId),
-        eq(sourceRecords.recordType, "evernote_note"),
-        sql`coalesce((${sourceRecords.recordMetadata}->>'trashed')::boolean, false) = false`,
-      ),
-    )
-    .orderBy(
-      desc(
-        sql`coalesce(${sourceRecords.sourceUpdatedAt}, ${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`,
-      ),
-    )
-    .limit(CORPUS.evernoteRecent);
+        .select({
+          id: sourceRecords.id,
+          externalId: sourceRecords.externalId,
+          recordType: sourceRecords.recordType,
+          recordTitle: sourceRecords.recordTitle,
+          recordText: sql<string>`left(${sourceRecords.recordText}, 4000)`,
+          updatedAt: sourceRecords.updatedAt,
+          sourceCreatedAt: sourceRecords.sourceCreatedAt,
+          sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
+          sourceUrl: sourceRecords.sourceUrl,
+          metadata: sourceRecords.recordMetadata,
+        })
+        .from(sourceRecords)
+        .innerJoin(
+          connectors,
+          and(
+            eq(connectors.id, sourceRecords.connectorId),
+            eq(connectors.enabled, true),
+          ),
+        )
+        .where(
+          and(
+            eq(sourceRecords.userId, userId),
+            eq(sourceRecords.recordType, "evernote_note"),
+            sql`coalesce((${sourceRecords.recordMetadata}->>'trashed')::boolean, false) = false`,
+          ),
+        )
+        .orderBy(
+          desc(
+            sql`coalesce(${sourceRecords.sourceUpdatedAt}, ${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`,
+          ),
+        )
+        .limit(CORPUS.evernoteRecent);
   pushRows(evernoteRows.map((row) => ({ ...row, mailbox: null })));
 
   return out;
 }
 
 function sourceRecordSearchTerms(query: string): string[] {
-  return [
-    ...new Set(
-      query
-        .toLowerCase()
-        .split(/[^a-z0-9]+/)
-        .map(normalizeKeywordToken)
-        .filter((term) => term.length >= 2 && !KEYWORD_STOP_WORDS.has(term)),
-    ),
-  ].filter((term) => /^[a-z0-9]+$/i.test(term));
+  return freeRetrievalTerms(query).filter((term) => /^[a-z0-9]+$/i.test(term));
 }
 
-function sourceRecordTsQuery(terms: string[]): string | null {
+function sourceRecordTsQueries(
+  terms: string[],
+): { all: string; any: string } | null {
   if (terms.length === 0) return null;
   const prefixes = terms.map((term) => `${term}:*`);
-  return prefixes.length <= 3 ? prefixes.join(" & ") : prefixes.join(" | ");
+  return {
+    all: prefixes.join(" & "),
+    any: prefixes.join(" | "),
+  };
+}
+
+function sourceRecordSplitTokenMatch(terms: string[]) {
+  const patterns = buildSplitTokenRegexes(terms);
+  if (patterns.length === 0) return sql`false`;
+  return sql`(${sql.join(
+    patterns.map(
+      (pattern) => sql`${sourceRecords.searchDocument} ~* ${pattern}`,
+    ),
+    sql` OR `,
+  )})`;
 }
 
 /** Match-centered evidence so full-library FTS hits remain grounded. */
@@ -777,6 +845,32 @@ export function evernoteMatchExcerpt(
   }`;
 }
 
+function sourceMetadataTagText(
+  metadata: Record<string, unknown> | null | undefined,
+): string {
+  const raw = metadata?.tagNames ?? metadata?.tags;
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((tag): tag is string => typeof tag === "string")
+      .join(" ");
+  }
+  return typeof raw === "string" ? raw : "";
+}
+
+export function evernoteMatchedText(input: {
+  recordType: string;
+  title: string;
+  excerpt: string;
+  tagText?: string;
+  attachmentText?: string;
+}): string {
+  return `${sourceTypeAliases(input.recordType)} source=${input.recordType} ${input.title}${
+    input.tagText ? ` tags=${input.tagText}` : ""
+  }\nMatched passage: ${input.excerpt}${
+    input.attachmentText ? `\nMatched attachment: ${input.attachmentText}` : ""
+  }`;
+}
+
 /** Full-library Evernote FTS, independent of the recent-source corpus cap. */
 export async function searchEvernoteSourceRecordsForUser(
   userId: string,
@@ -785,8 +879,11 @@ export async function searchEvernoteSourceRecordsForUser(
 ): Promise<ContextRecord[]> {
   if (!isEvernoteAskEnabled()) return [];
   const terms = sourceRecordSearchTerms(query);
-  const tsQuery = sourceRecordTsQuery(terms);
-  if (!tsQuery) return [];
+  const tsQueries = sourceRecordTsQueries(terms);
+  if (!tsQueries) return [];
+  const splitTokenMatch = sourceRecordSplitTokenMatch(
+    shouldExpandUrlTokens(query) ? terms : [],
+  );
   const rows = await getDb()
     .select({
       id: sourceRecords.id,
@@ -797,10 +894,40 @@ export async function searchEvernoteSourceRecordsForUser(
         ts_headline(
           'simple',
           ${sourceRecords.searchDocument},
-          to_tsquery('simple', ${tsQuery}),
+          to_tsquery('simple', ${tsQueries.any}),
           'MaxWords=80, MinWords=20, ShortWord=2, HighlightAll=false'
         ),
         1200
+      )`,
+      attachmentText: sql<string>`coalesce((
+        select left(
+          concat_ws(
+            E'\n',
+            coalesce(ea.file_name, ''),
+            ts_headline(
+              'simple',
+              coalesce(ea.extracted_text, ''),
+              to_tsquery('simple', ${tsQueries.any}),
+              'MaxWords=80, MinWords=20, ShortWord=2, HighlightAll=false'
+            )
+          ),
+          1200
+        )
+        from evernote_attachments ea
+        where ea.source_record_id = ${sourceRecords.id}
+          and ea.user_id = ${userId}::uuid
+          and ea.search_tsv @@ to_tsquery('simple', ${tsQueries.any})
+        order by ts_rank_cd(ea.search_tsv, to_tsquery('simple', ${tsQueries.any})) desc
+        limit 1
+      ), '')`,
+      attachmentId: sql<string | null>`(
+        select ea.id
+        from evernote_attachments ea
+        where ea.source_record_id = ${sourceRecords.id}
+          and ea.user_id = ${userId}::uuid
+          and ea.search_tsv @@ to_tsquery('simple', ${tsQueries.any})
+        order by ts_rank_cd(ea.search_tsv, to_tsquery('simple', ${tsQueries.any})) desc
+        limit 1
       )`,
       updatedAt: sourceRecords.updatedAt,
       sourceCreatedAt: sourceRecords.sourceCreatedAt,
@@ -822,66 +949,218 @@ export async function searchEvernoteSourceRecordsForUser(
         eq(sourceRecords.recordType, "evernote_note"),
         sql`coalesce((${sourceRecords.recordMetadata}->>'trashed')::boolean, false) = false`,
         sql`(
-          ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQuery})
+          ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.any})
+          OR ${splitTokenMatch}
           OR exists (
             select 1
             from evernote_attachments ea
             where ea.source_record_id = ${sourceRecords.id}
-              and ea.search_tsv @@ to_tsquery('simple', ${tsQuery})
+              and ea.user_id = ${userId}::uuid
+              and ea.search_tsv @@ to_tsquery('simple', ${tsQueries.any})
           )
         )`,
       ),
     )
     .orderBy(
-      sql`ts_rank_cd(coalesce(${sourceRecords.searchTsv}, ''::tsvector), to_tsquery('simple', ${tsQuery})) DESC`,
+      sql`CASE WHEN to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')) @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
+      sql`CASE WHEN (
+        ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.all})
+        OR exists (
+          select 1
+          from evernote_attachments ea
+          where ea.source_record_id = ${sourceRecords.id}
+            and ea.user_id = ${userId}::uuid
+            and ea.search_tsv @@ to_tsquery('simple', ${tsQueries.all})
+        )
+      ) THEN 1 ELSE 0 END DESC`,
+      sql`CASE WHEN ${splitTokenMatch} THEN 1 ELSE 0 END DESC`,
+      sql`(
+        ts_rank_cd(to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')), to_tsquery('simple', ${tsQueries.any})) * 4
+        + ts_rank_cd(coalesce(${sourceRecords.searchTsv}, ''::tsvector), to_tsquery('simple', ${tsQueries.any}))
+        + coalesce((
+          select max(ts_rank_cd(ea.search_tsv, to_tsquery('simple', ${tsQueries.any})))
+          from evernote_attachments ea
+          where ea.source_record_id = ${sourceRecords.id}
+            and ea.user_id = ${userId}::uuid
+            and ea.search_tsv @@ to_tsquery('simple', ${tsQueries.any})
+        ), 0)
+      ) DESC`,
       desc(sourceRecords.sourceUpdatedAt),
     )
     .limit(Math.min(Math.max(limit, 1), 50));
   return rows.map((row) => {
     const context = sourceRowToContext({ ...row, mailbox: null });
     const excerpt = evernoteMatchExcerpt(row.recordText ?? "", terms);
+    const tagText = sourceMetadataTagText(row.metadata);
     return {
       ...context,
-      text: `${sourceTypeAliases(row.recordType)} source=${row.recordType} ${context.title}\nMatched passage: ${excerpt}`,
+      sourceMetadata: row.attachmentId
+        ? {
+            ...(context.sourceMetadata ?? {}),
+            matchedAttachmentId: row.attachmentId,
+          }
+        : context.sourceMetadata,
+      text: evernoteMatchedText({
+        recordType: row.recordType,
+        title: context.title,
+        excerpt,
+        tagText,
+        attachmentText: row.attachmentText,
+      }),
     };
   });
 }
 
-async function collectCorpus(
+/** Full-library free FTS for Gmail, Drive, Calendar, finance, and other connectors. */
+export async function searchSourceRecordsForUser(
   userId: string,
-): Promise<{
+  query: string,
+  limit = 30,
+): Promise<ContextRecord[]> {
+  const terms = sourceRecordSearchTerms(query);
+  const tsQueries = sourceRecordTsQueries(terms);
+  if (!tsQueries) return [];
+  const splitTokenMatch = sourceRecordSplitTokenMatch(
+    shouldExpandUrlTokens(query) ? terms : [],
+  );
+  const rows = await getDb()
+    .select({
+      id: sourceRecords.id,
+      externalId: sourceRecords.externalId,
+      recordType: sourceRecords.recordType,
+      recordTitle: sourceRecords.recordTitle,
+      recordText: sql<string>`left(
+        ts_headline(
+          'simple',
+          ${sourceRecords.searchDocument},
+          to_tsquery('simple', ${tsQueries.any}),
+          'MaxWords=80, MinWords=20, ShortWord=2, HighlightAll=false'
+        ),
+        1200
+      )`,
+      updatedAt: sourceRecords.updatedAt,
+      sourceCreatedAt: sourceRecords.sourceCreatedAt,
+      sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
+      sourceUrl: sourceRecords.sourceUrl,
+      metadata: sourceRecords.recordMetadata,
+    })
+    .from(sourceRecords)
+    .innerJoin(
+      connectors,
+      and(
+        eq(connectors.id, sourceRecords.connectorId),
+        eq(connectors.enabled, true),
+      ),
+    )
+    .where(
+      and(
+        eq(sourceRecords.userId, userId),
+        ne(sourceRecords.recordType, "evernote_note"),
+        sql`(
+          ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.any})
+          OR ${splitTokenMatch}
+        )`,
+      ),
+    )
+    .orderBy(
+      sql`CASE WHEN to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')) @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
+      sql`CASE WHEN ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
+      sql`CASE WHEN ${splitTokenMatch} THEN 1 ELSE 0 END DESC`,
+      sql`(
+        ts_rank_cd(to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')), to_tsquery('simple', ${tsQueries.any})) * 4
+        + ts_rank_cd(coalesce(${sourceRecords.searchTsv}, ''::tsvector), to_tsquery('simple', ${tsQueries.any}))
+      ) DESC`,
+      desc(sourceRecords.sourceUpdatedAt),
+    )
+    .limit(Math.min(Math.max(limit, 1), 60));
+  return rows.map((row) => sourceRowToContext({ ...row, mailbox: null }));
+}
+
+/**
+ * Shared free note retrieval for typed Ask and Talk to Recall. Both native and
+ * imported notes use the same normalized query, title weighting, complete-match
+ * preference, and any-word fallback.
+ */
+export async function retrieveFreeNoteRecordsForUser(
+  userId: string,
+  query: string,
+  limit = 20,
+): Promise<ContextRecord[]> {
+  const [nativeNotes, evernoteNotes] = await Promise.all([
+    searchNoteRecordsForUser(userId, query, limit).catch(() => []),
+    searchEvernoteSourceRecordsForUser(userId, query, limit).catch(() => []),
+  ]);
+  const records: ContextRecord[] = [
+    ...nativeNotes.map((note) => ({
+      ...note,
+      sourceMetadata: null,
+    })),
+    ...evernoteNotes,
+  ];
+  return rankFreeTextMatches(query, records, limit).map(
+    ({
+      score: _score,
+      matchedTerms: _matched,
+      allTerms: _all,
+      titleMatches: _title,
+      exactTitle: _exactTitle,
+      ...record
+    }) => record,
+  );
+}
+
+async function collectCorpus(userId: string): Promise<{
   records: ContextRecord[];
   people: PersonRef[];
   tasks: Awaited<ReturnType<typeof listTasksForUser>>;
 }> {
-  const [tasks, notes, people, knowledge, memories, documents, captures, attentionList, vehiclesList, homesList, warrantiesList, orgsList, invoicesList, projectsList, sources, aliases] =
-    await Promise.all([
-      listTasksForUser(userId, { limit: CORPUS.tasks }),
-      listNotesForUser(userId, { limit: CORPUS.notes }),
-      listPeopleForUser(userId, { limit: CORPUS.people }),
-      listKnowledgeForUser(userId, { limit: CORPUS.knowledge }),
-      listMemoriesForUser(userId, { limit: CORPUS.memories }),
-      listDocumentsForUser(userId, { limit: CORPUS.documents }),
-      listCapturesForUser(userId, { limit: CORPUS.captures }),
-      listAttentionForToday(userId, CORPUS.attention),
-      listVehiclesForUser(userId, { limit: CORPUS.vehicles }),
-      listHomesForUser(userId, { limit: CORPUS.homes }),
-      listWarrantiesForUser(userId, { limit: CORPUS.warranties }),
-      listOrganizationsForUser(userId, { limit: CORPUS.organizations }),
-      listInvoicesForUser(userId, { limit: CORPUS.invoices }),
-      listProjectsForRetrieval(userId, CORPUS.projects),
-      loadSourceRecordsBalanced(userId),
-      listPersonNameAliases(userId),
-    ]);
+  const [
+    tasks,
+    notes,
+    people,
+    knowledge,
+    memories,
+    documents,
+    captures,
+    attentionList,
+    vehiclesList,
+    homesList,
+    warrantiesList,
+    orgsList,
+    invoicesList,
+    projectsList,
+    sources,
+    aliases,
+  ] = await Promise.all([
+    listTasksForUser(userId, { limit: CORPUS.tasks }),
+    listNotesForUser(userId, { limit: CORPUS.notes }),
+    listPeopleForUser(userId, { limit: CORPUS.people }),
+    listKnowledgeForUser(userId, { limit: CORPUS.knowledge }),
+    listMemoriesForUser(userId, { limit: CORPUS.memories }),
+    listDocumentsForUser(userId, { limit: CORPUS.documents }),
+    listCapturesForUser(userId, { limit: CORPUS.captures }),
+    listAttentionForToday(userId, CORPUS.attention),
+    listVehiclesForUser(userId, { limit: CORPUS.vehicles }),
+    listHomesForUser(userId, { limit: CORPUS.homes }),
+    listWarrantiesForUser(userId, { limit: CORPUS.warranties }),
+    listOrganizationsForUser(userId, { limit: CORPUS.organizations }),
+    listInvoicesForUser(userId, { limit: CORPUS.invoices }),
+    listProjectsForRetrieval(userId, CORPUS.projects),
+    loadSourceRecordsBalanced(userId),
+    listPersonNameAliases(userId),
+  ]);
 
   const records: ContextRecord[] = [];
   const personById = new Map(people.map((p) => [p.id, p] as const));
 
   for (const m of memories.slice(0, CORPUS.memories)) {
-    const linked = m.primaryPersonId ? personById.get(m.primaryPersonId) : undefined;
+    const linked = m.primaryPersonId
+      ? personById.get(m.primaryPersonId)
+      : undefined;
     const personName =
       linked?.displayName ??
-      ([linked?.firstName, linked?.lastName].filter(Boolean).join(" ").trim() || null);
+      ([linked?.firstName, linked?.lastName].filter(Boolean).join(" ").trim() ||
+        null);
     const digest = m.summary?.trim() || null;
     records.push({
       entityType: "memory",
@@ -932,7 +1211,8 @@ async function collectCorpus(
   }
   for (const p of people.slice(0, CORPUS.people)) {
     const fullName =
-      [p.firstName, p.lastName].filter(Boolean).join(" ").trim() || p.displayName;
+      [p.firstName, p.lastName].filter(Boolean).join(" ").trim() ||
+      p.displayName;
     records.push({
       entityType: "person",
       entityId: p.id,
@@ -941,7 +1221,9 @@ async function collectCorpus(
     });
   }
   for (const k of knowledge.slice(0, CORPUS.knowledge)) {
-    const personBits = [k.primaryPersonName, k.primaryPersonId].filter(Boolean).join(" ");
+    const personBits = [k.primaryPersonName, k.primaryPersonId]
+      .filter(Boolean)
+      .join(" ");
     records.push({
       entityType: "knowledge",
       entityId: k.id,
@@ -959,9 +1241,15 @@ async function collectCorpus(
       title: d.fileName,
       digest,
       text: `${d.fileName}\n${(d.summary ?? d.extractedText ?? "").slice(0, 600)}`,
+      sourceMetadata: {
+        storagePath: d.storagePath,
+        mimeType: d.fileType,
+      },
     });
   }
-  for (const c of captures) {
+  for (const c of captures.filter(
+    (capture) => capture.processedStatus !== "ignored",
+  )) {
     records.push({
       entityType: "capture",
       entityId: c.id,
@@ -1119,7 +1407,11 @@ export async function retrieveRelevantRecords(
   userId: string,
   question: string,
   limit = 16,
-  options?: { noteSearchQuery?: string; semantic?: boolean },
+  options?: {
+    noteSearchQuery?: string;
+    semantic?: boolean;
+    sourceScope?: "all" | "notes";
+  },
 ): Promise<{
   records: RetrievedRecord[];
   usedSemantic: boolean;
@@ -1133,40 +1425,54 @@ export async function retrieveRelevantRecords(
   tasks: Awaited<ReturnType<typeof listTasksForUser>>;
 }> {
   const noteQuery = (options?.noteSearchQuery ?? question).trim() || question;
+  if (options?.sourceScope === "notes") {
+    const noteRecords = await retrieveFreeNoteRecordsForUser(
+      userId,
+      noteQuery,
+      limit,
+    );
+    return {
+      records: noteRecords.map((record) => {
+        const relevance = freeTextRelevance(
+          noteQuery,
+          record.title,
+          record.text,
+        );
+        return {
+          ...record,
+          score: relevance.score,
+          method: "keyword" as const,
+          matchedPersonId: null,
+          matchedPersonName: null,
+        };
+      }),
+      usedSemantic: false,
+      namedPeople: [],
+      tasks: [],
+    };
+  }
   // Embed the query in parallel with the corpus load — it doesn't depend on the
   // corpus, so this removes a sequential OpenAI round-trip from the critical path.
   const [
     { records: baseCorpus, people, tasks },
     noteSearchHits,
-    evernoteSearchHits,
+    sourceSearchHits,
     queryVec,
   ] = await Promise.all([
     collectCorpus(userId),
-    searchNotesForUser(userId, noteQuery, 20).catch(() => []),
-    searchEvernoteSourceRecordsForUser(userId, noteQuery, 20).catch(() => []),
+    retrieveFreeNoteRecordsForUser(userId, noteQuery, 20),
+    searchSourceRecordsForUser(userId, question, 30).catch(() => []),
     options?.semantic === false
       ? Promise.resolve(null)
       : embedQuery(question).catch(() => null),
   ]);
   const corpus = [...baseCorpus];
-  const corpusNoteIds = new Set(
-    corpus.filter((r) => r.entityType === "note").map((r) => r.entityId),
-  );
   // Full-library note search covers older notes outside the recency corpus cap.
-  for (const note of noteSearchHits) {
-    if (corpusNoteIds.has(note.id)) continue;
-    corpus.push({
-      entityType: "note",
-      entityId: note.id,
-      title: note.title,
-      text: noteRetrievalText(note),
-    });
-    corpusNoteIds.add(note.id);
-  }
-  for (const record of evernoteSearchHits) {
+  // Replace recent-prefix copies so ranking and grounding use match-centered text.
+  for (const record of noteSearchHits) {
     const existingIndex = corpus.findIndex(
       (candidate) =>
-        candidate.entityType === "source_record" &&
+        candidate.entityType === record.entityType &&
         candidate.entityId === record.entityId,
     );
     if (existingIndex >= 0) {
@@ -1175,6 +1481,15 @@ export async function retrieveRelevantRecords(
     } else {
       corpus.push(record);
     }
+  }
+  for (const record of sourceSearchHits) {
+    const existingIndex = corpus.findIndex(
+      (candidate) =>
+        candidate.entityType === record.entityType &&
+        candidate.entityId === record.entityId,
+    );
+    if (existingIndex >= 0) corpus[existingIndex] = record;
+    else corpus.push(record);
   }
   if (corpus.length === 0) {
     return { records: [], usedSemantic: false, namedPeople: [], tasks };
@@ -1188,13 +1503,16 @@ export async function retrieveRelevantRecords(
   const namedByMention = mentionedPeople(question, people);
   const namedByRelation = peopleMatchingRelation(question, people);
   const namedMap = new Map<string, PersonRef>();
-  for (const p of [...namedByMention, ...namedByRelation]) namedMap.set(p.id, p);
+  for (const p of [...namedByMention, ...namedByRelation])
+    namedMap.set(p.id, p);
   const named = [...namedMap.values()];
   const namedIds = new Set(named.map((p) => p.id));
   const linkedBundle =
     named.length > 0
       ? await loadLinkedContextRecordsForPeople(userId, [...namedIds], {
-          excludeKeys: new Set(corpus.map((r) => `${r.entityType}:${r.entityId}`)),
+          excludeKeys: new Set(
+            corpus.map((r) => `${r.entityType}:${r.entityId}`),
+          ),
           limit: 40,
         })
       : { links: [], records: [] };
@@ -1210,10 +1528,15 @@ export async function retrieveRelevantRecords(
     });
   }
   const namedTokens = named.flatMap((p) => {
-    const parts = p.displayName.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
+    const parts = p.displayName
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((t) => t.length >= 2);
     return [p.displayName.toLowerCase(), ...parts];
   });
-  const personTagNeedles = named.map((p) => `person:${p.displayName.toLowerCase()}`);
+  const personTagNeedles = named.map(
+    (p) => `person:${p.displayName.toLowerCase()}`,
+  );
 
   const mailboxes = [
     ...new Set(
@@ -1246,7 +1569,10 @@ export async function retrieveRelevantRecords(
       if (relHits > 0) return 0.55 + Math.min(relHits, 2) * 0.05;
       return isFamilyDomainMemory(r) ? 0.35 : 0;
     }
-    if (r.entityType === "memory" && memoryNameMatchScore(r, personNameTokens) > 0) {
+    if (
+      r.entityType === "memory" &&
+      memoryNameMatchScore(r, personNameTokens) > 0
+    ) {
       return 0.5;
     }
     if (named.length === 0) return 0;
@@ -1271,13 +1597,17 @@ export async function retrieveRelevantRecords(
   const googleBoost = (r: ContextRecord): number => {
     const sender = gmailSenderMatchScore(question, r, named, nameTokens);
     let boost = 0;
-    if (sender >= 0.8) boost = 0.7 + sender * 0.25; // prefer sender-matched mail
+    if (sender >= 0.8)
+      boost = 0.7 + sender * 0.25; // prefer sender-matched mail
     else if (wantsGoogle && r.entityType === "source_record") {
       if (
         sourceRecordMatchesIntent(r.recordType, intent) ||
         senderMatchedMail.length > 0
       ) {
-        if (r.recordType === "gmail_message" && (intent.email || senderMatchedMail.length > 0)) {
+        if (
+          r.recordType === "gmail_message" &&
+          (intent.email || senderMatchedMail.length > 0)
+        ) {
           boost = 0.55;
         } else if (sourceRecordMatchesIntent(r.recordType, intent)) {
           boost = 0.55;
@@ -1295,10 +1625,15 @@ export async function retrieveRelevantRecords(
     return boost;
   };
 
+  const freeKeywordScore = (record: ContextRecord): number =>
+    record.entityType === "note" || record.recordType === "evernote_note"
+      ? freeTextRelevance(noteQuery, record.title, record.text).score
+      : keywordScore(question, `${record.title}\n${record.text}`);
+
   const keywordHits = corpus
     .map((r) => ({
       r,
-      kw: keywordScore(question, `${r.title}\n${r.text}`) + personBoost(r) + googleBoost(r),
+      kw: freeKeywordScore(r) + personBoost(r) + googleBoost(r),
     }))
     .filter((x) => x.kw > 0)
     .sort((a, b) => b.kw - a.kw);
@@ -1315,7 +1650,8 @@ export async function retrieveRelevantRecords(
           .map((x) => `${x.r.entityType}:${x.r.entityId}`),
       );
       const candidates: ContextRecord[] = [];
-      for (const hit of keywordHits.slice(0, CORPUS.keywordShortlist)) candidates.push(hit.r);
+      for (const hit of keywordHits.slice(0, CORPUS.keywordShortlist))
+        candidates.push(hit.r);
       // Always include named people + person-tagged + family memories + sender-matched gmail.
       for (const r of corpus) {
         const id = `${r.entityType}:${r.entityId}`;
@@ -1342,7 +1678,9 @@ export async function retrieveRelevantRecords(
       }
 
       // When pgvector is available, pull ANN neighbors into the candidate set.
-      const corpusById = new Map(corpus.map((r) => [`${r.entityType}:${r.entityId}`, r]));
+      const corpusById = new Map(
+        corpus.map((r) => [`${r.entityType}:${r.entityId}`, r]),
+      );
       const pgHits = await rankEntitiesByPgvector({
         userId,
         query: queryVec,
@@ -1393,7 +1731,10 @@ export async function retrieveRelevantRecords(
         for (const r of candidates) {
           const vec = vectors.get(`${r.entityType}:${r.entityId}`);
           if (!vec) continue;
-          semanticScores.set(`${r.entityType}:${r.entityId}`, cosineSimilarity(queryVec, vec));
+          semanticScores.set(
+            `${r.entityType}:${r.entityId}`,
+            cosineSimilarity(queryVec, vec),
+          );
         }
         const m = getEmbeddingCacheMetrics();
         const apiCalls =
@@ -1405,7 +1746,8 @@ export async function retrieveRelevantRecords(
         const denom = hits + misses;
         logger.debug(
           {
-            embed_cache_hit_rate: denom === 0 ? 1 : Number((hits / denom).toFixed(3)),
+            embed_cache_hit_rate:
+              denom === 0 ? 1 : Number((hits / denom).toFixed(3)),
             embed_api_calls_per_ask: apiCalls,
             embed_item_hits: hits,
             embed_item_misses: misses,
@@ -1424,9 +1766,10 @@ export async function retrieveRelevantRecords(
 
   const scored = corpus.map((r) => {
     const id = `${r.entityType}:${r.entityId}`;
-    const kw = keywordScore(question, `${r.title}\n${r.text}`);
+    const kw = freeKeywordScore(r);
     const sem = semanticScores.get(id) ?? 0;
-    const boost = personBoost(r) + typeBoost(r.entityType, r.pinned) + googleBoost(r);
+    const boost =
+      personBoost(r) + typeBoost(r.entityType, r.pinned) + googleBoost(r);
     const semanticForRecord =
       usedSemantic && r.recordType !== "evernote_note" && sem > 0;
     // Blend: semantic dominates when present; keyword still boosts exact matches.
@@ -1473,49 +1816,29 @@ export async function retrieveRelevantRecords(
     .slice(0, limit)
     .map(({ r, score, method }) => toRetrieved(r, score, method));
 
-  // Force-include full-library note FTS hits so older notes (and keyword matches
-  // below the semantic threshold) aren't crowded out by Gmail/memory boosts.
+  // Promote every full-library note hit, including copies already present in
+  // the recent corpus. The old absent-only injection left exact old titles
+  // behind broad Gmail/Evernote OR matches.
   if (noteSearchHits.length > 0) {
-    const already = new Set(top.map((r) => `${r.entityType}:${r.entityId}`));
-    const noteById = new Map(
-      corpus
-        .filter((r) => r.entityType === "note")
-        .map((r) => [r.entityId, r] as const),
+    const promoted = noteSearchHits
+      .slice(0, Math.min(8, limit))
+      .map((record) =>
+        toRetrieved(
+          record,
+          freeTextRelevance(noteQuery, record.title, record.text).score,
+          "keyword",
+        ),
+      );
+    const promotedKeys = new Set(
+      promoted.map((record) => `${record.entityType}:${record.entityId}`),
     );
-    const injected: RetrievedRecord[] = [];
-    for (const note of noteSearchHits.slice(0, Math.min(8, limit))) {
-      const key = `note:${note.id}`;
-      if (already.has(key)) continue;
-      const r = noteById.get(note.id);
-      if (!r) continue;
-      injected.push(toRetrieved(r, 1.05, "keyword"));
-      already.add(key);
-    }
-    if (injected.length > 0) {
-      top = [...injected, ...top].slice(
-        0,
-        Math.max(limit, Math.min(16, injected.length + 6)),
-      );
-    }
-  }
-
-  // Keep exact Evernote FTS hits visible even when semantic/person boosts crowd
-  // an older synced note out of the top set.
-  if (evernoteSearchHits.length > 0) {
-    const already = new Set(top.map((record) => `${record.entityType}:${record.entityId}`));
-    const injected: RetrievedRecord[] = [];
-    for (const record of evernoteSearchHits.slice(0, Math.min(8, limit))) {
-      const key = `${record.entityType}:${record.entityId}`;
-      if (already.has(key)) continue;
-      injected.push(toRetrieved(record, 1.05, "keyword"));
-      already.add(key);
-    }
-    if (injected.length > 0) {
-      top = [...injected, ...top].slice(
-        0,
-        Math.max(limit, Math.min(16, injected.length + 6)),
-      );
-    }
+    top = [
+      ...promoted,
+      ...top.filter(
+        (record) =>
+          !promotedKeys.has(`${record.entityType}:${record.entityId}`),
+      ),
+    ].slice(0, Math.max(limit, Math.min(16, promoted.length + 6)));
   }
 
   // Prefer emails whose From name/address matches the asked-about person.
@@ -1532,7 +1855,11 @@ export async function retrieveRelevantRecords(
     for (const r of bySender.slice(0, Math.min(8, limit))) {
       if (already.has(r.entityId)) continue;
       injected.push(
-        toRetrieved(r, 1.1 + gmailSenderMatchScore(question, r, named, nameTokens), "keyword"),
+        toRetrieved(
+          r,
+          1.1 + gmailSenderMatchScore(question, r, named, nameTokens),
+          "keyword",
+        ),
       );
       already.add(r.entityId);
     }
@@ -1540,14 +1867,21 @@ export async function retrieveRelevantRecords(
     if (intent.email) {
       const gmailByMailbox = new Map<string, ContextRecord[]>();
       for (const r of corpus) {
-        if (r.entityType !== "source_record" || r.recordType !== "gmail_message") continue;
+        if (
+          r.entityType !== "source_record" ||
+          r.recordType !== "gmail_message"
+        )
+          continue;
         if (mailboxHint && r.mailbox?.toLowerCase() !== mailboxHint) continue;
         const key = r.mailbox?.toLowerCase() || "unknown";
         const list = gmailByMailbox.get(key) ?? [];
         list.push(r);
         gmailByMailbox.set(key, list);
       }
-      const perMailbox = Math.max(3, Math.floor(Math.min(12, limit) / Math.max(1, gmailByMailbox.size)));
+      const perMailbox = Math.max(
+        3,
+        Math.floor(Math.min(12, limit) / Math.max(1, gmailByMailbox.size)),
+      );
       for (const [, mails] of gmailByMailbox) {
         let added = 0;
         for (const r of mails) {
@@ -1563,7 +1897,10 @@ export async function retrieveRelevantRecords(
     }
 
     if (injected.length > 0) {
-      top = [...injected, ...top].slice(0, Math.max(limit, Math.min(16, injected.length + 4)));
+      top = [...injected, ...top].slice(
+        0,
+        Math.max(limit, Math.min(16, injected.length + 4)),
+      );
     }
   }
 
@@ -1578,10 +1915,7 @@ export async function retrieveRelevantRecords(
         nameScore: memoryNameMatchScore(r, personNameTokens),
       }))
       .filter(
-        (x) =>
-          x.relScore > 0 ||
-          x.nameScore > 0 ||
-          isFamilyDomainMemory(x.r),
+        (x) => x.relScore > 0 || x.nameScore > 0 || isFamilyDomainMemory(x.r),
       )
       .sort((a, b) => {
         const sa = a.relScore * 2 + a.nameScore * 3;
@@ -1595,7 +1929,10 @@ export async function retrieveRelevantRecords(
       });
 
     const injected: RetrievedRecord[] = [];
-    for (const { r, relScore, nameScore } of familyMemories.slice(0, Math.min(10, limit))) {
+    for (const { r, relScore, nameScore } of familyMemories.slice(
+      0,
+      Math.min(10, limit),
+    )) {
       if (already.has(r.entityId)) continue;
       const rank = 1.0 + relScore * 0.12 + nameScore * 0.2;
       injected.push(toRetrieved(r, rank, "keyword"));
@@ -1629,7 +1966,10 @@ export async function retrieveRelevantRecords(
       already.add(key);
     }
     if (injected.length > 0) {
-      top = [...injected, ...top].slice(0, Math.max(limit, Math.min(16, injected.length + 4)));
+      top = [...injected, ...top].slice(
+        0,
+        Math.max(limit, Math.min(16, injected.length + 4)),
+      );
     }
   }
 

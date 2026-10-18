@@ -1508,6 +1508,9 @@ export type VoiceAnswerSource = {
   title: string;
   notebook: string | null;
   date: string | null;
+  source?: string;
+  recordType?: string | null;
+  isDocument?: boolean;
 };
 
 export type VoiceQueryResult = QueryRecallResult & {
@@ -2066,6 +2069,7 @@ export async function listConnectors(): Promise<{
     updatedAt: string;
   }[];
   googleOAuthConfigured?: boolean;
+  googleAutoSyncEnabled?: boolean;
   microsoftOAuthConfigured?: boolean;
   homeyOAuthConfigured?: boolean;
   evernoteOAuthConfigured?: boolean;
@@ -2242,6 +2246,7 @@ export type ConnectorSyncRun = {
   recordsSkipped: number;
   recordsFailed: number;
   errorMessage: string | null;
+  sourceErrors?: Record<string, string>;
   metadata: Record<string, unknown>;
 };
 
@@ -2661,10 +2666,12 @@ export async function saveTextItem(
 
 export async function saveImageItem(
   file: File,
+  caption = "",
 ): Promise<{ item: SavedItemRecord; existing: boolean }> {
   const form = new FormData();
   form.append("file", file);
-  const response = await fetch(`${API_BASE}/items/image`, {
+  if (caption.trim()) form.append("caption", caption.trim());
+  const response = await fetch(`${API_BASE}/items/file`, {
     method: "POST",
     body: form,
     credentials: "include",
@@ -2680,6 +2687,43 @@ export async function saveImageItem(
     item: SavedItemRecord;
     existing: boolean;
   }>;
+}
+
+export async function deleteSavedItem(id: string): Promise<void> {
+  await apiFetch(`/items/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export type ExploreDocument = {
+  kind: "recall" | "evernote" | "drive" | "gmail";
+  name: string;
+  mimeType: string | null;
+  previewUrl: string | null;
+  downloadUrl: string;
+};
+
+export type ExploreSearchResult = {
+  id: string;
+  entityType: string;
+  source: string;
+  kind: string;
+  title: string;
+  snippet: string;
+  notebook: string | null;
+  date: string | null;
+  openUrl: string | null;
+  itemId: string | null;
+  document: ExploreDocument | null;
+};
+
+export async function searchExplore(
+  query: string,
+  limit = 20,
+): Promise<{ results: ExploreSearchResult[] }> {
+  const params = new URLSearchParams({
+    q: query,
+    limit: String(limit),
+  });
+  return apiFetch(`/items/search?${params.toString()}`);
 }
 
 export async function listItemFacets(): Promise<{

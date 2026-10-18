@@ -21,7 +21,11 @@ import {
   syncPersonTag,
 } from "./person-tags";
 import { syncPrimaryPersonLink } from "./entity-links";
-import { KEYWORD_STOP_WORDS, normalizeKeywordToken } from "./keyword-match";
+import {
+  KEYWORD_STOP_WORDS,
+  freeRetrievalTerms,
+  normalizeKeywordToken,
+} from "./keyword-match";
 
 export type RecallNoteDto = {
   id: string;
@@ -424,6 +428,113 @@ export function buildNotesTsQuery(terms: string[]): string | null {
   const prefixes = safe.map((term) => `${term.toLowerCase()}:*`);
   if (prefixes.length <= 3) return prefixes.join(" & ");
   return prefixes.join(" | ");
+}
+
+export function buildSplitTokenRegexes(terms: string[]): string[] {
+  return terms
+    .filter((term) => /^[a-z0-9]+$/i.test(term))
+    .map(
+      (term) =>
+        `((^|[^a-z0-9])${term.toLowerCase()}[.-]|[.-]${term.toLowerCase()}([^a-z0-9]|$))`,
+    );
+}
+
+export function shouldExpandUrlTokens(query: string): boolean {
+  return /\b(?:link|url|website|web\s*(?:site|page)|portal)\b/i.test(query);
+}
+
+function noteSearchDocumentTokenMatch(terms: string[]) {
+  const patterns = buildSplitTokenRegexes(terms);
+  if (patterns.length === 0) return sql`false`;
+  return sql`(${sql.join(
+    patterns.map((pattern) => sql`${notes.searchDocument} ~* ${pattern}`),
+    sql` OR `,
+  )})`;
+}
+
+export type NoteRetrievalHit = {
+  entityType: "note";
+  entityId: string;
+  title: string;
+  text: string;
+  updatedAt: string;
+};
+
+/**
+ * Lean Ask-only note lookup. Unlike the Explore/listing search, this avoids
+ * attachment-count and person-name hydration and ranks complete/title matches
+ * before the any-word fallback.
+ */
+export async function searchNoteRecordsForUser(
+  userId: string,
+  query: string,
+  limit = 20,
+): Promise<NoteRetrievalHit[]> {
+  const terms = freeRetrievalTerms(query);
+  if (terms.length === 0) return [];
+  const prefixes = terms.map((term) => `${term}:*`);
+  const allTsQuery = prefixes.join(" & ");
+  const anyTsQuery = prefixes.join(" | ");
+  const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 50);
+  const anyMatch = sql`${notes.searchTsv} @@ to_tsquery('simple', ${anyTsQuery})`;
+  const splitTokenMatch = noteSearchDocumentTokenMatch(
+    shouldExpandUrlTokens(query) ? terms : [],
+  );
+  const textMatch = or(anyMatch, splitTokenMatch);
+  const whereMatch = terms.includes("vin")
+    ? or(textMatch, vinHeuristicMatch())
+    : textMatch;
+  const rows = await getDb()
+    .select({
+      id: notes.id,
+      title: notes.title,
+      content: sql<string>`left(${notes.content}, ${NOTE_SEARCH_CONTENT_CHARS})`,
+      preview: notes.preview,
+      summary: notes.summary,
+      factBullets: notes.factBullets,
+      tags: notes.tags,
+      matchText: sql<string>`left(
+        ts_headline(
+          'simple',
+          ${notes.searchDocument},
+          to_tsquery('simple', ${anyTsQuery}),
+          'MaxWords=80, MinWords=20, ShortWord=2, HighlightAll=false'
+        ),
+        ${NOTE_SEARCH_MATCH_CHARS}
+      )`,
+      updatedAt: notes.updatedAt,
+    })
+    .from(notes)
+    .where(and(eq(notes.userId, userId), whereMatch))
+    .orderBy(
+      sql`CASE WHEN to_tsvector('simple', coalesce(${notes.title}, '')) @@ to_tsquery('simple', ${allTsQuery}) THEN 1 ELSE 0 END DESC`,
+      sql`CASE WHEN ${notes.searchTsv} @@ to_tsquery('simple', ${allTsQuery}) THEN 1 ELSE 0 END DESC`,
+      sql`CASE WHEN ${splitTokenMatch} THEN 1 ELSE 0 END DESC`,
+      sql`(
+        ts_rank_cd(to_tsvector('simple', coalesce(${notes.title}, '')), to_tsquery('simple', ${anyTsQuery})) * 4
+        + ts_rank_cd(coalesce(${notes.searchTsv}, ''::tsvector), to_tsquery('simple', ${anyTsQuery}))
+      ) DESC`,
+      desc(notes.updatedAt),
+    )
+    .limit(safeLimit);
+
+  return rows.map((row) => ({
+    entityType: "note",
+    entityId: row.id,
+    title: row.title,
+    text: [
+      row.title,
+      row.summary,
+      ...(row.factBullets ?? []),
+      row.content,
+      row.preview,
+      ...(row.tags ?? []),
+      row.matchText,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    updatedAt: row.updatedAt.toISOString(),
+  }));
 }
 
 function vinHeuristicMatch() {

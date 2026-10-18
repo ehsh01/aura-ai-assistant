@@ -9,6 +9,8 @@ import {
   textFuzzyHasName,
   extractMailboxHint,
   evernoteMatchExcerpt,
+  evernoteMatchedText,
+  rankFreeTextMatches,
 } from "./retrieval";
 import { FAMILY_RELATION_INTENT, PERSON_INTENT, WAITING_INTENT } from "./query-utils";
 
@@ -19,6 +21,24 @@ describe("evernoteMatchExcerpt", () => {
     expect(excerpt).toContain("inspector approved");
     expect(excerpt.length).toBeLessThanOrEqual(602);
     expect(excerpt.startsWith("…")).toBe(true);
+  });
+
+  it("keeps attachment-only FTS evidence eligible for free ranking", () => {
+    const record = {
+      id: "attachment-note",
+      title: "Imported document",
+      text: evernoteMatchedText({
+        recordType: "evernote_note",
+        title: "Imported document",
+        excerpt: "",
+        attachmentText:
+          "Psychiatry website instructions for adding and editing a web link",
+      }),
+    };
+
+    expect(
+      rankFreeTextMatches("what's my psychiatry link", [record], 1)[0]?.id,
+    ).toBe(record.id);
   });
 });
 
