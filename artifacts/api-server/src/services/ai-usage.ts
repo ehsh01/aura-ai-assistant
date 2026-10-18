@@ -11,7 +11,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { and, eq, gte, sql } from "drizzle-orm";
 import { aiUsage } from "@workspace/db/schema";
-import { getDb, withDbAdvisoryLock } from "../lib/db";
+import { getDb, withDbAdvisoryLockWait } from "../lib/db";
 import { isEnabled } from "../lib/feature-flags";
 import { logger } from "../lib/logger";
 
@@ -421,17 +421,10 @@ function featureEnabled(feature: AiFeature): boolean {
 const BUDGET_CACHE_MS = 60_000;
 let budgetCache: { at: number; spend: number } | null = null;
 let monthlyBudgetCache: { at: number; spend: number } | null = null;
-const userBudgetCache = new Map<string, { at: number; spend: number }>();
-const backgroundUserBudgetCache = new Map<
-  string,
-  { at: number; spend: number }
->();
 
 export function resetBudgetCacheForTests(): void {
   budgetCache = null;
   monthlyBudgetCache = null;
-  userBudgetCache.clear();
-  backgroundUserBudgetCache.clear();
   invalidBudgetWarnings.clear();
 }
 
@@ -497,9 +490,56 @@ export class AiSpendBlockedError extends Error {
   }
 }
 
-export async function assertAiSpendAllowed(): Promise<void> {
+export async function assertAiSpendAllowed(context?: {
+  feature: AiFeature;
+  userId?: string | null;
+  background?: boolean;
+}): Promise<void> {
   const allowance = await aiSpendAllowance();
   if (!allowance.allowed) throw new AiSpendBlockedError(allowance.reason);
+
+  const userId = context?.userId;
+  if (!userId) return;
+  const perUserBudget =
+    context.feature === "ask_query"
+      ? dailyBudgetUsdPerUser()
+      : context.background
+        ? backgroundDailyBudgetUsdPerUser()
+        : undefined;
+  if (perUserBudget === undefined) return;
+  if (perUserBudget === null) throw new AiSpendBlockedError("unavailable");
+  try {
+    const spend = await spendTodayUsdForUser(userId);
+    if (spend >= perUserBudget) {
+      logger.warn(
+        {
+          feature: context.feature,
+          userId,
+          spend,
+          budget: perUserBudget,
+        },
+        "Per-user daily AI budget reached",
+      );
+      throw new AiSpendBlockedError("daily_limit");
+    }
+  } catch (err) {
+    if (err instanceof AiSpendBlockedError) throw err;
+    logger.warn(
+      { err, feature: context.feature, userId },
+      "Per-user AI spend guard failed closed",
+    );
+    throw new AiSpendBlockedError("unavailable");
+  }
+}
+
+const aiSpendLockStore = new AsyncLocalStorage<boolean>();
+
+/** Serialize each provider call with its spend check and durable usage write. */
+export function withAiSpendLock<T>(fn: () => Promise<T>): Promise<T> {
+  if (aiSpendLockStore.getStore()) return fn();
+  return withDbAdvisoryLockWait("ai-spend:global", () =>
+    aiSpendLockStore.run(true, fn),
+  );
 }
 
 /**
@@ -550,14 +590,10 @@ export async function allowBackgroundAi(
     }
 
     if (userId) {
-      let cached = backgroundUserBudgetCache.get(userId);
-      if (!cached || now - cached.at > BUDGET_CACHE_MS) {
-        cached = { at: now, spend: await spendTodayUsdForUser(userId) };
-        backgroundUserBudgetCache.set(userId, cached);
-      }
-      if (cached.spend >= userBudget) {
+      const userSpend = await spendTodayUsdForUser(userId);
+      if (userSpend >= userBudget) {
         logger.warn(
-          { feature, userId, spend: cached.spend, budget: userBudget },
+          { feature, userId, spend: userSpend, budget: userBudget },
           "Per-user background AI budget reached",
         );
         return false;
@@ -599,24 +635,17 @@ export async function userAiAllowance(
   const installAllowance = await aiSpendAllowance();
   if (!installAllowance.allowed) return installAllowance;
 
-  const now = Date.now();
-  let cached = userBudgetCache.get(userId);
-  if (!cached || now - cached.at > BUDGET_CACHE_MS) {
-    try {
-      cached = { at: now, spend: await spendTodayUsdForUser(userId) };
-    } catch (err) {
-      logger.warn(
-        { err, feature, userId },
-        "User AI spend guard failed closed",
-      );
-      return { allowed: false, reason: "unavailable" };
-    }
-    userBudgetCache.set(userId, cached);
+  let spend: number;
+  try {
+    spend = await spendTodayUsdForUser(userId);
+  } catch (err) {
+    logger.warn({ err, feature, userId }, "User AI spend guard failed closed");
+    return { allowed: false, reason: "unavailable" };
   }
-  if (cached.spend < budget) return { allowed: true };
+  if (spend < budget) return { allowed: true };
 
   logger.warn(
-    { feature, userId, spend: cached.spend, budget },
+    { feature, userId, spend, budget },
     "Per-user daily AI budget reached",
   );
   return { allowed: false, reason: "daily_limit" };
@@ -692,7 +721,7 @@ export async function withVoiceAiLock<T>(
   voiceLocks.set(userId, chain);
   await previous;
   try {
-    return await withDbAdvisoryLock("voice-ai:global", fn);
+    return await withAiSpendLock(fn);
   } finally {
     release();
     if (voiceLocks.get(userId) === chain) voiceLocks.delete(userId);

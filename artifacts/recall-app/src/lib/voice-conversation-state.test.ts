@@ -6,7 +6,7 @@ import {
 } from "./voice-conversation-state";
 
 describe("voice conversation state", () => {
-  it("barge-in leaves speaking immediately and resets the listening deadline", () => {
+  it("barge-in leaves speaking immediately and pauses the silence deadline", () => {
     const started = voiceSessionReducer(createVoiceSessionState(8_000), {
       type: "start",
       now: 1_000,
@@ -22,8 +22,35 @@ describe("voice conversation state", () => {
         now: 3_000,
       }),
     ).toMatchObject({
+      phase: "hearing",
+      silenceDeadlineAt: null,
+    });
+  });
+
+  it("does not time out during a long utterance and restarts silence after it", () => {
+    const listening = voiceSessionReducer(createVoiceSessionState(8_000), {
+      type: "start",
+      now: 1_000,
+    });
+    const hearing = voiceSessionReducer(listening, {
+      type: "speech-started",
+      now: 2_000,
+    });
+
+    expect(
+      voiceSessionReducer(hearing, {
+        type: "silence-timeout",
+        now: 30_000,
+      }),
+    ).toEqual(hearing);
+    expect(
+      voiceSessionReducer(hearing, {
+        type: "speech-ended",
+        now: 30_000,
+      }),
+    ).toMatchObject({
       phase: "listening",
-      silenceDeadlineAt: 11_000,
+      silenceDeadlineAt: 38_000,
     });
   });
 

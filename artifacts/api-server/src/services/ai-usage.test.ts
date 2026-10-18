@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   insert: vi.fn(),
   select: vi.fn(),
+  lock: vi.fn(),
 }));
 
 vi.mock("../lib/db", () => ({
@@ -10,7 +11,7 @@ vi.mock("../lib/db", () => ({
     insert: mocks.insert,
     select: mocks.select,
   }),
-  withDbAdvisoryLock: (_key: string, fn: () => Promise<unknown>) => fn(),
+  withDbAdvisoryLockWait: mocks.lock,
 }));
 
 import {
@@ -38,6 +39,7 @@ import {
   voiceAskDailyLimit,
   voiceTtsDailyCharacters,
   voiceSessionSilenceMs,
+  withAiSpendLock,
   withAiFeature,
   withVoiceAiLock,
 } from "./ai-usage";
@@ -159,6 +161,10 @@ beforeEach(() => {
   resetBudgetCacheForTests();
   mocks.insert.mockReset();
   mocks.select.mockReset();
+  mocks.lock.mockReset();
+  mocks.lock.mockImplementation((_key: string, fn: () => Promise<unknown>) =>
+    fn(),
+  );
   mocks.insert.mockReturnValue({ values: () => Promise.resolve() });
   stubSpend(0);
   process.env.AI_DAILY_BUDGET_USD = "1";
@@ -368,6 +374,19 @@ describe("background budget guard", () => {
   });
 });
 
+describe("provider spend lock", () => {
+  it("uses one blocking install-wide advisory lock", async () => {
+    await expect(
+      withAiSpendLock(() => withAiSpendLock(async () => "ok")),
+    ).resolves.toBe("ok");
+    expect(mocks.lock).toHaveBeenCalledWith(
+      "ai-spend:global",
+      expect.any(Function),
+    );
+    expect(mocks.lock).toHaveBeenCalledOnce();
+  });
+});
+
 describe("per-user Ask budget guard", () => {
   it("parses a positive per-user budget and fails closed when invalid or unset", () => {
     delete process.env.AI_DAILY_BUDGET_USD_PER_USER;
@@ -406,6 +425,35 @@ describe("per-user Ask budget guard", () => {
   it("distinguishes a reached Ask cap from unavailable spend accounting", async () => {
     process.env.AI_DAILY_BUDGET_USD_PER_USER = "1";
     stubSpend(1_000_000);
+    await expect(userAiAllowance("ask_query", "u1")).resolves.toEqual({
+      allowed: false,
+      reason: "daily_limit",
+    });
+  });
+
+  it("re-reads per-user spend after each completed Ask", async () => {
+    process.env.AI_DAILY_BUDGET_USD = "5";
+    process.env.AI_DAILY_BUDGET_USD_PER_USER = "1";
+    let call = 0;
+    mocks.select.mockImplementation(() => ({
+      from: () => ({
+        where: () => {
+          const position = call++ % 3;
+          const request = Math.floor((call - 1) / 3);
+          const micros =
+            position === 2 && request > 0
+              ? 1_000_000
+              : position === 2
+                ? 250_000
+                : 0;
+          return Promise.resolve([{ micros: String(micros) }]);
+        },
+      }),
+    }));
+
+    await expect(userAiAllowance("ask_query", "u1")).resolves.toEqual({
+      allowed: true,
+    });
     await expect(userAiAllowance("ask_query", "u1")).resolves.toEqual({
       allowed: false,
       reason: "daily_limit",
@@ -507,6 +555,28 @@ describe("voice AI caps", () => {
       "first:end",
       "second:start",
       "second:end",
+    ]);
+    expect(mocks.lock).toHaveBeenNthCalledWith(
+      1,
+      "ai-spend:global",
+      expect.any(Function),
+    );
+    expect(mocks.lock).toHaveBeenNthCalledWith(
+      2,
+      "ai-spend:global",
+      expect.any(Function),
+    );
+  });
+
+  it("queues different users on the shared spend lock instead of rejecting", async () => {
+    await Promise.all([
+      withVoiceAiLock("u1", async () => undefined),
+      withVoiceAiLock("u2", async () => undefined),
+    ]);
+
+    expect(mocks.lock.mock.calls.map(([key]) => key)).toEqual([
+      "ai-spend:global",
+      "ai-spend:global",
     ]);
   });
 });
