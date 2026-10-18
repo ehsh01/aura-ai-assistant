@@ -351,7 +351,7 @@ async function runQueryForUser(
     const keywordFallback = buildKeywordFallbackAnswer(keywordRecords);
     const answer =
       allowance.reason === "daily_limit"
-        ? "Your daily AI budget has been reached. Ask will be available again after midnight UTC."
+        ? "Your daily AI budget has been reached. Ask will be available again after midnight Eastern Time."
         : keywordFallback.answer;
     const relatedRecords = keywordRecords.slice(0, 8).map((record) => ({
       entityType: record.entityType,
