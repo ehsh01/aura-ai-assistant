@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildNotesTsQuery,
-  buildSplitTokenRegexes,
+  hostnameFallbackTerm,
+  hostnameIlikePatterns,
   shouldExpandUrlTokens,
 } from "./notes";
 
@@ -24,12 +25,18 @@ describe("buildNotesTsQuery", () => {
     expect(buildNotesTsQuery([])).toBeNull();
   });
 
-  it("expands hostname and hyphen tokens without matching ordinary substrings", () => {
-    const [pattern] = buildSplitTokenRegexes(["psychiatry"]);
-    const regex = new RegExp(pattern!, "i");
-    expect(regex.test("psychiatry.med.miami.edu")).toBe(true);
-    expect(regex.test("portal-psychiatry.health")).toBe(true);
-    expect(regex.test("general psychiatry notes")).toBe(false);
+  it("uses one selective term for bounded hostname fallback", () => {
+    expect(
+      hostnameFallbackTerm(
+        "[AppSmith test] what is the Psychiatry website link",
+      ),
+    ).toBe("psychiatry");
+    expect(hostnameIlikePatterns("psychiatry")).toEqual([
+      "%psychiatry.%",
+      "%.psychiatry%",
+      "%://psychiatry-%",
+      "%://%.psychiatry-%",
+    ]);
     expect(shouldExpandUrlTokens("khaila school portal link")).toBe(true);
     expect(shouldExpandUrlTokens("ordinary note summary")).toBe(false);
   });

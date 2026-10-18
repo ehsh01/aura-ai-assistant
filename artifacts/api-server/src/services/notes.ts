@@ -430,26 +430,27 @@ export function buildNotesTsQuery(terms: string[]): string | null {
   return prefixes.join(" | ");
 }
 
-export function buildSplitTokenRegexes(terms: string[]): string[] {
-  return terms
-    .filter((term) => /^[a-z0-9]+$/i.test(term))
-    .map(
-      (term) =>
-        `((^|[^a-z0-9])${term.toLowerCase()}[.-]|[.-]${term.toLowerCase()}([^a-z0-9]|$))`,
-    );
-}
-
 export function shouldExpandUrlTokens(query: string): boolean {
   return /\b(?:link|url|website|web\s*(?:site|page)|portal)\b/i.test(query);
 }
 
-function noteSearchDocumentTokenMatch(terms: string[]) {
-  const patterns = buildSplitTokenRegexes(terms);
-  if (patterns.length === 0) return sql`false`;
-  return sql`(${sql.join(
-    patterns.map((pattern) => sql`${notes.searchDocument} ~* ${pattern}`),
-    sql` OR `,
-  )})`;
+export function hostnameFallbackTerm(query: string): string | null {
+  if (!shouldExpandUrlTokens(query)) return null;
+  return (
+    freeRetrievalTerms(query)
+      .filter((term) => /^[a-z0-9]+$/i.test(term))
+      .sort((a, b) => b.length - a.length)[0] ?? null
+  );
+}
+
+export function hostnameIlikePatterns(term: string): string[] {
+  const normalized = term.toLowerCase();
+  return [
+    `%${normalized}.%`,
+    `%.${normalized}%`,
+    `%://${normalized}-%`,
+    `%://%.${normalized}-%`,
+  ];
 }
 
 export type NoteRetrievalHit = {
@@ -477,10 +478,53 @@ export async function searchNoteRecordsForUser(
   const anyTsQuery = prefixes.join(" | ");
   const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 50);
   const anyMatch = sql`${notes.searchTsv} @@ to_tsquery('simple', ${anyTsQuery})`;
-  const splitTokenMatch = noteSearchDocumentTokenMatch(
-    shouldExpandUrlTokens(query) ? terms : [],
-  );
-  const textMatch = or(anyMatch, splitTokenMatch);
+  const fallbackTerm = hostnameFallbackTerm(query);
+  const fallbackPatterns = fallbackTerm
+    ? hostnameIlikePatterns(fallbackTerm)
+    : [];
+  const fallbackMatch =
+    fallbackPatterns.length > 0
+      ? or(
+          ...fallbackPatterns.map((pattern) =>
+            ilike(notes.searchDocument, pattern),
+          ),
+        )
+      : undefined;
+  const normalHasHostnameMatch =
+    fallbackPatterns.length > 0
+      ? sql`exists (
+          select 1
+          from (
+            select n2.search_document
+            from notes n2
+            where n2.user_id = ${userId}::uuid
+              and n2.search_tsv @@ to_tsquery('simple', ${anyTsQuery})
+            order by
+              case when to_tsvector('simple', coalesce(n2.title, ''))
+                @@ to_tsquery('simple', ${allTsQuery})
+                then 1 else 0 end desc,
+              ts_rank_cd(
+                coalesce(n2.search_tsv, ''::tsvector),
+                to_tsquery('simple', ${anyTsQuery})
+              ) desc,
+              n2.updated_at desc
+            limit 50
+          ) normal_link_hits
+          where ${sql.join(
+            fallbackPatterns.map(
+              (pattern) =>
+                sql`normal_link_hits.search_document ilike ${pattern}`,
+            ),
+            sql` OR `,
+          )}
+        )`
+      : sql`false`;
+  const conditionalFallbackMatch = fallbackMatch
+    ? and(sql`not (${normalHasHostnameMatch})`, fallbackMatch)
+    : undefined;
+  const textMatch = conditionalFallbackMatch
+    ? or(anyMatch, conditionalFallbackMatch)
+    : anyMatch;
   const whereMatch = terms.includes("vin")
     ? or(textMatch, vinHeuristicMatch())
     : textMatch;
@@ -507,9 +551,11 @@ export async function searchNoteRecordsForUser(
     .from(notes)
     .where(and(eq(notes.userId, userId), whereMatch))
     .orderBy(
+      conditionalFallbackMatch
+        ? sql`CASE WHEN ${conditionalFallbackMatch} THEN 1 ELSE 0 END DESC`
+        : sql`0`,
       sql`CASE WHEN to_tsvector('simple', coalesce(${notes.title}, '')) @@ to_tsquery('simple', ${allTsQuery}) THEN 1 ELSE 0 END DESC`,
       sql`CASE WHEN ${notes.searchTsv} @@ to_tsquery('simple', ${allTsQuery}) THEN 1 ELSE 0 END DESC`,
-      sql`CASE WHEN ${splitTokenMatch} THEN 1 ELSE 0 END DESC`,
       sql`(
         ts_rank_cd(to_tsvector('simple', coalesce(${notes.title}, '')), to_tsquery('simple', ${anyTsQuery})) * 4
         + ts_rank_cd(coalesce(${notes.searchTsv}, ''::tsvector), to_tsquery('simple', ${anyTsQuery}))
