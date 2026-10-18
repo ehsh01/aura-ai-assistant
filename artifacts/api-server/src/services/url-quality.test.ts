@@ -23,6 +23,8 @@ describe("placeholder URL classification", () => {
     "https://yourwebsite.co/path",
     "https://replace-me.invalid/page",
     "https://service.test/path",
+    "https://pdf-name.pdf",
+    "https://c.riveron",
   ])("rejects obvious template URL %s", (url) => {
     expect(isPlaceholderUrl(url)).toBe(true);
   });
@@ -54,6 +56,17 @@ describe("placeholder URL classification", () => {
     ).toEqual([
       "https://psychiatry.med.miami.edu",
       "https://www.uhealthsystem.org",
+    ]);
+  });
+
+  it("rejects file-like and email fragments while preserving real bare domains", () => {
+    expect(
+      extractLinkCandidates(
+        "/documents/pdf-name.pdf mailto:c.riveron@med.miami.edu c.riveron@med.miami.edu psychiatry.med.miami.edu service.gov.uk",
+      ).map((candidate) => candidate.url),
+    ).toEqual([
+      "https://psychiatry.med.miami.edu",
+      "https://service.gov.uk",
     ]);
   });
 

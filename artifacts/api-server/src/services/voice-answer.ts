@@ -152,6 +152,23 @@ function linkSubjectKeywords(question: string): string[] {
   );
 }
 
+function wordTokens(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .map((token) => token.trim())
+      .filter(Boolean),
+  );
+}
+
+function countWholeTermMatches(
+  terms: string[],
+  tokens: Set<string>,
+): number {
+  return terms.filter((term) => tokens.has(term)).length;
+}
+
 function capitalize(value: string): string {
   return value ? `${value[0]!.toUpperCase()}${value.slice(1)}` : value;
 }
@@ -202,7 +219,16 @@ function findVoiceLinkEvidence(
         `${candidate.source.title}\n${candidate.record.text}`,
       ) &&
       LINK_QUESTION.test(`${candidate.source.title}\n${candidate.record.text}`);
-    if (looksLikeHowTo) howToContext.push(candidate);
+    const candidateSubjectMatches = countWholeTermMatches(
+      subjectTerms,
+      wordTokens(`${candidate.source.title}\n${candidate.record.text}`),
+    );
+    if (
+      looksLikeHowTo &&
+      (subjectTerms.length === 0 || candidateSubjectMatches > 0)
+    ) {
+      howToContext.push(candidate);
+    }
 
     for (const [linkIndex, link] of links.entries()) {
       if (
@@ -218,9 +244,8 @@ function findVoiceLinkEvidence(
       } catch {
         // Keep the encoded path for relevance matching.
       }
-      const urlText =
-        `${parsed.hostname}${decodedPath}`.toLowerCase();
-      const titleText = candidate.source.title.toLowerCase();
+      const urlTokens = wordTokens(`${parsed.hostname} ${decodedPath}`);
+      const titleTokens = wordTokens(candidate.source.title);
       const nearText = candidate.record.text
         .slice(
           Math.max(0, link.index - 240),
@@ -230,15 +255,12 @@ function findVoiceLinkEvidence(
           ),
         )
         .toLowerCase();
-      const urlMatches = subjectTerms.filter((term) =>
-        urlText.includes(term),
-      ).length;
-      const titleMatches = subjectTerms.filter((term) =>
-        titleText.includes(term),
-      ).length;
-      const nearMatches = subjectTerms.filter((term) =>
-        nearText.includes(term),
-      ).length;
+      const urlMatches = countWholeTermMatches(subjectTerms, urlTokens);
+      const titleMatches = countWholeTermMatches(subjectTerms, titleTokens);
+      const nearMatches = countWholeTermMatches(
+        subjectTerms,
+        wordTokens(nearText),
+      );
       if (
         subjectTerms.length > 0 &&
         urlMatches + titleMatches + nearMatches === 0
@@ -253,12 +275,12 @@ function findVoiceLinkEvidence(
         candidate,
         url: link.url,
         score:
-          urlMatches * 100 +
-          nearMatches * 50 +
-          titleMatches * 35 +
+          urlMatches * 45 +
+          nearMatches * 60 +
+          titleMatches * 60 +
+          (candidates.length - candidateIndex) * 25 +
           (isNote ? 20 : 0) -
-          (isEmail ? 20 : 0) -
-          candidateIndex,
+          (isEmail ? 20 : 0),
         candidateIndex,
         linkIndex,
       });
@@ -308,9 +330,12 @@ function closestLinkNote(
   return (
     [...pool].sort((a, b) => {
       const score = (candidate: LoadedCandidate) => {
-        const hay =
-          `${candidate.source.title}\n${candidate.record.text}`.toLowerCase();
-        return subjectTerms.filter((term) => hay.includes(term)).length;
+        return countWholeTermMatches(
+          subjectTerms,
+          wordTokens(
+            `${candidate.source.title}\n${candidate.record.text}`,
+          ),
+        );
       };
       return score(b) - score(a);
     })[0] ?? null
