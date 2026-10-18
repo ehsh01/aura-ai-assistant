@@ -95,6 +95,12 @@ export function PrivacyPolicy() {
             snippets of your content may be sent to our AI provider (OpenAI) for processing. This
             data is used only to generate your answer and is not used to train third-party models.
           </p>
+          <p>
+            <span className="text-white/90">Hey Recall audio:</span> if you opt in on desktop,
+            wake-phrase detection runs on your device. Recall does not send idle microphone audio
+            off your device. After “Hey Recall” is detected, the question you speak is sent through
+            Recall’s backend to OpenAI for transcription and is not stored as an audio recording.
+          </p>
         </Section>
 
         <Section title="How we use information">

@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { once } from "node:events";
 import {
   AiChatBody,
   AiChatResponse,
@@ -38,7 +39,10 @@ import {
   confirmProposedAction,
   type ProposedActionType,
 } from "../services/action-orchestrator";
-import { assertServerTtsEnabled, synthesizeSpeech } from "../services/tts";
+import {
+  assertServerTtsEnabled,
+  streamSynthesizeSpeech,
+} from "../services/tts";
 import {
   createAskThreadForUser,
   getAskThreadForUser,
@@ -57,14 +61,17 @@ import { askAiAvailabilityForUser } from "../services/ask-ai-availability";
 import { isEnabled } from "../lib/feature-flags";
 import { voiceAiAllowance, withVoiceAiLock } from "../services/ai-usage";
 import {
+  isVoiceLinkQuestion,
   queryVoiceNotesForUser,
   VOICE_LIMIT_REPLY,
 } from "../services/voice-answer";
+import { assertWakeWordPcmDurationAtMost } from "../services/voice-audio-duration";
 
 const voiceAudioUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_VOICE_AUDIO_BYTES, files: 1 },
 });
+const MAX_WAKE_WORD_UTTERANCE_SECONDS = 60;
 
 function mergeSearchHitsIntoContext(
   context: AiContext | undefined,
@@ -96,6 +103,15 @@ function mergeSearchHitsIntoContext(
 const router: IRouter = Router();
 
 // All routes here require authentication (enforced in routes/index.ts)
+
+function wakeWordFeatureEnabled(): boolean {
+  return (
+    isEnabled("RECALL_WAKEWORD_ENABLED", false) &&
+    isEnabled("RECALL_SERVER_STT_ENABLED", false) &&
+    isEnabled("RECALL_VOICE_AI_ENABLED", false) &&
+    Boolean(process.env.OPENAI_API_KEY?.trim())
+  );
+}
 
 router.get("/ai/status", (_req, res) => {
   const data = GetAiStatusResponse.parse(aiService.getStatus());
@@ -222,15 +238,70 @@ router.post("/ai/tts", async (req, res, next) => {
   try {
     assertServerTtsEnabled();
     const body = AiTtsBody.parse(req.body);
-    const { buffer, contentType } = await synthesizeSpeech(
+    await streamSynthesizeSpeech(
       body.text,
       req.user!.id,
+      async ({ chunks, contentType }) => {
+        const iterator = chunks[Symbol.asyncIterator]();
+        let first = await iterator.next();
+        while (!first.done && first.value.byteLength === 0) {
+          first = await iterator.next();
+        }
+        if (first.done) {
+          await iterator.return?.();
+          throw Object.assign(new Error("OpenAI TTS returned no audio"), {
+            status: 502,
+          });
+        }
+
+        res.status(200);
+        res.setHeader("Content-Type", contentType);
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.flushHeaders();
+
+        const cancelStream = () => {
+          void iterator.return?.().catch(() => undefined);
+        };
+        res.once("close", cancelStream);
+        try {
+          if (!res.write(Buffer.from(first.value))) {
+            await Promise.race([once(res, "drain"), once(res, "close")]);
+          }
+          while (!res.destroyed) {
+            const { done, value } = await iterator.next();
+            if (done) break;
+            if (value.byteLength > 0 && !res.write(Buffer.from(value))) {
+              await Promise.race([once(res, "drain"), once(res, "close")]);
+            }
+          }
+          if (!res.destroyed) res.end();
+        } finally {
+          res.off("close", cancelStream);
+          if (res.destroyed) await iterator.return?.().catch(() => undefined);
+        }
+      },
     );
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Content-Length", String(buffer.length));
-    res.send(buffer);
   } catch (err) {
+    if (res.headersSent) {
+      res.destroy(err instanceof Error ? err : undefined);
+      return;
+    }
+    const reason =
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err.code === "disabled" || err.code === "daily_limit")
+        ? err.code
+        : null;
+    if (reason) {
+      res.status(reason === "daily_limit" ? 429 : 503).json({
+        error: "VOICE_TTS_BLOCKED",
+        reason,
+        message: err instanceof Error ? err.message : "Server TTS unavailable",
+      });
+      return;
+    }
     next(err);
   }
 });
@@ -244,12 +315,28 @@ router.get("/ai/voice/availability", async (req, res, next) => {
   }
 });
 
+router.get("/ai/wakeword/config", (_req, res) => {
+  res.json({ enabled: wakeWordFeatureEnabled() });
+});
+
 router.post("/ai/voice/query", async (req, res, next) => {
   try {
     const body = AiQueryBody.parse(req.body);
     await withVoiceAiLock(req.user!.id, async () => {
       const allowance = await voiceAiAllowance("voice_ask", req.user!.id);
       if (!allowance.allowed) {
+        const linkFallback = isVoiceLinkQuestion(body.question)
+          ? await queryVoiceNotesForUser(
+              req.user!.id,
+              body.question,
+              body.threadId ?? null,
+              { allowModel: false },
+            )
+          : null;
+        if (linkFallback) {
+          res.json(linkFallback);
+          return;
+        }
         const dailyLimit = allowance.reason === "daily_limit";
         res.status(dailyLimit ? 429 : 503).json({
           error: dailyLimit ? "VOICE_DAILY_LIMIT" : "VOICE_AI_UNAVAILABLE",
@@ -564,6 +651,129 @@ router.post("/ai/transcribe", (req, res, next) => {
         next(e);
       }
     })();
+  });
+});
+
+/** Post-wake STT. Idle microphone audio never reaches this route. */
+router.post("/ai/wakeword/transcribe", (req, res, next) => {
+  if (!wakeWordFeatureEnabled()) {
+    res.status(503).json({
+      error: "WAKEWORD_UNAVAILABLE",
+      message: "Hey Recall is disabled",
+    });
+    return;
+  }
+
+  voiceAudioUpload.single("audio")(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+        res.status(400).json({
+          error: "AUDIO_TOO_LARGE",
+          message: `Recording exceeds the ${Math.round(MAX_VOICE_AUDIO_BYTES / (1024 * 1024))}MB limit`,
+        });
+        return;
+      }
+      next(err);
+      return;
+    }
+
+    const file = req.file;
+    if (!file?.buffer.length) {
+      res.status(400).json({
+        error: "MISSING_AUDIO",
+        message: "Audio file is required",
+      });
+      return;
+    }
+
+    const mimeType = file.mimetype.split(";")[0]!.toLowerCase();
+    if (mimeType !== "audio/wav" && mimeType !== "audio/x-wav") {
+      res.status(400).json({
+        error: "TRANSCRIBE_INVALID",
+        message: "Hey Recall requires 16 kHz PCM WAV audio",
+      });
+      return;
+    }
+    try {
+      assertWakeWordPcmDurationAtMost(
+        file.buffer,
+        MAX_WAKE_WORD_UTTERANCE_SECONDS,
+      );
+    } catch (error) {
+      if (error instanceof TranscriptionValidationError) {
+        res
+          .status(400)
+          .json({ error: "TRANSCRIBE_INVALID", message: error.message });
+        return;
+      }
+      next(error);
+      return;
+    }
+
+    void withVoiceAiLock(req.user!.id, async () => {
+      const allowance = await voiceAiAllowance(
+        "voice_stt",
+        req.user!.id,
+        MAX_WAKE_WORD_UTTERANCE_SECONDS,
+      );
+      if (!allowance.allowed) {
+        const dailyLimit = allowance.reason === "daily_limit";
+        res.status(dailyLimit ? 429 : 503).json({
+          error: "VOICE_STT_BLOCKED",
+          reason: allowance.reason,
+          message: dailyLimit
+            ? "Daily voice transcription allowance reached"
+            : "Voice transcription is unavailable",
+        });
+        return;
+      }
+
+      const locale =
+        typeof req.body?.locale === "string"
+          ? req.body.locale.slice(0, 16)
+          : undefined;
+      const result = await getTranscriptionProvider().transcribe({
+        userId: req.user!.id,
+        audio: file.buffer,
+        mimeType,
+        filename: file.originalname || "wake-utterance.wav",
+        locale,
+        feature: "voice_stt",
+      });
+      await writeAuditLog({
+        userId: req.user!.id,
+        action: "voice_transcribed",
+        entityType: "query",
+        metadata: {
+          source: "wake_word",
+          provider: result.provider,
+          model: result.model,
+          durationMs: result.durationMs,
+          byteLength: file.size,
+          textLength: result.text.length,
+        },
+      });
+      res.json({
+        text: result.text,
+        provider: result.provider,
+        model: result.model,
+        durationMs: result.durationMs,
+      });
+    }).catch((error) => {
+      if (error instanceof TranscriptionUnavailableError) {
+        res
+          .status(503)
+          .json({ error: "TRANSCRIBE_UNAVAILABLE", message: error.message });
+        return;
+      }
+      if (error instanceof TranscriptionValidationError) {
+        res
+          .status(400)
+          .json({ error: "TRANSCRIBE_INVALID", message: error.message });
+        return;
+      }
+      next(error);
+    });
   });
 });
 

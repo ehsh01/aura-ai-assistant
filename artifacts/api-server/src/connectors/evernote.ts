@@ -47,6 +47,7 @@ export type EvernoteNoteStore = {
     withResourcesRecognition: boolean,
     withResourcesAlternateData: boolean,
   ): Promise<EvernoteNote>;
+  getResourceData?(guid: string): Promise<Buffer | Uint8Array>;
 };
 
 type EvernoteClientInstance = {
@@ -433,6 +434,22 @@ export async function testEvernoteReadAccess(
     withEvernoteRateLimitRetry(() => store.listTags()),
   ]);
   return { notebookCount: notebooks.length, tagCount: tags.length };
+}
+
+/** Fetch attachment bytes read-only at click time; callers must not persist them. */
+export async function fetchEvernoteResourceData(
+  accessToken: string,
+  noteStoreUrl: string,
+  resourceGuid: string,
+): Promise<Buffer> {
+  const store = newEvernoteClient(accessToken).getNoteStore(noteStoreUrl);
+  if (!store.getResourceData) {
+    throw new Error("Evernote resource download is unavailable");
+  }
+  const bytes = await withEvernoteRateLimitRetry(() =>
+    store.getResourceData!(resourceGuid),
+  );
+  return Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
 }
 
 function decodeXmlEntities(text: string): string {

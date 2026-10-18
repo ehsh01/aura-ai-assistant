@@ -84,7 +84,8 @@ revokes the matching `auth_sessions` row so stolen cookies stop working.
 
 The SPA is served by nginx with a restrictive `Content-Security-Policy`:
 
-- scripts from `'self'` only (no CDN script tags)
+- scripts from `'self'` only (no CDN script tags), with
+  `'wasm-unsafe-eval'` narrowly permitting the local ONNX wake-word runtime
 - styles from `'self'` plus Google Fonts CSS (`'unsafe-inline'` allowed for Tailwind/runtime styles)
 - fonts from `'self'` and `fonts.gstatic.com`
 - API calls via same-origin `connect-src 'self'`
@@ -148,6 +149,7 @@ Backup strategy should include:
 - restore testing
 
 **Current (production):**
+
 - Daily dump: `scripts/backup-recall-db.sh` → `/var/backups/recall/` (cron documented in `DEPLOYMENT.md`)
 - Safe restore drill: `scripts/restore-drill-recall-db.sh` loads a dump into an ephemeral Docker Postgres and verifies schema/data — never writes production
 - Disaster restore into production remains a manual `psql` step after stopping the API

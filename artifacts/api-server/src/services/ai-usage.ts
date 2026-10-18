@@ -27,6 +27,7 @@ export type AiFeature =
   | "intent_route"
   | "ask_query"
   | "voice_ask"
+  | "voice_stt"
   | "transcribe"
   | "tts"
   | "voice_tts"
@@ -291,6 +292,10 @@ export function voiceAskDailyLimit(): number {
 
 export function voiceTtsDailyCharacters(): number {
   return nonNegativeInteger(process.env.RECALL_VOICE_TTS_DAILY_CHARS, 15_000);
+}
+
+export function voiceSttDailySeconds(): number {
+  return nonNegativeInteger(process.env.RECALL_VOICE_STT_DAILY_SECONDS, 1_800);
 }
 
 /** Explicit attachment vision OCR calls allowed per user and New York day. */
@@ -568,16 +573,20 @@ export async function withVoiceAiLock<T>(
  * midnight. Browser speech/search never call this function.
  */
 export async function voiceAiAllowance(
-  feature: "voice_ask" | "voice_tts",
+  feature: "voice_ask" | "voice_stt" | "voice_tts",
   userId: string,
-  requestedCharacters = 0,
+  requestedAmount = 0,
 ): Promise<VoiceAiAllowance> {
   if (!isEnabled("RECALL_VOICE_AI_ENABLED", false)) {
     return { allowed: false, reason: "disabled" };
   }
 
   const limit =
-    feature === "voice_ask" ? voiceAskDailyLimit() : voiceTtsDailyCharacters();
+    feature === "voice_ask"
+      ? voiceAskDailyLimit()
+      : feature === "voice_stt"
+        ? voiceSttDailySeconds()
+        : voiceTtsDailyCharacters();
   if (limit <= 0) return { allowed: false, reason: "daily_limit" };
 
   try {
@@ -590,11 +599,14 @@ export async function voiceAiAllowance(
       return { allowed: false, reason: "daily_limit" };
     }
 
-    const used = feature === "voice_ask" ? usage.calls : usage.characters;
+    const used =
+      feature === "voice_ask"
+        ? usage.calls
+        : feature === "voice_stt"
+          ? usage.seconds
+          : usage.characters;
     const requested =
-      feature === "voice_tts"
-        ? Math.max(0, Math.round(requestedCharacters))
-        : 1;
+      feature === "voice_ask" ? 1 : Math.max(0, Math.round(requestedAmount));
     if (used + requested > limit) {
       return { allowed: false, reason: "daily_limit" };
     }

@@ -7,6 +7,7 @@ import { startJobWorker } from "./services/job-worker";
 import { startSmsReminderSweep } from "./services/sms-reminders";
 import { startBriefingSweep } from "./services/briefing-sweep";
 import { startEvernoteSyncScheduler } from "./services/evernote-sync-scheduler";
+import { startGoogleAutoSync } from "./services/google-auto-sync";
 
 /**
  * RECALL_ROLE splits responsibilities across PM2 processes:
@@ -21,6 +22,7 @@ const role = (process.env.RECALL_ROLE ?? "api").toLowerCase();
 
 function startBackgroundServices(): void {
   startFinanceAutoSync();
+  startGoogleAutoSync();
   startJobWorker();
   startSmsReminderSweep();
   startBriefingSweep();

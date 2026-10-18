@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Link } from "wouter";
 import {
   Activity,
+  Ear,
   MessageSquare,
   Settings as SettingsIcon,
   Shield,
@@ -10,6 +11,7 @@ import {
 import { AppLayout } from "@/components/AppLayout";
 import { AiUsageSection } from "@/components/settings/AiUsageSection";
 import { useAuth } from "@/context/AuthContext";
+import { useWakeWord } from "@/context/WakeWordContext";
 import {
   adminSetDisabled,
   adminSetIsAdmin,
@@ -31,6 +33,7 @@ import { toast } from "@/hooks/use-toast";
 
 export function Settings() {
   const { user, logout } = useAuth();
+  const wakeWord = useWakeWord();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -224,6 +227,61 @@ export function Settings() {
             >
               Build {__RECALL_BUILD_ID__}
             </p>
+          </section>
+
+          <section
+            className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 md:p-6"
+            aria-labelledby="hey-recall-setting"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex min-w-0 gap-3">
+                <Ear size={18} className="mt-0.5 shrink-0 text-[#7dffd9]" />
+                <div>
+                  <h2
+                    id="hey-recall-setting"
+                    className="text-base font-medium text-white"
+                  >
+                    Hey Recall
+                  </h2>
+                  <p className="mt-1 text-sm text-white/45">
+                    Listen on this desktop for “Hey Recall.” Detection stays on
+                    this device; only the question after the wake phrase is sent
+                    through Recall’s backend to OpenAI for transcription.
+                  </p>
+                  <p className="mt-2 text-xs text-white/35">
+                    Works only while this tab is open. You can turn it off
+                    immediately from the listening indicator.
+                  </p>
+                </div>
+              </div>
+              <label className="flex shrink-0 items-center gap-2 text-xs text-white/55">
+                <input
+                  type="checkbox"
+                  role="switch"
+                  checked={wakeWord.optedIn}
+                  disabled={
+                    !wakeWord.optedIn &&
+                    (!wakeWord.serverEnabled || !wakeWord.desktopBrowser)
+                  }
+                  onChange={(event) =>
+                    wakeWord.setOptedIn(event.target.checked)
+                  }
+                  className="h-4 w-4 accent-[#7dffd9]"
+                  data-testid="wake-word-toggle"
+                />
+                {wakeWord.optedIn ? "On" : "Off"}
+              </label>
+            </div>
+            {!wakeWord.desktopBrowser && (
+              <p className="mt-3 text-xs text-amber-200/70">
+                Hey Recall is available in desktop browsers only.
+              </p>
+            )}
+            {wakeWord.desktopBrowser && !wakeWord.serverEnabled && (
+              <p className="mt-3 text-xs text-white/35">
+                Hey Recall is not enabled on this Recall server.
+              </p>
+            )}
           </section>
 
           <Link

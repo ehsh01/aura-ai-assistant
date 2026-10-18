@@ -33,6 +33,7 @@ import {
   userAiAllowance,
   voiceAiAllowance,
   voiceAskDailyLimit,
+  voiceSttDailySeconds,
   voiceTtsDailyCharacters,
   withAiFeature,
   withVoiceAiLock,
@@ -116,6 +117,7 @@ const ENV_KEYS = [
   "RECALL_EMBEDDING_WARM_ENABLED",
   "RECALL_VOICE_AI_ENABLED",
   "RECALL_VOICE_ASK_DAILY_LIMIT",
+  "RECALL_VOICE_STT_DAILY_SECONDS",
   "RECALL_VOICE_TTS_DAILY_CHARS",
 ] as const;
 
@@ -367,6 +369,7 @@ describe("per-user Ask budget guard", () => {
 describe("voice AI caps", () => {
   it("defaults the master switch off and uses conservative daily limits", async () => {
     expect(voiceAskDailyLimit()).toBe(30);
+    expect(voiceSttDailySeconds()).toBe(1_800);
     expect(voiceTtsDailyCharacters()).toBe(15_000);
     await expect(voiceAiAllowance("voice_ask", "u1")).resolves.toEqual({
       allowed: false,
@@ -427,6 +430,34 @@ describe("voice AI caps", () => {
     }));
 
     await expect(voiceAiAllowance("voice_tts", "u1", 11)).resolves.toEqual({
+      allowed: false,
+      reason: "daily_limit",
+    });
+  });
+
+  it("blocks wake-word STT when the maximum utterance could exceed its allowance", async () => {
+    process.env.RECALL_VOICE_AI_ENABLED = "true";
+    process.env.RECALL_VOICE_STT_DAILY_SECONDS = "1800";
+    let call = 0;
+    mocks.select.mockImplementation(() => ({
+      from: () => ({
+        where: () =>
+          Promise.resolve(
+            call++ === 0
+              ? [{ micros: "0" }]
+              : [
+                  {
+                    calls: "4",
+                    totalTokens: "0",
+                    characters: "0",
+                    seconds: "1741",
+                  },
+                ],
+          ),
+      }),
+    }));
+
+    await expect(voiceAiAllowance("voice_stt", "u1", 60)).resolves.toEqual({
       allowed: false,
       reason: "daily_limit",
     });

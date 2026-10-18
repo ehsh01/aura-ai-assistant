@@ -47,7 +47,9 @@ export class OpenAiWhisperTranscriptionProvider implements TranscriptionProvider
 
   async transcribe(input: TranscriptionRequest): Promise<TranscriptionResult> {
     if (!isEnabled("RECALL_SERVER_STT_ENABLED")) {
-      throw new TranscriptionUnavailableError("Server speech transcription is disabled");
+      throw new TranscriptionUnavailableError(
+        "Server speech transcription is disabled",
+      );
     }
     const apiKey = process.env.OPENAI_API_KEY?.trim();
     if (!apiKey) throw new TranscriptionUnavailableError();
@@ -68,7 +70,9 @@ export class OpenAiWhisperTranscriptionProvider implements TranscriptionProvider
       !ALLOWED_MIME.has(mimeBase) &&
       !mimeBase.startsWith("audio/")
     ) {
-      throw new TranscriptionValidationError(`Unsupported audio type: ${mimeBase}`);
+      throw new TranscriptionValidationError(
+        `Unsupported audio type: ${mimeBase}`,
+      );
     }
 
     // Whisper infers the container from the filename extension, so a
@@ -81,12 +85,13 @@ export class OpenAiWhisperTranscriptionProvider implements TranscriptionProvider
 
     const model = process.env.OPENAI_TRANSCRIBE_MODEL?.trim() || "whisper-1";
     const ext = extensionForMime(mime);
-    const filename = input.filename?.replace(/[^\w.-]/g, "_") || `utterance.${ext}`;
+    const filename =
+      input.filename?.replace(/[^\w.-]/g, "_") || `utterance.${ext}`;
     const started = Date.now();
 
     const client = createOpenAiClient({
       apiKey,
-      feature: "transcribe",
+      feature: input.feature ?? "transcribe",
       userId: input.userId,
     });
     const file = await toFile(input.audio, filename, { type: uploadType });
@@ -99,7 +104,9 @@ export class OpenAiWhisperTranscriptionProvider implements TranscriptionProvider
 
     const text = (result.text ?? "").replace(/\s+/g, " ").trim();
     if (!text) {
-      throw new TranscriptionValidationError("No speech detected in the recording");
+      throw new TranscriptionValidationError(
+        "No speech detected in the recording",
+      );
     }
     return {
       text,
@@ -119,6 +126,8 @@ export function getTranscriptionProvider(): TranscriptionProvider {
 }
 
 /** Test hook. */
-export function setTranscriptionProviderForTests(provider: TranscriptionProvider | null): void {
+export function setTranscriptionProviderForTests(
+  provider: TranscriptionProvider | null,
+): void {
   cached = provider;
 }

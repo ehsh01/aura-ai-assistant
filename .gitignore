@@ -44,6 +44,8 @@ npm-debug.log
 yarn-error.log
 testem.log
 /typings
+__pycache__/
+*.pyc
 
 # System Files
 .DS_Store

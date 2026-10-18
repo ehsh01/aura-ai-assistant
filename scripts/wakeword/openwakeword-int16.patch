@@ -1,0 +1,33 @@
+diff --git a/scripts/eval.mjs b/scripts/eval.mjs
+index cfbf872..bc67b8a 100644
+--- a/scripts/eval.mjs
++++ b/scripts/eval.mjs
+@@ -65,7 +65,11 @@ async function scores(clip) {
+   raw.set(pad); raw.set(clip, pad.length); raw.set(pad, pad.length + clip.length);
+   let m = [], e = [], out = [];
+   for (let i = 0; i + STEP + PAD <= raw.length; i += STEP) {
+-    for (const v of await run(mel, raw.subarray(i, i + STEP + PAD), [1, STEP + PAD])) m.push(v / 10 + 2);
++    const pcm = Float32Array.from(
++      raw.subarray(i, i + STEP + PAD),
++      (sample) => sample * 32768,
++    );
++    for (const v of await run(mel, pcm, [1, STEP + PAD])) m.push(v / 10 + 2);
+     if (m.length > MEL_WIN * MEL_BINS) m = m.slice(m.length - MEL_WIN * MEL_BINS);
+     if (m.length < MEL_WIN * MEL_BINS) continue;
+     for (const v of await run(emb, Float32Array.from(m), [1, MEL_WIN, MEL_BINS, 1])) e.push(v);
+diff --git a/scripts/featurize.mjs b/scripts/featurize.mjs
+index 1fb70d9..47fc860 100644
+--- a/scripts/featurize.mjs
++++ b/scripts/featurize.mjs
+@@ -80,7 +80,10 @@ const emb = await load('models/embedding_model.onnx');
+  * the difference between 40 minutes and 6 hours.
+  */
+ async function features(buf) {
+-  const frames = await run(mel, buf, [1, buf.length]);
++  // openWakeWord's melspectrogram model consumes int16 PCM magnitudes, carried
++  // in a float tensor by ONNX Runtime.
++  const pcm = Float32Array.from(buf, (sample) => sample * 32768);
++  const frames = await run(mel, pcm, [1, pcm.length]);
+   const need = (EMB_WIN - 1) * HOP + MEL_WIN; // 196 frames
+   const got = frames.length / MEL_BINS;
+   if (got < need) throw new Error(`window too short: ${got} mel frames, need ${need}`);

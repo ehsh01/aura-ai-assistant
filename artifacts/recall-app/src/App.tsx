@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RecallDataProvider } from "@/context/RecallDataContext";
 import { AuthProvider } from "@/context/AuthContext";
+import { WakeWordProvider } from "@/context/WakeWordContext";
 import { RequireAuth } from "@/components/RequireAuth";
 import { Dashboard } from "@/pages/Dashboard";
 import { Today } from "@/pages/Today";
@@ -89,39 +90,41 @@ function Router() {
 function AuthedRoutes() {
   return (
     <RequireAuth>
-      <Switch>
-        {/* Explore is the graph-first home; Today remains available at /today. */}
-        <Route path="/" component={Everything} />
-        <Route path="/everything/:itemId" component={Everything} />
-        <Route path="/everything" component={Everything} />
-        <Route path="/today/:category" component={Today} />
-        <Route path="/today" component={Today} />
-        <Route path="/ask" component={Dashboard} />
-        <Route path="/notes" component={Notes} />
-        <Route path="/notebooks" component={RedirectToNotes} />
-        <Route path="/inbox" component={Inbox} />
-        <Route path="/documents" component={Documents} />
-        {/* Knowledge folded into Notes — old /knowledge bookmarks land there too. */}
-        <Route path="/knowledge" component={RedirectToNotes} />
-        <Route path="/memory" component={Memory} />
-        <Route path="/people" component={People} />
-        <Route path="/people/:personId" component={PersonDetail} />
-        <Route path="/vehicles" component={Vehicles} />
-        <Route path="/organizations" component={Organizations} />
-        <Route path="/activity" component={Activity} />
-        <Route path="/connectors" component={Connectors} />
-        <Route path="/settings" component={Settings} />
-        <Route path="/projects" component={Projects} />
-        <Route path="/projects/:projectId" component={ProjectDetail} />
-        <Route path="/waiting" component={WaitingList} />
-        <Route path="/waiting/:id" component={WaitingDetail} />
-        <Route path="/deadlines" component={Deadlines} />
-        <Route path="/tasks" component={Tasks} />
-        <Route path="/canvas" component={Canvas} />
-        {/* Signed-in users hitting /login land on Today */}
-        <Route path="/login" component={RedirectHome} />
-        <Route component={RedirectHome} />
-      </Switch>
+      <WakeWordProvider>
+        <Switch>
+          {/* Explore is the graph-first home; Today remains available at /today. */}
+          <Route path="/" component={Everything} />
+          <Route path="/everything/:itemId" component={Everything} />
+          <Route path="/everything" component={Everything} />
+          <Route path="/today/:category" component={Today} />
+          <Route path="/today" component={Today} />
+          <Route path="/ask" component={Dashboard} />
+          <Route path="/notes" component={Notes} />
+          <Route path="/notebooks" component={RedirectToNotes} />
+          <Route path="/inbox" component={Inbox} />
+          <Route path="/documents" component={Documents} />
+          {/* Knowledge folded into Notes — old /knowledge bookmarks land there too. */}
+          <Route path="/knowledge" component={RedirectToNotes} />
+          <Route path="/memory" component={Memory} />
+          <Route path="/people" component={People} />
+          <Route path="/people/:personId" component={PersonDetail} />
+          <Route path="/vehicles" component={Vehicles} />
+          <Route path="/organizations" component={Organizations} />
+          <Route path="/activity" component={Activity} />
+          <Route path="/connectors" component={Connectors} />
+          <Route path="/settings" component={Settings} />
+          <Route path="/projects" component={Projects} />
+          <Route path="/projects/:projectId" component={ProjectDetail} />
+          <Route path="/waiting" component={WaitingList} />
+          <Route path="/waiting/:id" component={WaitingDetail} />
+          <Route path="/deadlines" component={Deadlines} />
+          <Route path="/tasks" component={Tasks} />
+          <Route path="/canvas" component={Canvas} />
+          {/* Signed-in users hitting /login land on Today */}
+          <Route path="/login" component={RedirectHome} />
+          <Route component={RedirectHome} />
+        </Switch>
+      </WakeWordProvider>
     </RequireAuth>
   );
 }

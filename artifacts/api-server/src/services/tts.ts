@@ -36,7 +36,7 @@ export function getOpenAiTtsSettings(): {
   const configuredVoice =
     process.env.RECALL_TTS_VOICE?.trim() ||
     process.env.OPENAI_TTS_VOICE?.trim() ||
-    "nova";
+    "onyx";
   if (!isOpenAiTtsModel(configuredModel)) {
     throw Object.assign(new Error("Configured TTS model is not allowed"), {
       status: 503,
@@ -66,15 +66,17 @@ export function assertServerTtsEnabled(): void {
   ) {
     const err = new Error("Server TTS is disabled") as Error & {
       status?: number;
+      code?: string;
     };
     err.status = 503;
+    err.code = "disabled";
     throw err;
   }
 }
 
 /**
  * Synthesize speech with OpenAI TTS.
- * Defaults: model tts-1 (fast/cheap), voice nova.
+ * Defaults: model tts-1 (fast/cheap), voice onyx.
  * Override with RECALL_TTS_MODEL / RECALL_TTS_VOICE.
  * Disabled unless the master, server, and provider flags are explicitly enabled.
  */
@@ -82,6 +84,99 @@ export async function synthesizeSpeech(
   text: string,
   userId: string,
 ): Promise<{ buffer: Buffer; contentType: string }> {
+  const response = await createSpeechForUser(text, userId);
+  return {
+    buffer: Buffer.from(await response.arrayBuffer()),
+    contentType: "audio/mpeg",
+  };
+}
+
+type SpeechResponse = {
+  arrayBuffer(): Promise<ArrayBuffer>;
+  body: unknown;
+};
+
+type WebAudioStream = {
+  getReader(): {
+    read(): Promise<{ done: boolean; value?: Uint8Array }>;
+    cancel(reason?: unknown): Promise<void>;
+    releaseLock(): void;
+  };
+};
+
+function audioChunk(value: unknown): Uint8Array {
+  if (typeof value === "string") return Buffer.from(value);
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  throw Object.assign(new Error("OpenAI TTS returned an invalid audio chunk"), {
+    status: 502,
+  });
+}
+
+function streamFailure(error: unknown): Error & { status: number } {
+  return Object.assign(new Error("OpenAI TTS stream failed", { cause: error }), {
+    status: 502,
+  });
+}
+
+/**
+ * OpenAI SDK v4 can expose Response.body as either a Node Readable/PassThrough
+ * or a WHATWG ReadableStream depending on its runtime transport.
+ */
+export function speechBodyChunks(body: unknown): AsyncIterable<Uint8Array> {
+  if (
+    body &&
+    typeof body === "object" &&
+    Symbol.asyncIterator in body &&
+    typeof body[Symbol.asyncIterator] === "function"
+  ) {
+    return {
+      async *[Symbol.asyncIterator]() {
+        try {
+          for await (const chunk of body as AsyncIterable<unknown>) {
+            yield audioChunk(chunk);
+          }
+        } catch (error) {
+          throw streamFailure(error);
+        }
+      },
+    };
+  }
+
+  if (
+    body &&
+    typeof body === "object" &&
+    "getReader" in body &&
+    typeof body.getReader === "function"
+  ) {
+    return {
+      async *[Symbol.asyncIterator]() {
+        const reader = (body as WebAudioStream).getReader();
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) yield audioChunk(value);
+          }
+        } catch (error) {
+          throw streamFailure(error);
+        } finally {
+          await reader.cancel().catch(() => undefined);
+          reader.releaseLock();
+        }
+      },
+    };
+  }
+
+  throw Object.assign(new Error("OpenAI TTS returned no readable audio stream"), {
+    status: 502,
+  });
+}
+
+async function createSpeechForUser(
+  text: string,
+  userId: string,
+): Promise<SpeechResponse> {
   assertServerTtsEnabled();
 
   const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -119,15 +214,31 @@ export async function synthesizeSpeech(
 
     const settings = getOpenAiTtsSettings();
     const client = createOpenAiClient({ apiKey, feature: "voice_tts", userId });
-    const response = await client.audio.speech.create({
+    const response = (await client.audio.speech.create({
       model: settings.model,
       voice: settings.voice,
       input: cleaned,
       response_format: "mp3",
       ...(settings.instructions ? { instructions: settings.instructions } : {}),
-    });
-
-    const buffer = Buffer.from(await response.arrayBuffer());
-    return { buffer, contentType: "audio/mpeg" };
+    })) as SpeechResponse;
+    return response;
   });
+}
+
+/**
+ * OpenAI accepts the call and strict usage logging completes inside the paid
+ * call lock. Client download backpressure happens after releasing the advisory
+ * lock so a slow connection cannot hold a database connection.
+ */
+export async function streamSynthesizeSpeech(
+  text: string,
+  userId: string,
+  consume: (input: {
+    chunks: AsyncIterable<Uint8Array>;
+    contentType: string;
+  }) => Promise<void>,
+): Promise<void> {
+  const response = await createSpeechForUser(text, userId);
+  const chunks = speechBodyChunks(response.body);
+  await consume({ chunks, contentType: "audio/mpeg" });
 }

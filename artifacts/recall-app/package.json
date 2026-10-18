@@ -83,6 +83,7 @@
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
-    "d3-force": "^3.0.0"
+    "d3-force": "^3.0.0",
+    "openwakeword-web": "^0.1.0"
   }
 }

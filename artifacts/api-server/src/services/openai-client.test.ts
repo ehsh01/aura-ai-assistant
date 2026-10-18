@@ -106,18 +106,23 @@ describe("instrumented OpenAI client", () => {
       arrayBuffer: async () => new ArrayBuffer(0),
     });
     mocks.transcriptions.mockResolvedValue({ text: "hello", duration: 2.5 });
-    const client = createOpenAiClient({
+    const ttsClient = createOpenAiClient({
       apiKey: "test",
       feature: "voice_tts",
       userId: "user-1",
     });
 
-    await client.audio.speech.create({
+    await ttsClient.audio.speech.create({
       model: "tts-1",
       voice: "nova",
       input: "12345678",
     });
-    await client.audio.transcriptions.create({
+    const sttClient = createOpenAiClient({
+      apiKey: "test",
+      feature: "voice_stt",
+      userId: "user-1",
+    });
+    await sttClient.audio.transcriptions.create({
       model: "whisper-1",
       file: new File([], "audio.webm"),
     });
@@ -137,6 +142,7 @@ describe("instrumented OpenAI client", () => {
       2,
       expect.objectContaining({
         provider: "openai",
+        feature: "voice_stt",
         model: "whisper-1",
         seconds: 2.5,
         costMicros: 250,
