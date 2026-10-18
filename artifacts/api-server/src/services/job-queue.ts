@@ -29,6 +29,7 @@ export type EnqueueJobInput = {
 };
 
 const DEFAULT_MAX_ATTEMPTS = 3;
+export const GOOGLE_SYNC_MAX_CURSOR_RETRIES = 3;
 /** Re-queue jobs stuck in processing longer than this (API crash mid-run). */
 export const STALE_PROCESSING_MS = 15 * 60 * 1000;
 /** Bound crash/deploy recovery independently from real execution failures. */
@@ -53,7 +54,10 @@ export function isNonRetryableCodeError(error: unknown): boolean {
   );
 }
 
-export function evernoteTransientDeferral(error: unknown): {
+export function connectorTransientDeferral(
+  error: unknown,
+  connectorType: string | null | undefined,
+): {
   retryAfterMs: number;
 } | null {
   if (!error || typeof error !== "object") return null;
@@ -65,18 +69,18 @@ export function evernoteTransientDeferral(error: unknown): {
   const status = Number(
     details.status ?? details.statusCode ?? data.status ?? data.statusCode,
   );
-  const message = error instanceof Error ? error.message : "";
-  if (
-    details.evernoteRateLimited !== true &&
-    details.evernoteTransient !== true &&
-    status !== 429 &&
-    ![502, 503, 504].includes(status) &&
-    !/\b429\b|rate.?limit|\b50[234]\b|backend read error|<!doctype html|<html/i.test(
-      message,
-    )
-  ) {
-    return null;
-  }
+  const googleStatus = Number(details.googleStatus);
+  const evernoteResponse =
+    connectorType === "evernote" &&
+    (details.evernoteRateLimited === true ||
+      details.evernoteTransient === true ||
+      (details.evernoteMcpError === true &&
+        (status === 429 || (status >= 500 && status <= 599))));
+  const googleResponse =
+    connectorType === "google" &&
+    Number.isFinite(googleStatus) &&
+    (googleStatus === 429 || (googleStatus >= 500 && googleStatus <= 599));
+  if (!evernoteResponse && !googleResponse) return null;
   const retryAfterMs =
     typeof details.retryAfterMs === "number"
       ? details.retryAfterMs
@@ -84,6 +88,12 @@ export function evernoteTransientDeferral(error: unknown): {
   return {
     retryAfterMs: Math.min(Math.max(retryAfterMs, 1_000), 3_600_000),
   };
+}
+
+export function evernoteTransientDeferral(error: unknown): {
+  retryAfterMs: number;
+} | null {
+  return connectorTransientDeferral(error, "evernote");
 }
 
 export function jobFailureIsTerminal(

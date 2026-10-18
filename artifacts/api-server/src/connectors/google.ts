@@ -1,4 +1,5 @@
 import type { EvidenceInput, NormalizedSourceRecord, RecallConnector } from "./types";
+import { sanitizeNormalizedSourceRecord } from "./text-sanitize";
 
 export const GOOGLE_OAUTH_SCOPES = [
   "openid",
@@ -202,7 +203,7 @@ export async function refreshGoogleAccessToken(refreshToken: string): Promise<{
     ) {
       throw new GoogleNeedsReauthError(message);
     }
-    throw new Error(message);
+    throw new GoogleApiError(res.status, message);
   }
   const data = (await res.json()) as {
     access_token?: string;
@@ -487,6 +488,17 @@ async function fetchGmailPage(
         status: googleErrorStatus(error),
       });
     }
+  }
+  const transientDetailError = errors.find(
+    (error) =>
+      error.status === 429 ||
+      (error.status != null && error.status >= 500 && error.status <= 599),
+  );
+  if (transientDetailError?.status != null) {
+    throw new GoogleApiError(
+      transientDetailError.status,
+      transientDetailError.message,
+    );
   }
   return {
     records: out,
@@ -1053,6 +1065,13 @@ export async function fetchGoogleBundle(
         continue;
       }
     } catch (error) {
+      if (
+        error instanceof GoogleApiError &&
+        (error.googleStatus === 429 ||
+          (error.googleStatus >= 500 && error.googleStatus <= 599))
+      ) {
+        throw error;
+      }
       sources.push({
         source,
         ok: false,
@@ -1094,15 +1113,17 @@ export const googleConnector: RecallConnector = {
   type: "google",
   sourceOfTruth: "read_only_external",
   async normalize(records: unknown[]): Promise<NormalizedSourceRecord[]> {
-    return (records as GoogleRawRecord[]).map((r) => ({
-      externalId: r.externalId.slice(0, 255),
-      recordType: r.recordType,
-      recordTitle: r.recordTitle,
-      recordText: r.recordText,
-      recordMetadata: r.metadata ?? {},
-      sourceUrl: r.sourceUrl ?? null,
-      sourceCreatedAt: r.sourceCreatedAt ?? null,
-    }));
+    return (records as GoogleRawRecord[]).map((r) =>
+      sanitizeNormalizedSourceRecord({
+        externalId: r.externalId.slice(0, 255),
+        recordType: r.recordType,
+        recordTitle: r.recordTitle,
+        recordText: r.recordText,
+        recordMetadata: r.metadata ?? {},
+        sourceUrl: r.sourceUrl ?? null,
+        sourceCreatedAt: r.sourceCreatedAt ?? null,
+      }),
+    );
   },
   mapEvidence(record: NormalizedSourceRecord): EvidenceInput[] {
     return [

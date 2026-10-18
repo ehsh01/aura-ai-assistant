@@ -121,6 +121,30 @@ describe("fetchGoogleBundle", () => {
     );
   });
 
+  it("throws Google rate limits and 5xx responses for bounded job retry", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse({ error: "backend unavailable" }, 503),
+    ) as typeof fetch;
+
+    await expect(
+      fetchGoogleBundle("token", null, { maxRows: 10 }),
+    ).rejects.toMatchObject({ googleStatus: 503 });
+  });
+
+  it("also retries a 5xx while fetching Gmail message details", async () => {
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/messages")) {
+        return jsonResponse({ messages: [{ id: "message-1" }] });
+      }
+      return jsonResponse({ error: "detail unavailable" }, 502);
+    }) as typeof fetch;
+
+    await expect(
+      fetchGoogleBundle("token", null, { maxRows: 10 }),
+    ).rejects.toMatchObject({ googleStatus: 502 });
+  });
+
   it("counts consumed Gmail rows even when detail fetches fail", async () => {
     const requested: URL[] = [];
     globalThis.fetch = vi.fn(async (input) => {

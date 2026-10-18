@@ -16,6 +16,7 @@ let pgliteDb: ReturnType<typeof drizzle<typeof schema>>;
 vi.mock("../lib/db", () => ({ getDb: () => pgliteDb }));
 
 const {
+  GOOGLE_SYNC_MAX_CURSOR_RETRIES,
   MAX_STALE_RECOVERIES,
   claimNextJob,
   deferJob,
@@ -174,6 +175,38 @@ describe("stale job recovery", () => {
       attempts: 1,
       last_error:
         "Evernote attachments phase stopped: schema validation failed",
+    });
+  });
+
+  it("stops a Google job after three consecutive failures on the same cursor", async () => {
+    await db.exec(`
+      INSERT INTO jobs (
+        id, user_id, type, payload, status, attempts, max_attempts,
+        locked_at, locked_by
+      ) VALUES (
+        'google-retry-cap', '${USER_ID}', 'connector_sync',
+        '{"connectorId":"google","syncRunId":"sync-google","connectorType":"google","cursor":{"source":"gmail","pageToken":"same"}}'::jsonb,
+        'processing', ${GOOGLE_SYNC_MAX_CURSOR_RETRIES},
+        ${GOOGLE_SYNC_MAX_CURSOR_RETRIES}, now(), 'worker'
+      )
+    `);
+
+    expect(
+      await failJob("google-retry-cap", "Google sync database error"),
+    ).toBe(true);
+    const result = await db.query<{
+      status: string;
+      attempts: number;
+      last_error: string;
+    }>(`
+      SELECT status, attempts, last_error
+      FROM jobs
+      WHERE id = 'google-retry-cap'
+    `);
+    expect(result.rows[0]).toEqual({
+      status: "failed",
+      attempts: GOOGLE_SYNC_MAX_CURSOR_RETRIES,
+      last_error: "Google sync database error",
     });
   });
 });

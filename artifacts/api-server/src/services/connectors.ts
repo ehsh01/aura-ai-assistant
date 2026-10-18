@@ -65,6 +65,7 @@ import {
   ticketEmailConnector,
 } from "../connectors/ticket-email";
 import type { RecallConnector } from "../connectors/types";
+import { sanitizeNormalizedSourceRecord } from "../connectors/text-sanitize";
 import { upsertEvidenceForSourceRecord } from "./evidence";
 import { writeAuditLog } from "./audit";
 import {
@@ -116,6 +117,12 @@ import {
   verifyOneEvernoteNotebook,
 } from "./evernote-full-sync";
 import { isEvernoteNightWindow } from "./evernote-runtime-policy";
+import {
+  databaseErrorCode,
+  isSkippableConnectorRecordError,
+  safeConnectorErrorMessage,
+} from "./connector-record-errors";
+import { GOOGLE_SYNC_MAX_CURSOR_RETRIES } from "./job-queue";
 
 const CONNECTOR_IMPLS: Record<string, RecallConnector> = {
   manual: manualConnector,
@@ -1724,7 +1731,9 @@ export async function upsertSourceRecord(
   userId: string,
   connectorId: string,
   record: Awaited<ReturnType<RecallConnector["normalize"]>>[number],
+  options?: { sanitized?: boolean },
 ): Promise<{ id: string; action: "created" | "updated" | "skipped" }> {
+  if (!options?.sanitized) record = sanitizeNormalizedSourceRecord(record);
   const existing = await getDb()
     .select({
       id: sourceRecords.id,
@@ -2125,12 +2134,15 @@ function mergeGoogleSourceResults(
   return { sources, sourceErrors };
 }
 
-async function persistGoogleRecordsBatch(
+type NormalizedConnectorRecord = Awaited<
+  ReturnType<RecallConnector["normalize"]>
+>[number];
+
+async function persistGoogleNormalizedRecordsBatch(
   userId: string,
   connectorId: string,
-  records: GoogleBundleResult["records"],
+  normalized: NormalizedConnectorRecord[],
 ): Promise<{ created: number; updated: number }> {
-  const normalized = await googleConnector.normalize(records);
   if (normalized.length === 0) return { created: 0, updated: 0 };
 
   return getDb().transaction(async (tx) => {
@@ -2241,6 +2253,70 @@ async function persistGoogleRecordsBatch(
   });
 }
 
+async function persistGoogleRecordsBatch(
+  userId: string,
+  connectorId: string,
+  records: GoogleBundleResult["records"],
+): Promise<{
+  created: number;
+  updated: number;
+  failed: number;
+  errors: string[];
+}> {
+  const normalized = await googleConnector.normalize(records);
+  try {
+    return {
+      ...(await persistGoogleNormalizedRecordsBatch(
+        userId,
+        connectorId,
+        normalized,
+      )),
+      failed: 0,
+      errors: [],
+    };
+  } catch (error) {
+    if (!isSkippableConnectorRecordError(error)) throw error;
+    logger.warn(
+      {
+        connectorId,
+        batchSize: normalized.length,
+        code: databaseErrorCode(error),
+      },
+      "Google record batch rejected; isolating invalid record",
+    );
+  }
+
+  let created = 0;
+  let updated = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  for (const record of normalized) {
+    try {
+      const result = await persistGoogleNormalizedRecordsBatch(
+        userId,
+        connectorId,
+        [record],
+      );
+      created += result.created;
+      updated += result.updated;
+    } catch (error) {
+      if (!isSkippableConnectorRecordError(error)) throw error;
+      failed += 1;
+      const code = databaseErrorCode(error) ?? "database_error";
+      errors.push(`${record.externalId} skipped (${code})`);
+      logger.warn(
+        {
+          connectorId,
+          externalId: record.externalId,
+          code,
+        },
+        "Skipped invalid Google connector record",
+      );
+    }
+  }
+  return { created, updated, failed, errors };
+}
+
 export async function enqueueGoogleSyncForUser(
   userId: string,
   connectorId: string,
@@ -2333,7 +2409,7 @@ export async function enqueueGoogleSyncForUser(
       payload: { connectorId, syncRunId, connectorType: "google" },
       status: "queued",
       attempts: 0,
-      maxAttempts: 3,
+      maxAttempts: GOOGLE_SYNC_MAX_CURSOR_RETRIES,
       availableAt: now,
       createdAt: now,
       updatedAt: now,
@@ -2382,7 +2458,11 @@ async function processGoogleSyncJobLocked(
     .limit(1);
   const run = runRows[0];
   if (!run) throw new Error("Google sync run not found");
-  if (run.status === "complete" || run.status === "partial_success")
+  if (
+    run.status === "complete" ||
+    run.status === "partial_success" ||
+    run.status === "failed"
+  )
     return true;
   if (!conn.enabled) throw new Error("Google connector is paused");
 
@@ -2437,22 +2517,34 @@ async function processGoogleSyncJobLocked(
     const recordsCreated = run.recordsCreated + persisted.created;
     const recordsUpdated = run.recordsUpdated + persisted.updated;
     const recordsFailed = Math.max(
-      run.recordsFailed,
+      run.recordsFailed + persisted.failed,
       Object.keys(merged.sourceErrors).length,
     );
     const complete = bundle.complete;
-    const partial = Object.keys(merged.sourceErrors).length > 0;
+    const partial =
+      Object.keys(merged.sourceErrors).length > 0 || recordsFailed > 0;
     const incrementalSourceFailed = Boolean(
-      merged.sourceErrors.gmail || merged.sourceErrors.drive,
+      merged.sourceErrors.gmail ||
+        merged.sourceErrors.drive ||
+        persisted.failed > 0,
     );
-    const errorMessage = partial
-      ? Object.entries(merged.sourceErrors)
-          .map(([source, error]) => `${source}: ${error}`)
-          .join("; ")
-          .slice(0, 2_000)
-      : null;
+    const sourceErrorMessage = Object.entries(merged.sourceErrors)
+      .map(([source, error]) => `${source}: ${error}`)
+      .join("; ")
+      .slice(0, 2_000);
+    const errorMessage = sourceErrorMessage
+      ? sourceErrorMessage
+      : recordsFailed > 0
+        ? `Google sync skipped ${recordsFailed} invalid record(s); see run metadata`
+        : null;
+    const priorErrors = Array.isArray(metadata.errors)
+      ? metadata.errors.filter(
+          (entry): entry is string => typeof entry === "string",
+        )
+      : [];
     const nextMetadata = {
       ...metadata,
+      errors: [...priorErrors, ...persisted.errors].slice(-100),
       googleSync: {
         ...googleState,
         cursor: bundle.nextCursor,
@@ -2527,7 +2619,7 @@ async function processGoogleSyncJobLocked(
     const memory = process.memoryUsage();
     logger.warn(
       {
-        error,
+        error: safeConnectorErrorMessage(error),
         connectorId,
         syncRunId,
         rowsProcessed: run.recordsFetched,
@@ -3275,12 +3367,14 @@ async function processEvernoteSyncJobLocked(
 
           const normalized = await evernoteConnector.normalize(batch.records);
           let batchProcessingError: Error | null = null;
-          for (const record of normalized) {
+          for (const normalizedRecord of normalized) {
+            const record = sanitizeNormalizedSourceRecord(normalizedRecord);
             try {
               const upsert = await upsertSourceRecord(
                 userId,
                 connectorId,
                 record,
+                { sanitized: true },
               );
               if (upsert.action === "created") {
                 recordsCreated += 1;
@@ -3520,9 +3614,7 @@ export async function failConnectorSyncRun(
     .set({
       status: "failed",
       completedAt: new Date(),
-      errorMessage: rows[0].metadata?.errors
-        ? sql`coalesce(${syncRuns.errorMessage}, ${errorMessage.slice(0, 1_000)})`
-        : errorMessage.slice(0, 1_000),
+      errorMessage: errorMessage.slice(0, 1_000),
       metadata: {
         ...(rows[0].metadata ?? {}),
         errors: [
@@ -3546,6 +3638,79 @@ export async function failConnectorSyncRun(
       updatedAt: new Date(),
     })
     .where(eq(connectors.id, rows[0].connectorId));
+}
+
+export async function failConnectorJobAndRun(
+  userId: string,
+  jobId: string,
+  syncRunId: string,
+  errorMessage: string,
+): Promise<void> {
+  const now = new Date();
+  const message = errorMessage.slice(0, 1_000);
+  await getDb().transaction(async (tx) => {
+    const rows = await tx
+      .select({
+        connectorId: syncRuns.connectorId,
+        metadata: syncRuns.metadata,
+      })
+      .from(syncRuns)
+      .where(and(eq(syncRuns.id, syncRunId), eq(syncRuns.userId, userId)))
+      .limit(1);
+    const run = rows[0];
+    if (!run) throw new Error("Connector sync run not found during terminal failure");
+
+    await tx
+      .update(syncRuns)
+      .set({
+        status: "failed",
+        completedAt: now,
+        errorMessage: message,
+        metadata: {
+          ...(run.metadata ?? {}),
+          errors: [
+            ...(Array.isArray(run.metadata?.errors)
+              ? run.metadata.errors.filter(
+                  (error): error is string => typeof error === "string",
+                )
+              : []),
+            message.slice(0, 300),
+          ].slice(-100),
+        },
+      })
+      .where(eq(syncRuns.id, syncRunId));
+    await tx
+      .update(connectors)
+      .set({
+        syncStatus: sql`case
+          when ${connectors.syncStatus} = 'needs_reauth' then 'needs_reauth'
+          else 'sync_failed'
+        end`,
+        updatedAt: now,
+      })
+      .where(eq(connectors.id, run.connectorId));
+    const failedJobs = await tx
+      .update(jobs)
+      .set({
+        status: "failed",
+        lastError: message,
+        completedAt: now,
+        lockedAt: null,
+        lockedBy: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(jobs.id, jobId),
+          eq(jobs.userId, userId),
+          eq(jobs.status, "processing"),
+        ),
+      )
+      .returning({ id: jobs.id });
+    if (failedJobs.length !== 1) {
+      throw new Error("Connector job was not processing during terminal failure");
+    }
+  });
 }
 
 export const failEvernoteSyncRun = failConnectorSyncRun;
@@ -3661,9 +3826,15 @@ export async function syncConnectorForUser(
     recordsFailed = evernoteFetch?.recordsFailed ?? 0;
     syncErrors.push(...(evernoteFetch?.errors ?? []));
 
-    for (const record of normalized) {
+    for (const normalizedRecord of normalized) {
+      const record = sanitizeNormalizedSourceRecord(normalizedRecord);
       try {
-        const upsert = await upsertSourceRecord(userId, connectorId, record);
+        const upsert = await upsertSourceRecord(
+          userId,
+          connectorId,
+          record,
+          { sanitized: true },
+        );
         const sourceRecordId = upsert.id;
         if (upsert.action === "created") {
           recordsCreated++;

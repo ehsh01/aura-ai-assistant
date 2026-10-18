@@ -1,7 +1,9 @@
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "@workspace/db/schema";
+import { GOOGLE_SYNC_MAX_CURSOR_RETRIES } from "./job-queue";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const CONNECTOR_ID = "google-test";
@@ -22,6 +24,7 @@ const {
   createGoogleConnectorForUser,
   enqueueGoogleSyncForUser,
   ensureGoogleAccessToken,
+  failConnectorJobAndRun,
   googleSyncMaxRowsPerTick,
   liveSearchGmailForUser,
   processGoogleSyncJob,
@@ -111,6 +114,55 @@ beforeEach(async () => {
       metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
       created_at timestamptz NOT NULL DEFAULT now()
     );
+    CREATE TABLE source_records (
+      id varchar(64) PRIMARY KEY,
+      user_id uuid NOT NULL REFERENCES users(id),
+      connector_id varchar(64) NOT NULL REFERENCES connectors(id),
+      external_id varchar(255) NOT NULL CHECK (external_id <> 'gmail:blocked'),
+      record_type varchar(32) NOT NULL,
+      record_title varchar(500),
+      record_text text,
+      record_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+      source_url text,
+      source_created_at timestamptz,
+      source_updated_at timestamptz,
+      last_synced_at timestamptz,
+      search_document text NOT NULL DEFAULT '',
+      search_tsv tsvector,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (connector_id, external_id)
+    );
+    CREATE TABLE entity_embeddings (
+      id varchar(64) PRIMARY KEY,
+      user_id uuid NOT NULL REFERENCES users(id),
+      entity_type varchar(32) NOT NULL,
+      entity_id varchar(64) NOT NULL,
+      content_hash varchar(32) NOT NULL,
+      model varchar(64) NOT NULL,
+      dims integer NOT NULL,
+      vector jsonb NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE evidence (
+      id varchar(64) PRIMARY KEY,
+      user_id uuid NOT NULL REFERENCES users(id),
+      entity_type varchar(32) NOT NULL,
+      entity_id varchar(64) NOT NULL,
+      claim_type varchar(64) NOT NULL,
+      source_capture_id varchar(64),
+      source_record_id varchar(64),
+      evidence_text text,
+      evidence_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+      file_name varchar(500),
+      file_id varchar(64),
+      row_number integer,
+      page_number integer,
+      url text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
     INSERT INTO users (id) VALUES ('${USER_ID}');
   `);
 });
@@ -159,6 +211,42 @@ describe("durable Google sync jobs", () => {
     });
     const jobs = await pgliteDb.select().from(schema.jobs);
     expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.maxAttempts).toBe(GOOGLE_SYNC_MAX_CURSOR_RETRIES);
+  });
+
+  it("replaces a partial error with the terminal whole-slice failure", async () => {
+    await createConnector({});
+    const queued = await enqueueGoogleSyncForUser(USER_ID, CONNECTOR_ID);
+    await pgliteDb
+      .update(schema.syncRuns)
+      .set({
+        errorMessage: "old partial error",
+        metadata: { errors: ["old partial error"] },
+      })
+      .where(eq(schema.syncRuns.id, queued.syncRunId));
+
+    await pgliteDb
+      .update(schema.jobs)
+      .set({ status: "processing", attempts: 3 })
+      .where(eq(schema.jobs.id, queued.jobId));
+    await failConnectorJobAndRun(
+      USER_ID,
+      queued.jobId,
+      queued.syncRunId,
+      "Connector sync database error (22P02)",
+    );
+    const [run] = await pgliteDb.select().from(schema.syncRuns);
+    expect(run).toMatchObject({
+      status: "failed",
+      errorMessage: "Connector sync database error (22P02)",
+    });
+    const [job] = await pgliteDb.select().from(schema.jobs);
+    expect(job).toMatchObject({
+      status: "failed",
+      lastError: "Connector sync database error (22P02)",
+    });
+    const [connector] = await pgliteDb.select().from(schema.connectors);
+    expect(connector?.syncStatus).toBe("sync_failed");
   });
 
   it("sets needs_reauth when refresh returns invalid_grant", async () => {
@@ -259,6 +347,155 @@ describe("durable Google sync jobs", () => {
         },
       },
     });
+    const [connector] = await pgliteDb.select().from(schema.connectors);
+    expect(connector?.lastSyncAt).toBeNull();
+  });
+
+  it("saves a malformed-surrogate Gmail message and continues the slice", async () => {
+    await createConnector({
+      googleEmail: "test@example.com",
+      accessToken: "fresh",
+      accessTokenExpiresAt: "2099-01-01T00:00:00.000Z",
+      refreshToken: "refresh",
+    });
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = new URL(String(input));
+      if (
+        url.hostname === "gmail.googleapis.com" &&
+        url.pathname.endsWith("/messages")
+      ) {
+        return jsonResponse({ messages: [{ id: "bad" }, { id: "good" }] });
+      }
+      if (url.pathname.endsWith("/messages/bad")) {
+        return jsonResponse({
+          id: "bad",
+          snippet: "snippet\ud83d",
+          payload: {
+            headers: [
+              { name: "Subject", value: "subject\ud83d" },
+              { name: "From", value: "Bad\ud83d <bad@example.com>" },
+            ],
+          },
+        });
+      }
+      if (url.pathname.endsWith("/messages/good")) {
+        return jsonResponse({
+          id: "good",
+          snippet: "next message",
+          payload: {
+            headers: [{ name: "Subject", value: "Good message" }],
+          },
+        });
+      }
+      if (
+        url.hostname === "www.googleapis.com" &&
+        url.pathname.includes("calendar")
+      ) {
+        return jsonResponse({ items: [] });
+      }
+      if (url.hostname === "people.googleapis.com") {
+        return jsonResponse({ connections: [] });
+      }
+      if (
+        url.hostname === "www.googleapis.com" &&
+        url.pathname === "/drive/v3/files"
+      ) {
+        return jsonResponse({ files: [] });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    }) as typeof fetch;
+
+    const queued = await enqueueGoogleSyncForUser(USER_ID, CONNECTOR_ID);
+    await expect(
+      processGoogleSyncJob(USER_ID, CONNECTOR_ID, queued.syncRunId),
+    ).resolves.toBe(true);
+
+    const rows = await pgliteDb
+      .select()
+      .from(schema.sourceRecords)
+      .orderBy(schema.sourceRecords.externalId);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      externalId: "gmail:bad",
+      recordTitle: "subject\ufffd",
+    });
+    expect(JSON.stringify(rows[0]?.recordMetadata)).not.toMatch(
+      /[\ud800-\udfff]/,
+    );
+    expect(rows[1]?.externalId).toBe("gmail:good");
+  });
+
+  it("skips one constrained record by id and saves the rest of the slice", async () => {
+    await createConnector({
+      googleEmail: "test@example.com",
+      accessToken: "fresh",
+      accessTokenExpiresAt: "2099-01-01T00:00:00.000Z",
+      refreshToken: "refresh",
+    });
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = new URL(String(input));
+      if (
+        url.hostname === "gmail.googleapis.com" &&
+        url.pathname.endsWith("/messages")
+      ) {
+        return jsonResponse({
+          messages: [{ id: "blocked" }, { id: "after-blocked" }],
+        });
+      }
+      if (url.pathname.endsWith("/messages/blocked")) {
+        return jsonResponse({
+          id: "blocked",
+          snippet: "content must not appear in logs",
+          payload: {
+            headers: [{ name: "Subject", value: "Blocked content" }],
+          },
+        });
+      }
+      if (url.pathname.endsWith("/messages/after-blocked")) {
+        return jsonResponse({
+          id: "after-blocked",
+          snippet: "saved",
+          payload: {
+            headers: [{ name: "Subject", value: "Saved after failure" }],
+          },
+        });
+      }
+      if (
+        url.hostname === "www.googleapis.com" &&
+        url.pathname.includes("calendar")
+      ) {
+        return jsonResponse({ items: [] });
+      }
+      if (url.hostname === "people.googleapis.com") {
+        return jsonResponse({ connections: [] });
+      }
+      if (
+        url.hostname === "www.googleapis.com" &&
+        url.pathname === "/drive/v3/files"
+      ) {
+        return jsonResponse({ files: [] });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    }) as typeof fetch;
+
+    const queued = await enqueueGoogleSyncForUser(USER_ID, CONNECTOR_ID);
+    await expect(
+      processGoogleSyncJob(USER_ID, CONNECTOR_ID, queued.syncRunId),
+    ).resolves.toBe(true);
+
+    const rows = await pgliteDb.select().from(schema.sourceRecords);
+    expect(rows.map((row) => row.externalId)).toEqual([
+      "gmail:after-blocked",
+    ]);
+    const [run] = await pgliteDb.select().from(schema.syncRuns);
+    expect(run).toMatchObject({
+      status: "partial_success",
+      recordsCreated: 1,
+      recordsFailed: 1,
+    });
+    expect(run?.metadata.errors).toEqual([
+      "gmail:blocked skipped (23514)",
+    ]);
     const [connector] = await pgliteDb.select().from(schema.connectors);
     expect(connector?.lastSyncAt).toBeNull();
   });

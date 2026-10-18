@@ -14,11 +14,11 @@ import {
   claimJobById,
   claimNextJobOfTypes,
   completeJob,
+  connectorTransientDeferral,
   connectorSyncFromPayload,
   continueJob,
   deferJob,
   enexImportFromPayload,
-  evernoteTransientDeferral,
   failJob,
   getJobForUser,
   heartbeatJob,
@@ -27,6 +27,7 @@ import {
   recoverStaleProcessingJobs,
   type Job,
 } from "./job-queue";
+import { safeConnectorErrorMessage } from "./connector-record-errors";
 
 const POLL_MS = 2_000;
 const STALE_RECOVERY_EVERY_TICKS = 30;
@@ -191,30 +192,43 @@ async function runOneJob(job: Job): Promise<void> {
       await completeJob(job.id);
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Job failed";
-    const transientEvernoteFailure =
+    const connectorMeta =
       job.type === JOB_TYPE_CONNECTOR_SYNC
-        ? evernoteTransientDeferral(err)
+        ? connectorSyncFromPayload(job.payload)
         : null;
-    if (transientEvernoteFailure) {
+    const message = connectorMeta
+      ? safeConnectorErrorMessage(err)
+      : err instanceof Error
+        ? err.message
+        : "Job failed";
+    const transientConnectorFailure = connectorMeta
+      ? connectorTransientDeferral(
+          err,
+          connectorMeta.connectorType ?? "evernote",
+        )
+      : null;
+    if (
+      transientConnectorFailure &&
+      connectorMeta?.connectorType !== "google"
+    ) {
       await deferJob(
         job.id,
-        transientEvernoteFailure.retryAfterMs,
+        transientConnectorFailure.retryAfterMs,
         message,
       );
       scheduleExplicitJobResume({
         id: job.id,
         availableAt: new Date(
-          Date.now() + transientEvernoteFailure.retryAfterMs,
+          Date.now() + transientConnectorFailure.retryAfterMs,
         ),
       });
       logger.info(
         {
           jobId: job.id,
           type: job.type,
-          retryAfterMs: transientEvernoteFailure.retryAfterMs,
+          retryAfterMs: transientConnectorFailure.retryAfterMs,
         },
-        "Background job paused by transient Evernote response",
+        "Background connector job paused by transient upstream response",
       );
       return;
     }
@@ -234,28 +248,36 @@ async function runOneJob(job: Job): Promise<void> {
       return;
     }
     const retryAfterMs =
-      err &&
+      transientConnectorFailure?.retryAfterMs ??
+      (err &&
       typeof err === "object" &&
       "retryAfterMs" in err &&
       typeof err.retryAfterMs === "number"
         ? err.retryAfterMs
-        : undefined;
+        : undefined);
+    const forceTerminal = isNonRetryableCodeError(err);
+    const terminalExpected = forceTerminal || job.attempts >= job.maxAttempts;
+    if (terminalExpected && connectorMeta) {
+      const { failConnectorJobAndRun } = await import("./connectors");
+      await failConnectorJobAndRun(
+        job.userId,
+        job.id,
+        connectorMeta.syncRunId,
+        message,
+      );
+      logger.warn(
+        { error: message, jobId: job.id, type: job.type, terminal: true },
+        "Background job failed",
+      );
+      return;
+    }
     const terminal = await failJob(job.id, message, {
       retryAfterMs,
-      forceTerminal: isNonRetryableCodeError(err),
+      forceTerminal,
     });
     if (!terminal) {
       const queued = await getJobForUser(job.userId, job.id);
       if (queued?.status === "queued") scheduleExplicitJobResume(queued);
-    }
-    if (terminal && job.type === JOB_TYPE_CONNECTOR_SYNC) {
-      const meta = connectorSyncFromPayload(job.payload);
-      if (meta) {
-        const { failConnectorSyncRun } = await import("./connectors");
-        await failConnectorSyncRun(job.userId, meta.syncRunId, message).catch(
-          () => undefined,
-        );
-      }
     }
     if (terminal && job.type === JOB_TYPE_CAPTURE_EXTRACTION) {
       const captureId = captureIdFromPayload(job.payload);
@@ -266,7 +288,12 @@ async function runOneJob(job: Job): Promise<void> {
         });
       }
     }
-    logger.warn({ err, jobId: job.id, type: job.type, terminal }, "Background job failed");
+    logger.warn(
+      connectorMeta
+        ? { error: message, jobId: job.id, type: job.type, terminal }
+        : { err, jobId: job.id, type: job.type, terminal },
+      "Background job failed",
+    );
   }
 }
 
