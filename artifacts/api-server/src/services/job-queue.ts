@@ -262,14 +262,18 @@ export async function heartbeatJob(jobId: string): Promise<void> {
 }
 
 /** Yield a successfully checkpointed long job back to the shared worker queue. */
-export async function continueJob(jobId: string): Promise<void> {
+export async function continueJob(
+  jobId: string,
+  delayMs = 1_000,
+): Promise<void> {
   const now = new Date();
+  const boundedDelay = Math.min(Math.max(delayMs, 1_000), 3_600_000);
   await getDb()
     .update(jobs)
     .set({
       status: "queued",
       attempts: 0,
-      availableAt: new Date(now.getTime() + 1_000),
+      availableAt: new Date(now.getTime() + boundedDelay),
       lockedAt: null,
       lockedBy: null,
       lastError: null,
@@ -408,14 +412,18 @@ export function enexImportFromPayload(payload: Record<string, unknown>): { fileP
   return { filePath, fileName };
 }
 
-export function connectorSyncFromPayload(
-  payload: Record<string, unknown>,
-): { connectorId: string; syncRunId: string } | null {
+export function connectorSyncFromPayload(payload: Record<string, unknown>): {
+  connectorId: string;
+  syncRunId: string;
+  connectorType?: string;
+} | null {
   const connectorId = payload.connectorId;
   const syncRunId = payload.syncRunId;
   if (typeof connectorId !== "string" || !connectorId) return null;
   if (typeof syncRunId !== "string" || !syncRunId) return null;
-  return { connectorId, syncRunId };
+  return typeof payload.connectorType === "string"
+    ? { connectorId, syncRunId, connectorType: payload.connectorType }
+    : { connectorId, syncRunId };
 }
 
 /** Lightweight queue counts for health / ops. */

@@ -56,6 +56,7 @@ describe("Evernote incremental/backfill coexistence", () => {
         records_skipped integer NOT NULL DEFAULT 0,
         records_failed integer NOT NULL DEFAULT 0,
         error_message text,
+        source_errors jsonb NOT NULL DEFAULT '{}'::jsonb,
         metadata jsonb NOT NULL DEFAULT '{}'::jsonb
       );
       CREATE TABLE jobs (

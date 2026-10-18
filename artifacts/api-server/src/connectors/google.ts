@@ -59,6 +59,7 @@ export async function exchangeGoogleCode(code: string): Promise<{
   accessToken: string;
   refreshToken: string | null;
   expiresIn: number;
+  scopes: string[];
   email: string;
   name: string | null;
 }> {
@@ -76,28 +77,39 @@ export async function exchangeGoogleCode(code: string): Promise<{
   });
   if (!tokenRes.ok) {
     const body = await tokenRes.text();
-    throw new Error(`Google token exchange failed: ${tokenRes.status} ${body.slice(0, 200)}`);
+    throw new Error(
+      `Google token exchange failed: ${tokenRes.status} ${body.slice(0, 200)}`,
+    );
   }
   const tokens = (await tokenRes.json()) as {
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
+    scope?: string;
   };
-  if (!tokens.access_token) throw new Error("Google did not return an access token");
+  if (!tokens.access_token)
+    throw new Error("Google did not return an access token");
 
-  const profileRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
-    headers: { Authorization: `Bearer ${tokens.access_token}` },
-  });
+  const profileRes = await fetch(
+    "https://www.googleapis.com/oauth2/v2/userinfo",
+    {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    },
+  );
   if (!profileRes.ok) {
     throw new Error(`Google profile fetch failed: ${profileRes.status}`);
   }
-  const profile = (await profileRes.json()) as { email?: string; name?: string };
+  const profile = (await profileRes.json()) as {
+    email?: string;
+    name?: string;
+  };
   if (!profile.email) throw new Error("Google account has no email");
 
   return {
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token ?? null,
     expiresIn: tokens.expires_in ?? 3600,
+    scopes: parseGoogleScopes(tokens.scope),
     email: profile.email,
     name: profile.name ?? null,
   };
@@ -166,6 +178,7 @@ export async function createGoogleCalendarEvent(
 export async function refreshGoogleAccessToken(refreshToken: string): Promise<{
   accessToken: string;
   expiresIn: number;
+  scopes: string[];
 }> {
   const { clientId, clientSecret } = googleConfig();
   const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -180,20 +193,86 @@ export async function refreshGoogleAccessToken(refreshToken: string): Promise<{
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Google token refresh failed: ${res.status} ${body.slice(0, 200)}`);
+    const message = `Google token refresh failed: ${res.status} ${body.slice(0, 200)}`;
+    if (
+      res.status === 401 ||
+      /\binvalid_grant\b|revoked|expired.*refresh/i.test(body)
+    ) {
+      throw new GoogleNeedsReauthError(message);
+    }
+    throw new Error(message);
   }
-  const data = (await res.json()) as { access_token?: string; expires_in?: number };
-  if (!data.access_token) throw new Error("Google refresh did not return an access token");
-  return { accessToken: data.access_token, expiresIn: data.expires_in ?? 3600 };
+  const data = (await res.json()) as {
+    access_token?: string;
+    expires_in?: number;
+    scope?: string;
+  };
+  if (!data.access_token)
+    throw new Error("Google refresh did not return an access token");
+  return {
+    accessToken: data.access_token,
+    expiresIn: data.expires_in ?? 3600,
+    scopes: parseGoogleScopes(data.scope),
+  };
+}
+
+export class GoogleNeedsReauthError extends Error {
+  readonly needsReauth = true;
+  readonly nonRetryable = true;
+  readonly status = 401;
+
+  constructor(message = "Google authorization was revoked — reconnect Google") {
+    super(message);
+    this.name = "GoogleNeedsReauthError";
+  }
+}
+
+export function isGoogleNeedsReauthError(error: unknown): boolean {
+  return (
+    error instanceof GoogleNeedsReauthError ||
+    Boolean(
+      error &&
+      typeof error === "object" &&
+      "needsReauth" in error &&
+      error.needsReauth === true,
+    )
+  );
+}
+
+function parseGoogleScopes(value: string | undefined): string[] {
+  return [
+    ...new Set(
+      (value ?? "")
+        .split(/\s+/)
+        .map((scope) => scope.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+class GoogleApiError extends Error {
+  constructor(
+    readonly googleStatus: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "GoogleApiError";
+  }
 }
 
 async function googleGet<T>(accessToken: string, url: string): Promise<T> {
   const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+    },
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Google API ${res.status}: ${body.slice(0, 180)}`);
+    throw new GoogleApiError(
+      res.status,
+      `Google API ${res.status}: ${body.slice(0, 180)}`,
+    );
   }
   return res.json() as Promise<T>;
 }
@@ -328,23 +407,59 @@ async function fetchGmailMessageDetails(
         hasFullBody: Boolean(body),
       },
     };
-  } catch {
-    return null;
+  } catch (error) {
+    throw error;
   }
 }
 
-async function fetchGmail(accessToken: string): Promise<GoogleRawRecord[]> {
-  // Broader inbox window so Ask has more than the last ~100 messages.
-  const list = await googleGet<{ messages?: { id: string }[] }>(
-    accessToken,
-    "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=300&q=newer_than:365d",
+type GooglePage = {
+  records: GoogleRawRecord[];
+  nextPageToken: string | null;
+  error?: string;
+  errorStatus?: number;
+};
+
+async function fetchGmailPage(
+  accessToken: string,
+  limit: number,
+  since: string | null,
+  pageToken?: string | null,
+): Promise<GooglePage> {
+  const url = new URL(
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages",
   );
+  url.searchParams.set("maxResults", String(Math.min(Math.max(limit, 1), 500)));
+  const sinceMs = since ? Date.parse(since) : Number.NaN;
+  url.searchParams.set(
+    "q",
+    Number.isFinite(sinceMs)
+      ? `after:${Math.floor(sinceMs / 1000)}`
+      : "newer_than:365d",
+  );
+  if (pageToken) url.searchParams.set("pageToken", pageToken);
+  const list = await googleGet<{
+    messages?: { id: string }[];
+    nextPageToken?: string;
+  }>(accessToken, url.toString());
   const out: GoogleRawRecord[] = [];
-  for (const msg of (list.messages ?? []).slice(0, 300)) {
-    const row = await fetchGmailMessageDetails(accessToken, msg.id);
-    if (row) out.push(row);
+  const errors: string[] = [];
+  for (const msg of list.messages ?? []) {
+    try {
+      const row = await fetchGmailMessageDetails(accessToken, msg.id);
+      if (row) out.push(row);
+    } catch (error) {
+      errors.push(
+        error instanceof Error ? error.message : "Gmail message fetch failed",
+      );
+    }
   }
-  return out;
+  return {
+    records: out,
+    nextPageToken: list.nextPageToken ?? null,
+    ...(errors.length > 0
+      ? { error: `${errors.length} Gmail message(s) failed: ${errors[0]}` }
+      : {}),
+  };
 }
 
 /**
@@ -374,17 +489,28 @@ export async function searchGmailMessages(
   return rows.filter((r): r is GoogleRawRecord => r !== null);
 }
 
-async function fetchCalendar(accessToken: string): Promise<GoogleRawRecord[]> {
+async function fetchCalendarPage(
+  accessToken: string,
+  limit: number,
+  pageToken?: string | null,
+): Promise<GooglePage> {
   const timeMin = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const timeMax = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
-  const url = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
+  const url = new URL(
+    "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+  );
   url.searchParams.set("timeMin", timeMin);
   url.searchParams.set("timeMax", timeMax);
   url.searchParams.set("singleEvents", "true");
   url.searchParams.set("orderBy", "startTime");
-  url.searchParams.set("maxResults", "100");
+  url.searchParams.set(
+    "maxResults",
+    String(Math.min(Math.max(limit, 1), 2500)),
+  );
+  if (pageToken) url.searchParams.set("pageToken", pageToken);
 
   const data = await googleGet<{
+    nextPageToken?: string;
     items?: {
       id?: string;
       summary?: string;
@@ -397,7 +523,7 @@ async function fetchCalendar(accessToken: string): Promise<GoogleRawRecord[]> {
     }[];
   }>(accessToken, url.toString());
 
-  return (data.items ?? [])
+  const records = (data.items ?? [])
     .filter((e) => e.id)
     .map((e) => {
       const start = e.start?.dateTime ?? e.start?.date ?? "";
@@ -427,32 +553,54 @@ async function fetchCalendar(accessToken: string): Promise<GoogleRawRecord[]> {
         metadata: { start, end, location: e.location ?? null },
       };
     });
+  return { records, nextPageToken: data.nextPageToken ?? null };
 }
 
-async function fetchContacts(accessToken: string): Promise<GoogleRawRecord[]> {
+async function fetchContactsPage(
+  accessToken: string,
+  limit: number,
+  pageToken?: string | null,
+): Promise<GooglePage> {
   const url = new URL("https://people.googleapis.com/v1/people/me/connections");
-  url.searchParams.set("personFields", "names,emailAddresses,phoneNumbers,organizations");
-  url.searchParams.set("pageSize", "200");
+  url.searchParams.set(
+    "personFields",
+    "names,emailAddresses,phoneNumbers,organizations",
+  );
+  url.searchParams.set("pageSize", String(Math.min(Math.max(limit, 1), 1000)));
+  if (pageToken) url.searchParams.set("pageToken", pageToken);
 
   const data = await googleGet<{
+    nextPageToken?: string;
     connections?: {
       resourceName?: string;
-      names?: { displayName?: string; givenName?: string; familyName?: string }[];
+      names?: {
+        displayName?: string;
+        givenName?: string;
+        familyName?: string;
+      }[];
       emailAddresses?: { value?: string }[];
       phoneNumbers?: { value?: string }[];
       organizations?: { name?: string; title?: string }[];
     }[];
   }>(accessToken, url.toString());
 
-  return (data.connections ?? [])
+  const records = (data.connections ?? [])
     .filter((p) => p.resourceName)
     .map((p) => {
       const name =
         p.names?.[0]?.displayName ||
-        [p.names?.[0]?.givenName, p.names?.[0]?.familyName].filter(Boolean).join(" ") ||
+        [p.names?.[0]?.givenName, p.names?.[0]?.familyName]
+          .filter(Boolean)
+          .join(" ") ||
         "Unknown contact";
-      const emails = (p.emailAddresses ?? []).map((e) => e.value).filter(Boolean).join(", ");
-      const phones = (p.phoneNumbers ?? []).map((e) => e.value).filter(Boolean).join(", ");
+      const emails = (p.emailAddresses ?? [])
+        .map((e) => e.value)
+        .filter(Boolean)
+        .join(", ");
+      const phones = (p.phoneNumbers ?? [])
+        .map((e) => e.value)
+        .filter(Boolean)
+        .join(", ");
       const org = p.organizations?.[0];
       return {
         externalId: `gcontact:${p.resourceName}`,
@@ -476,19 +624,31 @@ async function fetchContacts(accessToken: string): Promise<GoogleRawRecord[]> {
         },
       };
     });
+  return { records, nextPageToken: data.nextPageToken ?? null };
 }
 
-async function fetchDrive(accessToken: string): Promise<GoogleRawRecord[]> {
+async function fetchDrivePage(
+  accessToken: string,
+  limit: number,
+  since: string | null,
+  pageToken?: string | null,
+): Promise<GooglePage> {
   const url = new URL("https://www.googleapis.com/drive/v3/files");
   url.searchParams.set(
     "fields",
-    "files(id,name,mimeType,modifiedTime,webViewLink,description)",
+    "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink,description)",
   );
-  url.searchParams.set("pageSize", "50");
+  url.searchParams.set("pageSize", String(Math.min(Math.max(limit, 1), 1000)));
   url.searchParams.set("orderBy", "modifiedTime desc");
-  url.searchParams.set("q", "trashed=false");
+  const sinceMs = since ? Date.parse(since) : Number.NaN;
+  const modifiedFilter = Number.isFinite(sinceMs)
+    ? ` and modifiedTime > '${new Date(sinceMs).toISOString()}'`
+    : "";
+  url.searchParams.set("q", `trashed=false${modifiedFilter}`);
+  if (pageToken) url.searchParams.set("pageToken", pageToken);
 
   const data = await googleGet<{
+    nextPageToken?: string;
     files?: {
       id?: string;
       name?: string;
@@ -536,7 +696,7 @@ async function fetchDrive(accessToken: string): Promise<GoogleRawRecord[]> {
       metadata: { mimeType: f.mimeType ?? null },
     });
   }
-  return out;
+  return { records: out, nextPageToken: data.nextPageToken ?? null };
 }
 
 /** Max text we pull per Drive file (Docs/Sheets/Slides/text) for the top hits. */
@@ -668,26 +828,113 @@ export async function searchDriveFiles(
   return out;
 }
 
-/** Fetch a bounded Google data bundle for sync. */
+export const GOOGLE_SYNC_SOURCES = [
+  "gmail",
+  "calendar",
+  "contacts",
+  "drive",
+] as const;
+export type GoogleSyncSource = (typeof GOOGLE_SYNC_SOURCES)[number];
+
+export type GoogleSyncCursor = {
+  source: GoogleSyncSource;
+  pageToken: string | null;
+};
+
+export type GoogleSourceResult = {
+  source: GoogleSyncSource;
+  ok: boolean;
+  count: number;
+  error: string | null;
+  errorStatus: number | null;
+};
+
+export type GoogleBundleResult = {
+  records: GoogleRawRecord[];
+  sources: GoogleSourceResult[];
+  nextCursor: GoogleSyncCursor | null;
+  complete: boolean;
+};
+
+function sourceIndex(source: GoogleSyncSource): number {
+  return GOOGLE_SYNC_SOURCES.indexOf(source);
+}
+
+function googleErrorStatus(error: unknown): number | null {
+  return error instanceof GoogleApiError ? error.googleStatus : null;
+}
+
+/**
+ * Fetch one resumable, globally bounded Google sync slice.
+ * Gmail and Drive are incremental after the run's captured last-sync time.
+ */
 export async function fetchGoogleBundle(
   accessToken: string,
   mailboxEmail?: string | null,
-): Promise<GoogleRawRecord[]> {
-  const settled = await Promise.allSettled([
-    fetchGmail(accessToken),
-    fetchCalendar(accessToken),
-    fetchContacts(accessToken),
-    fetchDrive(accessToken),
-  ]);
+  options?: {
+    since?: string | null;
+    cursor?: GoogleSyncCursor | null;
+    maxRows?: number;
+  },
+): Promise<GoogleBundleResult> {
+  const maxRows = Math.max(1, Math.floor(options?.maxRows ?? 500));
+  const initialSource = options?.cursor?.source ?? GOOGLE_SYNC_SOURCES[0];
+  let index = Math.max(0, sourceIndex(initialSource));
+  let pageToken = options?.cursor?.pageToken ?? null;
   const out: GoogleRawRecord[] = [];
-  const errors: string[] = [];
-  for (const result of settled) {
-    if (result.status === "fulfilled") out.push(...result.value);
-    else errors.push(result.reason instanceof Error ? result.reason.message : "fetch failed");
+  const sources: GoogleSourceResult[] = [];
+
+  while (index < GOOGLE_SYNC_SOURCES.length && out.length < maxRows) {
+    const source = GOOGLE_SYNC_SOURCES[index]!;
+    const remaining = maxRows - out.length;
+    try {
+      let page: GooglePage;
+      if (source === "gmail") {
+        page = await fetchGmailPage(
+          accessToken,
+          remaining,
+          options?.since ?? null,
+          pageToken,
+        );
+      } else if (source === "calendar") {
+        page = await fetchCalendarPage(accessToken, remaining, pageToken);
+      } else if (source === "contacts") {
+        page = await fetchContactsPage(accessToken, remaining, pageToken);
+      } else {
+        page = await fetchDrivePage(
+          accessToken,
+          remaining,
+          options?.since ?? null,
+          pageToken,
+        );
+      }
+      out.push(...page.records.slice(0, remaining));
+      sources.push({
+        source,
+        ok: !page.error,
+        count: page.records.length,
+        error: page.error ?? null,
+        errorStatus: page.errorStatus ?? null,
+      });
+      if (page.nextPageToken) {
+        pageToken = page.nextPageToken;
+        if (out.length >= maxRows) break;
+        continue;
+      }
+    } catch (error) {
+      sources.push({
+        source,
+        ok: false,
+        count: 0,
+        error:
+          error instanceof Error ? error.message : `${source} fetch failed`,
+        errorStatus: googleErrorStatus(error),
+      });
+    }
+    index += 1;
+    pageToken = null;
   }
-  if (out.length === 0 && errors.length > 0) {
-    throw new Error(`Google sync failed: ${errors[0]}`);
-  }
+
   const mailbox = mailboxEmail?.trim().toLowerCase() || null;
   if (mailbox) {
     for (const r of out) {
@@ -697,7 +944,16 @@ export async function fetchGoogleBundle(
       }
     }
   }
-  return out;
+  const nextCursor =
+    index >= GOOGLE_SYNC_SOURCES.length
+      ? null
+      : { source: GOOGLE_SYNC_SOURCES[index]!, pageToken };
+  return {
+    records: out,
+    sources,
+    nextCursor,
+    complete: nextCursor === null,
+  };
 }
 
 export const googleConnector: RecallConnector = {

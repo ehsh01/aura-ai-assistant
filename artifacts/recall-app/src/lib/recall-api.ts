@@ -2066,6 +2066,7 @@ export async function listConnectors(): Promise<{
     updatedAt: string;
   }[];
   googleOAuthConfigured?: boolean;
+  googleAutoSyncEnabled?: boolean;
   microsoftOAuthConfigured?: boolean;
   homeyOAuthConfigured?: boolean;
   evernoteOAuthConfigured?: boolean;
@@ -2242,6 +2243,7 @@ export type ConnectorSyncRun = {
   recordsSkipped: number;
   recordsFailed: number;
   errorMessage: string | null;
+  sourceErrors?: Record<string, string>;
   metadata: Record<string, unknown>;
 };
 
