@@ -14,6 +14,7 @@ import {
 import {
   extractLinkCandidates,
   extractRealHttpUrls,
+  isConsoleOrAdminUrl,
   isPlaceholderUrl,
   isTrackingOrUtilityUrl,
   urlSelectionPenalty,
@@ -240,7 +241,8 @@ function findVoiceLinkEvidence(
     for (const [linkIndex, link] of links.entries()) {
       if (
         isPlaceholderUrl(link.url) ||
-        isTrackingOrUtilityUrl(link.url, { allowMaps })
+        isTrackingOrUtilityUrl(link.url, { allowMaps }) ||
+        (websiteAsk && isConsoleOrAdminUrl(link.url))
       ) {
         continue;
       }
@@ -272,15 +274,14 @@ function findVoiceLinkEvidence(
         subjectTerms,
         wordTokens(nearText),
       );
-      if (
-        subjectTerms.length > 0 &&
-        hostMatches +
-          pathMatches +
-          queryMatches +
-          titleMatches +
-          nearMatches ===
-          0
-      ) {
+      const linkRelevanceScore =
+        hostMatches * 120 +
+        titleMatches * 120 +
+        nearMatches * 120 +
+        pathMatches * 40 +
+        queryMatches * 15;
+      const minimumRelevance = websiteAsk ? 60 : 40;
+      if (subjectTerms.length > 0 && linkRelevanceScore < minimumRelevance) {
         continue;
       }
       const isNote =
@@ -295,11 +296,7 @@ function findVoiceLinkEvidence(
         candidate,
         url: link.url,
         score:
-          hostMatches * 120 +
-          titleMatches * 120 +
-          nearMatches * 120 +
-          pathMatches * 40 +
-          queryMatches * 15 +
+          linkRelevanceScore +
           (candidates.length - candidateIndex) * 25 +
           (isNote ? 20 : 0) -
           (isEmail ? 20 : 0) -

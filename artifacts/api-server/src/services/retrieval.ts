@@ -142,6 +142,10 @@ export function reserveSubjectUrlCandidates(
   ].slice(0, Math.max(ranked.length, limit));
 }
 
+export function noteSearchCandidateLimit(question: string): number {
+  return shouldExpandUrlTokens(question) ? 50 : 20;
+}
+
 type ContextRecord = {
   entityType: string;
   entityId: string;
@@ -1522,7 +1526,11 @@ export async function retrieveRelevantRecords(
     queryVec,
   ] = await Promise.all([
     collectCorpus(userId),
-    retrieveFreeNoteRecordsForUser(userId, noteQuery, 20),
+    retrieveFreeNoteRecordsForUser(
+      userId,
+      noteQuery,
+      noteSearchCandidateLimit(noteQuery),
+    ),
     searchSourceRecordsForUser(userId, question, 30).catch(() => []),
     options?.semantic === false
       ? Promise.resolve(null)

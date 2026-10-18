@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractLinkCandidates,
   extractRealHttpUrls,
+  isConsoleOrAdminUrl,
   isPlaceholderUrl,
   isTrackingOrUtilityUrl,
   unwrapRedirectUrl,
@@ -104,6 +105,14 @@ describe("placeholder URL classification", () => {
   });
 
   it("down-ranks consoles, query-heavy apps, and checkout URLs for website asks", () => {
+    expect(
+      isConsoleOrAdminUrl(
+        "https://cloud.digitalocean.com/spaces/psychiatry-inventory?i=abc",
+      ),
+    ).toBe(true);
+    expect(
+      isConsoleOrAdminUrl("https://psychiatry.med.miami.edu"),
+    ).toBe(false);
     expect(
       urlSelectionPenalty(
         "https://cloud.digitalocean.com/spaces/psychiatry-inventory?i=abc",
