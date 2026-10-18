@@ -602,6 +602,74 @@ function pageOffset(query: GraphQuery, quota: number): number {
 
 type GraphDb = Pick<ReturnType<typeof getDb>, "execute">;
 
+const EVERNOTE_TITLE_CACHE_TTL_MS = 60_000;
+const EVERNOTE_TITLE_CACHE_MAX_USERS = 20;
+const evernoteTitleCache = new Map<
+  string,
+  { expiresAt: number; titles: readonly string[] }
+>();
+const evernoteTitleInflight = new Map<string, Promise<readonly string[]>>();
+
+async function normalizedEvernoteTitlesForUser(
+  db: GraphDb,
+  userId: string,
+): Promise<readonly string[]> {
+  const cached = evernoteTitleCache.get(userId);
+  if (cached && cached.expiresAt > Date.now()) return cached.titles;
+  evernoteTitleCache.delete(userId);
+  const inFlight = evernoteTitleInflight.get(userId);
+  if (inFlight) return inFlight;
+
+  const load = (async (): Promise<readonly string[]> => {
+    const result = await db.execute(sql`
+      WITH evernote_rows AS MATERIALIZED (
+        SELECT sr.connector_id, sr.record_title, sr.record_metadata
+        FROM source_records sr
+        WHERE sr.user_id = ${userId}::uuid
+          AND sr.record_type = 'evernote_note'
+      )
+      SELECT DISTINCT
+        lower(regexp_replace(btrim(coalesce(er.record_title, '')), '[[:space:]]+', ' ', 'g')) AS title_norm
+      FROM evernote_rows er
+      JOIN connectors c ON c.id = er.connector_id AND c.enabled = true
+      WHERE lower(coalesce(
+          er.record_metadata->>'trashed',
+          er.record_metadata->>'deleted',
+          'false'
+        )) NOT IN ('true', '1', 'yes')
+        AND btrim(coalesce(er.record_title, '')) <> ''
+    `);
+    const titles = projectedRows(result)
+      .map((row) =>
+        String(
+          (row as GraphProjectedRow & { title_norm?: unknown }).title_norm ??
+            "",
+        ),
+      )
+      .filter(Boolean);
+    if (evernoteTitleCache.size >= EVERNOTE_TITLE_CACHE_MAX_USERS) {
+      evernoteTitleCache.delete(evernoteTitleCache.keys().next().value ?? "");
+    }
+    evernoteTitleCache.set(userId, {
+      expiresAt: Date.now() + EVERNOTE_TITLE_CACHE_TTL_MS,
+      titles,
+    });
+    return titles;
+  })();
+  evernoteTitleInflight.set(userId, load);
+  try {
+    return await load;
+  } finally {
+    if (evernoteTitleInflight.get(userId) === load) {
+      evernoteTitleInflight.delete(userId);
+    }
+  }
+}
+
+function cachedEvernoteTitlesSql(titles: readonly string[]) {
+  return sql`SELECT unnest(${titles}::text[]) AS title_norm`;
+}
+
 function graphSourceTypeSql(types: SourceRecordType[]) {
   return types.length
     ? sql`sr.record_type IN (${sql.join(
@@ -624,6 +692,7 @@ async function graphRowCountsForUser(
   db: GraphDb,
   userId: string,
   query: GraphQuery,
+  evernoteTitles: readonly string[],
 ): Promise<Record<SourceKey, number>> {
   const tsQuery = graphSearchTsQuery(query.q);
   const itemSearch = tsQuery
@@ -658,18 +727,7 @@ async function graphRowCountsForUser(
   });
   const result = await db.execute(sql`
     WITH evernote_titles AS MATERIALIZED (
-      SELECT DISTINCT
-        lower(regexp_replace(btrim(coalesce(sr.record_title, '')), '[[:space:]]+', ' ', 'g')) AS title_norm
-      FROM source_records sr
-      JOIN connectors c ON c.id = sr.connector_id AND c.enabled = true
-      WHERE sr.user_id = ${userId}::uuid
-        AND (c.type = 'evernote' OR sr.record_type = 'evernote_note')
-        AND lower(coalesce(
-          sr.record_metadata->>'trashed',
-          sr.record_metadata->>'deleted',
-          'false'
-        )) NOT IN ('true', '1', 'yes')
-        AND btrim(coalesce(sr.record_title, '')) <> ''
+      ${cachedEvernoteTitlesSql(evernoteTitles)}
     )
     SELECT source_key, row_count
     FROM (
@@ -767,9 +825,15 @@ async function listGraphRowsForUser(
   db: GraphDb,
   userId: string,
   query: GraphQuery,
+  evernoteTitles: readonly string[],
 ): Promise<{ items: SavedItemDto[]; hasMore: boolean }> {
   const budget = graphItemLimit(query);
-  const rowCounts = await graphRowCountsForUser(db, userId, query);
+  const rowCounts = await graphRowCountsForUser(
+    db,
+    userId,
+    query,
+    evernoteTitles,
+  );
   const quotas = sourceQuotasForQuery(query, rowCounts);
   const tsQuery = graphSearchTsQuery(query.q);
   const itemSearch = tsQuery
@@ -814,18 +878,7 @@ async function listGraphRowsForUser(
       quotas.notes > 0
         ? db.execute(sql`
             WITH evernote_titles AS MATERIALIZED (
-              SELECT DISTINCT
-                lower(regexp_replace(btrim(coalesce(sr.record_title, '')), '[[:space:]]+', ' ', 'g')) AS title_norm
-              FROM source_records sr
-              JOIN connectors c ON c.id = sr.connector_id AND c.enabled = true
-              WHERE sr.user_id = ${userId}::uuid
-                AND (c.type = 'evernote' OR sr.record_type = 'evernote_note')
-                AND lower(coalesce(
-                  sr.record_metadata->>'trashed',
-                  sr.record_metadata->>'deleted',
-                  'false'
-                )) NOT IN ('true', '1', 'yes')
-                AND btrim(coalesce(sr.record_title, '')) <> ''
+              ${cachedEvernoteTitlesSql(evernoteTitles)}
             )
             SELECT
               'notes'::text AS source_key,
@@ -1023,30 +1076,22 @@ const noisyNotebookCache = new Map<
 >();
 
 export function clearGraphCachesForTest(): void {
+  evernoteTitleCache.clear();
+  evernoteTitleInflight.clear();
   noisyNotebookCache.clear();
 }
 
 async function noisyNotebookKeysForUser(
   db: GraphDb,
   userId: string,
+  evernoteTitles: readonly string[],
 ): Promise<ReadonlySet<string>> {
   const cached = noisyNotebookCache.get(userId);
   if (cached && cached.expiresAt > Date.now()) return cached.keys;
   noisyNotebookCache.delete(userId);
   const result = await db.execute(sql`
     WITH evernote_titles AS MATERIALIZED (
-      SELECT DISTINCT
-        lower(regexp_replace(btrim(coalesce(sr.record_title, '')), '[[:space:]]+', ' ', 'g')) AS title_norm
-      FROM source_records sr
-      JOIN connectors c ON c.id = sr.connector_id AND c.enabled = true
-      WHERE sr.user_id = ${userId}::uuid
-        AND (c.type = 'evernote' OR sr.record_type = 'evernote_note')
-        AND lower(coalesce(
-          sr.record_metadata->>'trashed',
-          sr.record_metadata->>'deleted',
-          'false'
-        )) NOT IN ('true', '1', 'yes')
-        AND btrim(coalesce(sr.record_title, '')) <> ''
+      ${cachedEvernoteTitlesSql(evernoteTitles)}
     ),
     visible_notes AS (
       SELECT nb.name AS notebook
@@ -1062,7 +1107,7 @@ async function noisyNotebookKeysForUser(
       FROM source_records sr
       JOIN connectors c ON c.id = sr.connector_id AND c.enabled = true
       WHERE sr.user_id = ${userId}::uuid
-        AND (c.type = 'evernote' OR sr.record_type = 'evernote_note')
+        AND sr.record_type = 'evernote_note'
         AND lower(coalesce(
           sr.record_metadata->>'trashed',
           sr.record_metadata->>'deleted',
@@ -1115,9 +1160,10 @@ export async function getKnowledgeGraphForUser(
       sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY`,
     );
     await tx.execute(sql`SET LOCAL statement_timeout = '5s'`);
-    const page = await listGraphRowsForUser(tx, userId, query);
+    const evernoteTitles = await normalizedEvernoteTitlesForUser(tx, userId);
+    const page = await listGraphRowsForUser(tx, userId, query, evernoteTitles);
     const noisyNotebookKeys = query.types.includes("notebooks")
-      ? await noisyNotebookKeysForUser(tx, userId)
+      ? await noisyNotebookKeysForUser(tx, userId, evernoteTitles)
       : new Set<string>();
     return { page, noisyNotebookKeys };
   });

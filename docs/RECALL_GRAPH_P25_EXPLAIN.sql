@@ -9,6 +9,18 @@
 
 \set user_id '00000000-0000-0000-0000-000000000000'
 \set ts_query 'psychiatry'
+-- Default below is the unseeded whole-graph shape.
+\set item_search 'true'
+\set note_search 'true'
+\set source_search 'true'
+\set memory_search 'true'
+\set task_search 'true'
+-- For the seeded Psychiatry shape, replace the five variables above with:
+-- \set item_search 'i.search_tsv @@ to_tsquery(''simple'', :'':ts_query'')'
+-- \set note_search 'n.search_tsv @@ to_tsquery(''simple'', :'':ts_query'')'
+-- \set source_search 'sr.search_tsv @@ to_tsquery(''simple'', :'':ts_query'')'
+-- \set memory_search 'to_tsvector(''simple'', concat_ws(E''\\n'', m.title, m.content, m.tags::text)) @@ to_tsquery(''simple'', :'':ts_query'')'
+-- \set task_search 'to_tsvector(''simple'', concat_ws(E''\\n'', t.title, t.tags::text)) @@ to_tsquery(''simple'', :'':ts_query'')'
 \set item_limit 1
 \set item_offset 0
 \set note_limit 1
@@ -21,21 +33,54 @@
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SET LOCAL statement_timeout = '5s';
 
+-- Query 0: normalized Evernote-title cache loader. The API executes this only
+-- on a per-user 60-second cache miss. record_type is applied before JSONB and
+-- regexp work, so non-Evernote source rows never enter normalization.
+EXPLAIN (ANALYZE, BUFFERS, VERBOSE)
+WITH evernote_rows AS MATERIALIZED (
+  SELECT sr.connector_id, sr.record_title, sr.record_metadata
+  FROM source_records sr
+  WHERE sr.user_id = :'user_id'::uuid
+    AND sr.record_type = 'evernote_note'
+)
+SELECT DISTINCT
+  lower(regexp_replace(btrim(coalesce(er.record_title, '')), '[[:space:]]+', ' ', 'g')) AS title_norm
+FROM evernote_rows er
+JOIN connectors c ON c.id = er.connector_id AND c.enabled = true
+WHERE lower(coalesce(
+    er.record_metadata->>'trashed',
+    er.record_metadata->>'deleted',
+    'false'
+  )) NOT IN ('true', '1', 'yes')
+  AND btrim(coalesce(er.record_title, '')) <> '';
+
+-- Populate the psql variable used by Q1/Q3/Q7 exactly as the API's cached
+-- text[] bind parameter. Run this once per benchmark session/cache fill.
+SELECT coalesce(array_agg(title_norm), '{}'::text[])::text AS evernote_titles
+FROM (
+  WITH evernote_rows AS MATERIALIZED (
+    SELECT sr.connector_id, sr.record_title, sr.record_metadata
+    FROM source_records sr
+    WHERE sr.user_id = :'user_id'::uuid
+      AND sr.record_type = 'evernote_note'
+  )
+  SELECT DISTINCT
+    lower(regexp_replace(btrim(coalesce(er.record_title, '')), '[[:space:]]+', ' ', 'g')) AS title_norm
+  FROM evernote_rows er
+  JOIN connectors c ON c.id = er.connector_id AND c.enabled = true
+  WHERE lower(coalesce(
+      er.record_metadata->>'trashed',
+      er.record_metadata->>'deleted',
+      'false'
+    )) NOT IN ('true', '1', 'yes')
+    AND btrim(coalesce(er.record_title, '')) <> ''
+) cached_titles
+\gset
+
 -- Query 1: counts used to redistribute unused source quotas.
 EXPLAIN (ANALYZE, BUFFERS, VERBOSE)
 WITH evernote_titles AS MATERIALIZED (
-  SELECT DISTINCT
-    lower(regexp_replace(btrim(coalesce(sr.record_title, '')), '[[:space:]]+', ' ', 'g')) AS title_norm
-  FROM source_records sr
-  JOIN connectors c ON c.id = sr.connector_id AND c.enabled = true
-  WHERE sr.user_id = :'user_id'::uuid
-    AND (c.type = 'evernote' OR sr.record_type = 'evernote_note')
-    AND lower(coalesce(
-      sr.record_metadata->>'trashed',
-      sr.record_metadata->>'deleted',
-      'false'
-    )) NOT IN ('true', '1', 'yes')
-    AND btrim(coalesce(sr.record_title, '')) <> ''
+  SELECT unnest(:'evernote_titles'::text[]) AS title_norm
 )
 SELECT source_key, row_count
 FROM (
@@ -48,7 +93,7 @@ FROM (
       OR i.kind = 'link'
       OR i.kind IN ('image', 'pdf', 'file')
     )
-    AND i.search_tsv @@ to_tsquery('simple', :'ts_query')
+    AND :item_search
 
   UNION ALL
 
@@ -58,7 +103,7 @@ FROM (
     ON et.title_norm =
       lower(regexp_replace(btrim(coalesce(n.title, '')), '[[:space:]]+', ' ', 'g'))
   WHERE n.user_id = :'user_id'::uuid
-    AND n.search_tsv @@ to_tsquery('simple', :'ts_query')
+    AND :note_search
     AND et.title_norm IS NULL
 
   UNION ALL
@@ -77,7 +122,7 @@ FROM (
       'homey_device',
       'google_contact'
     )
-    AND sr.search_tsv @@ to_tsquery('simple', :'ts_query')
+    AND :source_search
     AND (
       sr.record_type <> 'evernote_note'
       OR lower(coalesce(
@@ -95,16 +140,14 @@ FROM (
   WHERE m.user_id = :'user_id'::uuid
     AND m.status = 'active'
     AND (m.expires_at IS NULL OR m.expires_at > now())
-    AND to_tsvector('simple', concat_ws(E'\n', m.title, m.content, m.tags::text))
-      @@ to_tsquery('simple', :'ts_query')
+    AND :memory_search
 
   UNION ALL
 
   SELECT 'tasks'::text AS source_key, count(*)::int AS row_count
   FROM tasks t
   WHERE t.user_id = :'user_id'::uuid
-    AND to_tsvector('simple', concat_ws(E'\n', t.title, t.tags::text))
-      @@ to_tsquery('simple', :'ts_query')
+    AND :task_search
 ) counts;
 
 -- Query 2: Recall saved-item page.
@@ -122,7 +165,7 @@ WHERE i.user_id = :'user_id'::uuid
     OR i.kind = 'link'
     OR i.kind IN ('image', 'pdf', 'file')
   )
-  AND i.search_tsv @@ to_tsquery('simple', :'ts_query')
+  AND :item_search
 ORDER BY i.bumped_at DESC, i.id DESC
 LIMIT :item_limit + 1
 OFFSET :item_offset;
@@ -130,18 +173,7 @@ OFFSET :item_offset;
 -- Query 3: native-note page with the materialized Evernote title hash side.
 EXPLAIN (ANALYZE, BUFFERS, VERBOSE)
 WITH evernote_titles AS MATERIALIZED (
-  SELECT DISTINCT
-    lower(regexp_replace(btrim(coalesce(sr.record_title, '')), '[[:space:]]+', ' ', 'g')) AS title_norm
-  FROM source_records sr
-  JOIN connectors c ON c.id = sr.connector_id AND c.enabled = true
-  WHERE sr.user_id = :'user_id'::uuid
-    AND (c.type = 'evernote' OR sr.record_type = 'evernote_note')
-    AND lower(coalesce(
-      sr.record_metadata->>'trashed',
-      sr.record_metadata->>'deleted',
-      'false'
-    )) NOT IN ('true', '1', 'yes')
-    AND btrim(coalesce(sr.record_title, '')) <> ''
+  SELECT unnest(:'evernote_titles'::text[]) AS title_norm
 )
 SELECT
   'notes'::text AS source_key,
@@ -165,7 +197,7 @@ LEFT JOIN evernote_titles et
   ON et.title_norm =
     lower(regexp_replace(btrim(coalesce(n.title, '')), '[[:space:]]+', ' ', 'g'))
 WHERE n.user_id = :'user_id'::uuid
-  AND n.search_tsv @@ to_tsquery('simple', :'ts_query')
+  AND :note_search
   AND et.title_norm IS NULL
 ORDER BY n.updated_at DESC, n.id DESC
 LIMIT :note_limit + 1
@@ -210,7 +242,7 @@ ranked_source_ids AS (
       'homey_device',
       'google_contact'
     )
-    AND sr.search_tsv @@ to_tsquery('simple', :'ts_query')
+    AND :source_search
     AND (
       sr.record_type <> 'evernote_note'
       OR lower(coalesce(
@@ -288,8 +320,7 @@ FROM life_memories m
 WHERE m.user_id = :'user_id'::uuid
   AND m.status = 'active'
   AND (m.expires_at IS NULL OR m.expires_at > now())
-  AND to_tsvector('simple', concat_ws(E'\n', m.title, m.content, m.tags::text))
-    @@ to_tsquery('simple', :'ts_query')
+  AND :memory_search
 ORDER BY m.pinned DESC, m.updated_at DESC, m.id DESC
 LIMIT :memory_limit + 1
 OFFSET :memory_offset;
@@ -314,8 +345,7 @@ SELECT
   t.updated_at
 FROM tasks t
 WHERE t.user_id = :'user_id'::uuid
-  AND to_tsvector('simple', concat_ws(E'\n', t.title, t.tags::text))
-    @@ to_tsquery('simple', :'ts_query')
+  AND :task_search
 ORDER BY t.completed ASC, t.updated_at DESC, t.id DESC
 LIMIT :task_limit + 1
 OFFSET :task_offset;
@@ -323,18 +353,7 @@ OFFSET :task_offset;
 -- Query 7: noisy-notebook set. The API caches this result per user for 30s.
 EXPLAIN (ANALYZE, BUFFERS, VERBOSE)
 WITH evernote_titles AS MATERIALIZED (
-  SELECT DISTINCT
-    lower(regexp_replace(btrim(coalesce(sr.record_title, '')), '[[:space:]]+', ' ', 'g')) AS title_norm
-  FROM source_records sr
-  JOIN connectors c ON c.id = sr.connector_id AND c.enabled = true
-  WHERE sr.user_id = :'user_id'::uuid
-    AND (c.type = 'evernote' OR sr.record_type = 'evernote_note')
-    AND lower(coalesce(
-      sr.record_metadata->>'trashed',
-      sr.record_metadata->>'deleted',
-      'false'
-    )) NOT IN ('true', '1', 'yes')
-    AND btrim(coalesce(sr.record_title, '')) <> ''
+  SELECT unnest(:'evernote_titles'::text[]) AS title_norm
 ),
 visible_notes AS (
   SELECT nb.name AS notebook
@@ -352,7 +371,7 @@ visible_notes AS (
   FROM source_records sr
   JOIN connectors c ON c.id = sr.connector_id AND c.enabled = true
   WHERE sr.user_id = :'user_id'::uuid
-    AND (c.type = 'evernote' OR sr.record_type = 'evernote_note')
+    AND sr.record_type = 'evernote_note'
     AND lower(coalesce(
       sr.record_metadata->>'trashed',
       sr.record_metadata->>'deleted',

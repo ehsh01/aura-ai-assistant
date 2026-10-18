@@ -49,12 +49,14 @@ the native-note source cap, so July import twins do not consume graph slots.
 Saved `items` are not suppressed. Trashed Evernote records do not suppress a
 native note.
 
-The Evernote title side is a `MATERIALIZED` normalized-title CTE joined with
-`LEFT JOIN ... IS NULL`, allowing a hash anti-join instead of a regexp nested
-loop. Every graph read runs in a transaction with
-`SET LOCAL statement_timeout = '5s'`. The noisy-notebook set is cached per user
-for 30 seconds with a 100-user process cap. Exact production EXPLAIN SQL is in
-`docs/RECALL_GRAPH_P25_EXPLAIN.sql`.
+The Evernote title loader filters to `record_type = 'evernote_note'` before
+JSONB and regexp work, then caches the normalized title array per user for 60
+seconds. Count, native-note, and noisy-notebook queries reuse that array through
+a `MATERIALIZED` CTE and `LEFT JOIN ... IS NULL`, allowing a hash anti-join
+without rebuilding the title set three times per request. Every graph read runs
+in a transaction with `SET LOCAL statement_timeout = '5s'`. The noisy-notebook
+set is cached per user for 30 seconds with a 100-user process cap. Exact
+production EXPLAIN SQL is in `docs/RECALL_GRAPH_P25_EXPLAIN.sql`.
 
 ## Hub de-noising
 

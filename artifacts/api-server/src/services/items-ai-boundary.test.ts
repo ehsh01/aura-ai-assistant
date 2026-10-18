@@ -64,6 +64,13 @@ describe("saved items AI boundary", () => {
     expect(graph).toContain("LIMIT ${quotas.items + 1}");
     expect(graph).toContain("SET LOCAL statement_timeout = '5s'");
     expect(graph).toContain("NOISY_NOTEBOOK_CACHE_TTL_MS = 30_000");
+    expect(graph).toContain("EVERNOTE_TITLE_CACHE_TTL_MS = 60_000");
+    expect(graph).toContain("WITH evernote_rows AS MATERIALIZED");
+    expect(graph).toContain("sr.record_type = 'evernote_note'");
+    expect(graph).toContain("evernoteTitleInflight");
+    expect(
+      graph.match(/cachedEvernoteTitlesSql\(evernoteTitles\)/g),
+    ).toHaveLength(3);
     expect(graph).not.toContain("NOT EXISTS (");
     expect(graph).not.toMatch(/coalesce\([insr]+\.search_tsv/);
     expect(graph).toContain("ITEM_GRAPH_BODY_MAX_CHARS");
