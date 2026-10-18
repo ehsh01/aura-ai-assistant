@@ -59,11 +59,17 @@ import {
 } from "../services/voice-first";
 import { askAiAvailabilityForUser } from "../services/ask-ai-availability";
 import { isEnabled } from "../lib/feature-flags";
-import { voiceAiAllowance, withVoiceAiLock } from "../services/ai-usage";
+import {
+  recordAiUsage,
+  voiceAiAllowance,
+  voiceSessionSilenceMs,
+  withVoiceAiLock,
+} from "../services/ai-usage";
 import {
   isVoiceLinkQuestion,
   queryVoiceNotesForUser,
   VOICE_LIMIT_REPLY,
+  VOICE_MONTHLY_LIMIT_REPLY,
 } from "../services/voice-answer";
 
 const voiceAudioUpload = multer({
@@ -280,11 +286,13 @@ router.post("/ai/tts", async (req, res, next) => {
       typeof err === "object" &&
       err !== null &&
       "code" in err &&
-      (err.code === "disabled" || err.code === "daily_limit")
+      (err.code === "disabled" ||
+        err.code === "daily_limit" ||
+        err.code === "monthly_limit")
         ? err.code
         : null;
     if (reason) {
-      res.status(reason === "daily_limit" ? 429 : 503).json({
+      res.status(reason === "disabled" ? 503 : 429).json({
         error: "VOICE_TTS_BLOCKED",
         reason,
         message: err instanceof Error ? err.message : "Server TTS unavailable",
@@ -298,7 +306,10 @@ router.post("/ai/tts", async (req, res, next) => {
 router.get("/ai/voice/availability", async (req, res, next) => {
   try {
     const allowance = await voiceAiAllowance("voice_ask", req.user!.id);
-    res.json(allowance);
+    res.json({
+      ...allowance,
+      sessionSilenceMs: voiceSessionSilenceMs(),
+    });
   } catch (err) {
     next(err);
   }
@@ -319,14 +330,33 @@ router.post("/ai/voice/query", async (req, res, next) => {
             )
           : null;
         if (linkFallback) {
-          res.json(linkFallback);
+          res.json({
+            ...linkFallback,
+            limitReason:
+              allowance.reason === "daily_limit" ||
+              allowance.reason === "monthly_limit"
+                ? allowance.reason
+                : null,
+          });
           return;
         }
-        const dailyLimit = allowance.reason === "daily_limit";
-        res.status(dailyLimit ? 429 : 503).json({
-          error: dailyLimit ? "VOICE_DAILY_LIMIT" : "VOICE_AI_UNAVAILABLE",
+        const capReached =
+          allowance.reason === "daily_limit" ||
+          allowance.reason === "monthly_limit";
+        res.status(capReached ? 429 : 503).json({
+          error:
+            allowance.reason === "monthly_limit"
+              ? "VOICE_MONTHLY_LIMIT"
+              : capReached
+                ? "VOICE_DAILY_LIMIT"
+                : "VOICE_AI_UNAVAILABLE",
           reason: allowance.reason,
-          message: dailyLimit ? VOICE_LIMIT_REPLY : "Voice AI is unavailable",
+          message:
+            allowance.reason === "monthly_limit"
+              ? VOICE_MONTHLY_LIMIT_REPLY
+              : capReached
+                ? VOICE_LIMIT_REPLY
+                : "Voice AI is unavailable",
         });
         return;
       }
@@ -336,6 +366,20 @@ router.post("/ai/voice/query", async (req, res, next) => {
         body.question,
         body.threadId ?? null,
       );
+      // Model-backed turns are recorded by the instrumented OpenAI client.
+      // Deterministic and no-match turns still consume exactly one Ask.
+      if (result.privacy.model === null) {
+        await recordAiUsage(
+          {
+            userId: req.user!.id,
+            feature: "voice_ask",
+            provider: "recall",
+            model: "notes-only",
+            costMicros: 0,
+          },
+          { strict: true },
+        );
+      }
       res.json(result);
     });
   } catch (err) {

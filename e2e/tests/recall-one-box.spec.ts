@@ -72,6 +72,13 @@ async function mockRecall(page: Page) {
     if (url.pathname === "/api/ai/query/availability") {
       return json(route, { allowed: true, model: "gpt-4.1-mini" });
     }
+    if (url.pathname === "/api/ai/voice/availability") {
+      return json(route, {
+        allowed: true,
+        remaining: 100,
+        sessionSilenceMs: 8_000,
+      });
+    }
     if (url.pathname === "/api/items/graph") {
       return json(route, {
         nodes: [],
@@ -262,11 +269,18 @@ async function installVoice(page: Page, transcript = "find roof contract") {
       onresult: ((event: unknown) => void) | null = null;
       onend: (() => void) | null = null;
       onerror: ((event: unknown) => void) | null = null;
-      start() {}
+      onspeechstart: (() => void) | null = null;
+      start() {
+        Object.assign(window, { __recallRecognition: this });
+      }
       stop() {
+        this.emitTranscript();
+      }
+      emitTranscript() {
         const current =
           (window as unknown as { __recallTranscript?: string })
             .__recallTranscript ?? text;
+        this.onspeechstart?.();
         const result = Object.assign([{ transcript: current }], {
           isFinal: true,
         });
@@ -286,6 +300,12 @@ async function installVoice(page: Page, transcript = "find roof contract") {
       SpeechRecognition: Recognition,
       webkitSpeechRecognition: Recognition,
       SpeechSynthesisUtterance: Utterance,
+      __emitRecallTranscript: () =>
+        (
+          window as unknown as {
+            __recallRecognition?: { emitTranscript: () => void };
+          }
+        ).__recallRecognition?.emitTranscript(),
     });
     window.speechSynthesis.getVoices = () => [];
     window.speechSynthesis.speak = (utterance) => {
@@ -295,6 +315,18 @@ async function installVoice(page: Page, transcript = "find roof contract") {
       );
     };
     window.speechSynthesis.cancel = () => {};
+  }, transcript);
+}
+
+async function emitVoice(page: Page, transcript?: string) {
+  await page.evaluate((next) => {
+    if (next) {
+      (window as unknown as { __recallTranscript: string }).__recallTranscript =
+        next;
+    }
+    (
+      window as unknown as { __emitRecallTranscript: () => void }
+    ).__emitRecallTranscript();
   }, transcript);
 }
 
@@ -395,9 +427,7 @@ test.describe("Recall one-box Phase 1", () => {
         expect(bounds!.x).toBeGreaterThanOrEqual(0);
         expect(bounds!.y).toBeGreaterThanOrEqual(0);
         expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
-        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(
-          viewport.height,
-        );
+        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
       }
     }
   });
@@ -410,7 +440,7 @@ test.describe("Recall one-box Phase 1", () => {
     await page.goto("/");
     const mic = page.getByTestId("recall-ring-mic");
     await mic.click();
-    await mic.click();
+    await emitVoice(page);
     await expect(page.getByTestId("voice-spoken-only")).toBeVisible();
     await expect(page.getByTestId("document-card")).toHaveCount(0);
     await expect(page.getByTestId("one-box-result")).toHaveCount(0);
@@ -423,16 +453,12 @@ test.describe("Recall one-box Phase 1", () => {
     expect(calls.ttsTexts[0]).toContain(
       'I found the document; say "show me" to open it.',
     );
-    await expect(mic).toHaveClass(/is-ready/);
+    await expect(mic).toHaveClass(/is-listening/);
+    await expect(mic).toContainText("8S SILENCE");
 
     const searchesBefore = calls.searches.length;
     const voiceBefore = calls.voice;
-    await page.evaluate(() => {
-      (window as unknown as { __recallTranscript: string }).__recallTranscript =
-        "show me";
-    });
-    await mic.click();
-    await mic.click();
+    await emitVoice(page, "show me");
     await expect(page.getByTestId("show-me-state")).toContainText(
       "roof-contract.pdf",
     );
@@ -449,7 +475,7 @@ test.describe("Recall one-box Phase 1", () => {
     await page.goto("/");
     const mic = page.getByTestId("recall-ring-mic");
     await mic.click();
-    await mic.click();
+    await emitVoice(page);
     await expect(
       page.getByText("Nothing to show yet", { exact: true }),
     ).toBeVisible();
@@ -471,7 +497,7 @@ test.describe("Recall one-box Phase 1", () => {
     await page.screenshot({ path: `${dir}/recall-one-box-desktop.png` });
     const mic = page.getByTestId("recall-ring-mic");
     await mic.click();
-    await mic.click();
+    await emitVoice(page);
     await expect(page.getByTestId("voice-spoken-only")).toBeVisible();
     await page.getByTestId("show-voice-results").click();
     await expect(page.getByTestId("document-card")).toBeVisible();
@@ -482,7 +508,7 @@ test.describe("Recall one-box Phase 1", () => {
     await page.screenshot({ path: `${dir}/recall-one-box-mobile-390x844.png` });
     const mobileMic = page.getByTestId("recall-ring-mic");
     await mobileMic.click();
-    await mobileMic.click();
+    await emitVoice(page);
     await expect(page.getByTestId("voice-spoken-only")).toBeVisible();
     await page.getByTestId("show-voice-results").click();
     await expect(page.getByTestId("document-card")).toBeVisible();

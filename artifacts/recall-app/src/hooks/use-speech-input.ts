@@ -37,6 +37,8 @@ type UseSpeechInputOptions = {
   /** Called while server transcription is in flight. */
   onTranscribingChange?: (busy: boolean) => void;
   onListeningChange?: (listening: boolean) => void;
+  /** Fires on detected speech, before the final transcript (used for barge-in). */
+  onSpeechStart?: () => void;
   /** Explore sets this false so voice can never invoke paid transcription. */
   allowServerTranscription?: boolean;
 };
@@ -67,10 +69,12 @@ export function useSpeechInput(
   const onErrorRef = useRef(options.onError);
   const onTranscribingRef = useRef(options.onTranscribingChange);
   const onListeningRef = useRef(options.onListeningChange);
+  const onSpeechStartRef = useRef(options.onSpeechStart);
   onFinalRef.current = onFinal;
   onErrorRef.current = options.onError;
   onTranscribingRef.current = options.onTranscribingChange;
   onListeningRef.current = options.onListeningChange;
+  onSpeechStartRef.current = options.onSpeechStart;
 
   useEffect(() => {
     const next = pickSpeechMode(
@@ -115,6 +119,7 @@ export function useSpeechInput(
 
     const useLocalRecognition = await canProcessSpeechLocally(Ctor, "en-US");
     const recognition = new Ctor();
+    let speechStarted = false;
     recognition.continuous = false;
     recognition.interimResults = isIosDevice();
     recognition.lang = "en-US";
@@ -122,7 +127,16 @@ export function useSpeechInput(
     // pack is available. Older browsers ignore this extension.
     if (useLocalRecognition) recognition.processLocally = true;
 
+    recognition.onspeechstart = () => {
+      if (speechStarted) return;
+      speechStarted = true;
+      onSpeechStartRef.current?.();
+    };
     recognition.onresult = (event: SpeechRecognitionEvent) => {
+      if (!speechStarted) {
+        speechStarted = true;
+        onSpeechStartRef.current?.();
+      }
       const transcript = collectTranscript(event);
       if (!transcript || deliveredRef.current) return;
       deliveredRef.current = true;

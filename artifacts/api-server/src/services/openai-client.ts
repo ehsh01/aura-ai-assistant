@@ -1,5 +1,7 @@
 import OpenAI from "openai";
 import {
+  AiSpendBlockedError,
+  assertAiSpendAllowed,
   currentAiFeature,
   isBackgroundFeature,
   recordAiUsage,
@@ -86,6 +88,7 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
   completions.create = async (params, requestOptions) => {
     const model = String(params.model ?? "unknown");
     try {
+      await assertAiSpendAllowed();
       const request = params.stream
         ? {
             ...params,
@@ -125,6 +128,7 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
         },
       };
     } catch (err) {
+      if (err instanceof AiSpendBlockedError) throw err;
       await record(model, null, 0);
       throw err;
     }
@@ -140,10 +144,12 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
   embeddings.create = async (params, requestOptions) => {
     const model = String(params.model ?? "unknown");
     try {
+      await assertAiSpendAllowed();
       const result = await createEmbedding(params, requestOptions);
       await record(model, (result as { usage?: UsageLike }).usage);
       return result;
     } catch (err) {
+      if (err instanceof AiSpendBlockedError) throw err;
       await record(model, null, 0);
       throw err;
     }
@@ -159,6 +165,7 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
   speech.create = async (params, requestOptions) => {
     const model = String(params.model ?? "tts-1");
     try {
+      await assertAiSpendAllowed();
       const result = await createSpeech(params, requestOptions);
       await record(
         model,
@@ -171,6 +178,7 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
       );
       return result;
     } catch (err) {
+      if (err instanceof AiSpendBlockedError) throw err;
       await record(model, null, 0);
       throw err;
     }
@@ -186,6 +194,7 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
   transcriptions.create = async (params, requestOptions) => {
     const model = String(params.model ?? "whisper-1");
     try {
+      await assertAiSpendAllowed();
       const result = await createTranscription(params, requestOptions);
       const seconds = Number((result as { duration?: unknown })?.duration ?? 0);
       await record(model, null, transcriptionCostMicros(result), {
@@ -193,6 +202,7 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
       });
       return result;
     } catch (err) {
+      if (err instanceof AiSpendBlockedError) throw err;
       await record(model, null, 0);
       throw err;
     }

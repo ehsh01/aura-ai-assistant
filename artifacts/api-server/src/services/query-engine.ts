@@ -350,10 +350,15 @@ async function runQueryForUser(
       }
     }
     const keywordFallback = buildKeywordFallbackAnswer(keywordRecords);
+    const budgetLimited =
+      allowance.reason === "daily_limit" ||
+      allowance.reason === "monthly_limit";
     const answer =
-      allowance.reason === "daily_limit"
-        ? "Your daily AI budget has been reached. Ask will be available again after midnight Eastern Time."
-        : keywordFallback.answer;
+      allowance.reason === "monthly_limit"
+        ? "Your monthly AI budget has been reached. Ask will be available again next month."
+        : allowance.reason === "daily_limit"
+          ? "Your daily AI budget has been reached. Ask will be available again after midnight Eastern Time."
+          : keywordFallback.answer;
     const relatedRecords = keywordRecords.slice(0, 8).map((record) => ({
       entityType: record.entityType,
       entityId: record.entityId,
@@ -372,16 +377,10 @@ async function runQueryForUser(
     });
     const result: QueryAnswer = {
       answer,
-      confidence:
-        allowance.reason === "daily_limit"
-          ? 1
-          : keywordRecords.length > 0
-            ? 0.6
-            : 0.2,
-      caveats:
-        allowance.reason === "daily_limit"
-          ? "No AI model was called."
-          : "AI spend accounting is temporarily unavailable; this answer uses keyword search only.",
+      confidence: budgetLimited ? 1 : keywordRecords.length > 0 ? 0.6 : 0.2,
+      caveats: budgetLimited
+        ? "No AI model was called."
+        : "AI spend accounting is temporarily unavailable; this answer uses keyword search only.",
       evidence: [],
       relatedRecords,
       images: [],

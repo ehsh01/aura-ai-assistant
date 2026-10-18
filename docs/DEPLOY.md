@@ -75,6 +75,24 @@ trap - EXIT
 Review the migration runner output and stop on any error. If it says it
 baselined every migration, stop: no pending migration was exercised.
 
+Before a voice-cap release, set these explicit production values in
+`artifacts/api-server/.env` (the deploy does not change production env):
+
+```dotenv
+AI_DAILY_BUDGET_USD=1.00
+RECALL_AI_MONTHLY_BUDGET_USD=15.00
+AI_BACKGROUND_DAILY_BUDGET_USD_PER_USER=1.00
+AI_DAILY_BUDGET_USD_PER_USER=1.00
+RECALL_VOICE_ASK_DAILY_LIMIT=100
+RECALL_VOICE_TTS_DAILY_CHARS=30000
+RECALL_VOICE_SESSION_SILENCE_MS=8000
+RECALL_TTS_MODEL=tts-1
+RECALL_TTS_VOICE=onyx
+```
+
+Missing or invalid budget variables disable paid AI. Do not print the
+production env while checking these values.
+
 ## 3. Deploy one explicit SHA
 
 Use the **Deploy Recall App** workflow's **Run workflow** button and enter the

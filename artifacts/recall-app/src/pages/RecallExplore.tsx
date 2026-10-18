@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
 } from "react";
@@ -39,6 +40,7 @@ import {
   deleteSavedItem,
   fetchKnowledgeGraph,
   getAskAiAvailability,
+  getVoiceAiAvailability,
   getSavedItem,
   listSavedItems,
   queryRecallStream,
@@ -57,6 +59,12 @@ import {
   VoiceQueryError,
 } from "@/lib/recall-api";
 import { speakText, stopSpeaking } from "@/lib/speech-synthesis";
+import {
+  createVoiceSessionState,
+  isVoiceSessionActive,
+  shouldBargeIn,
+  voiceSessionReducer,
+} from "@/lib/voice-conversation-state";
 
 const ALL_GRAPH_TYPES: KnowledgeGraphNodeType[] = [
   "notes",
@@ -67,6 +75,8 @@ const ALL_GRAPH_TYPES: KnowledgeGraphNodeType[] = [
   "evernote",
 ];
 const VOICE_LIMIT_REPLY = "Daily voice limit reached. Free search still works.";
+const VOICE_MONTHLY_LIMIT_REPLY =
+  "Monthly voice limit reached. Free search still works.";
 
 type ActionChip =
   | { kind: "saved"; itemId: string | null; label: string }
@@ -334,6 +344,11 @@ export function RecallExplore() {
   const [voiceTurn, setVoiceTurn] = useState<VoiceTurn | null>(null);
   const [voiceThreadId, setVoiceThreadId] = useState<string | null>(null);
   const [speaking, setSpeaking] = useState(false);
+  const [voiceSession, dispatchVoiceSession] = useReducer(
+    voiceSessionReducer,
+    undefined,
+    () => createVoiceSessionState(),
+  );
   const [preview, setPreview] = useState<{ url: string; title: string } | null>(
     null,
   );
@@ -373,6 +388,17 @@ export function RecallExplore() {
           reason: "unavailable",
         }),
       );
+    void getVoiceAiAvailability()
+      .then(({ sessionSilenceMs }) => {
+        if (Number.isFinite(sessionSilenceMs)) {
+          dispatchVoiceSession({
+            type: "configure",
+            silenceTimeoutMs: sessionSilenceMs,
+            now: Date.now(),
+          });
+        }
+      })
+      .catch(() => undefined);
     return () => stopSpeaking();
   }, [loadWorkspace]);
 
@@ -484,6 +510,7 @@ export function RecallExplore() {
       if (busy) return;
       let freeResults: ExploreSearchResult[] = [];
       setBusy(true);
+      dispatchVoiceSession({ type: "turn-started" });
       setPanelMode("voice");
       showChip({ kind: "search", value: question }, 0);
       setValue(question);
@@ -520,36 +547,109 @@ export function RecallExplore() {
           proofResults = [documentResult, ...proofResults];
         }
         if (proofResults.length === 0) proofResults = freeResults;
-        const spokenAnswer = voiceAnswerForSpeech(result.answer, presentation);
+        const responseCapReply =
+          result.limitReason === "monthly_limit"
+            ? VOICE_MONTHLY_LIMIT_REPLY
+            : result.limitReason === "daily_limit"
+              ? VOICE_LIMIT_REPLY
+              : null;
+        const answerForSpeech = voiceAnswerForSpeech(
+          result.answer,
+          presentation,
+        );
+        const spokenAnswer = responseCapReply
+          ? `${answerForSpeech} ${responseCapReply}`
+          : answerForSpeech;
         setVoiceTurn({
           id: `${Date.now()}`,
           question,
           answer: spokenAnswer,
           results: proofResults,
           presentation,
-          showAll: false,
+          showAll: Boolean(responseCapReply),
         });
         setSpeaking(true);
-        void speakText(spokenAnswer, {
-          premium: true,
-          onEnd: () => setSpeaking(false),
-          onError: () => setSpeaking(false),
-        }).then((started) => {
+        if (responseCapReply) {
+          dispatchVoiceSession({
+            type: "cap-reached",
+            message: responseCapReply,
+          });
+        } else {
+          dispatchVoiceSession({ type: "speaking-started" });
+        }
+        void (async () => {
+          let blockedReason:
+            | "disabled"
+            | "daily_limit"
+            | "monthly_limit"
+            | null = null;
+          const started = await speakText(spokenAnswer, {
+            premium: !responseCapReply,
+            onBlocked: (reason) => {
+              blockedReason = reason;
+              return reason === "daily_limit" || reason === "monthly_limit";
+            },
+            onEnd: () => {
+              setSpeaking(false);
+              dispatchVoiceSession({ type: "listen", now: Date.now() });
+            },
+            onError: () => {
+              setSpeaking(false);
+              dispatchVoiceSession({ type: "listen", now: Date.now() });
+            },
+          });
+          if (
+            blockedReason === "daily_limit" ||
+            blockedReason === "monthly_limit"
+          ) {
+            const capReply =
+              blockedReason === "monthly_limit"
+                ? VOICE_MONTHLY_LIMIT_REPLY
+                : VOICE_LIMIT_REPLY;
+            setVoiceTurn({
+              id: `${Date.now()}`,
+              question,
+              answer: capReply,
+              results: [],
+              presentation: "fact",
+              showAll: true,
+            });
+            dispatchVoiceSession({
+              type: "cap-reached",
+              message: capReply,
+            });
+            const fallbackStarted = await speakText(capReply, {
+              premium: false,
+              onEnd: () => setSpeaking(false),
+              onError: () => setSpeaking(false),
+            });
+            if (!fallbackStarted) setSpeaking(false);
+            return;
+          }
           if (!started) setSpeaking(false);
-        });
+        })();
       } catch (error) {
+        const capReached =
+          error instanceof VoiceQueryError &&
+          (error.reason === "daily_limit" || error.reason === "monthly_limit");
         const blocked =
           error instanceof VoiceQueryError &&
-          (error.reason === "disabled" || error.reason === "daily_limit");
+          (error.reason === "disabled" || capReached);
         const fallback =
-          error instanceof VoiceQueryError && error.reason === "daily_limit"
-            ? VOICE_LIMIT_REPLY
+          error instanceof VoiceQueryError
+            ? error.reason === "monthly_limit"
+              ? VOICE_MONTHLY_LIMIT_REPLY
+              : error.reason === "daily_limit"
+                ? VOICE_LIMIT_REPLY
+                : freeVoiceAnswer(freeResults)
             : freeVoiceAnswer(freeResults);
-        const presentation = voicePresentationFor({
-          query: question,
-          bestIsDocument: Boolean(freeResults[0]?.document),
-          answer: fallback,
-        });
+        const presentation = capReached
+          ? ("fact" as const)
+          : voicePresentationFor({
+              query: question,
+              bestIsDocument: Boolean(freeResults[0]?.document),
+              answer: fallback,
+            });
         const spokenAnswer = voiceAnswerForSpeech(fallback, presentation);
         setVoiceTurn({
           id: `${Date.now()}`,
@@ -557,15 +657,33 @@ export function RecallExplore() {
           answer: spokenAnswer,
           results: freeResults,
           presentation,
-          showAll: false,
+          showAll: capReached,
         });
+        if (capReached) {
+          dispatchVoiceSession({
+            type: "cap-reached",
+            message: fallback,
+          });
+        }
         if (blocked) {
           setSpeaking(true);
           void speakText(spokenAnswer, {
             premium: false,
-            onEnd: () => setSpeaking(false),
-            onError: () => setSpeaking(false),
+            onEnd: () => {
+              setSpeaking(false);
+              if (!capReached) {
+                dispatchVoiceSession({ type: "listen", now: Date.now() });
+              }
+            },
+            onError: () => {
+              setSpeaking(false);
+              if (!capReached) {
+                dispatchVoiceSession({ type: "listen", now: Date.now() });
+              }
+            },
           });
+        } else {
+          dispatchVoiceSession({ type: "listen", now: Date.now() });
         }
       } finally {
         setBusy(false);
@@ -583,6 +701,7 @@ export function RecallExplore() {
             title: "Nothing to show yet",
             description: "Ask Recall something first.",
           });
+        dispatchVoiceSession({ type: "listen", now: Date.now() });
         return;
       }
       const decision = classifyOneBoxInput({
@@ -591,7 +710,10 @@ export function RecallExplore() {
       });
       if (!decision.value) return;
       if (decision.intent === "save") {
-        void save(decision.value, null);
+        dispatchVoiceSession({ type: "turn-started" });
+        void save(decision.value, null).finally(() =>
+          dispatchVoiceSession({ type: "listen", now: Date.now() }),
+        );
       } else {
         void runVoiceSearch(decision.value);
       }
@@ -601,8 +723,71 @@ export function RecallExplore() {
 
   const speech = useSpeechInput(submitVoice, {
     allowServerTranscription: false,
-    onError: showSpeechError,
+    onError: (error) => {
+      if (error === "no-speech" && isVoiceSessionActive(voiceSession)) {
+        return;
+      }
+      showSpeechError(error);
+    },
+    onSpeechStart: () => {
+      if (!isVoiceSessionActive(voiceSession)) return;
+      if (shouldBargeIn(voiceSession) || speaking) {
+        stopSpeaking();
+        setSpeaking(false);
+      }
+      dispatchVoiceSession({ type: "speech-started", now: Date.now() });
+    },
   });
+  const voiceSessionActive = isVoiceSessionActive(voiceSession);
+
+  useEffect(() => {
+    if (
+      !voiceSessionActive ||
+      busy ||
+      speech.listening ||
+      speech.transcribing ||
+      (voiceSession.phase !== "listening" && voiceSession.phase !== "speaking")
+    ) {
+      return;
+    }
+    let cancelled = false;
+    void speech.start().then((result) => {
+      if (!cancelled && !result.ok) {
+        dispatchVoiceSession({
+          type: "stop",
+          message: "Voice session ended because the microphone is unavailable.",
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    busy,
+    speech.listening,
+    speech.start,
+    speech.transcribing,
+    voiceSession.phase,
+    voiceSessionActive,
+  ]);
+
+  useEffect(() => {
+    if (
+      voiceSession.phase !== "listening" ||
+      voiceSession.silenceDeadlineAt === null
+    ) {
+      return;
+    }
+    const delay = Math.max(0, voiceSession.silenceDeadlineAt - Date.now());
+    const timer = window.setTimeout(() => {
+      const now = Date.now();
+      dispatchVoiceSession({ type: "silence-timeout", now });
+      speech.stop();
+      stopSpeaking();
+      setSpeaking(false);
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [speech.stop, voiceSession.phase, voiceSession.silenceDeadlineAt]);
   const ringState = speech.listening
     ? "listening"
     : speaking
@@ -611,14 +796,31 @@ export function RecallExplore() {
         ? panelMode === "search"
           ? "searching"
           : "thinking"
-        : "ready";
+        : voiceSession.phase === "cap-reached"
+          ? "cap-reached"
+          : "ready";
+  const silenceSeconds = Math.round(voiceSession.silenceTimeoutMs / 1_000);
+  const voiceSessionLabel = voiceSessionActive
+    ? `${voiceSession.phase.toUpperCase()} · ${silenceSeconds}S SILENCE`
+    : voiceSession.phase === "cap-reached"
+      ? "STOPPED · CAP"
+      : voiceSession.phase === "ended"
+        ? `ENDED · ${silenceSeconds}S SILENCE`
+        : `READY · ${silenceSeconds}S SILENCE`;
 
   const beforeMic = useCallback(() => {
+    if (isVoiceSessionActive(voiceSession)) {
+      speech.stop();
+      stopSpeaking();
+      setSpeaking(false);
+      dispatchVoiceSession({ type: "stop" });
+      return false;
+    }
     if (!speaking) return true;
     stopSpeaking();
     setSpeaking(false);
     return false;
-  }, [speaking]);
+  }, [speaking, speech, voiceSession]);
 
   const submitAi = async () => {
     const question = value.trim();
@@ -1008,12 +1210,25 @@ export function RecallExplore() {
               iconSize={44}
               title="Talk to Recall"
               testId="recall-ring-mic"
+              listeningLabel={
+                <>
+                  <span className="assistant-ring-name">R.E.C.A.L.L.</span>
+                  <small data-testid="voice-session-state">
+                    {voiceSessionLabel}
+                  </small>
+                </>
+              }
               holdToTalk
               quiet
               onBeforeToggle={beforeMic}
+              onActivated={() =>
+                dispatchVoiceSession({ type: "start", now: Date.now() })
+              }
             >
               <span className="assistant-ring-name">R.E.C.A.L.L.</span>
-              <small>{ringState.toUpperCase()}</small>
+              <small data-testid="voice-session-state">
+                {voiceSessionLabel}
+              </small>
             </MicButton>
           </form>
         </div>
