@@ -12,6 +12,7 @@ import {
   evernoteMatchedText,
   hasSubjectMatchingUrlHostname,
   noteSearchCandidateLimit,
+  pinSubjectHostnameMatchesBeforeCut,
   rankFreeTextMatches,
   reserveSubjectUrlCandidates,
   type RetrievedRecord,
@@ -48,9 +49,9 @@ describe("evernoteMatchExcerpt", () => {
 
 describe("link candidate slot reservation", () => {
   const psychiatryTitleDecoys: RetrievedRecord[] = Array.from(
-    { length: 36 },
+    { length: 70 },
     (_, index) => ({
-      entityType: "note",
+      entityType: index % 2 === 0 ? "note" : "source_record",
       entityId: `psychiatry-title-${index}`,
       title:
         index === 0
@@ -62,6 +63,7 @@ describe("link candidate slot reservation", () => {
           : `Reference note ${index + 1}`,
       score: 10 - index,
       method: "keyword",
+      recordType: index % 2 === 0 ? undefined : "evernote_note",
     }),
   );
   const hostnameMatch: RetrievedRecord = {
@@ -77,10 +79,29 @@ describe("link candidate slot reservation", () => {
     "what is the Psychiatry website link",
     "[AppSmith test] what is the Psychiatry website link",
   ])("reserves a top-eight slot for the subject-matching hostname in %s", (query) => {
+    const mergedRaw = rankFreeTextMatches(
+      query,
+      [...psychiatryTitleDecoys, hostnameMatch],
+      psychiatryTitleDecoys.length + 1,
+    );
+    expect(
+      mergedRaw.findIndex(
+        (record) => record.entityId === "note-en-xfbhdx",
+      ),
+    ).toBeGreaterThanOrEqual(50);
+    const mergedTop50 = pinSubjectHostnameMatchesBeforeCut(
+      query,
+      mergedRaw,
+      50,
+      2,
+    );
+    expect(mergedTop50.map((record) => record.entityId)).toContain(
+      "note-en-xfbhdx",
+    );
     const ranked = reserveSubjectUrlCandidates(
       query,
-      psychiatryTitleDecoys.slice(0, 8),
-      [...psychiatryTitleDecoys, hostnameMatch],
+      mergedTop50.slice(0, 8),
+      mergedTop50,
       8,
       2,
     );
