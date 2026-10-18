@@ -148,7 +148,7 @@ async function mockRecall(page: Page) {
             openUrl: "https://mail.google.com/example",
             itemId: null,
             document: {
-              kind: "drive",
+              kind: "gmail",
               name: "roof-contract.pdf",
               mimeType: "application/pdf",
               previewUrl: "/api/items/source-records/drive-roof/media",
@@ -389,6 +389,16 @@ test.describe("Recall one-box Phase 1", () => {
       await expect(page.getByLabel("Graph filters")).toHaveCount(0);
       await expect(page.locator("[role=tab]")).toHaveCount(0);
       await expect(page.locator(".hud-chip")).toHaveCount(0);
+      for (const testId of ["one-box", "recall-ring-mic"]) {
+        const bounds = await page.getByTestId(testId).boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.y).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(
+          viewport.height,
+        );
+      }
     }
   });
 
@@ -500,6 +510,7 @@ test.describe("Recall one-box Phase 1", () => {
       navigator.serviceWorker.dispatchEvent(new Event("controllerchange"));
     });
     await expect.poll(() => documentRequests).toBe(2);
+    await page.waitForLoadState("domcontentloaded");
     await page.evaluate(() => {
       navigator.serviceWorker.dispatchEvent(new Event("controllerchange"));
     });

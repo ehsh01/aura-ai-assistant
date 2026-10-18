@@ -1,13 +1,20 @@
 import { and, eq } from "drizzle-orm";
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import {
   connectors,
+  documents,
   evernoteAttachments,
   sourceRecords,
 } from "@workspace/db/schema";
-import { fetchDriveFileDownload } from "../connectors/google";
+import {
+  fetchDriveFileDownload,
+  fetchGmailAttachmentDownload,
+} from "../connectors/google";
 import { fetchEvernoteResourceData } from "../connectors/evernote";
 import { withEvernoteMcpClient } from "../connectors/evernote-mcp";
 import { getDb } from "../lib/db";
+import { config } from "../lib/config";
 import {
   openConnectorSettings,
   sealConnectorSettings,
@@ -19,7 +26,8 @@ import {
 import { ensureGoogleAccessToken } from "./connectors";
 
 export type OwnerDocumentResponse = {
-  response: Response;
+  response?: Response;
+  path?: string;
   fileName: string;
   mimeType: string;
 };
@@ -166,5 +174,111 @@ export async function getSourceRecordDocumentForUser(
         ? "application/pdf"
         : mimeType) ??
       "application/octet-stream",
+  };
+}
+
+export async function getGmailAttachmentForUser(
+  userId: string,
+  sourceRecordId: string,
+  attachmentId: string,
+): Promise<OwnerDocumentResponse | null> {
+  const rows = await getDb()
+    .select({
+      source: sourceRecords,
+      connector: connectors,
+    })
+    .from(sourceRecords)
+    .innerJoin(connectors, eq(connectors.id, sourceRecords.connectorId))
+    .where(
+      and(
+        eq(sourceRecords.id, sourceRecordId),
+        eq(sourceRecords.userId, userId),
+        eq(sourceRecords.recordType, "gmail_message"),
+        eq(connectors.userId, userId),
+        eq(connectors.enabled, true),
+      ),
+    )
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  const rawAttachments = row.source.recordMetadata?.attachments;
+  const attachments = Array.isArray(rawAttachments) ? rawAttachments : [];
+  const attachment = attachments.find(
+    (value) =>
+      value &&
+      typeof value === "object" &&
+      (value as { id?: unknown }).id === attachmentId,
+  ) as
+    | {
+        id: string;
+        fileName?: unknown;
+        mimeType?: unknown;
+        sizeBytes?: unknown;
+      }
+    | undefined;
+  if (!attachment) return null;
+  const declaredSize =
+    typeof attachment.sizeBytes === "number" ? attachment.sizeBytes : null;
+  if (declaredSize != null && declaredSize > config.attachmentMaxBytes) {
+    throw Object.assign(new Error("Gmail attachment exceeds the download cap"), {
+      status: 413,
+    });
+  }
+  const messageId = row.source.externalId.replace(/^gmail:/, "");
+  if (!messageId || messageId === row.source.externalId) return null;
+  const { accessToken } = await ensureGoogleAccessToken(row.connector);
+  const bytes = await fetchGmailAttachmentDownload(
+    accessToken,
+    messageId,
+    attachmentId,
+  );
+  if (bytes.length > config.attachmentMaxBytes) {
+    throw Object.assign(new Error("Gmail attachment exceeds the download cap"), {
+      status: 413,
+    });
+  }
+  const mimeType =
+    typeof attachment.mimeType === "string"
+      ? attachment.mimeType
+      : "application/octet-stream";
+  return {
+    response: new Response(bytes, {
+      headers: { "content-type": mimeType },
+    }),
+    fileName: safeName(
+      typeof attachment.fileName === "string" ? attachment.fileName : null,
+      "gmail-attachment",
+    ),
+    mimeType,
+  };
+}
+
+export async function getRecallDocumentForUser(
+  userId: string,
+  documentId: string,
+): Promise<OwnerDocumentResponse | null> {
+  const rows = await getDb()
+    .select({
+      fileName: documents.fileName,
+      fileType: documents.fileType,
+      storagePath: documents.storagePath,
+    })
+    .from(documents)
+    .where(and(eq(documents.id, documentId), eq(documents.userId, userId)))
+    .limit(1);
+  const document = rows[0];
+  if (!document?.storagePath) return null;
+  const absolute = path.resolve(config.attachmentsDir, document.storagePath);
+  const root = `${path.resolve(config.attachmentsDir)}${path.sep}`;
+  if (!absolute.startsWith(root)) return null;
+  try {
+    await stat(absolute);
+  } catch {
+    return null;
+  }
+  return {
+    path: absolute,
+    fileName: safeName(document.fileName, "document"),
+    mimeType: document.fileType ?? "application/octet-stream",
   };
 }

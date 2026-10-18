@@ -49,6 +49,12 @@ describe("Recall one-box deterministic routing", () => {
       "last month's receipts",
     ],
     [
+      "show me the roof contract",
+      "search",
+      "search-verb",
+      "the roof contract",
+    ],
+    [
       "https://example.com/roof",
       "save",
       "bare-url",

@@ -901,6 +901,15 @@ export async function searchEvernoteSourceRecordsForUser(
         order by ts_rank_cd(ea.search_tsv, to_tsquery('simple', ${tsQueries.any})) desc
         limit 1
       ), '')`,
+      attachmentId: sql<string | null>`(
+        select ea.id
+        from evernote_attachments ea
+        where ea.source_record_id = ${sourceRecords.id}
+          and ea.user_id = ${userId}::uuid
+          and ea.search_tsv @@ to_tsquery('simple', ${tsQueries.any})
+        order by ts_rank_cd(ea.search_tsv, to_tsquery('simple', ${tsQueries.any})) desc
+        limit 1
+      )`,
       updatedAt: sourceRecords.updatedAt,
       sourceCreatedAt: sourceRecords.sourceCreatedAt,
       sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
@@ -926,6 +935,7 @@ export async function searchEvernoteSourceRecordsForUser(
             select 1
             from evernote_attachments ea
             where ea.source_record_id = ${sourceRecords.id}
+              and ea.user_id = ${userId}::uuid
               and ea.search_tsv @@ to_tsquery('simple', ${tsQueries.any})
           )
         )`,
@@ -963,6 +973,12 @@ export async function searchEvernoteSourceRecordsForUser(
     const tagText = sourceMetadataTagText(row.metadata);
     return {
       ...context,
+      sourceMetadata: row.attachmentId
+        ? {
+            ...(context.sourceMetadata ?? {}),
+            matchedAttachmentId: row.attachmentId,
+          }
+        : context.sourceMetadata,
       text: evernoteMatchedText({
         recordType: row.recordType,
         title: context.title,
@@ -1197,9 +1213,15 @@ async function collectCorpus(userId: string): Promise<{
       title: d.fileName,
       digest,
       text: `${d.fileName}\n${(d.summary ?? d.extractedText ?? "").slice(0, 600)}`,
+      sourceMetadata: {
+        storagePath: d.storagePath,
+        mimeType: d.fileType,
+      },
     });
   }
-  for (const c of captures) {
+  for (const c of captures.filter(
+    (capture) => capture.processedStatus !== "ignored",
+  )) {
     records.push({
       entityType: "capture",
       entityId: c.id,

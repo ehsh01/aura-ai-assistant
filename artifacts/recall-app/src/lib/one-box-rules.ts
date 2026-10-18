@@ -17,7 +17,8 @@ export type OneBoxDecision = {
 };
 
 const SAVE_VERB = /^(?:save|remember|note|keep|add)\b[\s,:-]*/i;
-const SEARCH_VERB = /^(?:find|look\s+up|search|show)\b[\s,:-]*/i;
+const SEARCH_VERB =
+  /^(?:find|look\s+up|search|show(?:\s+me)?)\b[\s,:-]*/i;
 const QUESTION_WORD =
   /^(?:who|what|when|where|why|how|which|is|are|do|does|did|can|could|should|will|was|were|has|have|any)\b/i;
 const DOCUMENT_WORD = /\b(?:doc|document|file|pdf|contract|policy|receipt)\b/i;

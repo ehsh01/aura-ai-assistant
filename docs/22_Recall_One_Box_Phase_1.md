@@ -54,9 +54,9 @@ Typed searches and typed Ask AI answers retain their normal on-screen results.
 
 ## Document security
 
-Recall-native, Drive, and Evernote downloads use authenticated owner-scoped
-Recall endpoints. Connector URLs are never exposed as download URLs. Evernote
-remains read-only: attachment bytes are fetched from Evernote at click time,
+Recall-native, Gmail, Drive, and Evernote downloads use authenticated
+owner-scoped Recall endpoints. Connector URLs are never exposed as download
+URLs. Gmail and Evernote attachment bytes are fetched read-only at click time,
 streamed to the authenticated owner, and are not written to public storage.
 
 ## Cost and schema

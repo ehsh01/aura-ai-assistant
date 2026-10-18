@@ -5,7 +5,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { items, type ItemMedia } from "@workspace/db/schema";
+import { captures, items, type ItemMedia } from "@workspace/db/schema";
 import { config } from "../lib/config";
 import { getDb } from "../lib/db";
 import { createCaptureForUser, updateCaptureStatusForUser } from "./captures";
@@ -603,38 +603,43 @@ export async function saveFileItemForUser(
   await mkdir(absoluteDir, { recursive: true });
   const storagePath = path.join(relativeDir, fileName);
   const absolutePath = path.join(config.attachmentsDir, storagePath);
-  await pipeline(Readable.from(file.buffer), createWriteStream(absolutePath));
-  const extractedText = file.mimetype.startsWith("image/")
-    ? ""
-    : await extractTextFromAttachmentFile({
-        absPath: absolutePath,
-        mimeType: file.mimetype,
-        fileName,
-        sizeBytes: file.size,
-      });
+  try {
+    await pipeline(Readable.from(file.buffer), createWriteStream(absolutePath));
+    const extractedText = file.mimetype.startsWith("image/")
+      ? ""
+      : await extractTextFromAttachmentFile({
+          absPath: absolutePath,
+          mimeType: file.mimetype,
+          fileName,
+          sizeBytes: file.size,
+        });
 
-  const now = new Date();
-  await getDb().insert(items).values({
-    id,
-    userId,
-    captureId: capture.id,
-    kind: imageKind(file.mimetype),
-    state: "ready",
-    source: "recall",
-    title: fileName.replace(/\.[^.]+$/, "") || fileName,
-    description: cleanCaption || null,
-    bodyText: [cleanCaption, extractedText].filter(Boolean).join("\n\n"),
-    media: {
-      storagePath,
-      fileName,
-      mimeType: file.mimetype,
-      sizeBytes: file.size,
-    },
-    tags: heuristicItemTags({ mimeType: file.mimetype, date: now }),
-    bumpedAt: now,
-    createdAt: now,
-    updatedAt: now,
-  });
+    const now = new Date();
+    await getDb().insert(items).values({
+      id,
+      userId,
+      captureId: capture.id,
+      kind: imageKind(file.mimetype),
+      state: "ready",
+      source: "recall",
+      title: fileName.replace(/\.[^.]+$/, "") || fileName,
+      description: cleanCaption || null,
+      bodyText: [cleanCaption, extractedText].filter(Boolean).join("\n\n"),
+      media: {
+        storagePath,
+        fileName,
+        mimeType: file.mimetype,
+        sizeBytes: file.size,
+      },
+      tags: heuristicItemTags({ mimeType: file.mimetype, date: now }),
+      bumpedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+  } catch (error) {
+    await rm(absoluteDir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
   await finishRawCapture(userId, capture.id);
   return (await getItemForUser(userId, id))!;
 }
@@ -644,20 +649,28 @@ export async function deleteItemForUser(
   id: string,
 ): Promise<boolean> {
   if (id.startsWith("note:") || id.startsWith("evernote:")) return false;
-  const deleted = await getDb()
-    .delete(items)
-    .where(and(eq(items.id, id), eq(items.userId, userId)))
-    .returning({ media: items.media });
-  const storagePath = deleted[0]?.media?.storagePath;
+  const item = await getItemForUser(userId, id);
+  if (!item) return false;
+  const storagePath = item.media.storagePath;
   if (storagePath) {
     const absolute = path.resolve(config.attachmentsDir, storagePath);
     const root = `${path.resolve(config.attachmentsDir)}${path.sep}`;
-    if (absolute.startsWith(root)) {
-      await rm(absolute, { force: true }).catch(() => undefined);
-      await rm(path.dirname(absolute), { recursive: true, force: true }).catch(
-        () => undefined,
-      );
+    if (!absolute.startsWith(root)) {
+      throw Object.assign(new Error("Item media path is invalid"), {
+        status: 409,
+      });
     }
+    await rm(path.dirname(absolute), { recursive: true, force: true });
+  }
+  const deleted = await getDb()
+    .delete(items)
+    .where(and(eq(items.id, id), eq(items.userId, userId)))
+    .returning({ captureId: items.captureId });
+  const captureId = deleted[0]?.captureId;
+  if (captureId) {
+    await getDb()
+      .delete(captures)
+      .where(and(eq(captures.id, captureId), eq(captures.userId, userId)));
   }
   return deleted.length > 0;
 }

@@ -51,9 +51,13 @@ function voiceSourceLabel(record: RetrievedRecord): string {
 }
 
 function isDocumentRecord(record: RetrievedRecord): boolean {
+  const attachments = record.sourceMetadata?.attachments;
   return (
     record.entityType === "document" ||
     record.recordType === "drive_file" ||
+    (record.recordType === "gmail_message" &&
+      Array.isArray(attachments) &&
+      attachments.length > 0) ||
     /\bmatched attachment\b/i.test(record.text)
   );
 }

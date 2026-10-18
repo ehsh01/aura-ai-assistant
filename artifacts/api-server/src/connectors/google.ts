@@ -209,12 +209,39 @@ function headerValue(
 /** Max decoded email body length we surface to Ask (keeps context bounded). */
 const MAX_EMAIL_BODY_CHARS = 4000;
 
-type GmailPart = {
+export type GmailPart = {
   mimeType?: string;
   filename?: string;
-  body?: { data?: string; size?: number };
+  body?: { attachmentId?: string; data?: string; size?: number };
   parts?: GmailPart[];
 };
+
+export type GmailAttachment = {
+  id: string;
+  fileName: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+};
+
+export function gmailAttachments(
+  payload: GmailPart | undefined,
+): GmailAttachment[] {
+  const attachments: GmailAttachment[] = [];
+  const walk = (part: GmailPart) => {
+    if (part.filename?.trim() && part.body?.attachmentId) {
+      attachments.push({
+        id: part.body.attachmentId,
+        fileName: part.filename.trim(),
+        mimeType: part.mimeType?.trim() || null,
+        sizeBytes:
+          typeof part.body.size === "number" ? part.body.size : null,
+      });
+    }
+    for (const child of part.parts ?? []) walk(child);
+  };
+  if (payload) walk(payload);
+  return attachments;
+}
 
 function decodeBase64Url(data: string): string {
   try {
@@ -326,6 +353,7 @@ async function fetchGmailMessageDetails(
         senderEmail: fromParsed.email || null,
         threadId: full.threadId ?? null,
         hasFullBody: Boolean(body),
+        attachments: wantFull ? gmailAttachments(full.payload) : [],
       },
     };
   } catch {
@@ -341,10 +369,32 @@ async function fetchGmail(accessToken: string): Promise<GoogleRawRecord[]> {
   );
   const out: GoogleRawRecord[] = [];
   for (const msg of (list.messages ?? []).slice(0, 300)) {
-    const row = await fetchGmailMessageDetails(accessToken, msg.id);
+    const row = await fetchGmailMessageDetails(accessToken, msg.id, {
+      full: true,
+    });
     if (row) out.push(row);
   }
   return out;
+}
+
+export async function fetchGmailAttachmentDownload(
+  accessToken: string,
+  messageId: string,
+  attachmentId: string,
+): Promise<Buffer> {
+  const data = await googleGet<{ data?: string }>(
+    accessToken,
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
+  );
+  if (!data.data) {
+    throw Object.assign(new Error("Gmail attachment returned no content"), {
+      status: 502,
+    });
+  }
+  return Buffer.from(
+    data.data.replace(/-/g, "+").replace(/_/g, "/"),
+    "base64",
+  );
 }
 
 /**
@@ -533,7 +583,10 @@ async function fetchDrive(accessToken: string): Promise<GoogleRawRecord[]> {
         .join("\n"),
       sourceUrl: f.webViewLink ?? null,
       sourceCreatedAt: f.modifiedTime ?? null,
-      metadata: { mimeType: f.mimeType ?? null },
+      metadata: {
+        mimeType: f.mimeType ?? null,
+        isFolder: f.mimeType === "application/vnd.google-apps.folder",
+      },
     });
   }
   return out;
@@ -591,10 +644,19 @@ export async function fetchDriveFileDownload(
   fileId: string,
   mimeType: string | null | undefined,
 ): Promise<Response> {
-  const googleNative = (mimeType ?? "").startsWith(
-    "application/vnd.google-apps.",
-  );
-  const url = googleNative
+  const exportableGoogleMime =
+    /^application\/vnd\.google-apps\.(?:document|drawing|presentation|spreadsheet)$/.test(
+      mimeType ?? "",
+    );
+  if (
+    (mimeType ?? "").startsWith("application/vnd.google-apps.") &&
+    !exportableGoogleMime
+  ) {
+    throw Object.assign(new Error("This Drive item cannot be downloaded"), {
+      status: 415,
+    });
+  }
+  const url = exportableGoogleMime
     ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/export?mimeType=${encodeURIComponent("application/pdf")}`
     : `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`;
   const response = await fetch(url, {

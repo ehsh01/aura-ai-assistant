@@ -17,6 +17,8 @@ import {
 import { searchExploreForUser } from "../services/explore-search";
 import {
   getEvernoteAttachmentForUser,
+  getGmailAttachmentForUser,
+  getRecallDocumentForUser,
   getSourceRecordDocumentForUser,
   type OwnerDocumentResponse,
 } from "../services/item-documents";
@@ -46,19 +48,63 @@ function uploadImage(req: Request, res: Response, next: NextFunction): void {
   });
 }
 
-function streamOwnerDocument(found: OwnerDocumentResponse, req: Request, res: Response): void {
-  const disposition = req.query.download === "1" ? "attachment" : "inline";
-  res.setHeader("Content-Type", found.mimeType);
-  res.setHeader("Content-Disposition", `${disposition}; filename="${found.fileName}"`);
+export function isSafeInlineMediaType(mimeType: string): boolean {
+  const mime = mimeType.toLowerCase().split(";", 1)[0]!.trim();
+  return (
+    mime === "application/pdf" ||
+    mime === "text/plain" ||
+    /^image\/(?:avif|bmp|gif|jpe?g|png|webp)$/.test(mime)
+  );
+}
+
+function setOwnerDocumentHeaders(
+  mimeType: string,
+  fileName: string,
+  download: boolean,
+  res: Response,
+): void {
+  const inline = !download && isSafeInlineMediaType(mimeType);
+  const disposition = inline ? "inline" : "attachment";
+  res.setHeader(
+    "Content-Type",
+    inline || download ? mimeType : "application/octet-stream",
+  );
+  res.setHeader("Content-Disposition", `${disposition}; filename="${fileName}"`);
   res.setHeader("Cache-Control", "private, no-store");
-  if (!found.response.body) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader(
+    "Content-Security-Policy",
+    "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'",
+  );
+}
+
+function streamOwnerDocument(found: OwnerDocumentResponse, req: Request, res: Response): void {
+  setOwnerDocumentHeaders(
+    found.mimeType,
+    found.fileName,
+    req.query.download === "1",
+    res,
+  );
+  if (found.path) {
+    res.sendFile(found.path);
+    return;
+  }
+  if (!found.response?.body) {
     res.status(502).json({
       error: "EMPTY_DOCUMENT",
       message: "Document returned no content",
     });
     return;
   }
-  Readable.fromWeb(found.response.body as import("node:stream/web").ReadableStream).pipe(res);
+  const stream = Readable.fromWeb(
+    found.response.body as import("node:stream/web").ReadableStream,
+  );
+  stream.once("error", () => {
+    if (res.headersSent) res.destroy();
+    else res.status(502).end();
+  });
+  res.once("close", () => stream.destroy());
+  stream.pipe(res);
 }
 
 router.get("/items", async (req, res, next) => {
@@ -163,6 +209,44 @@ router.get("/items/source-records/:sourceRecordId/media", async (req, res, next)
   }
 });
 
+router.get(
+  "/items/source-records/:sourceRecordId/gmail-attachments/:attachmentId/media",
+  async (req, res, next) => {
+    try {
+      const found = await getGmailAttachmentForUser(
+        req.user!.id,
+        req.params.sourceRecordId,
+        req.params.attachmentId,
+      );
+      if (!found) {
+        res
+          .status(404)
+          .json({ error: "NOT_FOUND", message: "Attachment not found" });
+        return;
+      }
+      streamOwnerDocument(found, req, res);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+router.get("/items/documents/:documentId/media", async (req, res, next) => {
+  try {
+    const found = await getRecallDocumentForUser(
+      req.user!.id,
+      req.params.documentId,
+    );
+    if (!found) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Document not found" });
+      return;
+    }
+    streamOwnerDocument(found, req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get("/items/:itemId/media", async (req, res, next) => {
   try {
     const found = await getItemMediaForUser(req.user!.id, req.params.itemId);
@@ -170,10 +254,12 @@ router.get("/items/:itemId/media", async (req, res, next) => {
       res.status(404).json({ error: "NOT_FOUND", message: "Item media not found" });
       return;
     }
-    res.setHeader("Content-Type", found.mimeType);
-    const disposition = req.query.download === "1" ? "attachment" : "inline";
-    res.setHeader("Content-Disposition", `${disposition}; filename="${found.fileName.replace(/"/g, "")}"`);
-    res.setHeader("Cache-Control", "private, no-store");
+    setOwnerDocumentHeaders(
+      found.mimeType,
+      found.fileName.replace(/"/g, ""),
+      req.query.download === "1",
+      res,
+    );
     res.sendFile(found.path);
   } catch (error) {
     next(error);

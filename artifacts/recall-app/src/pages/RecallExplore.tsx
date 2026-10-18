@@ -175,13 +175,15 @@ function SearchCard({
       )}
       {(result.document || result.openUrl) && (
         <div className="mt-3 flex gap-2">
-          <button
-            type="button"
-            onClick={open}
-            className="recall-document-action"
-          >
-            Open <ExternalLink size={12} />
-          </button>
+          {(result.document?.previewUrl || result.openUrl) && (
+            <button
+              type="button"
+              onClick={open}
+              className="recall-document-action"
+            >
+              Open <ExternalLink size={12} />
+            </button>
+          )}
           {result.document && (
             <a
               href={result.document.downloadUrl}
@@ -220,18 +222,20 @@ function DocumentCard({
           {result.document.name}
         </h3>
         <div className="mt-3 flex gap-2">
-          <button
-            type="button"
-            className="recall-document-action is-primary"
-            onClick={() =>
-              result.document?.previewUrl
-                ? onPreview(result.document.previewUrl, result.document.name)
-                : result.openUrl &&
-                  window.open(result.openUrl, "_blank", "noopener,noreferrer")
-            }
-          >
-            Open
-          </button>
+          {(result.document.previewUrl || result.openUrl) && (
+            <button
+              type="button"
+              className="recall-document-action is-primary"
+              onClick={() =>
+                result.document?.previewUrl
+                  ? onPreview(result.document.previewUrl, result.document.name)
+                  : result.openUrl &&
+                    window.open(result.openUrl, "_blank", "noopener,noreferrer")
+              }
+            >
+              Open
+            </button>
+          )}
           <a
             href={result.document.downloadUrl}
             className="recall-document-action"
@@ -510,6 +514,7 @@ export function RecallExplore() {
         if (
           presentation === "document" &&
           documentResult &&
+          sourceKeys.size === 0 &&
           !proofResults.includes(documentResult)
         ) {
           proofResults = [documentResult, ...proofResults];
@@ -1057,7 +1062,12 @@ export function RecallExplore() {
                   <X size={17} />
                 </button>
               </div>
-              <iframe src={preview.url} title={preview.title} />
+              <iframe
+                src={preview.url}
+                title={preview.title}
+                sandbox=""
+                referrerPolicy="no-referrer"
+              />
             </div>
           </div>
         )}

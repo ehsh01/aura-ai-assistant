@@ -96,11 +96,25 @@ function itemResult(item: SavedItemDto): ExploreSearchResult {
           kind: "recall",
           name: item.media.fileName ?? item.title,
           mimeType: item.media.mimeType ?? null,
-          previewUrl: mediaUrl,
+          previewUrl: canPreviewDocumentMime(item.media.mimeType)
+            ? mediaUrl
+            : null,
           downloadUrl: `${mediaUrl}?download=1`,
         }
       : null,
   };
+}
+
+function canPreviewDocumentMime(mimeType: string | null | undefined): boolean {
+  const mime = (mimeType ?? "").toLowerCase();
+  return (
+    mime === "application/pdf" ||
+    mime === "text/plain" ||
+    /^image\/(?:avif|bmp|gif|jpe?g|png|webp)$/.test(mime) ||
+    /^application\/vnd\.google-apps\.(?:document|drawing|presentation|spreadsheet)$/.test(
+      mime,
+    )
+  );
 }
 
 function metadataString(
@@ -111,10 +125,55 @@ function metadataString(
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function gmailDocument(
+  sourceRecordId: string,
+  metadata: Record<string, unknown> | null | undefined,
+): ExploreDocument | null {
+  const values = Array.isArray(metadata?.attachments)
+    ? metadata.attachments
+    : [];
+  const attachment = values.find(
+    (value) =>
+      value &&
+      typeof value === "object" &&
+      typeof (value as { id?: unknown }).id === "string",
+  ) as
+    | {
+        id: string;
+        fileName?: unknown;
+        mimeType?: unknown;
+      }
+    | undefined;
+  if (!attachment) return null;
+  const mimeType =
+    typeof attachment.mimeType === "string" ? attachment.mimeType : null;
+  const mediaUrl =
+    `/api/items/source-records/${encodeURIComponent(sourceRecordId)}` +
+    `/gmail-attachments/${encodeURIComponent(attachment.id)}/media`;
+  return {
+    kind: "gmail",
+    name:
+      typeof attachment.fileName === "string"
+        ? attachment.fileName
+        : "Gmail attachment",
+    mimeType,
+    previewUrl: canPreviewDocumentMime(mimeType) ? mediaUrl : null,
+    downloadUrl: `${mediaUrl}?download=1`,
+  };
+}
+
 async function evernoteDocument(
   userId: string,
   sourceRecordId: string,
+  preferredAttachmentId?: string | null,
 ): Promise<ExploreDocument | null> {
+  const clauses = [
+    eq(evernoteAttachments.userId, userId),
+    eq(evernoteAttachments.sourceRecordId, sourceRecordId),
+  ];
+  if (preferredAttachmentId) {
+    clauses.push(eq(evernoteAttachments.id, preferredAttachmentId));
+  }
   const rows = await getDb()
     .select({
       id: evernoteAttachments.id,
@@ -123,10 +182,7 @@ async function evernoteDocument(
     })
     .from(evernoteAttachments)
     .where(
-      and(
-        eq(evernoteAttachments.userId, userId),
-        eq(evernoteAttachments.sourceRecordId, sourceRecordId),
-      ),
+      and(...clauses),
     )
     .limit(1);
   const attachment = rows[0];
@@ -136,7 +192,7 @@ async function evernoteDocument(
     kind: "evernote",
     name: attachment.fileName ?? "Evernote attachment",
     mimeType: attachment.mime,
-    previewUrl: mediaUrl,
+    previewUrl: canPreviewDocumentMime(attachment.mime) ? mediaUrl : null,
     downloadUrl: `${mediaUrl}?download=1`,
   };
 }
@@ -163,11 +219,10 @@ export async function searchExploreForUser(
     }),
   ]);
 
-  const results: ExploreSearchResult[] = native.map(itemResult);
-  const seen = new Set(results.map((result) => result.id));
+  const nativeResults = native.map(itemResult);
+  const retrievalResults: ExploreSearchResult[] = [];
   for (const record of retrieval.records) {
     const key = `${record.entityType}:${record.entityId}`;
-    if (seen.has(key)) continue;
     const isEvernote =
       record.entityType === "source_record" &&
       record.recordType === "evernote_note";
@@ -180,30 +235,50 @@ export async function searchExploreForUser(
     const metadata = record.sourceMetadata;
     let document: ExploreDocument | null = null;
     if (isEvernote) {
-      document = await evernoteDocument(userId, record.entityId);
+      document = await evernoteDocument(
+        userId,
+        record.entityId,
+        metadataString(metadata, "matchedAttachmentId"),
+      );
+    } else if (
+      record.entityType === "source_record" &&
+      record.recordType === "gmail_message"
+    ) {
+      document = gmailDocument(record.entityId, metadata);
     } else if (
       record.entityType === "source_record" &&
       record.recordType === "drive_file" &&
-      metadata?.isFolder !== true
+      metadata?.isFolder !== true &&
+      metadataString(metadata, "mimeType") !==
+        "application/vnd.google-apps.folder"
     ) {
       const mediaUrl = `/api/items/source-records/${encodeURIComponent(record.entityId)}/media`;
       document = {
         kind: "drive",
         name: record.title,
         mimeType: metadataString(metadata, "mimeType"),
-        previewUrl: mediaUrl,
+        previewUrl: canPreviewDocumentMime(
+          metadataString(metadata, "mimeType"),
+        )
+          ? mediaUrl
+          : null,
         downloadUrl: `${mediaUrl}?download=1`,
       };
-    } else if (record.entityType === "document") {
+    } else if (
+      record.entityType === "document" &&
+      metadataString(metadata, "storagePath")
+    ) {
+      const mediaUrl = `/api/items/documents/${encodeURIComponent(record.entityId)}/media`;
+      const mimeType = metadataString(metadata, "mimeType");
       document = {
         kind: "recall",
         name: record.title,
-        mimeType: metadataString(metadata, "mimeType"),
-        previewUrl: null,
-        downloadUrl: `/api/documents/${encodeURIComponent(record.entityId)}/download`,
+        mimeType,
+        previewUrl: canPreviewDocumentMime(mimeType) ? mediaUrl : null,
+        downloadUrl: `${mediaUrl}?download=1`,
       };
     }
-    results.push({
+    retrievalResults.push({
       id: key,
       entityType: record.entityType,
       source: sourceLabel(record.entityType, record.recordType),
@@ -216,7 +291,32 @@ export async function searchExploreForUser(
       itemId,
       document,
     });
-    seen.add(key);
   }
-  return results.slice(0, safeLimit);
+
+  const canonicalKey = (result: ExploreSearchResult): string => {
+    if (result.itemId?.startsWith("note:")) return result.itemId;
+    if (result.itemId?.startsWith("evernote:")) return result.itemId;
+    if (
+      result.entityType === "source_record" &&
+      result.kind === "evernote_note"
+    ) {
+      return `evernote:${result.id.slice(result.id.indexOf(":") + 1)}`;
+    }
+    return result.id;
+  };
+  const merged: ExploreSearchResult[] = [];
+  const seen = new Set<string>();
+  const append = (result: ExploreSearchResult | undefined) => {
+    if (!result) return;
+    const key = canonicalKey(result);
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(result);
+  };
+  const length = Math.max(nativeResults.length, retrievalResults.length);
+  for (let index = 0; index < length && merged.length < safeLimit; index += 1) {
+    append(retrievalResults[index]);
+    if (merged.length < safeLimit) append(nativeResults[index]);
+  }
+  return merged;
 }
