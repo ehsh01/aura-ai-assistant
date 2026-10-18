@@ -1535,6 +1535,14 @@ export async function getVoiceAiAvailability(): Promise<VoiceAiAvailability> {
   return apiFetch("/ai/voice/availability");
 }
 
+export type WakeWordConfig = {
+  enabled: boolean;
+};
+
+export async function getWakeWordConfig(): Promise<WakeWordConfig> {
+  return apiFetch("/ai/wakeword/config");
+}
+
 export async function queryVoiceRecall(
   question: string,
   options?: { threadId?: string | null },
@@ -1692,6 +1700,40 @@ export async function transcribeUtterance(
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { message?: string };
     throw new Error(err.message ?? `Transcription failed (${res.status})`);
+  }
+  return res.json() as Promise<{
+    text: string;
+    provider: string;
+    model: string;
+    durationMs: number;
+  }>;
+}
+
+/** Upload audio captured only after the local "Hey Recall" detector fires. */
+export async function transcribeWakeWordUtterance(
+  blob: Blob,
+  options?: { locale?: string; filename?: string },
+): Promise<{
+  text: string;
+  provider: string;
+  model: string;
+  durationMs: number;
+}> {
+  const form = new FormData();
+  form.append("audio", blob, options?.filename ?? "wake-utterance.webm");
+  if (options?.locale) form.append("locale", options.locale);
+
+  const res = await fetch(`${API_BASE}/ai/wakeword/transcribe`, {
+    method: "POST",
+    body: form,
+    credentials: "include",
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { message?: string };
+    throw new Error(
+      err.message ?? `Wake-word transcription failed (${res.status})`,
+    );
   }
   return res.json() as Promise<{
     text: string;

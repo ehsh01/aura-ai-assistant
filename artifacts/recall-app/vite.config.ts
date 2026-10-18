@@ -111,6 +111,9 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2,webmanifest}"],
+        // The server kill switch must prevent downloading the inference code.
+        // This chunk is loaded only after the authenticated config gate passes.
+        globIgnores: ["**/wake-word-runtime-*.js", "wakeword/**"],
         navigateFallback: "index.html",
         navigateFallbackDenylist: [/^\/api/],
       },
@@ -145,6 +148,9 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
+      // Wake-word inference uses the WASM-only build. The package default also
+      // bundles WebGPU/WebNN JSEP (~28 MB), which Recall does not use.
+      "onnxruntime-web": "onnxruntime-web/wasm",
       "@": path.resolve(import.meta.dirname, "src"),
       "@assets": path.resolve(
         import.meta.dirname,

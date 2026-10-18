@@ -31,6 +31,7 @@ import { useSpeakAnswer } from "@/hooks/use-speak-answer";
 import { useSpeechInput } from "@/hooks/use-speech-input";
 import { toast } from "@/hooks/use-toast";
 import { shouldUseGridFallback } from "@/lib/graph-performance";
+import { subscribeVoiceAsk } from "@/lib/voice-activation";
 import {
   fetchKnowledgeGraph,
   getAskAiAvailability,
@@ -699,6 +700,14 @@ function LegacyEverything() {
       allowServerTranscription: false,
       onError: showSpeechError,
     },
+  );
+
+  useEffect(
+    () =>
+      subscribeVoiceAsk(({ transcript }) => {
+        void submitTalkTranscript(transcript);
+      }),
+    [submitTalkTranscript],
   );
 
   const stopTalkSpeech = useCallback(() => {

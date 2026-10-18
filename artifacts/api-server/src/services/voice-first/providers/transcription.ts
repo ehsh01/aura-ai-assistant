@@ -12,6 +12,8 @@ export type TranscriptionRequest = {
   filename?: string;
   /** BCP-47 locale hint. */
   locale?: string;
+  /** Cost attribution. Wake-word audio is reported separately from manual STT. */
+  feature?: "transcribe" | "voice_stt";
 };
 
 export type TranscriptionResult = {
