@@ -146,7 +146,7 @@ describe("spoken grounded answers", () => {
       expect.objectContaining({
         noteSearchQuery: "warranty?",
         semantic: false,
-        sourceScope: "notes",
+        sourceScope: "all",
       }),
     );
     expect(voice.answer).toBe(
@@ -219,7 +219,7 @@ describe("spoken grounded answers", () => {
     );
     const request = mocks.completion.mock.calls[0]![0];
     expect(request.messages[0].content).toContain(
-      "including a URL—you must answer the question and cite that note",
+      "including a URL—you must answer the question and cite that record",
     );
     expect(request.messages[1].content).toContain(
       "Link found: https://psychiatry.example.com/edit-links (from Adding and editing a web link on the Psychiatry website)",
@@ -299,7 +299,7 @@ describe("spoken grounded answers", () => {
       "u1",
       'What does my note "Adding and editing a web link on the Psychiatry website" say?',
       8,
-      expect.objectContaining({ sourceScope: "notes" }),
+      expect.objectContaining({ sourceScope: "all" }),
     );
   });
 

@@ -396,7 +396,7 @@ export async function testFlipperForceConnectorForUser(
 }
 
 /** Resolve a fresh Google access token for a connector row. */
-async function ensureGoogleAccessToken(conn: Connector): Promise<{
+export async function ensureGoogleAccessToken(conn: Connector): Promise<{
   accessToken: string;
   mailbox: string | null;
 }> {
