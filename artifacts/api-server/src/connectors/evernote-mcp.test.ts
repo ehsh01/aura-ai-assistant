@@ -139,7 +139,10 @@ describe("Evernote MCP read-only boundary", () => {
     const wrapperStart = mcpSource.indexOf(
       "export function createEvernoteReadOnlyCaller",
     );
-    const wrapperEnd = mcpSource.indexOf("\n}\n\nfunction invokeTool", wrapperStart);
+    const wrapperEnd = mcpSource.indexOf(
+      "\n}\n\nfunction invokeTool",
+      wrapperStart,
+    );
     expect(wrapperStart).toBeGreaterThanOrEqual(0);
     expect(wrapperEnd).toBeGreaterThan(wrapperStart);
 
@@ -165,10 +168,10 @@ describe("Evernote MCP read-only boundary", () => {
     );
     expect(source).not.toMatch(/\.(?:insert|update|delete)\s*\(/);
     expect(source).toContain("fetchEvernoteNoteListingPage");
-    expect(source).toContain("rowsParsed");
-    expect(source).toContain("totalResultCount");
+    expect(source).toContain("planEvernoteNotebookRanges");
+    expect(source).toContain("rowsBeyondFirst2000");
+    expect(source).toContain("--notebook-guid");
     expect(source).toContain("startIndex");
-    expect(source).toContain("hasMore");
     expect(source).not.toContain("onStateChanged");
   });
 });
@@ -252,13 +255,8 @@ describe("Evernote MCP connection probe", () => {
   });
 
   it("times out a fetch that never resolves and closes the transport", async () => {
-    const close = vi.spyOn(
-      StreamableHTTPClientTransport.prototype,
-      "close",
-    );
-    const fetchFn = vi.fn(
-      () => new Promise<Response>(() => undefined),
-    );
+    const close = vi.spyOn(StreamableHTTPClientTransport.prototype, "close");
+    const fetchFn = vi.fn(() => new Promise<Response>(() => undefined));
 
     let error: unknown;
     try {
@@ -337,9 +335,7 @@ describe("Evernote MCP auth persistence", () => {
     expect(String(sealed.clientSecret)).toMatch(/^v1\./);
     expect(String(sealed.token)).toMatch(/^v1\./);
 
-    const restored = mcpOAuthStateFromSettings(
-      openConnectorSettings(sealed),
-    );
+    const restored = mcpOAuthStateFromSettings(openConnectorSettings(sealed));
     expect(restored.clientInformation).toEqual(
       expect.objectContaining({
         client_id: "dcr-client",
@@ -356,8 +352,7 @@ describe("Evernote MCP auth persistence", () => {
       evernoteMcpAuthorizationCode(
         new URLSearchParams({
           error: "access_denied",
-          error_description:
-            "This account is not eligible without a paid plan",
+          error_description: "This account is not eligible without a paid plan",
         }),
       ),
     ).toThrow("not eligible without a paid plan");
@@ -402,6 +397,17 @@ describe("Evernote search_notes page parsing", () => {
     expect(page).toMatchObject({
       totalResultCount: 4927,
       startIndex: 2,
+      hasMore: true,
+    });
+  });
+
+  it("parses the sanitized empty page at Evernote's 2,000-row cap", () => {
+    expect(
+      parseEvernoteNoteListingPage(noteListingFixture.emptyAtCapForm, 2_000),
+    ).toMatchObject({
+      rows: [],
+      totalResultCount: 4927,
+      startIndex: 2_000,
       hasMore: true,
     });
   });
@@ -487,8 +493,8 @@ describe("Evernote MCP HTTP pacing", () => {
 
   it("marks exhausted HTTP 503 responses for attempt-free deferral", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0);
-    const fetchFn = vi.fn(async () =>
-      new Response("backend unavailable", { status: 503 }),
+    const fetchFn = vi.fn(
+      async () => new Response("backend unavailable", { status: 503 }),
     );
 
     await expect(
@@ -536,6 +542,171 @@ describe("Evernote MCP HTTP pacing", () => {
 });
 
 describe("Evernote MCP read sync", () => {
+  it("migrates a 2,000-row checkpoint, retries the named failure, and never requests the capped offset", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE = "25";
+    const total = 2_001;
+    const failedIndex = 731;
+    const guid = (index: number) =>
+      `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
+    const known = new Map(
+      Array.from({ length: 2_000 }, (_, index) => index)
+        .filter((index) => index !== failedIndex)
+        .map((index) => [
+          guid(index),
+          {
+            updateSequenceNum: null,
+            contentHash: "stored",
+            evernoteUpdated: null,
+            evernoteSeenSyncRunId: "resume-capped",
+            evernoteProcessedSyncRunId: "resume-capped",
+          },
+        ]),
+    );
+    const searchCalls: Array<Record<string, unknown>> = [];
+    const bodyCalls: string[] = [];
+    const textPage = (
+      ids: number[],
+      startIndex: number,
+      resultTotal: number,
+    ) => ({
+      content: [
+        {
+          type: "text",
+          text: `${ids
+            .map(
+              (index, offset) =>
+                `${offset + 1}. ${guid(index)} — Sanitized note ${index}`,
+            )
+            .join(
+              "\n",
+            )}\n\nShowing ${ids.length} of ${resultTotal} (startIndex=${startIndex}${startIndex + ids.length < resultTotal ? ", more available" : ""}).`,
+        },
+      ],
+      structuredContent: { totalResultCount: resultTotal },
+    });
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notebooks") {
+          return {
+            structuredContent: {
+              notebooks: [{ id: "nb-big", name: "Sanitized archive" }],
+            },
+          };
+        }
+        if (input.name === "search_notes") {
+          const args = input.arguments ?? {};
+          searchCalls.push(args);
+          const query = String(args.query ?? "");
+          const start = Number(args.startIndex ?? 0);
+          const max = Number(args.maxResults ?? 25);
+          if (!query.includes("nbGuid:")) {
+            if (start >= 2_000) {
+              return noteListingFixture.emptyAtCapForm;
+            }
+            const count = Math.min(max, total - start);
+            return textPage(
+              Array.from({ length: count }, (_, offset) => start + offset),
+              start,
+              total,
+            );
+          }
+          let rangeStart = 0;
+          let rangeTotal = total;
+          if (query.includes("-created:")) {
+            rangeTotal = 1_000;
+          } else if (query.includes("created:")) {
+            rangeStart = 1_000;
+            rangeTotal = 1_001;
+          }
+          const count = Math.min(max, rangeTotal - start);
+          return textPage(
+            Array.from(
+              { length: Math.max(0, count) },
+              (_, offset) => rangeStart + start + offset,
+            ),
+            start,
+            rangeTotal,
+          );
+        }
+        if (input.name === "get_note") {
+          const id = String(input.arguments?.noteId);
+          bodyCalls.push(id);
+          return {
+            structuredContent: {
+              id,
+              title:
+                id === guid(failedIndex)
+                  ? "Sanitized failed note"
+                  : "Sanitized new note",
+              content: "<en-note>Sanitized body</en-note>",
+              notebookId: "nb-big",
+            },
+          };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+
+    const result = await streamEvernoteViaMcp(client, {
+      syncRunId: "resume-capped",
+      partitionByNotebook: true,
+      checkpoint: {
+        startIndex: 2_000,
+        expectedTotal: 4_927,
+        recordsFetched: 2_000,
+        recordsSkipped: 0,
+        recordsFailed: 1,
+        batchesProcessed: 2_000,
+        listingAuthoritative: true,
+      },
+      taxonomy: { notebooks: [], tags: [], spaces: [] },
+      loadKnownNotes: async (ids) =>
+        new Map(
+          ids.filter((id) => known.has(id)).map((id) => [id, known.get(id)!]),
+        ),
+      processBatch: async (batch) => {
+        for (const item of batch.seen) {
+          const previous = known.get(item.externalId);
+          known.set(item.externalId, {
+            updateSequenceNum: null,
+            contentHash: previous?.contentHash ?? "stored",
+            evernoteUpdated: null,
+            evernoteSeenSyncRunId: "resume-capped",
+            evernoteProcessedSyncRunId: "resume-capped",
+          });
+        }
+      },
+    });
+
+    expect(
+      searchCalls.some(
+        (call) =>
+          String(call.query ?? "").includes("nbGuid:") &&
+          Number(call.startIndex) >= 2_000,
+      ),
+    ).toBe(false);
+    expect(bodyCalls).toEqual([guid(failedIndex), guid(2_000)]);
+    expect(result).toMatchObject({
+      startIndex: total,
+      recordsFailed: 0,
+      listingComplete: true,
+      recordsDeferred: 0,
+      notebookCursor: {
+        retryReport: [
+          {
+            guid: guid(failedIndex),
+            title: `Sanitized note ${failedIndex}`,
+            status: "recovered",
+          },
+        ],
+      },
+    });
+  });
+
   it("streams the sanitized production text listing without structured rows", async () => {
     process.env.EVERNOTE_MCP_PACE_MS = "0";
     const fixture = noteListingFixture.textContentForm;
@@ -756,7 +927,8 @@ describe("Evernote MCP read sync", () => {
 
   it("lists locally, fetches only changed note bodies, and normalizes GUID evidence", async () => {
     process.env.EVERNOTE_MCP_PACE_MS = "0";
-    const calls: Array<{ name: string; arguments?: Record<string, unknown> }> = [];
+    const calls: Array<{ name: string; arguments?: Record<string, unknown> }> =
+      [];
     const client = {
       async callTool(input: {
         name: string;
@@ -833,7 +1005,11 @@ describe("Evernote MCP read sync", () => {
     expect(result.recordsSkipped).toBe(1);
     expect(result.recordsFailed).toBe(0);
     expect(calls.filter((call) => call.name === "get_note")).toHaveLength(1);
-    expect(calls.every((call) => call.name.startsWith("search_") || call.name === "get_note")).toBe(true);
+    expect(
+      calls.every(
+        (call) => call.name.startsWith("search_") || call.name === "get_note",
+      ),
+    ).toBe(true);
     expect(result.records[0]).toMatchObject({
       externalId: "22222222-2222-4222-8222-222222222222",
       recordType: "evernote_note",
@@ -1001,7 +1177,9 @@ describe("Evernote MCP read sync", () => {
           return {
             structuredContent: {
               totalResultCount: 1,
-              notes: [{ id: "limited-note", updatedAt: "2026-10-17T00:00:00Z" }],
+              notes: [
+                { id: "limited-note", updatedAt: "2026-10-17T00:00:00Z" },
+              ],
             },
           };
         }
@@ -1240,7 +1418,9 @@ describe("Evernote MCP read sync", () => {
           return {
             structuredContent: {
               totalResultCount: 1,
-              notes: [{ id: "note-limited", updatedAt: "2026-10-17T00:00:00Z" }],
+              notes: [
+                { id: "note-limited", updatedAt: "2026-10-17T00:00:00Z" },
+              ],
             },
           };
         }
@@ -1438,7 +1618,9 @@ describe("Evernote MCP read sync", () => {
     const baseline = await enumerateEvernoteTaxonomy(client);
 
     expect(resumed).toEqual(baseline);
-    expect(calls.filter((call) => call === "search_notebooks:")).toHaveLength(2);
+    expect(calls.filter((call) => call === "search_notebooks:")).toHaveLength(
+      2,
+    );
     expect(resumedProgress.at(-1)).toMatchObject({
       stage: "complete",
       notebooksFound: 120,
@@ -1447,8 +1629,7 @@ describe("Evernote MCP read sync", () => {
     expect(
       resumedProgress.every(
         (progress) =>
-          progress.searchesDone >= 10 &&
-          progress.prefixesQueued >= 0,
+          progress.searchesDone >= 10 && progress.prefixesQueued >= 0,
       ),
     ).toBe(true);
   });
@@ -1559,7 +1740,9 @@ describe("Evernote MCP read sync", () => {
 
     expect(noteCalls).toBe(total);
     expect(batchSizes).toEqual(Array.from({ length: 55 }, () => 1));
-    expect(checkpoints).toEqual(Array.from({ length: 55 }, (_, index) => index + 1));
+    expect(checkpoints).toEqual(
+      Array.from({ length: 55 }, (_, index) => index + 1),
+    );
     expect(result).toMatchObject({
       recordsFetched: total,
       recordsDeferred: 0,

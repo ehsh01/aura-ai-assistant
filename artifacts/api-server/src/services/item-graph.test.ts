@@ -86,4 +86,28 @@ describe("knowledge graph caps and filters", () => {
     expect(vehicles.map((node) => node.type).sort()).toEqual(["notebooks", "tags"]);
     expect(new Set(vehicles.map((node) => node.id)).size).toBe(2);
   });
+
+  it("does not render internal notebook and year facets as tag nodes", () => {
+    const graph = buildKnowledgeGraph(
+      [
+        item("facets", {
+          tags: [
+            "real tag",
+            "notebook:cf240195-dcdb-486a-8ab5-example",
+            "year:2026",
+          ],
+        }),
+      ],
+      {
+        limit: 20,
+        offset: 0,
+        types: ["notes", "notebooks", "tags"],
+        maxEdgesPerNode: 8,
+      },
+    );
+    const tagLabels = graph.nodes
+      .filter((node) => node.type === "tags")
+      .map((node) => node.label);
+    expect(tagLabels).toEqual(["real tag"]);
+  });
 });

@@ -16,13 +16,23 @@ function add(tags: Set<string>, value: string | null | undefined): void {
   if (normalized) tags.add(normalized);
 }
 
+/** Internal search facets are not user-authored tags and must stay out of UI/graph. */
+export function isVisibleItemTag(value: string): boolean {
+  const normalized = normalize(value);
+  return (
+    !normalized.startsWith("notebook:") && !/^year:\d{4}$/.test(normalized)
+  );
+}
+
 /** Deterministic, free labels only. No model or embedding call is made here. */
 export function heuristicItemTags(input: HeuristicTagInput): string[] {
   const tags = new Set<string>();
 
   if (input.url) {
     try {
-      const domain = new URL(input.url).hostname.toLowerCase().replace(/^www\./, "");
+      const domain = new URL(input.url).hostname
+        .toLowerCase()
+        .replace(/^www\./, "");
       add(tags, domain);
       add(tags, `domain:${domain}`);
     } catch {
@@ -36,14 +46,14 @@ export function heuristicItemTags(input: HeuristicTagInput): string[] {
     add(tags, subtype ? `format:${subtype.replace(/^x-/, "")}` : null);
   }
 
-  for (const tag of input.evernoteTags ?? []) add(tags, tag);
-  if (input.notebook) add(tags, `notebook:${input.notebook}`);
+  for (const tag of input.evernoteTags ?? []) {
+    if (isVisibleItemTag(tag)) add(tags, tag);
+  }
 
   const date = input.date ?? new Date();
   if (!Number.isNaN(date.getTime())) {
     const year = String(date.getUTCFullYear());
     const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-    add(tags, `year:${year}`);
     add(tags, `date:${year}-${month}`);
   }
 

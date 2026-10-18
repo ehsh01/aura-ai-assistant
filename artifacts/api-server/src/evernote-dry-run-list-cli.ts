@@ -36,12 +36,21 @@ function connectorIdArgument(): string | null {
   return value;
 }
 
+function requiredArgument(name: string): string {
+  const index = process.argv.indexOf(name);
+  const value = index >= 0 ? process.argv[index + 1]?.trim() : "";
+  if (!value) throw new Error(`${name} requires a value`);
+  return value;
+}
+
 loadDotEnv();
 
 const { getDb, closeDb } = await import("./lib/db.js");
 const { openConnectorSettings } = await import("./lib/secret-box.js");
 const {
   fetchEvernoteNoteListingPage,
+  evernoteNotebookRangeQuery,
+  planEvernoteNotebookRanges,
   withEvernoteMcpClient,
 } = await import("./connectors/evernote-mcp.js");
 
@@ -80,27 +89,61 @@ try {
   if (settings.authTransport !== "mcp") {
     throw new Error("The selected Evernote connector does not use MCP");
   }
+  const notebookGuid = requiredArgument("--notebook-guid");
+  const notebookName =
+    process.argv.includes("--notebook-name")
+      ? requiredArgument("--notebook-name")
+      : notebookGuid;
 
   // Deliberately omit the persistence callback: OAuth refresh can occur in
   // memory for this connection, but the dry-run never stores tokens or DB state.
-  const result = await withEvernoteMcpClient(settings, (client) =>
-    fetchEvernoteNoteListingPage(client, {
-      query: "",
-      maxResults: 2,
-      startIndex: 0,
-    }),
-  );
+  const result = await withEvernoteMcpClient(settings, async (client) => {
+    const scope = { notebookGuid, notebookName };
+    const ranges = await planEvernoteNotebookRanges(client, scope);
+    const output: Array<{
+      query: string;
+      expected: number;
+      rows: number;
+      from: string | null;
+      before: string | null;
+    }> = [];
+    let totalRows = 0;
+    for (const range of ranges) {
+      let startIndex = 0;
+      let rows = 0;
+      while (startIndex < range.expectedTotal) {
+        const page = await fetchEvernoteNoteListingPage(client, {
+          query: evernoteNotebookRangeQuery(scope, range),
+          maxResults: 100,
+          startIndex,
+        });
+        if (page.rows.length === 0) {
+          throw new Error(
+            `Dry-run range ended early at ${startIndex} of ${range.expectedTotal}`,
+          );
+        }
+        rows += page.rows.length;
+        startIndex += page.rows.length;
+      }
+      totalRows += rows;
+      output.push({
+        query: evernoteNotebookRangeQuery(scope, range),
+        expected: range.expectedTotal,
+        rows,
+        from: range.from,
+        before: range.before,
+      });
+    }
+    return {
+      notebookGuid,
+      notebookName,
+      ranges: output,
+      totalRows,
+      rowsBeyondFirst2000: Math.max(0, totalRows - 2_000),
+    };
+  });
   console.log(
-    JSON.stringify(
-      {
-        rowsParsed: result.value.rows.length,
-        totalResultCount: result.value.totalResultCount,
-        startIndex: result.value.startIndex,
-        hasMore: result.value.hasMore,
-      },
-      null,
-      2,
-    ),
+    JSON.stringify(result.value, null, 2),
   );
 } finally {
   await closeDb();
