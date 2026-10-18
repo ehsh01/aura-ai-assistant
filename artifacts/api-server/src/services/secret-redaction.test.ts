@@ -17,8 +17,8 @@ export const FAKE_CREDENTIALS = {
   github: "ghp_FakeGithubToken1234567890",
   slack: "xoxb-fake-slack-token-123456",
   jwt: "eyJhbGciOiJIUzI1NiJ9.ZmFrZXBheWxvYWQ.ZmFrZXNpZ25hdHVyZQ",
-  sshBare: "R00tPsychPass!",
-  commandToken: "tok3nV4lue",
+  sshBare: "R00t@Psych@Tail9",
+  commandToken: "R00t@Psych@Tail9",
 };
 
 export const PSYCHIATRY_SECRET_FIXTURE = `Psychiatry Inventory App
@@ -48,6 +48,8 @@ describe("credential redaction", () => {
       expect(redacted).not.toContain(secret);
     }
     expect(redacted).not.toContain("ZmFrZS1wcml2YXRlLWtleQ");
+    expect(redacted).not.toContain("Psych@Tail9");
+    expect(redacted).not.toContain("@Tail9");
     expect(redacted).toContain(`SSH password: ${HIDDEN_CREDENTIAL}`);
     expect(redacted).toContain(
       `postgres://inventory:${HIDDEN_CREDENTIAL}@db.example.health`,

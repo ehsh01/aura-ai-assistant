@@ -1,19 +1,31 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 export const HIDDEN_CREDENTIAL = "[hidden credential]";
+
+const credentialScope = new AsyncLocalStorage<Set<string>>();
+
+export function withCredentialRedactionScope<T>(operation: () => T): T {
+  if (credentialScope.getStore()) return operation();
+  return credentialScope.run(new Set<string>(), operation);
+}
+
+function rememberCredential(value: string): void {
+  const normalized = value.replace(/^["']|["']$/g, "");
+  if (normalized.length >= 6) credentialScope.getStore()?.add(normalized);
+}
 
 const PRIVATE_KEY_BLOCK =
   /-----BEGIN (?:OPENSSH |RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----[\s\S]*?-----END (?:OPENSSH |RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----/gi;
 const INLINE_PASSWORD =
   /\b((?:(?:ssh|database|db)\s+)?(?:password|passwd|pass|pwd|pin)\s*(?:is|[:=])\s*)([^\s,;]+)/gi;
 const GENERIC_USERINFO =
-  /\b((?:[a-z][a-z0-9+.-]*:\/\/)?[A-Za-z0-9._-]+:)([^@\s]+)(@[A-Za-z0-9.[\]:_-]+)/gi;
+  /\b((?:[a-z][a-z0-9+.-]*:\/\/)?[A-Za-z0-9._-]+:)(\S+)(@[A-Za-z0-9.[\]_-]+(?::\d+)?(?:[/?#][^\s]*)?)/gi;
 const SSHPASS_PASSWORD =
-  /\b(sshpass\s+-p\s+)(?:"[^"]*"|'[^']*'|\S+)/gi;
+  /\b(sshpass\s+-p\s+)("[^"]*"|'[^']*'|\S+)/gi;
 const UPPER_SNAKE_CREDENTIAL =
   /\b([A-Z][A-Z0-9_]*(?:_KEY|_SECRET|_TOKEN|_PASSWORD)\s*[:=]\s*)(["']?)([^\s"']+)(\2)/g;
 const LABELED_CREDENTIAL =
   /\b((?:(spaces|digitalocean|aws|s3|access|secret|api|private|ssh|root|admin|db|database|do)\s+)?(key|secret|token|password|passwd|pwd|pass|pin)\s*[:=]\s*)(["']?)([^\s"']+)(\4)/gi;
-const CREDENTIAL_CONTEXT =
-  /\b(?:spaces|digitalocean|aws|s3|access|secret|api|private|ssh|root|admin|db|database|do)\b/i;
 const BEARER_TOKEN = /\bBearer\s+[A-Za-z0-9._~+/-]{8,}={0,2}/gi;
 const OPENAI_KEY = /\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\b/g;
 const GITHUB_TOKEN = /\bgh[pousr]_[A-Za-z0-9]{16,}\b/g;
@@ -24,28 +36,28 @@ const JWT =
 const HIGH_ENTROPY_TOKEN = /[A-Za-z0-9/+=_-]{32,}/g;
 
 function redactLabeledCredentials(text: string): string {
-  let previousLine = "";
   return text.replace(/^.*$/gm, (line) => {
-    const hasCredentialContext =
-      CREDENTIAL_CONTEXT.test(line) || CREDENTIAL_CONTEXT.test(previousLine);
     let redacted = line.replace(
       UPPER_SNAKE_CREDENTIAL,
-      `$1${HIDDEN_CREDENTIAL}`,
-    );
-    redacted = redacted.replace(
-      LABELED_CREDENTIAL,
-      (match, label: string, prefix: string | undefined, name: string) => {
-        if (
-          name.toLowerCase() === "key" &&
-          !prefix &&
-          !hasCredentialContext
-        ) {
-          return match;
-        }
+      (_match, label: string, _quote: string, value: string) => {
+        rememberCredential(value);
         return `${label}${HIDDEN_CREDENTIAL}`;
       },
     );
-    previousLine = line;
+    redacted = redacted.replace(
+      LABELED_CREDENTIAL,
+      (
+        _match,
+        label: string,
+        _prefix: string | undefined,
+        _name: string,
+        _quote: string,
+        value: string,
+      ) => {
+        rememberCredential(value);
+        return `${label}${HIDDEN_CREDENTIAL}`;
+      },
+    );
     return redacted;
   });
 }
@@ -69,6 +81,7 @@ function redactSshFollowingPasswords(text: string): string {
     const remainder = line.slice(end);
     const sameLineToken = remainder.trim().split(/\s+/)[0] ?? "";
     if (sameLineToken && !isCommandOrPath(sameLineToken)) {
+      rememberCredential(sameLineToken);
       lines[index] =
         line.slice(0, end) +
         remainder.replace(sameLineToken, HIDDEN_CREDENTIAL);
@@ -79,6 +92,7 @@ function redactSshFollowingPasswords(text: string): string {
       if (!candidate) continue;
       const token = candidate.split(/\s+/)[0] ?? "";
       if (token && !isCommandOrPath(token)) {
+        rememberCredential(token);
         lines[next] = (lines[next] ?? "").replace(
           token,
           HIDDEN_CREDENTIAL,
@@ -113,23 +127,75 @@ function redactHighEntropyTokens(text: string): string {
     }
     const mixedCase = /[a-z]/.test(token) && /[A-Z]/.test(token);
     const hasEntropyMarker = /\d|[+/]/.test(token);
-    return mixedCase && hasEntropyMarker ? HIDDEN_CREDENTIAL : token;
+    if (mixedCase && hasEntropyMarker) {
+      rememberCredential(token);
+      return HIDDEN_CREDENTIAL;
+    }
+    return token;
   });
+}
+
+function redactKnownCredentialValues(text: string): string {
+  const known = [...(credentialScope.getStore() ?? [])].sort(
+    (a, b) => b.length - a.length,
+  );
+  let redacted = text;
+  for (const value of known) {
+    if (value.length >= 6) redacted = redacted.split(value).join(HIDDEN_CREDENTIAL);
+  }
+  return redacted.replace(
+    /[A-Za-z0-9@:/+_=.-]{6,}/g,
+    (token) =>
+      known.some((value) => value.length >= token.length && value.includes(token))
+        ? HIDDEN_CREDENTIAL
+        : token,
+  );
 }
 
 export function redactCredentials(text: string): string {
   if (!text) return text;
-  const known = text
-    .replace(PRIVATE_KEY_BLOCK, HIDDEN_CREDENTIAL)
-    .replace(GENERIC_USERINFO, `$1${HIDDEN_CREDENTIAL}$3`)
-    .replace(SSHPASS_PASSWORD, `$1${HIDDEN_CREDENTIAL}`)
-    .replace(INLINE_PASSWORD, `$1${HIDDEN_CREDENTIAL}`)
-    .replace(BEARER_TOKEN, HIDDEN_CREDENTIAL)
-    .replace(OPENAI_KEY, HIDDEN_CREDENTIAL)
-    .replace(GITHUB_TOKEN, HIDDEN_CREDENTIAL)
-    .replace(SLACK_TOKEN, HIDDEN_CREDENTIAL)
-    .replace(ACCESS_KEY, HIDDEN_CREDENTIAL)
-    .replace(JWT, HIDDEN_CREDENTIAL);
+  const scoped = redactKnownCredentialValues(text);
+  const known = scoped
+    .replace(PRIVATE_KEY_BLOCK, (value) => {
+      rememberCredential(value);
+      return HIDDEN_CREDENTIAL;
+    })
+    .replace(GENERIC_USERINFO, (_match, prefix: string, value: string, host: string) => {
+      rememberCredential(value);
+      return `${prefix}${HIDDEN_CREDENTIAL}${host}`;
+    })
+    .replace(SSHPASS_PASSWORD, (_match, prefix: string, value: string) => {
+      rememberCredential(value);
+      return `${prefix}${HIDDEN_CREDENTIAL}`;
+    })
+    .replace(INLINE_PASSWORD, (_match, prefix: string, value: string) => {
+      rememberCredential(value);
+      return `${prefix}${HIDDEN_CREDENTIAL}`;
+    })
+    .replace(BEARER_TOKEN, (value) => {
+      rememberCredential(value.replace(/^Bearer\s+/i, ""));
+      return HIDDEN_CREDENTIAL;
+    })
+    .replace(OPENAI_KEY, (value) => {
+      rememberCredential(value);
+      return HIDDEN_CREDENTIAL;
+    })
+    .replace(GITHUB_TOKEN, (value) => {
+      rememberCredential(value);
+      return HIDDEN_CREDENTIAL;
+    })
+    .replace(SLACK_TOKEN, (value) => {
+      rememberCredential(value);
+      return HIDDEN_CREDENTIAL;
+    })
+    .replace(ACCESS_KEY, (value) => {
+      rememberCredential(value);
+      return HIDDEN_CREDENTIAL;
+    })
+    .replace(JWT, (value) => {
+      rememberCredential(value);
+      return HIDDEN_CREDENTIAL;
+    });
   return redactHighEntropyTokens(
     redactSshFollowingPasswords(redactLabeledCredentials(known)),
   );
