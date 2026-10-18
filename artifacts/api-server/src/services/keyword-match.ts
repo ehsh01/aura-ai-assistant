@@ -61,6 +61,10 @@ export const KEYWORD_STOP_WORDS = new Set([
   "some",
   "that",
   "this",
+  "it",
+  "its",
+  "they",
+  "them",
   "there",
   "here",
   "into",
@@ -136,6 +140,7 @@ export type FreeTextRelevance = {
   matchedTerms: number;
   allTerms: boolean;
   titleMatches: number;
+  exactTitle: boolean;
 };
 
 /**
@@ -150,7 +155,13 @@ export function freeTextRelevance(
 ): FreeTextRelevance {
   const terms = freeRetrievalTerms(query);
   if (terms.length === 0) {
-    return { score: 0, matchedTerms: 0, allTerms: false, titleMatches: 0 };
+    return {
+      score: 0,
+      matchedTerms: 0,
+      allTerms: false,
+      titleMatches: 0,
+      exactTitle: false,
+    };
   }
   const normalizedTitle = title.toLowerCase();
   const normalizedText = text.toLowerCase();
@@ -162,17 +173,28 @@ export function freeTextRelevance(
   }
   const matchedTerms = titleMatches + bodyMatches;
   if (matchedTerms === 0) {
-    return { score: 0, matchedTerms: 0, allTerms: false, titleMatches: 0 };
+    return {
+      score: 0,
+      matchedTerms: 0,
+      allTerms: false,
+      titleMatches: 0,
+      exactTitle: false,
+    };
   }
   const allTerms = matchedTerms === terms.length;
   const coverage = matchedTerms / terms.length;
   const titleCoverage = titleMatches / terms.length;
+  const titleTerms = freeRetrievalTerms(title);
+  const exactTitle =
+    titleTerms.length === terms.length &&
+    titleTerms.every((term, index) => term === terms[index]);
   const score =
     coverage +
     titleCoverage * 2 +
     (allTerms ? 1 : 0) +
-    (titleMatches === terms.length ? 2 : 0);
-  return { score, matchedTerms, allTerms, titleMatches };
+    (titleMatches === terms.length ? 2 : 0) +
+    (exactTitle ? 4 : 0);
+  return { score, matchedTerms, allTerms, titleMatches, exactTitle };
 }
 
 export function rankFreeTextMatches<T extends { title: string; text: string }>(
@@ -189,6 +211,7 @@ export function rankFreeTextMatches<T extends { title: string; text: string }>(
     .filter(({ relevance }) => relevance.score > 0)
     .sort(
       (a, b) =>
+        Number(b.relevance.exactTitle) - Number(a.relevance.exactTitle) ||
         Number(b.relevance.allTerms) - Number(a.relevance.allTerms) ||
         b.relevance.score - a.relevance.score ||
         a.index - b.index,

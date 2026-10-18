@@ -237,6 +237,10 @@ router.post("/ai/tts", async (req, res, next) => {
         res.flushHeaders();
 
         const reader = stream.getReader();
+        const cancelReader = () => {
+          void reader.cancel().catch(() => undefined);
+        };
+        res.once("close", cancelReader);
         try {
           while (!res.destroyed) {
             const { done, value } = await reader.read();
@@ -247,6 +251,7 @@ router.post("/ai/tts", async (req, res, next) => {
           }
           if (!res.destroyed) res.end();
         } finally {
+          res.off("close", cancelReader);
           if (res.destroyed) await reader.cancel().catch(() => undefined);
           reader.releaseLock();
         }

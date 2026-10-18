@@ -2,6 +2,7 @@ const mocks = vi.hoisted(() => ({
   speechCreate: vi.fn(),
   allowance: vi.fn(),
   lock: vi.fn(),
+  insideLock: false,
 }));
 
 vi.mock("../lib/feature-flags", () => ({
@@ -30,9 +31,15 @@ beforeEach(() => {
   mocks.allowance.mockReset();
   mocks.allowance.mockResolvedValue({ allowed: true, remaining: 1000 });
   mocks.lock.mockReset();
-  mocks.lock.mockImplementation(
-    async (_userId: string, fn: () => Promise<unknown>) => fn(),
-  );
+  mocks.insideLock = false;
+  mocks.lock.mockImplementation(async (_userId: string, fn: () => Promise<unknown>) => {
+    mocks.insideLock = true;
+    try {
+      return await fn();
+    } finally {
+      mocks.insideLock = false;
+    }
+  });
   mocks.speechCreate.mockReset();
 });
 
@@ -62,6 +69,7 @@ describe("streamSynthesizeSpeech", () => {
       "A short grounded answer.",
       "user-1",
       async ({ stream: body, contentType }) => {
+        expect(mocks.insideLock).toBe(false);
         expect(contentType).toBe("audio/mpeg");
         const reader = body.getReader();
         const first = await reader.read();

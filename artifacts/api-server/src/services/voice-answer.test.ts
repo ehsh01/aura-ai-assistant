@@ -20,7 +20,16 @@ vi.mock("./openai-client", () => ({
 vi.mock("./ask-threads", () => ({
   ensureAskThreadForUser: mocks.ensureThread,
   listRecentTurnsForThread: mocks.recentTurns,
-  retrievalQueryFromHistory: (question: string) => question,
+  retrievalQueryFromHistory: (
+    question: string,
+    history: Array<{ role: string; content: string }>,
+  ) => {
+    const prior = history
+      .filter((turn) => turn.role === "user")
+      .map((turn) => turn.content)
+      .join("\n");
+    return prior ? `${prior}\n${question}` : question;
+  },
   appendAskMessage: mocks.appendMessage,
 }));
 
@@ -197,6 +206,31 @@ describe("spoken grounded answers", () => {
       'What does my note "Adding and editing a web link on the Psychiatry website" say?',
       8,
       expect.objectContaining({ sourceScope: "notes" }),
+    );
+  });
+
+  it("uses prior user context for a pronoun-only follow-up", async () => {
+    const priorQuestion =
+      'What does my note "Adding and editing a web link on the Psychiatry website" say?';
+    mocks.recentTurns.mockResolvedValue([
+      { role: "user", content: priorQuestion },
+      { role: "assistant", content: "It explains how to edit that link." },
+    ]);
+    mocks.retrieve.mockResolvedValue({
+      records: [],
+      usedSemantic: false,
+      namedPeople: [],
+      tasks: [],
+    });
+
+    await queryVoiceNotesForUser("u1", "What does it say?", null);
+    expect(mocks.retrieve).toHaveBeenCalledWith(
+      "u1",
+      `${priorQuestion}\nWhat does it say?`,
+      8,
+      expect.objectContaining({
+        noteSearchQuery: `${priorQuestion}\nWhat does it say?`,
+      }),
     );
   });
 

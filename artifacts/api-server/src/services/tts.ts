@@ -84,10 +84,11 @@ export async function synthesizeSpeech(
   text: string,
   userId: string,
 ): Promise<{ buffer: Buffer; contentType: string }> {
-  return createSpeechForUser(text, userId, async (response) => ({
+  const response = await createSpeechForUser(text, userId);
+  return {
     buffer: Buffer.from(await response.arrayBuffer()),
     contentType: "audio/mpeg",
-  }));
+  };
 }
 
 type SpeechResponse = {
@@ -95,11 +96,10 @@ type SpeechResponse = {
   body: ReadableStream<Uint8Array> | null;
 };
 
-async function createSpeechForUser<T>(
+async function createSpeechForUser(
   text: string,
   userId: string,
-  consume: (response: SpeechResponse) => Promise<T>,
-): Promise<T> {
+): Promise<SpeechResponse> {
   assertServerTtsEnabled();
 
   const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -144,13 +144,14 @@ async function createSpeechForUser<T>(
       response_format: "mp3",
       ...(settings.instructions ? { instructions: settings.instructions } : {}),
     })) as SpeechResponse;
-    return consume(response);
+    return response;
   });
 }
 
 /**
- * Keep the paid-call lock and usage accounting active until the downstream
- * response has consumed the OpenAI body. No transcript is added to usage logs.
+ * OpenAI accepts the call and strict usage logging completes inside the paid
+ * call lock. Client download backpressure happens after releasing the advisory
+ * lock so a slow connection cannot hold a database connection.
  */
 export async function streamSynthesizeSpeech(
   text: string,
@@ -160,12 +161,11 @@ export async function streamSynthesizeSpeech(
     contentType: string;
   }) => Promise<void>,
 ): Promise<void> {
-  return createSpeechForUser(text, userId, async (response) => {
-    if (!response.body) {
-      throw Object.assign(new Error("OpenAI TTS returned no audio stream"), {
-        status: 502,
-      });
-    }
-    await consume({ stream: response.body, contentType: "audio/mpeg" });
-  });
+  const response = await createSpeechForUser(text, userId);
+  if (!response.body) {
+    throw Object.assign(new Error("OpenAI TTS returned no audio stream"), {
+      status: 502,
+    });
+  }
+  await consume({ stream: response.body, contentType: "audio/mpeg" });
 }

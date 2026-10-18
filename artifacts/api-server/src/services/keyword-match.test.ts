@@ -45,6 +45,12 @@ describe("free Ask retrieval ranking", () => {
     title: "Sell It Now! eBay",
     text: "An old Evernote copy about adding a web listing.",
   };
+  const reorderedTitle = {
+    id: "evernote-reordered-title",
+    kind: "evernote",
+    title: "Psychiatry website: editing and adding a web link",
+    text: "A different imported note with the same title words.",
+  };
   const records = [...receipts, otherEvernote, target];
 
   it.each([
@@ -57,6 +63,18 @@ describe("free Ask retrieval ranking", () => {
     expect(ranked[0]?.titleMatches).toBeGreaterThanOrEqual(2);
   });
 
+  it("breaks all-word ties in favor of the exact normalized title order", () => {
+    const ranked = rankFreeTextMatches(
+      'What does my note "Adding and editing a web link on the Psychiatry website" say?',
+      [reorderedTitle, target],
+    );
+    expect(ranked[0]).toMatchObject({ id: target.id, exactTitle: true });
+    expect(ranked[1]).toMatchObject({
+      id: reorderedTitle.id,
+      exactTitle: false,
+    });
+  });
+
   it("drops conversational filler and normalizes simple paraphrases", () => {
     expect(
       freeRetrievalTerms(
@@ -67,6 +85,7 @@ describe("free Ask retrieval ranking", () => {
       "psychiatry",
       "website",
     ]);
+    expect(freeRetrievalTerms("what does it say?")).toEqual([]);
   });
 
   it("returns no candidate for a truly absent topic", () => {

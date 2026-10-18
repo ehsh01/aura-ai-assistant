@@ -118,6 +118,7 @@ function configurePremiumAudio(
 async function appendSourceBuffer(
   sourceBuffer: SourceBuffer,
   chunk: Uint8Array,
+  signal: AbortSignal,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const onEnd = () => {
@@ -128,12 +129,22 @@ async function appendSourceBuffer(
       cleanup();
       reject(new Error("Could not append streamed TTS audio"));
     };
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException("TTS playback stopped", "AbortError"));
+    };
     const cleanup = () => {
       sourceBuffer.removeEventListener("updateend", onEnd);
       sourceBuffer.removeEventListener("error", onError);
+      signal.removeEventListener("abort", onAbort);
     };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
     sourceBuffer.addEventListener("updateend", onEnd, { once: true });
     sourceBuffer.addEventListener("error", onError, { once: true });
+    signal.addEventListener("abort", onAbort, { once: true });
     sourceBuffer.appendBuffer(new Uint8Array(chunk));
   });
 }
@@ -142,6 +153,7 @@ async function playMediaSourceResponse(
   response: Response,
   options: SpeakOptions,
   generation: number,
+  signal: AbortSignal,
 ): Promise<boolean> {
   if (!response.body) throw new Error("TTS returned no audio stream");
   const mediaSource = new MediaSource();
@@ -151,12 +163,32 @@ async function playMediaSourceResponse(
   configurePremiumAudio(audio, options, generation);
 
   const opened = new Promise<void>((resolve, reject) => {
-    mediaSource.addEventListener("sourceopen", () => resolve(), { once: true });
-    mediaSource.addEventListener(
-      "error",
-      () => reject(new Error("Could not open streamed TTS audio")),
-      { once: true },
-    );
+    const onOpen = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("Could not open streamed TTS audio"));
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException("TTS playback stopped", "AbortError"));
+    };
+    const cleanup = () => {
+      mediaSource.removeEventListener("sourceopen", onOpen);
+      mediaSource.removeEventListener("error", onError);
+      mediaSource.removeEventListener("sourceclose", onError);
+      signal.removeEventListener("abort", onAbort);
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    mediaSource.addEventListener("sourceopen", onOpen, { once: true });
+    mediaSource.addEventListener("error", onError, { once: true });
+    mediaSource.addEventListener("sourceclose", onError, { once: true });
+    signal.addEventListener("abort", onAbort, { once: true });
   });
   await opened;
   if (generation !== speakGeneration) return false;
@@ -169,7 +201,7 @@ async function playMediaSourceResponse(
       const { done, value } = await reader.read();
       if (done) break;
       if (value.byteLength > 0) {
-        await appendSourceBuffer(sourceBuffer, value);
+        await appendSourceBuffer(sourceBuffer, value, signal);
         playing ??= audio.play();
       }
     }
@@ -285,7 +317,12 @@ export async function speakText(
       MediaSource.isTypeSupported("audio/mpeg") &&
       Boolean(response.body);
     return canStream
-      ? await playMediaSourceResponse(response, options, generation)
+      ? await playMediaSourceResponse(
+          response,
+          options,
+          generation,
+          controller.signal,
+        )
       : await playBlobResponse(response, options, generation);
   } catch (error) {
     if (generation !== speakGeneration) return false;

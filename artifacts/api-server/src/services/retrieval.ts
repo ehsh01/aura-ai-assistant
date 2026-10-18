@@ -835,6 +835,22 @@ function sourceMetadataTagText(
   return typeof raw === "string" ? raw : "";
 }
 
+export function evernoteMatchedText(input: {
+  recordType: string;
+  title: string;
+  excerpt: string;
+  tagText?: string;
+  attachmentText?: string;
+}): string {
+  return `${sourceTypeAliases(input.recordType)} source=${input.recordType} ${input.title}${
+    input.tagText ? ` tags=${input.tagText}` : ""
+  }\nMatched passage: ${input.excerpt}${
+    input.attachmentText
+      ? `\nMatched attachment: ${input.attachmentText}`
+      : ""
+  }`;
+}
+
 /** Full-library Evernote FTS, independent of the recent-source corpus cap. */
 export async function searchEvernoteSourceRecordsForUser(
   userId: string,
@@ -860,6 +876,27 @@ export async function searchEvernoteSourceRecordsForUser(
         ),
         1200
       )`,
+      attachmentText: sql<string>`coalesce((
+        select left(
+          concat_ws(
+            E'\n',
+            coalesce(ea.file_name, ''),
+            ts_headline(
+              'simple',
+              coalesce(ea.extracted_text, ''),
+              to_tsquery('simple', ${tsQueries.any}),
+              'MaxWords=80, MinWords=20, ShortWord=2, HighlightAll=false'
+            )
+          ),
+          1200
+        )
+        from evernote_attachments ea
+        where ea.source_record_id = ${sourceRecords.id}
+          and ea.user_id = ${userId}::uuid
+          and ea.search_tsv @@ to_tsquery('simple', ${tsQueries.any})
+        order by ts_rank_cd(ea.search_tsv, to_tsquery('simple', ${tsQueries.any})) desc
+        limit 1
+      ), '')`,
       updatedAt: sourceRecords.updatedAt,
       sourceCreatedAt: sourceRecords.sourceCreatedAt,
       sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
@@ -892,10 +929,26 @@ export async function searchEvernoteSourceRecordsForUser(
     )
     .orderBy(
       sql`CASE WHEN to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')) @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
-      sql`CASE WHEN ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
+      sql`CASE WHEN (
+        ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.all})
+        OR exists (
+          select 1
+          from evernote_attachments ea
+          where ea.source_record_id = ${sourceRecords.id}
+            and ea.user_id = ${userId}::uuid
+            and ea.search_tsv @@ to_tsquery('simple', ${tsQueries.all})
+        )
+      ) THEN 1 ELSE 0 END DESC`,
       sql`(
         ts_rank_cd(to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')), to_tsquery('simple', ${tsQueries.any})) * 4
         + ts_rank_cd(coalesce(${sourceRecords.searchTsv}, ''::tsvector), to_tsquery('simple', ${tsQueries.any}))
+        + coalesce((
+          select max(ts_rank_cd(ea.search_tsv, to_tsquery('simple', ${tsQueries.any})))
+          from evernote_attachments ea
+          where ea.source_record_id = ${sourceRecords.id}
+            and ea.user_id = ${userId}::uuid
+            and ea.search_tsv @@ to_tsquery('simple', ${tsQueries.any})
+        ), 0)
       ) DESC`,
       desc(sourceRecords.sourceUpdatedAt),
     )
@@ -906,9 +959,13 @@ export async function searchEvernoteSourceRecordsForUser(
     const tagText = sourceMetadataTagText(row.metadata);
     return {
       ...context,
-      text: `${sourceTypeAliases(row.recordType)} source=${row.recordType} ${context.title}${
-        tagText ? ` tags=${tagText}` : ""
-      }\nMatched passage: ${excerpt}`,
+      text: evernoteMatchedText({
+        recordType: row.recordType,
+        title: context.title,
+        excerpt,
+        tagText,
+        attachmentText: row.attachmentText,
+      }),
     };
   });
 }
@@ -940,6 +997,7 @@ export async function retrieveFreeNoteRecordsForUser(
       matchedTerms: _matched,
       allTerms: _all,
       titleMatches: _title,
+      exactTitle: _exactTitle,
       ...record
     }) => record,
   );
