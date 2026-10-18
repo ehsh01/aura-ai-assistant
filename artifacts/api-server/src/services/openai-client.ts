@@ -60,13 +60,16 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
     model: string,
     usage?: UsageLike | null,
     costMicros?: number,
+    measurements?: { characters?: number; seconds?: number },
   ): Promise<void> => {
     const ctx = context();
     await recordAiUsage(
       {
         ...ctx,
+        provider: "openai",
         model: model || "unknown",
         ...usageTokens(usage),
+        ...measurements,
         ...(costMicros === undefined ? {} : { costMicros }),
       },
       { strict: true },
@@ -164,6 +167,7 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
           completion_tokens: 0,
         },
         ttsCostMicros(model, params.input),
+        { characters: String(params.input ?? "").length },
       );
       return result;
     } catch (err) {
@@ -183,7 +187,10 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
     const model = String(params.model ?? "whisper-1");
     try {
       const result = await createTranscription(params, requestOptions);
-      await record(model, null, transcriptionCostMicros(result));
+      const seconds = Number((result as { duration?: unknown })?.duration ?? 0);
+      await record(model, null, transcriptionCostMicros(result), {
+        seconds: Number.isFinite(seconds) ? seconds : 0,
+      });
       return result;
     } catch (err) {
       await record(model, null, 0);

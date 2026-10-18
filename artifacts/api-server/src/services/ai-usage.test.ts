@@ -10,6 +10,7 @@ vi.mock("../lib/db", () => ({
     insert: mocks.insert,
     select: mocks.select,
   }),
+  withDbAdvisoryLock: (_key: string, fn: () => Promise<unknown>) => fn(),
 }));
 
 import {
@@ -26,10 +27,15 @@ import {
   priceFor,
   recordAiUsage,
   resetBudgetCacheForTests,
+  startOfAiBudgetDay,
   usageSummary,
   usageTokens,
   userAiAllowance,
+  voiceAiAllowance,
+  voiceAskDailyLimit,
+  voiceTtsDailyCharacters,
   withAiFeature,
+  withVoiceAiLock,
 } from "./ai-usage";
 
 /** Stub the drizzle chain used by spendTodayUsd(). */
@@ -108,6 +114,9 @@ const ENV_KEYS = [
   "RECALL_EMAIL_AI_SCAN_ENABLED",
   "RECALL_HOME_AI_DIGEST_ENABLED",
   "RECALL_EMBEDDING_WARM_ENABLED",
+  "RECALL_VOICE_AI_ENABLED",
+  "RECALL_VOICE_ASK_DAILY_LIMIT",
+  "RECALL_VOICE_TTS_DAILY_CHARS",
 ] as const;
 
 let savedEnv: Record<string, string | undefined> = {};
@@ -352,6 +361,113 @@ describe("per-user Ask budget guard", () => {
       allowed: false,
       reason: "daily_limit",
     });
+  });
+});
+
+describe("voice AI caps", () => {
+  it("defaults the master switch off and uses conservative daily limits", async () => {
+    expect(voiceAskDailyLimit()).toBe(30);
+    expect(voiceTtsDailyCharacters()).toBe(15_000);
+    await expect(voiceAiAllowance("voice_ask", "u1")).resolves.toEqual({
+      allowed: false,
+      reason: "disabled",
+    });
+    expect(mocks.select).not.toHaveBeenCalled();
+  });
+
+  it("checks the global budget and per-user Ask count before a paid call", async () => {
+    process.env.RECALL_VOICE_AI_ENABLED = "true";
+    process.env.AI_DAILY_BUDGET_USD = "1";
+    process.env.RECALL_VOICE_ASK_DAILY_LIMIT = "30";
+    let call = 0;
+    mocks.select.mockImplementation(() => ({
+      from: () => ({
+        where: () =>
+          Promise.resolve(
+            call++ === 0
+              ? [{ micros: "250000" }]
+              : [
+                  {
+                    calls: "29",
+                    totalTokens: "0",
+                    characters: "0",
+                    seconds: "0",
+                  },
+                ],
+          ),
+      }),
+    }));
+
+    await expect(voiceAiAllowance("voice_ask", "u1")).resolves.toEqual({
+      allowed: true,
+      remaining: 0,
+    });
+  });
+
+  it("blocks TTS when the requested text would cross the character cap", async () => {
+    process.env.RECALL_VOICE_AI_ENABLED = "true";
+    process.env.RECALL_VOICE_TTS_DAILY_CHARS = "100";
+    let call = 0;
+    mocks.select.mockImplementation(() => ({
+      from: () => ({
+        where: () =>
+          Promise.resolve(
+            call++ === 0
+              ? [{ micros: "0" }]
+              : [
+                  {
+                    calls: "1",
+                    totalTokens: "0",
+                    characters: "90",
+                    seconds: "0",
+                  },
+                ],
+          ),
+      }),
+    }));
+
+    await expect(voiceAiAllowance("voice_tts", "u1", 11)).resolves.toEqual({
+      allowed: false,
+      reason: "daily_limit",
+    });
+  });
+
+  it("serializes concurrent paid voice checks for one user", async () => {
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const first = withVoiceAiLock("u1", async () => {
+      events.push("first:start");
+      await firstGate;
+      events.push("first:end");
+    });
+    const second = withVoiceAiLock("u1", async () => {
+      events.push("second:start");
+      events.push("second:end");
+    });
+    await Promise.resolve();
+    expect(events).toEqual(["first:start"]);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(events).toEqual([
+      "first:start",
+      "first:end",
+      "second:start",
+      "second:end",
+    ]);
+  });
+});
+
+describe("AI budget day", () => {
+  it("resets at midnight America/New_York rather than midnight UTC", () => {
+    expect(
+      startOfAiBudgetDay(new Date("2026-07-04T03:59:59Z")).toISOString(),
+    ).toBe("2026-07-03T04:00:00.000Z");
+    expect(
+      startOfAiBudgetDay(new Date("2026-07-04T04:00:00Z")).toISOString(),
+    ).toBe("2026-07-04T04:00:00.000Z");
   });
 });
 

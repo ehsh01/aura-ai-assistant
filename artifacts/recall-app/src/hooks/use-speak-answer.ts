@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getVoiceAnswersEnabled,
   isVoiceAnswersSupported,
@@ -11,10 +11,14 @@ import {
  * Speaks Ask answers when voice is enabled.
  * Uses free browser speech by default; OpenAI TTS only when premium is on.
  */
-export function useSpeakAnswer(answer: string | null | undefined, ready: boolean) {
+export function useSpeakAnswer(
+  answer: string | null | undefined,
+  ready: boolean,
+) {
   const supported = isVoiceAnswersSupported();
   const [enabled, setEnabled] = useState(() => getVoiceAnswersEnabled());
   const [speaking, setSpeaking] = useState(false);
+  const ownsSpeechRef = useRef(false);
 
   const setVoiceEnabled = useCallback((next: boolean) => {
     setVoiceAnswersEnabled(next);
@@ -41,25 +45,38 @@ export function useSpeakAnswer(answer: string | null | undefined, ready: boolean
 
   useEffect(() => {
     if (!supported || !enabled || !ready || !answer?.trim()) {
-      stopSpeaking();
-      setSpeaking(false);
+      if (ownsSpeechRef.current) {
+        ownsSpeechRef.current = false;
+        stopSpeaking();
+        setSpeaking(false);
+      }
       return;
     }
 
     let cancelled = false;
+    ownsSpeechRef.current = true;
     setSpeaking(true);
     void speakText(answer, {
       onEnd: () => {
-        if (!cancelled) setSpeaking(false);
+        if (!cancelled) {
+          ownsSpeechRef.current = false;
+          setSpeaking(false);
+        }
       },
       onError: () => {
-        if (!cancelled) setSpeaking(false);
+        if (!cancelled) {
+          ownsSpeechRef.current = false;
+          setSpeaking(false);
+        }
       },
     });
 
     return () => {
       cancelled = true;
-      stopSpeaking();
+      if (ownsSpeechRef.current) {
+        ownsSpeechRef.current = false;
+        stopSpeaking();
+      }
     };
   }, [answer, enabled, ready, supported]);
 

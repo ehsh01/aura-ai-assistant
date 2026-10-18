@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  canProcessSpeechLocally,
   ensureMicPermission,
   getSpeechBlockReason,
   getSpeechRecognitionCtor,
@@ -112,10 +113,14 @@ export function useSpeechInput(
     recognitionRef.current?.abort();
     deliveredRef.current = false;
 
+    const useLocalRecognition = await canProcessSpeechLocally(Ctor, "en-US");
     const recognition = new Ctor();
     recognition.continuous = false;
     recognition.interimResults = isIosDevice();
     recognition.lang = "en-US";
+    // Chrome 139+ can keep recognition on-device when its English language
+    // pack is available. Older browsers ignore this extension.
+    if (useLocalRecognition) recognition.processLocally = true;
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       const transcript = collectTranscript(event);

@@ -50,7 +50,10 @@ import {
 } from "./nl-gmail-query";
 import { isDriveSearchIntent, planDriveSearch } from "./nl-drive-query";
 import { isHomeyAskIntent, planHomeyAsk } from "./nl-homey-query";
-import { isFlipperForceAskIntent, planFlipperForceAsk } from "./nl-flipperforce-query";
+import {
+  isFlipperForceAskIntent,
+  planFlipperForceAsk,
+} from "./nl-flipperforce-query";
 import { extractMailboxHint, retrieveRelevantRecords } from "./retrieval";
 import { promptTextForRetrievedRecord } from "./prompt-context";
 import { listWaitingOnForUser } from "./waiting-on";
@@ -75,7 +78,10 @@ import {
   type AskAnswerImage,
 } from "./ask-images";
 import { listImageAttachmentsForNotes } from "./note-attachments";
-import { executeHomeyAskForUser, executeFlipperForceAskForUser } from "./connectors";
+import {
+  executeHomeyAskForUser,
+  executeFlipperForceAskForUser,
+} from "./connectors";
 import { listOpenHomeyAlertsForUser } from "./homey-alerts";
 import { formatUserRulesForPrompt } from "./user-rules";
 import { listRecentAskFeedbackHints } from "./ask-feedback";
@@ -88,7 +94,7 @@ import {
 } from "./ask-accuracy-policy";
 import { verifyFinanceAmountsInAnswer } from "./ask-verifier";
 import { isRelationLiteral } from "./ask-accuracy-policy";
-import { userAiAllowance } from "./ai-usage";
+import { userAiAllowance, type AiFeature } from "./ai-usage";
 
 function buildFinanceBreakdownAnswer(
   finance: QueryFinanceAggregate,
@@ -107,7 +113,9 @@ function buildFinanceBreakdownAnswer(
       }
       // Net breakdown: omit transfers / CC payments when classified.
       if (t.kind) {
-        return t.kind === "expense" || t.kind === "income" || t.kind === "refund";
+        return (
+          t.kind === "expense" || t.kind === "income" || t.kind === "refund"
+        );
       }
       return true;
     })
@@ -225,6 +233,13 @@ export type QueryStreamHandlers = {
   onToken: (delta: string) => void;
 };
 
+export type QueryRecallOptions = {
+  threadId?: string | null;
+  stream?: QueryStreamHandlers | null;
+  /** Attribution override for an explicit paid surface such as Talk. */
+  usageFeature?: Extract<AiFeature, "ask_query" | "voice_ask">;
+};
+
 function makeEvidence(input: {
   claimType: string;
   evidenceText: string;
@@ -302,18 +317,19 @@ function emailAboutSnippet(text: string): string | null {
 export async function queryRecallForUser(
   userId: string,
   question: string,
-  options?: { threadId?: string | null; stream?: QueryStreamHandlers | null },
+  options?: QueryRecallOptions,
 ): Promise<QueryAnswer> {
   const { withAiFeature } = await import("./ai-usage");
-  return withAiFeature({ feature: "ask_query", userId }, () =>
-    runQueryForUser(userId, question, options),
+  return withAiFeature(
+    { feature: options?.usageFeature ?? "ask_query", userId },
+    () => runQueryForUser(userId, question, options),
   );
 }
 
 async function runQueryForUser(
   userId: string,
   question: string,
-  options?: { threadId?: string | null; stream?: QueryStreamHandlers | null },
+  options?: QueryRecallOptions,
 ): Promise<QueryAnswer> {
   const allowance = await userAiAllowance("ask_query", userId);
   if (!allowance.allowed) {
@@ -335,14 +351,18 @@ async function runQueryForUser(
     const keywordFallback = buildKeywordFallbackAnswer(keywordRecords);
     const answer =
       allowance.reason === "daily_limit"
-        ? "Your daily AI budget has been reached. Ask will be available again after midnight UTC."
+        ? "Your daily AI budget has been reached. Ask will be available again after midnight Eastern Time."
         : keywordFallback.answer;
     const relatedRecords = keywordRecords.slice(0, 8).map((record) => ({
       entityType: record.entityType,
       entityId: record.entityId,
       title: record.title,
     }));
-    const thread = await ensureAskThreadForUser(userId, options?.threadId, question);
+    const thread = await ensureAskThreadForUser(
+      userId,
+      options?.threadId,
+      question,
+    );
     await appendAskMessage({
       userId,
       threadId: thread.id,
@@ -352,7 +372,11 @@ async function runQueryForUser(
     const result: QueryAnswer = {
       answer,
       confidence:
-        allowance.reason === "daily_limit" ? 1 : keywordRecords.length > 0 ? 0.6 : 0.2,
+        allowance.reason === "daily_limit"
+          ? 1
+          : keywordRecords.length > 0
+            ? 0.6
+            : 0.2,
       caveats:
         allowance.reason === "daily_limit"
           ? "No AI model was called."
@@ -415,7 +439,11 @@ async function runQueryForUser(
   const personIntent = PERSON_INTENT.test(workingQuestion);
   const familyIntent = FAMILY_RELATION_INTENT.test(workingQuestion);
 
-  const thread = await ensureAskThreadForUser(userId, options?.threadId, question);
+  const thread = await ensureAskThreadForUser(
+    userId,
+    options?.threadId,
+    question,
+  );
   const priorTurns = await listRecentTurnsForThread(userId, thread.id);
   // Family facts must not be poisoned by earlier wrong assistant answers in the same thread.
   const conversation: ConversationTurn[] = familyIntent
@@ -438,7 +466,8 @@ async function runQueryForUser(
     const clarifyAnswer: QueryAnswer = {
       answer: ambiguity.question,
       confidence: 0.7,
-      caveats: "Clarifying before searching so I don't guess the wrong date or filter.",
+      caveats:
+        "Clarifying before searching so I don't guess the wrong date or filter.",
       evidence: [],
       relatedRecords: [],
       images: [],
@@ -487,7 +516,10 @@ async function runQueryForUser(
     retrieveRelevantRecords(
       userId,
       retrievalQuestion,
-      familyIntent || /\b(email|emails|gmail|inbox|mail)\b/i.test(retrievalQuestion) ? 16 : 12,
+      familyIntent ||
+        /\b(email|emails|gmail|inbox|mail)\b/i.test(retrievalQuestion)
+        ? 16
+        : 12,
       // FTS uses only the current turn so prior thread context (emails, etc.)
       // doesn't AND-pollute the notes query.
       { noteSearchQuery: workingQuestion },
@@ -536,7 +568,9 @@ async function runQueryForUser(
   if (waitingItems.length > 0) {
     for (const w of waitingItems.slice(0, personIntent ? 3 : 6)) {
       // Waiting ids are "note:uuid" / "knowledge:uuid" / "task:uuid".
-      const bareId = w.id.includes(":") ? w.id.slice(w.id.indexOf(":") + 1) : w.id;
+      const bareId = w.id.includes(":")
+        ? w.id.slice(w.id.indexOf(":") + 1)
+        : w.id;
       evidence.push(
         makeEvidence({
           claimType: "summary_based_on",
@@ -573,7 +607,9 @@ async function runQueryForUser(
     financeSyncTimedOut = Boolean(financeFresh.timedOut);
     try {
       const connectors = await listConnectorsForUser(userId);
-      const financeConn = connectors.find((c) => c.type === "finance_api" && c.enabled);
+      const financeConn = connectors.find(
+        (c) => c.type === "finance_api" && c.enabled,
+      );
       if (!financeConn) {
         financeConnectorMissing = true;
         sourcesConsulted.push({
@@ -719,7 +755,7 @@ async function runQueryForUser(
             system:
               rec.recordType === "evernote_note"
                 ? "Evernote"
-                : rec.recordType ?? rec.entityType,
+                : (rec.recordType ?? rec.entityType),
             ...(rec.recordType === "evernote_note"
               ? {
                   sourceTitle: rec.title,
@@ -727,8 +763,7 @@ async function runQueryForUser(
                     typeof rec.sourceMetadata?.notebookName === "string"
                       ? rec.sourceMetadata.notebookName
                       : null,
-                  evernoteGuid:
-                    rec.sourceExternalId ?? null,
+                  evernoteGuid: rec.sourceExternalId ?? null,
                   tagNames: Array.isArray(rec.sourceMetadata?.tagNames)
                     ? rec.sourceMetadata.tagNames
                     : [],
@@ -743,7 +778,9 @@ async function runQueryForUser(
   }
 
   const waitingRelated = waitingItems.map((w) => {
-    const bareId = w.id.includes(":") ? w.id.slice(w.id.indexOf(":") + 1) : w.id;
+    const bareId = w.id.includes(":")
+      ? w.id.slice(w.id.indexOf(":") + 1)
+      : w.id;
     return {
       entityType: w.sourceType,
       entityId: bareId,
@@ -764,14 +801,21 @@ async function runQueryForUser(
   const imageIntent = wantsShowSavedImage(question);
   let askImages: AskAnswerImage[] = [];
   if (imageIntent) {
-    const noteIds = noteIdsForAskImages([...retrievalRelated, ...relatedRecords]);
+    const noteIds = noteIdsForAskImages([
+      ...retrievalRelated,
+      ...relatedRecords,
+    ]);
     if (noteIds.length > 0) {
       const titleByNote = new Map(
         [...retrievalRelated, ...relatedRecords]
           .filter((r) => r.entityType === "note")
           .map((r) => [r.entityId, r.title] as const),
       );
-      const attachments = await listImageAttachmentsForNotes(userId, noteIds, 6);
+      const attachments = await listImageAttachmentsForNotes(
+        userId,
+        noteIds,
+        6,
+      );
       askImages = attachments.map((a) => ({
         attachmentId: a.id,
         noteId: a.noteId,
@@ -783,7 +827,9 @@ async function runQueryForUser(
   }
 
   const waitingContext = waitingItems.map((w) => {
-    const bareId = w.id.includes(":") ? w.id.slice(w.id.indexOf(":") + 1) : w.id;
+    const bareId = w.id.includes(":")
+      ? w.id.slice(w.id.indexOf(":") + 1)
+      : w.id;
     return {
       entityType: w.sourceType,
       entityId: bareId,
@@ -850,7 +896,9 @@ async function runQueryForUser(
     const mailboxes = await getConnectedGoogleMailboxes(userId);
     const mailboxHint = extractMailboxHint(workingQuestion, mailboxes);
     const accountsLabel =
-      mailboxes.length > 0 ? mailboxes.join(", ") : "your connected Google accounts";
+      mailboxes.length > 0
+        ? mailboxes.join(", ")
+        : "your connected Google accounts";
 
     if (wantsEmailAsk && mailboxes.length === 0) {
       sourcesConsulted.push({
@@ -863,19 +911,21 @@ async function runQueryForUser(
 
     const [gmailPlanRaw, drivePlan] = await Promise.all([
       wantsEmailAsk && mailboxes.length > 0
-        ? planGmailSearch(retrievalQuestion, userId).then((p) =>
-            p ??
-            (retrievalQuestion.trim() !== workingQuestion.trim()
-              ? planGmailSearch(workingQuestion, userId)
-              : null),
+        ? planGmailSearch(retrievalQuestion, userId).then(
+            (p) =>
+              p ??
+              (retrievalQuestion.trim() !== workingQuestion.trim()
+                ? planGmailSearch(workingQuestion, userId)
+                : null),
           )
         : Promise.resolve(null),
       wantsDriveAsk && mailboxes.length > 0
-        ? planDriveSearch(retrievalQuestion, userId).then((p) =>
-            p ??
-            (retrievalQuestion.trim() !== workingQuestion.trim()
-              ? planDriveSearch(workingQuestion, userId)
-              : null),
+        ? planDriveSearch(retrievalQuestion, userId).then(
+            (p) =>
+              p ??
+              (retrievalQuestion.trim() !== workingQuestion.trim()
+                ? planDriveSearch(workingQuestion, userId)
+                : null),
           )
         : Promise.resolve(null),
     ]);
@@ -903,8 +953,7 @@ async function runQueryForUser(
       });
     }
 
-    const emailOnlyLatest =
-      sourcePlan.answerMode === "deterministic_email";
+    const emailOnlyLatest = sourcePlan.answerMode === "deterministic_email";
     const [gmailHits, driveHits] = await Promise.all([
       gmailPlan?.query && !isRelationLiteral(gmailPlan.personName)
         ? liveSearchGmailForUser(userId, gmailPlan.query, {
@@ -946,7 +995,8 @@ async function runQueryForUser(
               ? `Latest match · ${accountsLabel}`
               : `${gmailHits.length} message(s) · ${accountsLabel}`
             : `No messages for “${gmailPlan.query}” across ${accountsLabel}`,
-        hitCount: emailOnlyLatest && gmailHits.length > 0 ? 1 : gmailHits.length,
+        hitCount:
+          emailOnlyLatest && gmailHits.length > 0 ? 1 : gmailHits.length,
       });
       // Last-email answers only need the top hit; skip stuffing the UI with the thread.
       const hitsForContext = emailOnlyLatest
@@ -1104,7 +1154,9 @@ async function runQueryForUser(
       images.length > 0 &&
       !/\b(here('s| is)|showing|below)\b/i.test(answer.slice(0, 120))
     ) {
-      const from = [...new Set(images.map((i) => i.noteTitle))].slice(0, 2).join("; ");
+      const from = [...new Set(images.map((i) => i.noteTitle))]
+        .slice(0, 2)
+        .join("; ");
       answer = `Here's the saved image from “${from}”:\n\n${answer}`;
     }
     const withPrivacy: QueryAnswer = {
@@ -1113,11 +1165,14 @@ async function runQueryForUser(
       images,
       threadId: thread.id,
       evidence: annotatePrimaryExternalLink(result.evidence),
-      suggestedNextAction: compactSuggestedNextAction(result.suggestedNextAction, {
-        answer,
-        confidence: result.confidence,
-        caveats: result.caveats,
-      }),
+      suggestedNextAction: compactSuggestedNextAction(
+        result.suggestedNextAction,
+        {
+          answer,
+          confidence: result.confidence,
+          caveats: result.caveats,
+        },
+      ),
       presentation: result.presentation ?? "compact",
       sourcesConsulted: result.sourcesConsulted ?? sourcesConsulted,
       privacy: result.privacy ?? {
@@ -1161,7 +1216,9 @@ async function runQueryForUser(
       entityType: "query",
       entityId: thread.id,
       metadata: {
-        question: question.slice(0, 240),
+        ...(options?.usageFeature === "voice_ask"
+          ? { input: "voice", questionLength: question.length }
+          : { question: question.slice(0, 240) }),
         threadId: thread.id,
         assistantMessageId: assistantMsg.id,
         confidence: withPrivacy.confidence,
@@ -1191,7 +1248,10 @@ async function runQueryForUser(
       question,
     );
   if (wantsHomeyAlerts) {
-    const openAlerts = await listOpenHomeyAlertsForUser(userId, { limit: 6, hours: 48 });
+    const openAlerts = await listOpenHomeyAlertsForUser(userId, {
+      limit: 6,
+      hours: 48,
+    });
     if (openAlerts.length === 0) {
       return finish({
         answer:
@@ -1222,7 +1282,8 @@ async function runQueryForUser(
         }),
       ),
       relatedRecords: [],
-      suggestedNextAction: "Acknowledge on Connectors or Ask to control a device",
+      suggestedNextAction:
+        "Acknowledge on Connectors or Ask to control a device",
       promptVersion: QUERY_ANSWER_PROMPT_VERSION,
       degraded: false,
     });
@@ -1246,7 +1307,9 @@ async function runQueryForUser(
       });
     }
     const sorted = [...attentionItems]
-      .sort((a, b) => attentionUrgencyScore(b, now) - attentionUrgencyScore(a, now))
+      .sort(
+        (a, b) => attentionUrgencyScore(b, now) - attentionUrgencyScore(a, now),
+      )
       .slice(0, 8);
     const unconfirmed = sorted.filter(
       (item) => item.confirmedAt == null && item.dateConfidence === "uncertain",
@@ -1257,7 +1320,10 @@ async function runQueryForUser(
     return finish({
       answer: `Deadlines on your radar:\n${lines.join("\n")}`,
       confidence: 0.9,
-      caveats: unconfirmed > 0 ? `${unconfirmed} date(s) still need confirmation.` : null,
+      caveats:
+        unconfirmed > 0
+          ? `${unconfirmed} date(s) still need confirmation.`
+          : null,
       evidence: sorted.slice(0, 4).map((item) =>
         makeEvidence({
           claimType: "attention_due",
@@ -1285,13 +1351,20 @@ async function runQueryForUser(
   }
 
   if (BLOCKING_INTENT.test(workingQuestion)) {
-    const project = mentionedProject(workingQuestion, await listProjectsForUser(userId));
-    const context = project ? await getProjectContextForUser(userId, project.id) : null;
+    const project = mentionedProject(
+      workingQuestion,
+      await listProjectsForUser(userId),
+    );
+    const context = project
+      ? await getProjectContextForUser(userId, project.id)
+      : null;
     if (project && context) {
       const highRisks = context.risks.filter((r) => r.severity === "high");
       const lines = [
         ...highRisks.slice(0, 4).map((r) => `- ${r.label} (${r.reason})`),
-        ...context.blockers.slice(0, 4).map((b) => `- Waiting on ${b.title} — ${b.detail ?? "open"}`),
+        ...context.blockers
+          .slice(0, 4)
+          .map((b) => `- Waiting on ${b.title} — ${b.detail ?? "open"}`),
       ];
       return finish({
         answer:
@@ -1307,7 +1380,11 @@ async function runQueryForUser(
               evidenceText: `${d.title} — ${d.detail ?? "deadline"}`,
               entityType: "attention_item",
               entityId: d.id,
-              metadata: { retrievalMethod: "project_context", relatedEntityType: "attention_item", relatedEntityId: d.id },
+              metadata: {
+                retrievalMethod: "project_context",
+                relatedEntityType: "attention_item",
+                relatedEntityId: d.id,
+              },
             }),
           ),
           ...context.blockers.slice(0, 2).map((b) =>
@@ -1316,7 +1393,11 @@ async function runQueryForUser(
               evidenceText: b.title,
               entityType: "waiting_item",
               entityId: b.id,
-              metadata: { retrievalMethod: "project_context", relatedEntityType: "waiting_item", relatedEntityId: b.id },
+              metadata: {
+                retrievalMethod: "project_context",
+                relatedEntityType: "waiting_item",
+                relatedEntityId: b.id,
+              },
             }),
           ),
         ],
@@ -1331,17 +1412,27 @@ async function runQueryForUser(
   }
 
   if (DECISIONS_INTENT.test(workingQuestion)) {
-    const project = mentionedProject(workingQuestion, await listProjectsForUser(userId));
-    const context = project ? await getProjectContextForUser(userId, project.id) : null;
+    const project = mentionedProject(
+      workingQuestion,
+      await listProjectsForUser(userId),
+    );
+    const context = project
+      ? await getProjectContextForUser(userId, project.id)
+      : null;
     if (project && context) {
-      const withLinks = context.decisions.filter((d) => d.entityType && d.entityId);
+      const withLinks = context.decisions.filter(
+        (d) => d.entityType && d.entityId,
+      );
       return finish({
         answer:
           context.decisions.length === 0
             ? `No recorded decisions for ${project.name} yet — Recall logs confirmations, completions, and dismissals here as they happen.`
             : `Recent decisions for ${project.name}:\n${context.decisions
                 .slice(0, 6)
-                .map((d) => `- ${d.at.slice(0, 10)} — ${d.label}${d.detail ? `: ${d.detail}` : ""}`)
+                .map(
+                  (d) =>
+                    `- ${d.at.slice(0, 10)} — ${d.label}${d.detail ? `: ${d.detail}` : ""}`,
+                )
                 .join("\n")}`,
         confidence: 0.9,
         caveats: null,
@@ -1387,7 +1478,11 @@ async function runQueryForUser(
             evidenceText: `${i.title}${i.detail ? ` — ${i.detail}` : ""}`,
             entityType: "task",
             entityId: i.id,
-            metadata: { retrievalMethod: "person_context", relatedEntityType: "task", relatedEntityId: i.id },
+            metadata: {
+              retrievalMethod: "person_context",
+              relatedEntityType: "task",
+              relatedEntityId: i.id,
+            },
           }),
         ),
         relatedRecords: [],
@@ -1404,11 +1499,15 @@ async function runQueryForUser(
     if (context) {
       const lines = [context.summary];
       if (context.nextBestAction) {
-        lines.push(`Next: ${context.nextBestAction.title} — ${context.nextBestAction.reason}.`);
+        lines.push(
+          `Next: ${context.nextBestAction.title} — ${context.nextBestAction.reason}.`,
+        );
       }
       const lastMessage = context.recentMessages[0];
       if (lastMessage) {
-        lines.push(`Last email: ${lastMessage.title} (${lastMessage.at.slice(0, 10)}).`);
+        lines.push(
+          `Last email: ${lastMessage.title} (${lastMessage.at.slice(0, 10)}).`,
+        );
       }
       return finish({
         answer: lines.join("\n"),
@@ -1421,7 +1520,11 @@ async function runQueryForUser(
               evidenceText: `${w.title} — ${w.detail ?? "waiting"}`,
               entityType: "waiting_item",
               entityId: w.id,
-              metadata: { retrievalMethod: "person_context", relatedEntityType: "waiting_item", relatedEntityId: w.id },
+              metadata: {
+                retrievalMethod: "person_context",
+                relatedEntityType: "waiting_item",
+                relatedEntityId: w.id,
+              },
             }),
           ),
           ...(lastMessage
@@ -1451,17 +1554,20 @@ async function runQueryForUser(
 
   if (BRIEFING_INTENT.test(workingQuestion)) {
     const now = new Date();
-    const [briefingPrefs, attentionItems, waitingItems, captures] = await Promise.all([
-      getBriefingPrefsForUser(userId),
-      listAttentionForToday(userId, 40),
-      listWaitingItemsForUser(userId, { status: "all", limit: 100 }),
-      listCaptureInboxForUser(userId),
-    ]);
+    const [briefingPrefs, attentionItems, waitingItems, captures] =
+      await Promise.all([
+        getBriefingPrefsForUser(userId),
+        listAttentionForToday(userId, 40),
+        listWaitingItemsForUser(userId, { status: "all", limit: 100 }),
+        listCaptureInboxForUser(userId),
+      ]);
     // Same dedupe as Today: review-queue items are not re-surfaced as actions.
     const reviewQueueIds = new Set<string>([
       ...waitingItems.filter((w) => w.status === "candidate").map((w) => w.id),
       ...attentionItems
-        .filter((a) => a.confirmedAt == null && a.dateConfidence === "uncertain")
+        .filter(
+          (a) => a.confirmedAt == null && a.dateConfidence === "uncertain",
+        )
         .map((a) => a.id),
       ...captures.filter((c) => c.status === "pending").map((c) => c.id),
     ]);
@@ -1479,7 +1585,9 @@ async function runQueryForUser(
       return finish({
         answer: `${briefing.summary} Nothing needs a decision right now.`,
         confidence: 0.85,
-        caveats: briefing.dataNotes.length ? briefing.dataNotes.join(" ") : null,
+        caveats: briefing.dataNotes.length
+          ? briefing.dataNotes.join(" ")
+          : null,
         evidence: [],
         relatedRecords: [],
         suggestedNextAction: "Open Today",
@@ -1568,7 +1676,10 @@ async function runQueryForUser(
           .join("\n")}`,
       );
     }
-    const evidenceItems = [...checkin.unfinished, ...checkin.tomorrow].slice(0, 4);
+    const evidenceItems = [...checkin.unfinished, ...checkin.tomorrow].slice(
+      0,
+      4,
+    );
     return finish({
       answer: sections.length
         ? sections.join("\n\n")
@@ -1663,7 +1774,9 @@ async function runQueryForUser(
         : "Connect FlipperForce on Connectors if this looks wrong. Household spending still comes from MyFamilyBudget.",
       evidence: ffEvidence,
       relatedRecords: [],
-      suggestedNextAction: result.ok ? "Ask about another property" : "Open Connectors",
+      suggestedNextAction: result.ok
+        ? "Ask about another property"
+        : "Open Connectors",
       promptVersion: QUERY_ANSWER_PROMPT_VERSION,
       degraded: false,
     });
@@ -1684,10 +1797,15 @@ async function runQueryForUser(
   }
 
   // Full transaction lists are deterministic — don't let the model truncate them.
-  if (finance && !financeNeedsSync && FINANCE_BREAKDOWN_INTENT.test(workingQuestion)) {
+  if (
+    finance &&
+    !financeNeedsSync &&
+    FINANCE_BREAKDOWN_INTENT.test(workingQuestion)
+  ) {
     const verdict = confidenceFromSources({
       requiredOk: true,
-      requiredEmptyAfterSafeFilter: finance.expenseCount === 0 && finance.incomeCount === 0,
+      requiredEmptyAfterSafeFilter:
+        finance.expenseCount === 0 && finance.incomeCount === 0,
       stale: false,
       connectorMissing: false,
       authError: false,
@@ -1775,16 +1893,17 @@ async function runQueryForUser(
     return finish({
       answer: buildFinanceTotalAnswer(finance, metric),
       confidence: verdict.confidence,
-      caveats: [
-        financePayeeDistrusted
-          ? "Ignored a suspicious merchant filter that matched nothing; totals are for the date range only."
-          : null,
-        financeSyncTimedOut
-          ? "Finance refresh was still running — this total is from the last completed sync."
-          : null,
-      ]
-        .filter(Boolean)
-        .join(" ") || null,
+      caveats:
+        [
+          financePayeeDistrusted
+            ? "Ignored a suspicious merchant filter that matched nothing; totals are for the date range only."
+            : null,
+          financeSyncTimedOut
+            ? "Finance refresh was still running — this total is from the last completed sync."
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" ") || null,
       evidence: financeOnlyEvidence.slice(0, 1),
       relatedRecords: [],
       suggestedNextAction: null,
@@ -1807,7 +1926,9 @@ async function runQueryForUser(
       dataLeftDevice: false,
       categoriesSent: ["gmail_message"],
     };
-    if (sourcesConsulted.some((s) => s.id === "gmail" && s.status === "missing")) {
+    if (
+      sourcesConsulted.some((s) => s.id === "gmail" && s.status === "missing")
+    ) {
       return finish({
         answer:
           "I can't search email until a Google account is connected. Open Connectors and connect Google, then ask again.",
@@ -1823,13 +1944,8 @@ async function runQueryForUser(
         privacy: compactPrivacy,
       });
     }
-    if (
-      sourcesConsulted.some((s) =>
-        s.detail?.includes("Could not resolve"),
-      )
-    ) {
-      const who =
-        workingQuestion.match(/\bmy\s+(\w+)/i)?.[1] ?? "that person";
+    if (sourcesConsulted.some((s) => s.detail?.includes("Could not resolve"))) {
+      const who = workingQuestion.match(/\bmy\s+(\w+)/i)?.[1] ?? "that person";
       return finish({
         answer: `I know you're asking about your ${who}, but I couldn't match that to someone in People. Add or update their role (e.g. role=wife), then ask again.`,
         confidence: 0.55,
@@ -1863,7 +1979,8 @@ async function runQueryForUser(
       const emailEvidence = [
         makeEvidence({
           claimType: "source_excerpt",
-          evidenceText: `${topGmailHit.title}${date ? ` (${date})` : ""}\n${about ?? ""}`.trim(),
+          evidenceText:
+            `${topGmailHit.title}${date ? ` (${date})` : ""}\n${about ?? ""}`.trim(),
           entityType: "gmail_message",
           entityId: topGmailHit.externalId,
           metadata: {
@@ -1914,12 +2031,16 @@ async function runQueryForUser(
   // AI synthesis when available.
   if (!degraded) {
     try {
-      const metric = finance && !financeNeedsSync ? financeMetricForQuestion(question) : null;
+      const metric =
+        finance && !financeNeedsSync
+          ? financeMetricForQuestion(question)
+          : null;
       const [rulesPrompt, feedbackHints] = await Promise.all([
         formatUserRulesForPrompt(userId),
         listRecentAskFeedbackHints(userId),
       ]);
-      const userRulesPrompt = [rulesPrompt, feedbackHints].filter(Boolean).join("\n\n") || null;
+      const userRulesPrompt =
+        [rulesPrompt, feedbackHints].filter(Boolean).join("\n\n") || null;
 
       const answerRequest = {
         question,
@@ -1985,8 +2106,9 @@ async function runQueryForUser(
             ],
           },
         });
-        const streamed = await aiService.answerQueryStream(answerRequest, (delta) =>
-          stream.onToken(delta),
+        const streamed = await aiService.answerQueryStream(
+          answerRequest,
+          (delta) => stream.onToken(delta),
         );
         const hasGrounding =
           relevant.length > 0 ||
@@ -1996,10 +2118,12 @@ async function runQueryForUser(
           (finance && !financeNeedsSync);
         const verdict = confidenceFromSources({
           requiredOk: Boolean(
-            (sourcePlan.required.includes("finance") && finance && !financeNeedsSync) ||
-              (sourcePlan.required.includes("gmail") && liveGmailHitCount > 0) ||
-              (sourcePlan.required.includes("drive") && liveDriveHitCount > 0) ||
-              sourcePlan.required.length === 0,
+            (sourcePlan.required.includes("finance") &&
+              finance &&
+              !financeNeedsSync) ||
+            (sourcePlan.required.includes("gmail") && liveGmailHitCount > 0) ||
+            (sourcePlan.required.includes("drive") && liveDriveHitCount > 0) ||
+            sourcePlan.required.length === 0,
           ),
           requiredEmptyAfterSafeFilter: false,
           stale: false,
@@ -2023,9 +2147,7 @@ async function runQueryForUser(
             );
           }
         }
-        const confidence = financeNeedsSync
-          ? 0.4
-          : verdict.confidence;
+        const confidence = financeNeedsSync ? 0.4 : verdict.confidence;
         const caveats = financeNeedsSync
           ? "Finance data needs a sync on Connectors before totals are reliable."
           : !hasGrounding
@@ -2063,13 +2185,19 @@ async function runQueryForUser(
             finance,
             financeMetricForQuestion(retrievalQuestion),
           );
-          caveats = [caveats, "Corrected invented dollar amounts from synced totals."]
+          caveats = [
+            caveats,
+            "Corrected invented dollar amounts from synced totals.",
+          ]
             .filter(Boolean)
             .join(" ");
         }
       }
       if (financeNeedsSync) {
-        caveats = [caveats, "Finance data needs a sync on Connectors before totals are reliable."]
+        caveats = [
+          caveats,
+          "Finance data needs a sync on Connectors before totals are reliable.",
+        ]
           .filter(Boolean)
           .join(" ");
       }
@@ -2081,9 +2209,11 @@ async function runQueryForUser(
         (finance && !financeNeedsSync);
       const verdict = confidenceFromSources({
         requiredOk: Boolean(
-          (sourcePlan.required.includes("finance") && finance && !financeNeedsSync) ||
-            (sourcePlan.required.includes("gmail") && liveGmailHitCount > 0) ||
-            sourcePlan.required.length === 0,
+          (sourcePlan.required.includes("finance") &&
+            finance &&
+            !financeNeedsSync) ||
+          (sourcePlan.required.includes("gmail") && liveGmailHitCount > 0) ||
+          sourcePlan.required.length === 0,
         ),
         requiredEmptyAfterSafeFilter: false,
         stale: false,
@@ -2110,7 +2240,9 @@ async function runQueryForUser(
   // Deterministic fallback.
   let answer: string;
   let confidence =
-    relevant.length > 0 || waitingItems.length > 0 || (finance && !financeNeedsSync)
+    relevant.length > 0 ||
+    waitingItems.length > 0 ||
+    (finance && !financeNeedsSync)
       ? 0.6
       : 0.3;
   let caveats: string | null =
@@ -2180,18 +2312,25 @@ async function runQueryForUser(
     confidence = 0.85;
     suggestedNextAction = "Open People → Waiting on";
   } else if (/attention|today|focus|do today/i.test(question)) {
-    const dueToday = openTasks.filter((t) => t.time && t.time.startsWith(today));
+    const dueToday = openTasks.filter(
+      (t) => t.time && t.time.startsWith(today),
+    );
     const high = openTasks.filter((t) => t.priority === "high");
     const focus = dueToday[0] ?? high[0] ?? openTasks[0];
     answer = focus
       ? `Focus on "${focus.title}"${focus.time ? ` (due ${focus.time})` : ""}. You have ${openTasks.length} open task(s) total.`
       : `You have ${openTasks.length} open task(s). Nothing is marked due today.`;
     confidence = 0.85;
-    suggestedNextAction = focus ? `Open task: ${focus.title}` : "Review your task list";
+    suggestedNextAction = focus
+      ? `Open task: ${focus.title}`
+      : "Review your task list";
   } else if (relevant.length > 0) {
     const fallback = buildKeywordFallbackAnswer(relevant);
     answer = usedSemantic
-      ? fallback.answer.replace(" related record(s).", " related record(s) (semantic match).")
+      ? fallback.answer.replace(
+          " related record(s).",
+          " related record(s) (semantic match).",
+        )
       : fallback.answer;
     suggestedNextAction = fallback.suggestedNextAction;
   } else {

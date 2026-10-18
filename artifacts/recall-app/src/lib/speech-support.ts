@@ -1,4 +1,10 @@
-type SpeechRecognitionCtor = new () => SpeechRecognition;
+type SpeechRecognitionCtor = {
+  new (): SpeechRecognition;
+  available?: (options: {
+    langs: string[];
+    processLocally: boolean;
+  }) => Promise<"available" | "downloadable" | "downloading" | "unavailable">;
+};
 
 export type SpeechInputError =
   | "unsupported"
@@ -7,6 +13,7 @@ export type SpeechInputError =
   | "no-speech"
   | "network"
   | "audio-capture"
+  | "language-not-supported"
   | "aborted"
   | "unknown";
 
@@ -17,6 +24,21 @@ export function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
     webkitSpeechRecognition?: SpeechRecognitionCtor;
   };
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
+export async function canProcessSpeechLocally(
+  Ctor: SpeechRecognitionCtor,
+  lang: string,
+): Promise<boolean> {
+  if (typeof Ctor.available !== "function") return false;
+  try {
+    return (
+      (await Ctor.available({ langs: [lang], processLocally: true })) ===
+      "available"
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function isIosDevice(): boolean {
@@ -82,6 +104,12 @@ export function speechErrorMessage(error: SpeechInputError): {
         description:
           "Another app may be using the mic. Close it and try again.",
       };
+    case "language-not-supported":
+      return {
+        title: "On-device language unavailable",
+        description:
+          "Chrome's English speech pack is not installed. Recall will use normal browser recognition instead.",
+      };
     case "aborted":
       return {
         title: "Voice stopped",
@@ -106,6 +134,8 @@ export function mapRecognitionError(code: string): SpeechInputError {
       return "network";
     case "audio-capture":
       return "audio-capture";
+    case "language-not-supported":
+      return "language-not-supported";
     case "aborted":
       return "aborted";
     default:

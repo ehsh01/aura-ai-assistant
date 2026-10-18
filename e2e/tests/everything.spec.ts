@@ -57,6 +57,8 @@ async function mockRecall(
   options: {
     graphSourceCount?: number;
     askAiAllowed?: boolean;
+    voiceAiReason?: "disabled" | "daily_limit" | "unavailable" | null;
+    voiceNoMatch?: boolean;
     denseNotebook?: boolean;
     notebookEdgeCap?: number;
   } = {},
@@ -64,6 +66,8 @@ async function mockRecall(
   const items = [...baseItems];
   const calls = {
     ai: 0,
+    voiceAsk: 0,
+    voiceBodies: [] as Array<{ question: string; threadId?: string }>,
     itemSearch: 0,
     itemQueries: [] as string[],
     transcribe: 0,
@@ -104,6 +108,48 @@ async function mockRecall(
         allowed: options.askAiAllowed !== false,
         model: options.askAiAllowed === false ? null : "gpt-4.1-mini",
         reason: options.askAiAllowed === false ? "disabled" : null,
+      });
+    }
+    if (url.pathname === "/api/ai/voice/availability") {
+      return json(route, {
+        allowed: options.voiceAiReason == null,
+        remaining: options.voiceAiReason == null ? 29 : undefined,
+        reason: options.voiceAiReason ?? undefined,
+      });
+    }
+    if (url.pathname === "/api/ai/voice/query") {
+      calls.voiceAsk += 1;
+      calls.voiceBodies.push(request.postDataJSON());
+      const noMatch = options.voiceNoMatch === true;
+      return json(route, {
+        answer: noMatch
+          ? "I couldn't find that in your notes."
+          : "The permit revision was approved. From your note Permit revision, October 2026.",
+        confidence: noMatch ? 0.2 : 0.9,
+        caveats: noMatch ? "Limited matching records found." : null,
+        evidence: [],
+        relatedRecords: noMatch
+          ? []
+          : [
+              {
+                entityType: "item",
+                entityId: "item-permit",
+                title: "Permit revision",
+              },
+            ],
+        images: [],
+        suggestedNextAction: null,
+        threadId: "voice-thread-1",
+        sources: noMatch
+          ? []
+          : [
+              {
+                itemId: "item-permit",
+                title: "Permit revision",
+                notebook: "House Projects",
+                date: now,
+              },
+            ],
       });
     }
     if (url.pathname === "/api/ai/query/stream") {
@@ -307,6 +353,8 @@ async function installVoiceHarness(
       abortCalls: 0,
       trackStops: 0,
       speakCalls: 0,
+      cancelCalls: 0,
+      processLocally: false,
     };
     Object.assign(window, { __recallVoiceTest: state });
 
@@ -321,9 +369,20 @@ async function installVoiceHarness(
     });
 
     class FakeSpeechRecognition {
+      static async available() {
+        return "available";
+      }
       continuous = false;
       interimResults = false;
       lang = "";
+      private locally = false;
+      set processLocally(value: boolean) {
+        this.locally = value;
+        state.processLocally = value;
+      }
+      get processLocally() {
+        return this.locally;
+      }
       onresult: ((event: unknown) => void) | null = null;
       onend: (() => void) | null = null;
       onerror: ((event: unknown) => void) | null = null;
@@ -352,14 +411,37 @@ async function installVoiceHarness(
       }
     }
 
+    class FakeSpeechSynthesisUtterance {
+      rate = 1;
+      pitch = 1;
+      voice: SpeechSynthesisVoice | null = null;
+      onend: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(readonly text: string) {}
+    }
+
     Object.assign(window, {
       SpeechRecognition: FakeSpeechRecognition,
       webkitSpeechRecognition: FakeSpeechRecognition,
+      SpeechSynthesisUtterance: FakeSpeechSynthesisUtterance,
     });
 
     const synthesis = window.speechSynthesis;
+    synthesis.getVoices = () =>
+      [
+        {
+          default: true,
+          lang: "en-US",
+          localService: true,
+          name: "Test Natural",
+          voiceURI: "test-natural",
+        },
+      ] as SpeechSynthesisVoice[];
     synthesis.speak = () => {
       state.speakCalls += 1;
+    };
+    synthesis.cancel = () => {
+      state.cancelCalls += 1;
     };
   }, mode);
 }
@@ -447,9 +529,7 @@ test.describe("Everything capture, graph, grid, and search", () => {
         Number((await graphCanvas.getAttribute("data-graph-stretch-x")) ?? 0),
       )
       .toBeCloseTo(0.64, 2);
-    const fitTop = Number(
-      await graphCanvas.getAttribute("data-graph-fit-top"),
-    );
+    const fitTop = Number(await graphCanvas.getAttribute("data-graph-fit-top"));
     const fitBottom = Number(
       await graphCanvas.getAttribute("data-graph-fit-bottom"),
     );
@@ -696,6 +776,7 @@ test.describe("Everything capture, graph, grid, and search", () => {
   }) => {
     await installVoiceHarness(page, "manual-result");
     const mock = await mockRecall(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/");
     await page.evaluate(() => localStorage.removeItem("recall.voiceAnswers"));
     await page.reload();
@@ -743,16 +824,16 @@ test.describe("Everything capture, graph, grid, and search", () => {
     expect(trackStops).toBe(1);
   });
 
-  test("push-to-talk stop delivers one transcript to free search and returns READY", async ({
+  test("search-bar mic stays free, on-device where available, and never uploads audio", async ({
     page,
   }) => {
     await installVoiceHarness(page, "manual-result");
     const mock = await mockRecall(page);
     await page.goto("/");
 
-    await page.getByTestId("ring-mic-desktop").click();
+    await page.getByTestId("ask-bar-mic").click();
     await expect(page.getByTestId("assistant-ring-desktop")).toHaveClass(
-      /is-listening/,
+      /is-ready/,
     );
     await expect(page.getByTestId("ask-bar-mic")).toHaveAttribute(
       "aria-pressed",
@@ -774,17 +855,122 @@ test.describe("Everything capture, graph, grid, and search", () => {
             __recallVoiceTest: {
               stopCalls: number;
               abortCalls: number;
+              processLocally: boolean;
             };
           }
         ).__recallVoiceTest,
     );
     expect(state.stopCalls).toBe(1);
     expect(state.abortCalls).toBe(0);
+    expect(state.processLocally).toBe(true);
     expect(
       mock.calls.itemQueries.filter((query) => query === "permit"),
     ).toHaveLength(1);
     expect(mock.calls.ai).toBe(0);
+    expect(mock.calls.voiceAsk).toBe(0);
     expect(mock.calls.transcribe).toBe(0);
+    expect(mock.calls.tts).toBe(0);
+  });
+
+  test("Talk asks once, speaks with browser fallback, shows sources, and reuses its thread", async ({
+    page,
+  }) => {
+    await installVoiceHarness(page, "manual-result");
+    const mock = await mockRecall(page);
+    await page.goto("/");
+
+    await page.getByTestId("ring-mic-desktop").click();
+    await expect(page.getByTestId("assistant-ring-desktop")).toHaveClass(
+      /is-listening/,
+    );
+    await page.getByTestId("ring-mic-desktop").click();
+
+    await expect(page.getByTestId("talk-transcript")).toContainText("You");
+    await expect(page.getByTestId("talk-transcript")).toContainText(
+      "The permit revision was approved.",
+    );
+    await expect(page.getByTestId("talk-source-chip")).toContainText(
+      "Permit revision · House Projects · Oct 2026",
+    );
+    await expect.poll(() => mock.calls.tts).toBe(1);
+    expect(mock.calls.voiceAsk).toBe(1);
+    expect(mock.calls.transcribe).toBe(0);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as Window & {
+                __recallVoiceTest: { speakCalls: number };
+              }
+            ).__recallVoiceTest.speakCalls,
+        ),
+      )
+      .toBe(2);
+
+    // A tap while speaking stops output rather than starting another capture.
+    await page.getByTestId("ring-mic-desktop").click();
+    await expect(page.getByTestId("assistant-ring-desktop")).not.toHaveClass(
+      /is-speaking/,
+    );
+
+    await page.getByTestId("ring-mic-desktop").click();
+    await page.getByTestId("ring-mic-desktop").click();
+    await expect.poll(() => mock.calls.voiceAsk).toBe(2);
+    expect(mock.calls.voiceBodies[1]?.threadId).toBe("voice-thread-1");
+  });
+
+  test("Talk falls back to free keyword search and browser speech when the master switch is off", async ({
+    page,
+  }) => {
+    await installVoiceHarness(page, "manual-result");
+    const mock = await mockRecall(page, { voiceAiReason: "disabled" });
+    await page.goto("/");
+
+    await page.getByTestId("ring-mic-desktop").click();
+    await page.getByTestId("ring-mic-desktop").click();
+    await expect(page.getByTestId("talk-transcript")).toContainText(
+      "The top match is Permit revision.",
+    );
+    expect(mock.calls.voiceAsk).toBe(0);
+    expect(mock.calls.tts).toBe(0);
+    expect(mock.calls.transcribe).toBe(0);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as Window & {
+                __recallVoiceTest: { speakCalls: number };
+              }
+            ).__recallVoiceTest.speakCalls,
+        ),
+      )
+      .toBe(2);
+  });
+
+  test("Talk speaks the cap notice and the exact no-match reply", async ({
+    page,
+  }) => {
+    await installVoiceHarness(page, "manual-result");
+    const capped = await mockRecall(page, { voiceAiReason: "daily_limit" });
+    await page.goto("/");
+    await page.getByTestId("ring-mic-desktop").click();
+    await page.getByTestId("ring-mic-desktop").click();
+    await expect(page.getByTestId("talk-transcript")).toContainText(
+      "Daily voice limit reached. Free search still works.",
+    );
+    expect(capped.calls.voiceAsk).toBe(0);
+
+    await page.unrouteAll({ behavior: "wait" });
+    const noMatch = await mockRecall(page, { voiceNoMatch: true });
+    await page.getByTestId("ring-mic-desktop").click();
+    await page.getByTestId("ring-mic-desktop").click();
+    await page.getByTestId("ring-mic-desktop").click();
+    await expect(page.getByTestId("talk-transcript")).toContainText(
+      "I couldn't find that in your notes.",
+    );
+    expect(noMatch.calls.voiceAsk).toBe(1);
   });
 
   test("iOS standalone shows the dictation guidance and never uploads audio", async ({

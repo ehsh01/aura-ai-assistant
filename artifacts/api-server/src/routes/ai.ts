@@ -38,11 +38,7 @@ import {
   confirmProposedAction,
   type ProposedActionType,
 } from "../services/action-orchestrator";
-import {
-  assertServerTtsEnabled,
-  OPENAI_TTS_VOICES,
-  synthesizeSpeech,
-} from "../services/tts";
+import { assertServerTtsEnabled, synthesizeSpeech } from "../services/tts";
 import {
   createAskThreadForUser,
   getAskThreadForUser,
@@ -59,6 +55,11 @@ import {
 } from "../services/voice-first";
 import { askAiAvailabilityForUser } from "../services/ask-ai-availability";
 import { isEnabled } from "../lib/feature-flags";
+import { voiceAiAllowance, withVoiceAiLock } from "../services/ai-usage";
+import {
+  queryVoiceNotesForUser,
+  VOICE_LIMIT_REPLY,
+} from "../services/voice-answer";
 
 const voiceAudioUpload = multer({
   storage: multer.memoryStorage(),
@@ -215,7 +216,6 @@ const AiQueryBody = z.object({
 
 const AiTtsBody = z.object({
   text: z.string().min(1).max(4096),
-  voice: z.enum(OPENAI_TTS_VOICES).optional(),
 });
 
 router.post("/ai/tts", async (req, res, next) => {
@@ -224,13 +224,48 @@ router.post("/ai/tts", async (req, res, next) => {
     const body = AiTtsBody.parse(req.body);
     const { buffer, contentType } = await synthesizeSpeech(
       body.text,
-      body.voice,
       req.user!.id,
     );
     res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Length", String(buffer.length));
     res.send(buffer);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/ai/voice/availability", async (req, res, next) => {
+  try {
+    const allowance = await voiceAiAllowance("voice_ask", req.user!.id);
+    res.json(allowance);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/ai/voice/query", async (req, res, next) => {
+  try {
+    const body = AiQueryBody.parse(req.body);
+    await withVoiceAiLock(req.user!.id, async () => {
+      const allowance = await voiceAiAllowance("voice_ask", req.user!.id);
+      if (!allowance.allowed) {
+        const dailyLimit = allowance.reason === "daily_limit";
+        res.status(dailyLimit ? 429 : 503).json({
+          error: dailyLimit ? "VOICE_DAILY_LIMIT" : "VOICE_AI_UNAVAILABLE",
+          reason: allowance.reason,
+          message: dailyLimit ? VOICE_LIMIT_REPLY : "Voice AI is unavailable",
+        });
+        return;
+      }
+
+      const result = await queryVoiceNotesForUser(
+        req.user!.id,
+        body.question,
+        body.threadId ?? null,
+      );
+      res.json(result);
+    });
   } catch (err) {
     next(err);
   }
@@ -477,12 +512,10 @@ router.post("/ai/transcribe", (req, res, next) => {
       try {
         const file = req.file;
         if (!file?.buffer?.length) {
-          res
-            .status(400)
-            .json({
-              error: "MISSING_AUDIO",
-              message: "Audio file is required",
-            });
+          res.status(400).json({
+            error: "MISSING_AUDIO",
+            message: "Audio file is required",
+          });
           return;
         }
         const locale =
@@ -595,12 +628,10 @@ router.post("/ai/actions/cancel", async (req, res, next) => {
       body.proposalId,
     );
     if (!cancelled) {
-      res
-        .status(404)
-        .json({
-          error: "NOT_FOUND",
-          message: "Proposal not found or not cancellable",
-        });
+      res.status(404).json({
+        error: "NOT_FOUND",
+        message: "Proposal not found or not cancellable",
+      });
       return;
     }
     res.json({ ok: true, proposal: cancelled });

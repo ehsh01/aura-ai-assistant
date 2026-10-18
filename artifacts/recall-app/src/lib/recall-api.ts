@@ -777,9 +777,7 @@ export async function unlinkProjectSource(
   });
 }
 
-export async function listPersonOrganizations(
-  personId: string,
-): Promise<{
+export async function listPersonOrganizations(personId: string): Promise<{
   organizations: {
     organizationId: string;
     displayName: string;
@@ -1499,8 +1497,66 @@ export type AskAiAvailability = {
   reason: "disabled" | "unavailable" | "daily_limit" | null;
 };
 
+export type VoiceAiAvailability = {
+  allowed: boolean;
+  remaining?: number;
+  reason?: "disabled" | "daily_limit" | "unavailable";
+};
+
+export type VoiceAnswerSource = {
+  itemId: string;
+  title: string;
+  notebook: string | null;
+  date: string | null;
+};
+
+export type VoiceQueryResult = QueryRecallResult & {
+  sources: VoiceAnswerSource[];
+};
+
+export class VoiceQueryError extends Error {
+  constructor(
+    message: string,
+    readonly reason: "disabled" | "daily_limit" | "unavailable",
+  ) {
+    super(message);
+    this.name = "VoiceQueryError";
+  }
+}
+
 export async function getAskAiAvailability(): Promise<AskAiAvailability> {
   return apiFetch("/ai/query/availability");
+}
+
+export async function getVoiceAiAvailability(): Promise<VoiceAiAvailability> {
+  return apiFetch("/ai/voice/availability");
+}
+
+export async function queryVoiceRecall(
+  question: string,
+  options?: { threadId?: string | null },
+): Promise<VoiceQueryResult> {
+  const res = await fetch(`${API_BASE}/ai/voice/query`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      question,
+      threadId: options?.threadId ?? undefined,
+    }),
+    signal: AbortSignal.timeout(45_000),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as {
+      message?: string;
+      reason?: "disabled" | "daily_limit" | "unavailable";
+    };
+    throw new VoiceQueryError(
+      body.message ?? "Voice AI is unavailable",
+      body.reason ?? "unavailable",
+    );
+  }
+  return res.json() as Promise<VoiceQueryResult>;
 }
 
 export async function queryRecall(
@@ -2139,11 +2195,14 @@ export async function testEvernoteConnector(
   const controller = new AbortController();
   const timeout = globalThis.setTimeout(() => controller.abort(), 20_000);
   try {
-    return await apiFetch(`/connectors/${encodeURIComponent(connectorId)}/test`, {
-      method: "POST",
-      body: "{}",
-      signal: controller.signal,
-    });
+    return await apiFetch(
+      `/connectors/${encodeURIComponent(connectorId)}/test`,
+      {
+        method: "POST",
+        body: "{}",
+        signal: controller.signal,
+      },
+    );
   } catch (error) {
     if (controller.signal.aborted) {
       throw new Error("Evernote didn't respond — reconnect Evernote", {

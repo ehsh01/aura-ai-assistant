@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useRef } from "react";
 import { Mic, Loader2 } from "lucide-react";
 import { useSpeechInput } from "@/hooks/use-speech-input";
 import { toast } from "@/hooks/use-toast";
@@ -20,6 +20,12 @@ interface MicButtonProps {
   onListeningChange?: (listening: boolean) => void;
   testId?: string;
   controller?: MicButtonController;
+  /** Return false to consume the activation (for example, to stop speech). */
+  onBeforeToggle?: () => boolean | void;
+  /** A long press listens only while held; a quick tap uses auto-stop. */
+  holdToTalk?: boolean;
+  /** Suppress transient listening/recording toasts for always-visible controls. */
+  quiet?: boolean;
 }
 
 export function showSpeechError(error: SpeechInputError) {
@@ -35,11 +41,17 @@ function MicButtonControl({
   children,
   listeningLabel,
   testId,
+  onBeforeToggle,
+  holdToTalk = false,
+  quiet = false,
 }: MicButtonProps & { controller: MicButtonController }) {
   const { listening, transcribing, supported, blockReason, mode, toggle } =
     controller;
+  const pressedAtRef = useRef<number | null>(null);
+  const suppressClickRef = useRef(false);
 
   const handleClick = async () => {
+    if (onBeforeToggle?.() === false) return;
     if (!supported) {
       showSpeechError(blockReason ?? "unsupported");
       return;
@@ -51,7 +63,7 @@ function MicButtonControl({
       return;
     }
     if ("stopped" in result) {
-      if (mode === "server") {
+      if (mode === "server" && !quiet) {
         toast({
           title: "Transcribing…",
           description: "Turning your recording into text.",
@@ -60,13 +72,28 @@ function MicButtonControl({
       return;
     }
 
-    toast({
-      title: mode === "server" ? "Recording…" : "Listening…",
-      description:
-        mode === "server"
-          ? "Just stop talking when you’re done, or tap the mic to end it now."
-          : "Speak now, then wait a moment for Recall to respond.",
-    });
+    if (!quiet)
+      toast({
+        title: mode === "server" ? "Recording…" : "Listening…",
+        description:
+          mode === "server"
+            ? "Just stop talking when you’re done, or tap the mic to end it now."
+            : "Speak now, then wait a moment for Recall to respond.",
+      });
+  };
+
+  const handlePointerDown = () => {
+    if (!holdToTalk) return;
+    pressedAtRef.current = performance.now();
+    suppressClickRef.current = true;
+    void handleClick();
+  };
+
+  const handlePointerUp = () => {
+    if (!holdToTalk || pressedAtRef.current == null) return;
+    const heldFor = performance.now() - pressedAtRef.current;
+    pressedAtRef.current = null;
+    if (heldFor >= 350 && controller.listening) controller.stop();
   };
 
   const label = transcribing
@@ -78,7 +105,16 @@ function MicButtonControl({
   return (
     <button
       type="button"
-      onClick={() => void handleClick()}
+      onClick={() => {
+        if (suppressClickRef.current) {
+          suppressClickRef.current = false;
+          return;
+        }
+        void handleClick();
+      }}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
       disabled={transcribing}
       title={
         transcribing

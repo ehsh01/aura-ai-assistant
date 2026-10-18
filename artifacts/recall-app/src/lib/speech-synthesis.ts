@@ -53,14 +53,13 @@ export function stopSpeaking(): void {
 export type SpeakOptions = {
   rate?: number;
   pitch?: number;
-  voice?: string;
   /** Explicitly opt this call into paid OpenAI TTS. No UI passes this. */
   premium?: boolean;
   onEnd?: () => void;
   onError?: () => void;
 };
 
-async function fetchOpenAiTts(text: string, voice?: string): Promise<Blob> {
+async function fetchOpenAiTts(text: string): Promise<Blob> {
   const headers: Record<string, string> = {
     Accept: "audio/mpeg",
     "Content-Type": "application/json",
@@ -70,7 +69,7 @@ async function fetchOpenAiTts(text: string, voice?: string): Promise<Blob> {
     method: "POST",
     headers,
     credentials: "include",
-    body: JSON.stringify({ text, ...(voice ? { voice } : {}) }),
+    body: JSON.stringify({ text }),
   });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { message?: string };
@@ -148,7 +147,7 @@ export async function speakText(
   }
 
   try {
-    const blob = await fetchOpenAiTts(cleaned, options.voice);
+    const blob = await fetchOpenAiTts(cleaned);
     if (generation !== speakGeneration) return false;
 
     const url = URL.createObjectURL(blob);
