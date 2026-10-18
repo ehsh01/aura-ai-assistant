@@ -16,13 +16,32 @@ function add(tags: Set<string>, value: string | null | undefined): void {
   if (normalized) tags.add(normalized);
 }
 
+/** Internal search facets are not user-authored tags and must stay out of UI/graph. */
+export function isVisibleItemTag(value: string): boolean {
+  const normalized = normalize(value);
+  return (
+    !normalized.startsWith("notebook:") && !/^year:\d{4}$/.test(normalized)
+  );
+}
+
+/** Evernote display tags contain only names returned by Evernote, not Recall facets. */
+export function evernoteDisplayTags(values: string[]): string[] {
+  const tags = new Set<string>();
+  for (const value of values) {
+    if (isVisibleItemTag(value)) add(tags, value);
+  }
+  return [...tags];
+}
+
 /** Deterministic, free labels only. No model or embedding call is made here. */
 export function heuristicItemTags(input: HeuristicTagInput): string[] {
   const tags = new Set<string>();
 
   if (input.url) {
     try {
-      const domain = new URL(input.url).hostname.toLowerCase().replace(/^www\./, "");
+      const domain = new URL(input.url).hostname
+        .toLowerCase()
+        .replace(/^www\./, "");
       add(tags, domain);
       add(tags, `domain:${domain}`);
     } catch {

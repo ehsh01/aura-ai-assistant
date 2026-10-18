@@ -28,6 +28,12 @@ import {
   graphEdgeCoreWidth,
   graphEdgeGlowWidth,
 } from "@/lib/graph-edge-style";
+import {
+  calculateGraphFit,
+  clampGraphLabelBox,
+  shouldRenderGraphLabel,
+  type GraphViewportRect,
+} from "@/lib/graph-viewport";
 
 type LayoutNode = KnowledgeGraphNode &
   SimulationNodeDatum & {
@@ -111,7 +117,13 @@ export function KnowledgeGraph({
     nodes: [],
     edges: [],
   });
-  const viewRef = useRef({ x: 0, y: 0, scale: 1 });
+  const viewRef = useRef({
+    x: 0,
+    y: 0,
+    scale: 1,
+    stretchX: 1,
+    stretchY: 1,
+  });
   const dragRef = useRef<{
     startX: number;
     startY: number;
@@ -171,8 +183,62 @@ export function KnowledgeGraph({
     let height = container.clientHeight;
     let frame = 0;
     let renderedEdgeCoreWidth = Number.NaN;
+    let visibleViewport: GraphViewportRect = {
+      left: 24,
+      top: 24,
+      right: Math.max(25, width - 24),
+      bottom: Math.max(25, height - 24),
+    };
     const context = canvas.getContext("2d");
     if (!context) return;
+
+    const measureVisibleViewport = () => {
+      const canvasBounds = canvas.getBoundingClientRect();
+      const mobile = width < 640;
+      const sidePadding = mobile ? 18 : 36;
+      const verticalPadding = mobile ? 18 : 24;
+      const topBar = document.querySelector<HTMLElement>(
+        "[data-graph-fit-top-overlay]",
+      );
+      const bottomBar = document.querySelector<HTMLElement>(
+        "[data-graph-fit-bottom-overlay]",
+      );
+      const mobileControls = document.querySelector<HTMLElement>(
+        "[data-graph-fit-mobile-controls]",
+      );
+      const bottomBoundary = Math.min(
+        bottomBar?.getBoundingClientRect().top ?? canvasBounds.bottom,
+        mobile
+          ? (mobileControls?.getBoundingClientRect().top ?? canvasBounds.bottom)
+          : canvasBounds.bottom,
+      );
+      const top = Math.max(
+        verticalPadding,
+        (topBar?.getBoundingClientRect().bottom ?? canvasBounds.top) -
+          canvasBounds.top +
+          verticalPadding,
+      );
+      const bottom = Math.min(
+        height - verticalPadding,
+        bottomBoundary - canvasBounds.top - verticalPadding,
+      );
+      visibleViewport =
+        bottom - top >= 160
+          ? {
+              left: sidePadding,
+              top,
+              right: Math.max(sidePadding + 1, width - sidePadding),
+              bottom,
+            }
+          : {
+              left: sidePadding,
+              top: verticalPadding,
+              right: Math.max(sidePadding + 1, width - sidePadding),
+              bottom: Math.max(verticalPadding + 1, height - verticalPadding),
+            };
+      canvas.dataset.graphFitTop = visibleViewport.top.toFixed(0);
+      canvas.dataset.graphFitBottom = visibleViewport.bottom.toFixed(0);
+    };
 
     const resize = () => {
       width = container.clientWidth;
@@ -183,12 +249,23 @@ export function KnowledgeGraph({
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      measureVisibleViewport();
       draw();
     };
 
     const screenPoint = (node: LayoutNode) => ({
-      x: width / 2 + viewRef.current.x + (node.x ?? 0) * viewRef.current.scale,
-      y: height / 2 + viewRef.current.y + (node.y ?? 0) * viewRef.current.scale,
+      x:
+        width / 2 +
+        viewRef.current.x +
+        (node.x ?? 0) *
+          viewRef.current.scale *
+          viewRef.current.stretchX,
+      y:
+        height / 2 +
+        viewRef.current.y +
+        (node.y ?? 0) *
+          viewRef.current.scale *
+          viewRef.current.stretchY,
     });
 
     const strokeEdgeLayer = (
@@ -214,18 +291,26 @@ export function KnowledgeGraph({
         context.moveTo(
           width / 2 +
             viewRef.current.x +
-            (source.x ?? 0) * viewRef.current.scale,
+            (source.x ?? 0) *
+              viewRef.current.scale *
+              viewRef.current.stretchX,
           height / 2 +
             viewRef.current.y +
-            (source.y ?? 0) * viewRef.current.scale,
+            (source.y ?? 0) *
+              viewRef.current.scale *
+              viewRef.current.stretchY,
         );
         context.lineTo(
           width / 2 +
             viewRef.current.x +
-            (target.x ?? 0) * viewRef.current.scale,
+            (target.x ?? 0) *
+              viewRef.current.scale *
+              viewRef.current.stretchX,
           height / 2 +
             viewRef.current.y +
-            (target.y ?? 0) * viewRef.current.scale,
+            (target.y ?? 0) *
+              viewRef.current.scale *
+              viewRef.current.stretchY,
         );
       }
       context.globalAlpha = alpha;
@@ -342,7 +427,8 @@ export function KnowledgeGraph({
           context.shadowBlur = 0;
         }
 
-        if (viewRef.current.scale >= 0.24) {
+        if (viewRef.current.scale >= 0.18) {
+          const mobile = width < 640;
           const occupied: Array<{
             left: number;
             top: number;
@@ -350,10 +436,23 @@ export function KnowledgeGraph({
             bottom: number;
           }> = [];
           const labeledNodes = layoutNodes
-            .filter(
-              (node) => node.hub || (labels && viewRef.current.scale > 0.42),
+            .filter((node) =>
+              shouldRenderGraphLabel({
+                hub: node.hub,
+                hovered: node.id === activeNodeId,
+                labelsEnabled: labels,
+                scale: viewRef.current.scale,
+                mobile,
+              }),
             )
-            .sort((a, b) => Number(b.hub) - Number(a.hub) || b.value - a.value);
+            .sort(
+              (a, b) =>
+                Number(b.id === activeNodeId) -
+                  Number(a.id === activeNodeId) ||
+                Number(b.hub) - Number(a.hub) ||
+                b.value - a.value,
+            )
+            .slice(0, mobile ? (viewRef.current.scale < 0.68 ? 12 : 20) : 48);
 
           for (const node of labeledNodes) {
             const point = screenPoint(node);
@@ -361,12 +460,13 @@ export function KnowledgeGraph({
               2.2,
               node.radius * Math.sqrt(viewRef.current.scale),
             );
+            const labelLimit = mobile ? 18 : 26;
             const label =
-              node.label.length > 26
-                ? `${node.label.slice(0, 24)}…`
+              node.label.length > labelLimit
+                ? `${node.label.slice(0, labelLimit - 2)}…`
                 : node.label;
             const badge = TYPE_BADGES[node.type];
-            const labelFont = `${node.hub ? 11 : 9}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+            const labelFont = `${mobile ? (node.hub ? 9 : 8) : node.hub ? 11 : 9}px ui-monospace, SFMono-Regular, Menlo, monospace`;
             context.font = labelFont;
             const labelWidth = context.measureText(label).width;
             context.font = "7px ui-monospace, SFMono-Regular, Menlo, monospace";
@@ -408,17 +508,16 @@ export function KnowledgeGraph({
               })),
             ];
             const box = expanded
-              .map((candidate) => ({
-                ...candidate,
-                right: candidate.left + totalWidth,
-                bottom: candidate.top + labelHeight,
-              }))
+              .map((candidate) =>
+                clampGraphLabelBox(
+                  candidate,
+                  totalWidth,
+                  labelHeight,
+                  visibleViewport,
+                ),
+              )
               .find(
                 (candidate) =>
-                  candidate.left >= 4 &&
-                  candidate.top >= 4 &&
-                  candidate.right <= width - 4 &&
-                  candidate.bottom <= height - 4 &&
                   occupied.every(
                     (existing) =>
                       candidate.right + 4 < existing.left ||
@@ -510,26 +609,24 @@ export function KnowledgeGraph({
 
     const fit = () => {
       if (!layoutNodes.length) return;
+      measureVisibleViewport();
       const xs = layoutNodes.map((node) => node.x ?? 0);
       const ys = layoutNodes.map((node) => node.y ?? 0);
-      const minX = Math.min(...xs);
-      const maxX = Math.max(...xs);
-      const minY = Math.min(...ys);
-      const maxY = Math.max(...ys);
-      const graphWidth = Math.max(1, maxX - minX);
-      const graphHeight = Math.max(1, maxY - minY);
-      const scale = Math.max(
-        0.25,
-        Math.min(
-          1.3,
-          Math.min((width - 80) / graphWidth, (height - 110) / graphHeight),
-        ),
-      );
-      viewRef.current = {
-        scale,
-        x: -((minX + maxX) / 2) * scale,
-        y: -((minY + maxY) / 2) * scale,
-      };
+      const graphPadding = 22;
+      viewRef.current = calculateGraphFit({
+        canvasWidth: width,
+        canvasHeight: height,
+        viewport: visibleViewport,
+        graph: {
+          left: Math.min(...xs) - graphPadding,
+          top: Math.min(...ys) - graphPadding,
+          right: Math.max(...xs) + graphPadding,
+          bottom: Math.max(...ys) + graphPadding,
+        },
+      });
+      canvas.dataset.graphFitScale = viewRef.current.scale.toFixed(3);
+      canvas.dataset.graphStretchX = viewRef.current.stretchX.toFixed(2);
+      canvas.dataset.graphStretchY = viewRef.current.stretchY.toFixed(2);
       draw();
     };
 

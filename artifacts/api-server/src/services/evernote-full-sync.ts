@@ -127,6 +127,68 @@ export async function persistEvernoteTaxonomy(
             updatedAt: values.updatedAt,
           },
         });
+      if (kind === "notebook" && entity.name !== entity.id) {
+        const backfilled = await getDb()
+          .update(sourceRecords)
+          .set({
+            recordMetadata: sql`jsonb_set(
+              coalesce(${sourceRecords.recordMetadata}, '{}'::jsonb),
+              '{notebookName}',
+              to_jsonb(${entity.name}::text),
+              true
+            )`,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(sourceRecords.connectorId, connectorId),
+              eq(sourceRecords.recordType, "evernote_note"),
+              sql`${sourceRecords.recordMetadata}->>'notebookGuid' = ${entity.id}`,
+              sql`(
+                nullif(${sourceRecords.recordMetadata}->>'notebookName', '') is null
+                or ${sourceRecords.recordMetadata}->>'notebookName' = ${entity.id}
+              )`,
+            ),
+          )
+          .returning({ id: sourceRecords.id });
+        if (backfilled.length > 0) {
+          await getDb()
+            .update(sourceRecords)
+            .set({
+              searchDocument: sql`concat_ws(
+                E'\n',
+                coalesce(${sourceRecords.recordTitle}, ''),
+                left(coalesce(${sourceRecords.recordText}, ''), 180000),
+                coalesce(${sourceRecords.recordMetadata}->>'notebookName', ''),
+                coalesce(
+                  ${sourceRecords.recordMetadata}->>'tagNames',
+                  ${sourceRecords.recordMetadata}->>'tags',
+                  ''
+                )
+              )`,
+              searchTsv: sql`to_tsvector(
+                'simple',
+                concat_ws(
+                  E'\n',
+                  coalesce(${sourceRecords.recordTitle}, ''),
+                  left(coalesce(${sourceRecords.recordText}, ''), 180000),
+                  coalesce(${sourceRecords.recordMetadata}->>'notebookName', ''),
+                  coalesce(
+                    ${sourceRecords.recordMetadata}->>'tagNames',
+                    ${sourceRecords.recordMetadata}->>'tags',
+                    ''
+                  )
+                )
+              )`,
+            })
+            .where(
+              inArray(
+                sourceRecords.id,
+                backfilled.map((record) => record.id),
+              ),
+            );
+        }
+      }
     }
   }
   for (const entity of taxonomy.tags) {
@@ -907,6 +969,8 @@ export type EvernoteCompletenessReport = {
     notebook: string;
     stack: string | null;
     spaceId: string | null;
+    expected: number;
+    created: number;
     evernoteNotes: number;
     recallNotes: number;
     missing: number;
@@ -919,7 +983,7 @@ export type EvernoteCompletenessReport = {
 };
 
 type NotebookCountRow = {
-  notebook_id: string;
+  notebook_id: string | null;
   recall_notes: number | string;
   attachments_expected: number | string;
   attachments_stored: number | string;
@@ -951,6 +1015,8 @@ export function calculateEvernoteReport(
 ): EvernoteCompletenessReport {
   const rows = notebooks.map((item) => ({
     ...item,
+    expected: item.evernoteNotes,
+    created: item.recallNotes,
     missing: Math.max(0, item.evernoteNotes - item.recallNotes),
     verified: item.verified !== false,
   }));

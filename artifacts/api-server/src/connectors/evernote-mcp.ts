@@ -80,9 +80,7 @@ function asArray(value: unknown): unknown[] {
 }
 
 function max429Retries(): number {
-  const configured = Number(
-    process.env.EVERNOTE_MCP_MAX_429_RETRIES ?? 2,
-  );
+  const configured = Number(process.env.EVERNOTE_MCP_MAX_429_RETRIES ?? 2);
   return Number.isFinite(configured)
     ? Math.min(Math.max(Math.floor(configured), 0), 4)
     : 2;
@@ -118,10 +116,7 @@ export function evernoteRateLimitBackoffMs(
   const jitter = Math.floor(
     exponential * 0.25 * Math.min(Math.max(random, 0), 1),
   );
-  return Math.min(
-    3_600_000,
-    Math.max(exponential, retryAfterMs ?? 0) + jitter,
-  );
+  return Math.min(3_600_000, Math.max(exponential, retryAfterMs ?? 0) + jitter);
 }
 
 function evernoteRateLimitError(
@@ -155,10 +150,9 @@ function evernoteTransientError(
   retryAfterMs: number;
   evernoteTransient: true;
 } {
-  const wrapped = new Error(
-    "Evernote MCP transient backend response",
-    { cause: error },
-  ) as Error & {
+  const wrapped = new Error("Evernote MCP transient backend response", {
+    cause: error,
+  }) as Error & {
     status: number;
     retryAfterMs: number;
     evernoteTransient: true;
@@ -180,7 +174,8 @@ export async function evernoteMcpFetch(
     const response = options?.fetchFn
       ? await options.fetchFn(request, init)
       : await fetch(request, init);
-    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    const contentType =
+      response.headers.get("content-type")?.toLowerCase() ?? "";
     const htmlResponse = contentType.includes("text/html");
     const transientStatus =
       response.status === 429 ||
@@ -224,9 +219,7 @@ function firstArray(root: JsonRecord, keys: string[]): unknown[] {
   return [];
 }
 
-function stripClientSecret(
-  value: StoredOAuthClientInformation,
-): {
+function stripClientSecret(value: StoredOAuthClientInformation): {
   information: StoredOAuthClientInformation;
   secret: string | null;
 } {
@@ -253,10 +246,7 @@ function stripTokens(value: StoredOAuthTokens): {
   return {
     accessToken,
     refreshToken: refreshToken ?? null,
-    metadata: row as Omit<
-      StoredOAuthTokens,
-      "access_token" | "refresh_token"
-    >,
+    metadata: row as Omit<StoredOAuthTokens, "access_token" | "refresh_token">,
   };
 }
 
@@ -446,7 +436,9 @@ export async function beginEvernoteMcpOAuth(
     fetchFn: evernoteMcpFetch,
   });
   if (result !== "REDIRECT") {
-    throw new Error("Evernote MCP OAuth unexpectedly completed without consent");
+    throw new Error(
+      "Evernote MCP OAuth unexpectedly completed without consent",
+    );
   }
   if (!provider.authorizationUrl) {
     throw new Error("Evernote MCP did not start OAuth authorization");
@@ -460,9 +452,7 @@ export async function beginEvernoteMcpOAuth(
 export async function finishEvernoteMcpOAuth(
   settings: Record<string, unknown>,
   callbackParams: URLSearchParams,
-  onStateChanged?: (
-    settings: EvernoteMcpConnectorSettings,
-  ) => Promise<void>,
+  onStateChanged?: (settings: EvernoteMcpConnectorSettings) => Promise<void>,
 ): Promise<EvernoteMcpConnectorSettings> {
   const state = mcpOAuthStateFromSettings(settings);
   const provider = new RecallEvernoteMcpOAuthProvider(
@@ -566,9 +556,7 @@ function parseToolResult(raw: JsonRecord, name: string): JsonRecord {
   if (raw.isError === true) {
     const structuredError = asRecord(raw.structuredContent);
     const error = new Error(
-      text
-        ? text.slice(0, 300)
-        : `Evernote MCP ${name} failed`,
+      text ? text.slice(0, 300) : `Evernote MCP ${name} failed`,
     ) as Error & { status?: number; retryAfterMs?: number };
     const structuredStatus = asNumber(
       structuredError.status ?? structuredError.statusCode,
@@ -580,12 +568,10 @@ function parseToolResult(raw: JsonRecord, name: string): JsonRecord {
     ) {
       error.status = 429;
       const retryMs = asNumber(
-        structuredError.retryAfterMs ??
-          structuredError.retry_after_ms,
+        structuredError.retryAfterMs ?? structuredError.retry_after_ms,
       );
       const retrySeconds = asNumber(
-        structuredError.retryAfter ??
-          structuredError.retry_after,
+        structuredError.retryAfter ?? structuredError.retry_after,
       );
       error.retryAfterMs =
         retryMs ?? (retrySeconds != null ? retrySeconds * 1_000 : undefined);
@@ -631,9 +617,7 @@ async function callReadTool(
   const maxRetries = max429Retries();
   for (let attempt = 0; ; attempt++) {
     try {
-      const raw = asRecord(
-        await invokeTool(client, { name, arguments: args }),
-      );
+      const raw = asRecord(await invokeTool(client, { name, arguments: args }));
       return parseToolResult(raw, name);
     } catch (error) {
       const row = asRecord(error);
@@ -688,23 +672,19 @@ async function callReadTool(
             data.retryAfterMs ??
             data.retry_after_ms,
         ) ??
-        (headerDelay ?? messageDelay) ??
-        ((asNumber(
+        headerDelay ??
+        messageDelay ??
+        (asNumber(
           row.retryAfter ??
             row.retry_after ??
             data.retryAfter ??
             data.retry_after,
-        ) ??
-          1) *
-          1_000);
+        ) ?? 1) * 1_000;
       const boundedDelay = evernoteRateLimitBackoffMs(
         attempt,
         Math.min(Math.max(retryAfterMs, 0), 3_600_000),
       );
-      if (
-        row.mcpRetriesExhausted === true ||
-        attempt >= maxRetries
-      ) {
+      if (row.mcpRetriesExhausted === true || attempt >= maxRetries) {
         throw rateLimited
           ? evernoteRateLimitError(error, boundedDelay)
           : evernoteTransientError(
@@ -798,9 +778,7 @@ export type EvernoteNoteListingPage = {
 
 function recordGraph(value: unknown, maxDepth = 5): JsonRecord[] {
   const output: JsonRecord[] = [];
-  const queue: Array<{ value: unknown; depth: number }> = [
-    { value, depth: 0 },
-  ];
+  const queue: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
   const seen = new Set<object>();
   while (queue.length > 0) {
     const current = queue.shift()!;
@@ -827,13 +805,7 @@ function recordGraph(value: unknown, maxDepth = 5): JsonRecord[] {
 
 function noteRowsFromStructured(value: unknown): JsonRecord[] {
   const records = recordGraph(value);
-  const preferredKeys = [
-    "notes",
-    "results",
-    "items",
-    "noteList",
-    "matches",
-  ];
+  const preferredKeys = ["notes", "results", "items", "noteList", "matches"];
   const noteRows = (candidate: unknown): JsonRecord[] =>
     asArray(candidate)
       .map(asRecord)
@@ -857,10 +829,7 @@ function mcpTextParts(value: unknown): string[] {
   const records = recordGraph(value);
   const parts: string[] = [];
   for (const record of records) {
-    for (const candidate of [
-      record[MCP_TEXT_FIELD],
-      record.text,
-    ]) {
+    for (const candidate of [record[MCP_TEXT_FIELD], record.text]) {
       if (typeof candidate === "string" && candidate.trim()) {
         parts.push(candidate);
       }
@@ -895,10 +864,7 @@ function noteRowsFromText(text: string): JsonRecord[] {
   return rows;
 }
 
-function nestedScalar(
-  value: unknown,
-  keys: string[],
-): unknown {
+function nestedScalar(value: unknown, keys: string[]): unknown {
   for (const record of recordGraph(value)) {
     for (const key of keys) {
       if (record[key] !== undefined && record[key] !== null) {
@@ -940,8 +906,7 @@ export function parseEvernoteNoteListingPage(
   ]);
   const nestedTotal =
     nestedTotalValue == null ? null : asNumber(nestedTotalValue);
-  const totalResultCount =
-    nestedTotal ?? (footer ? Number(footer[2]) : null);
+  const totalResultCount = nestedTotal ?? (footer ? Number(footer[2]) : null);
   const nestedStartValue = nestedScalar(root, [
     "startIndex",
     "start",
@@ -951,12 +916,11 @@ export function parseEvernoteNoteListingPage(
     nestedStartValue == null ? null : asNumber(nestedStartValue);
   const startIndex = Math.max(
     0,
-    Math.floor(nestedStart ?? (footer ? Number(footer[3]) : fallbackStartIndex)),
+    Math.floor(
+      nestedStart ?? (footer ? Number(footer[3]) : fallbackStartIndex),
+    ),
   );
-  const explicitHasMore = nestedScalar(root, [
-    "hasMore",
-    "moreAvailable",
-  ]);
+  const explicitHasMore = nestedScalar(root, ["hasMore", "moreAvailable"]);
   const isLastPage = nestedScalar(root, ["isLastPage"]);
   const footerStatus = footer?.[4]?.toLowerCase() ?? "";
   const hasMore =
@@ -983,9 +947,7 @@ export function parseEvernoteNoteListingPage(
   const safeKeys = (record: JsonRecord): string[] =>
     Object.keys(record)
       .filter(
-        (key) =>
-          key !== MCP_TEXT_FIELD &&
-          key !== MCP_CONTENT_TYPES_FIELD,
+        (key) => key !== MCP_TEXT_FIELD && key !== MCP_CONTENT_TYPES_FIELD,
       )
       .sort();
   return {
@@ -1028,7 +990,10 @@ function deepLink(guid: string, row: JsonRecord): string {
 /** Full ENML is retained. Kept as an export for compatibility with older tests. */
 export const EVERNOTE_MAX_NOTE_CONTENT_CHARS = Number.POSITIVE_INFINITY;
 
-function boundedText(value: unknown, max = EVERNOTE_MAX_NOTE_CONTENT_CHARS): {
+function boundedText(
+  value: unknown,
+  max = EVERNOTE_MAX_NOTE_CONTENT_CHARS,
+): {
   text: string;
   truncated: boolean;
 } {
@@ -1058,8 +1023,7 @@ function compactNoteForSync(raw: JsonRecord): JsonRecord {
     const row = asRecord(value);
     return {
       id: noteGuid(row),
-      name:
-        boundedScalar(row.name, 500) ?? boundedScalar(row.label, 500) ?? "",
+      name: boundedScalar(row.name, 500) ?? boundedScalar(row.label, 500) ?? "",
       title: boundedScalar(row.title, 1_000) ?? "",
       parentId: boundedScalar(row.parentId, 500),
     };
@@ -1074,8 +1038,7 @@ function compactNoteForSync(raw: JsonRecord): JsonRecord {
       hash: boundedScalar(row.hash, 128) ?? boundedScalar(row.md5, 128),
       mime: boundedScalar(row.mime, 255) ?? boundedScalar(row.mimeType, 255),
       name:
-        boundedScalar(row.name, 2_000) ??
-        boundedScalar(row.fileName, 2_000),
+        boundedScalar(row.name, 2_000) ?? boundedScalar(row.fileName, 2_000),
       sizeBytes: asNumber(row.sizeBytes ?? row.size),
     };
   };
@@ -1103,10 +1066,9 @@ function compactNoteForSync(raw: JsonRecord): JsonRecord {
     ...asArray(raw.resources),
     ...asArray(structured.resources),
   ].map(compactResource);
-  const tasks = [
-    ...asArray(raw.tasks),
-    ...asArray(structured.tasks),
-  ].map(compactTask);
+  const tasks = [...asArray(raw.tasks), ...asArray(structured.tasks)].map(
+    compactTask,
+  );
   return {
     id: noteGuid(raw),
     title: boundedScalar(raw.title, 1_000) ?? "Untitled",
@@ -1168,11 +1130,8 @@ function noteToRaw(
   const notebookName =
     asString(raw.notebookName) ??
     asString(asRecord(raw.notebook).name) ??
-    (notebookGuid ? notebooks.get(notebookGuid)?.name ?? notebookGuid : null);
-  const tagRows = [
-    ...asArray(raw.tags),
-    ...asArray(structured.tags),
-  ];
+    (notebookGuid ? (notebooks.get(notebookGuid)?.name ?? notebookGuid) : null);
+  const tagRows = [...asArray(raw.tags), ...asArray(structured.tags)];
   const parsedTags = [
     ...new Map(
       tagRows
@@ -1199,10 +1158,7 @@ function noteToRaw(
     ...asArray(raw.resources),
     ...asArray(structured.resources),
   ];
-  const tasks = [
-    ...asArray(raw.tasks),
-    ...asArray(structured.tasks),
-  ];
+  const tasks = [...asArray(raw.tasks), ...asArray(structured.tasks)];
   const sourceCreatedAt = iso(raw.created ?? raw.createdAt);
   const sourceUpdatedAt = iso(raw.updated ?? raw.updatedAt);
   const sourceUrl = deepLink(guid, raw);
@@ -1216,9 +1172,7 @@ function noteToRaw(
       resources,
       tasks,
       trashed:
-        raw.trashed === true ||
-        raw.inTrash === true ||
-        Boolean(raw.deleted),
+        raw.trashed === true || raw.inTrash === true || Boolean(raw.deleted),
       reminderOrder: raw.reminderOrder ?? null,
       reminderTime: raw.reminderTime ?? null,
       reminderDoneTime: raw.reminderDoneTime ?? null,
@@ -1241,8 +1195,7 @@ function noteToRaw(
     sourceUpdatedAt,
     metadata: {
       contentHash,
-      usn:
-        asNumber(raw.usn ?? raw.version ?? raw.updateSequenceNum) ?? null,
+      usn: asNumber(raw.usn ?? raw.version ?? raw.updateSequenceNum) ?? null,
       notebookGuid,
       notebookName,
       tagGuids,
@@ -1258,8 +1211,7 @@ function noteToRaw(
             boundedScalar(row.resourceId, 500),
           hash: boundedScalar(row.hash, 128) ?? boundedScalar(row.md5, 128),
           mime:
-            boundedScalar(row.mime, 255) ??
-            boundedScalar(row.mimeType, 255),
+            boundedScalar(row.mime, 255) ?? boundedScalar(row.mimeType, 255),
           name:
             boundedScalar(row.name, 2_000) ??
             boundedScalar(row.fileName, 2_000),
@@ -1287,9 +1239,7 @@ function noteToRaw(
         };
       }),
       trashed:
-        raw.trashed === true ||
-        raw.inTrash === true ||
-        Boolean(raw.deleted),
+        raw.trashed === true || raw.inTrash === true || Boolean(raw.deleted),
       hasReminder:
         raw.reminderOrder != null ||
         raw.reminderTime != null ||
@@ -1309,9 +1259,7 @@ function paceMs(): number {
 }
 
 export function evernoteMcpBackfillChunkSize(): number {
-  const configured = Number(
-    process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE ?? 25,
-  );
+  const configured = Number(process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE ?? 25);
   if (!Number.isFinite(configured)) return 25;
   return Math.min(Math.max(Math.floor(configured), 1), 100);
 }
@@ -1371,15 +1319,12 @@ function taxonomyEntity(value: unknown): EvernoteTaxonomyEntity | null {
   return {
     ...named,
     parentId:
-      boundedScalar(row.parentId, 500) ??
-      boundedScalar(row.parentGuid, 500),
+      boundedScalar(row.parentId, 500) ?? boundedScalar(row.parentGuid, 500),
     stack: boundedScalar(row.stack, 1_000),
     spaceId:
-      boundedScalar(row.workspaceId, 500) ??
-      boundedScalar(row.spaceId, 500),
+      boundedScalar(row.workspaceId, 500) ?? boundedScalar(row.spaceId, 500),
     access:
-      boundedScalar(row.primaryAccess, 64) ??
-      boundedScalar(row.access, 64),
+      boundedScalar(row.primaryAccess, 64) ?? boundedScalar(row.access, 64),
     metadata: row,
   };
 }
@@ -1396,9 +1341,7 @@ function taxonomyCheckpointEntity(
   };
 }
 
-function initialTaxonomyCheckpoint(
-  value: unknown,
-): EvernoteTaxonomyCheckpoint {
+function initialTaxonomyCheckpoint(value: unknown): EvernoteTaxonomyCheckpoint {
   const checkpoint = asRecord(value);
   const stage = checkpoint.stage;
   if (
@@ -1427,14 +1370,11 @@ function initialTaxonomyCheckpoint(
   const entities = (candidate: unknown): EvernoteTaxonomyEntity[] =>
     asArray(candidate)
       .map(taxonomyCheckpointEntity)
-      .filter(
-        (entity): entity is EvernoteTaxonomyEntity => Boolean(entity),
-      );
+      .filter((entity): entity is EvernoteTaxonomyEntity => Boolean(entity));
   return {
     version: 1,
     stage,
-    startedAt:
-      asString(checkpoint.startedAt) ?? new Date().toISOString(),
+    startedAt: asString(checkpoint.startedAt) ?? new Date().toISOString(),
     searchesDone: Math.max(
       0,
       Math.floor(asNumber(checkpoint.searchesDone) ?? 0),
@@ -1517,7 +1457,8 @@ async function enumerateNameSearch(
     const total = asNumber(
       result.totalResultCount ?? result.total ?? result.totalCount,
     );
-    const saturated = rows.length >= cap || (total != null && total > rows.length);
+    const saturated =
+      rows.length >= cap || (total != null && total > rows.length);
     if (saturated) {
       if (query.length < maxDepth) {
         for (const char of alphabet) {
@@ -1595,9 +1536,7 @@ export async function enumerateEvernoteTaxonomy(
         "items",
       ])
         .map(taxonomyEntity)
-        .filter(
-          (entity): entity is EvernoteTaxonomyEntity => Boolean(entity),
-        );
+        .filter((entity): entity is EvernoteTaxonomyEntity => Boolean(entity));
     }
     checkpoint.stage = "complete";
     await emitTaxonomyCheckpoint(checkpoint, options);
@@ -1646,9 +1585,7 @@ async function lookupTaxonomyEntity(
     });
     const entities = firstArray(result, keys)
       .map(taxonomyEntity)
-      .filter(
-        (entity): entity is EvernoteTaxonomyEntity => Boolean(entity),
-      );
+      .filter((entity): entity is EvernoteTaxonomyEntity => Boolean(entity));
     const exact =
       entities.find((entity) => entity.id === id) ??
       (hintedName
@@ -1704,8 +1641,7 @@ async function resolveNoteTaxonomy(
     asString(raw.notebookGuid) ??
     asString(notebookRow.id) ??
     asString(notebookRow.guid);
-  const notebookName =
-    asString(raw.notebookName) ?? asString(notebookRow.name);
+  const notebookName = asString(raw.notebookName) ?? asString(notebookRow.name);
   if (notebookId) {
     const existing = notebooks.get(notebookId);
     const existingUnresolved =
@@ -1747,9 +1683,7 @@ async function resolveNoteTaxonomy(
   const tagRows = [...asArray(raw.tags), ...asArray(structured.tags)];
   const embeddedTags = tagRows
     .map(taxonomyEntity)
-    .filter(
-      (entity): entity is EvernoteTaxonomyEntity => Boolean(entity),
-    );
+    .filter((entity): entity is EvernoteTaxonomyEntity => Boolean(entity));
   const handledTagIds = new Set<string>();
   for (const entity of embeddedTags) {
     handledTagIds.add(entity.id);
@@ -1820,6 +1754,44 @@ export type EvernoteMcpSyncCheckpoint = {
   recordsFailed: number;
   batchesProcessed: number;
   listingAuthoritative: boolean;
+  version?: 2;
+  notebookCursor?: {
+    scopes: EvernoteNotebookScope[];
+    scopeIndex: number;
+    pendingRanges: EvernoteDateRange[];
+    activeRange: EvernoteDateRange | null;
+    legacyPrefixEnd: number;
+    legacyScanIndex: number;
+    legacyRetryIndex: number;
+    legacyRetryNotes: EvernoteFailedNote[];
+    retryReport: EvernoteRetryReportEntry[];
+    skipExistingSourceRecords: boolean;
+  };
+};
+
+export type EvernoteFailedNote = {
+  guid: string;
+  title: string;
+  error?: string;
+};
+
+export type EvernoteRetryReportEntry = EvernoteFailedNote & {
+  status: "recovered" | "failed";
+};
+
+export type EvernoteNotebookScope = {
+  notebookGuid: string | null;
+  notebookName: string;
+  expectedTotal: number;
+  queryMode?: "notebook" | "global";
+};
+
+export type EvernoteDateRange = {
+  field: "created" | "updated";
+  from: string | null;
+  before: string | null;
+  expectedTotal: number;
+  startIndex: number;
 };
 
 export type EvernoteMcpSyncBatch = {
@@ -1827,6 +1799,7 @@ export type EvernoteMcpSyncBatch = {
   seen: Array<{ externalId: string; listingIndex: number }>;
   replayExternalIds: string[];
   errors: string[];
+  failedNotes: EvernoteFailedNote[];
   checkpoint: EvernoteMcpSyncCheckpoint;
   taxonomyLookups: EvernoteTaxonomyLookupProgress;
 };
@@ -1850,11 +1823,379 @@ type EvernoteMcpStreamOptions = {
   query?: string;
   forceTrashed?: boolean;
   stopAtFirstUnchanged?: boolean;
+  partitionByNotebook?: boolean;
 };
+
+function parseFailedNotes(value: unknown): EvernoteFailedNote[] {
+  return asArray(value)
+    .map((candidate) => {
+      const item = asRecord(candidate);
+      const guid = asString(item.guid);
+      if (!guid) return null;
+      return {
+        guid,
+        title: asString(item.title) ?? "Untitled",
+        ...(asString(item.error) ? { error: asString(item.error)! } : {}),
+      };
+    })
+    .filter((item): item is EvernoteFailedNote => Boolean(item));
+}
+
+function parseRetryReport(value: unknown): EvernoteRetryReportEntry[] {
+  return asArray(value)
+    .map((candidate) => {
+      const item = asRecord(candidate);
+      const guid = asString(item.guid);
+      const status = item.status;
+      if (!guid || (status !== "recovered" && status !== "failed")) return null;
+      return {
+        guid,
+        title: asString(item.title) ?? "Untitled",
+        status,
+        ...(asString(item.error) ? { error: asString(item.error)! } : {}),
+      };
+    })
+    .filter((item): item is EvernoteRetryReportEntry => Boolean(item));
+}
+
+function parseEvernoteDateRange(value: unknown): EvernoteDateRange | null {
+  const item = asRecord(value);
+  if (item.field !== "created" && item.field !== "updated") return null;
+  const expectedTotal = asNumber(item.expectedTotal);
+  if (expectedTotal == null) return null;
+  return {
+    field: item.field,
+    from: asString(item.from),
+    before: asString(item.before),
+    expectedTotal: Math.max(0, Math.floor(expectedTotal)),
+    startIndex: Math.max(0, Math.floor(asNumber(item.startIndex) ?? 0)),
+  };
+}
+
+function evernoteDateSearchValue(value: string): string {
+  return value.replaceAll(/[-:]/g, "").replace(".000Z", "").replace(/Z$/, "");
+}
+
+function quoteEvernoteSearchValue(value: string): string {
+  return `"${value.replaceAll('"', "")}"`;
+}
+
+export function evernoteNotebookRangeQuery(
+  scope: Pick<EvernoteNotebookScope, "notebookGuid" | "queryMode">,
+  range?: Pick<EvernoteDateRange, "field" | "from" | "before"> | null,
+  baseQuery = "",
+): string {
+  return [
+    baseQuery.trim(),
+    scope.queryMode === "global"
+      ? ""
+      : scope.notebookGuid
+        ? `nbGuid:${quoteEvernoteSearchValue(scope.notebookGuid)}`
+        : "-nbGuid:*",
+    range?.from ? `${range.field}:${evernoteDateSearchValue(range.from)}` : "",
+    range?.before
+      ? `-${range.field}:${evernoteDateSearchValue(range.before)}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function dateRangeMidpoint(range: EvernoteDateRange): string | null {
+  const lower = range.from
+    ? Date.parse(range.from)
+    : Date.parse("1900-01-01T00:00:00.000Z");
+  const upper = range.before
+    ? Date.parse(range.before)
+    : Date.parse("2200-01-01T00:00:00.000Z");
+  if (
+    !Number.isFinite(lower) ||
+    !Number.isFinite(upper) ||
+    upper - lower <= 1_000
+  ) {
+    return null;
+  }
+  const midpoint = Math.floor((lower + upper) / 2 / 1_000) * 1_000;
+  if (midpoint <= lower || midpoint >= upper) return null;
+  return new Date(midpoint).toISOString();
+}
+
+export type EvernoteNotebookListingPage = {
+  rows: EvernoteTaxonomyEntity[];
+  totalResultCount: number | null;
+  startIndex: number;
+  hasMore: boolean | null;
+  recognized: boolean;
+  shape: {
+    topLevelKeys: string[];
+    dataKeys: string[];
+    contentTypes: string[];
+    textRows: Array<{ guid: string; name: string }>;
+  };
+};
+
+export type EvernoteNotebookDiscoveryResult = {
+  notebooks: EvernoteTaxonomyEntity[];
+  totalResultCount: number;
+  totalWasReported: boolean;
+  pages: number;
+  pageShapes: Array<
+    EvernoteNotebookListingPage["shape"] & { query: string }
+  >;
+};
+
+function notebookRowsFromText(value: string): EvernoteTaxonomyEntity[] {
+  const guidPattern =
+    "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+  const guidRegex = new RegExp(guidPattern, "i");
+  const rows: EvernoteTaxonomyEntity[] = [];
+  for (const line of value.split(/\r?\n/)) {
+    const numbered = line.match(/^\s*\d+\.\s+(.+?)\s*$/);
+    if (!numbered) continue;
+    const guidMatch = numbered[1]!.match(guidRegex);
+    if (!guidMatch) continue;
+    const id = guidMatch[0];
+    const name =
+      numbered[1]!
+        .replace(id, "")
+        .replace(/^[\s—–|:-]+|[\s—–|:-]+$/g, "")
+        .trim() || id;
+    rows.push({
+      id,
+      name: name.slice(0, 1_000),
+      parentId: null,
+      stack: null,
+      spaceId: null,
+      access: null,
+      metadata: { listingShape: "text" },
+    });
+  }
+  return rows;
+}
+
+export function parseEvernoteNotebookListingPage(
+  value: unknown,
+  fallbackStartIndex = 0,
+): EvernoteNotebookListingPage {
+  const root = asRecord(value);
+  const records = recordGraph(root);
+  const notebookKeys = ["notebooks", "results", "items", "notebookList"];
+  let structuredArrayFound = false;
+  let rows: EvernoteTaxonomyEntity[] = [];
+  for (const record of records) {
+    for (const key of notebookKeys) {
+      if (!Array.isArray(record[key])) continue;
+      structuredArrayFound = true;
+      const parsed = asArray(record[key])
+        .map(taxonomyEntity)
+        .filter(
+          (entity): entity is EvernoteTaxonomyEntity => Boolean(entity),
+        );
+      if (parsed.length > 0) {
+        rows = parsed;
+        break;
+      }
+    }
+    if (rows.length > 0) break;
+  }
+  const textParts = mcpTextParts(root);
+  if (rows.length === 0) {
+    for (const part of textParts) {
+      const parsed = notebookRowsFromText(part);
+      if (parsed.length > 0) {
+        rows = parsed;
+        break;
+      }
+    }
+  }
+  const footerPattern =
+    /Showing\s+(\d+)\s+of\s+(\d+)\s+\(startIndex=(\d+)(?:,\s*([^)]+))?\)\.?/i;
+  const footer = textParts
+    .map((part) => part.match(footerPattern))
+    .find((match): match is RegExpMatchArray => Boolean(match));
+  const totalValue = nestedScalar(root, [
+    "totalResultCount",
+    "totalResults",
+    "totalNotebooks",
+    "totalCount",
+    "total",
+  ]);
+  const nestedTotal = totalValue == null ? null : asNumber(totalValue);
+  const totalResultCount =
+    nestedTotal ?? (footer ? Number(footer[2]) : null);
+  const startValue = nestedScalar(root, ["startIndex", "start", "offset"]);
+  const nestedStart = startValue == null ? null : asNumber(startValue);
+  const startIndex = Math.max(
+    0,
+    Math.floor(nestedStart ?? (footer ? Number(footer[3]) : fallbackStartIndex)),
+  );
+  const explicitHasMore = nestedScalar(root, ["hasMore", "moreAvailable"]);
+  const isLastPage = nestedScalar(root, ["isLastPage"]);
+  const footerStatus = footer?.[4]?.toLowerCase() ?? "";
+  const hasMore =
+    typeof explicitHasMore === "boolean"
+      ? explicitHasMore
+      : typeof isLastPage === "boolean"
+        ? !isLastPage
+        : footer
+          ? /more available/.test(footerStatus) ||
+            startIndex + Number(footer[1]) < Number(footer[2])
+          : totalResultCount != null
+            ? startIndex + rows.length < totalResultCount
+            : null;
+  const safeKeys = (record: JsonRecord): string[] =>
+    Object.keys(record)
+      .filter(
+        (key) =>
+          key !== MCP_TEXT_FIELD &&
+          key !== MCP_CONTENT_TYPES_FIELD,
+      )
+      .sort();
+  return {
+    rows,
+    totalResultCount,
+    startIndex,
+    hasMore,
+    recognized: structuredArrayFound || Boolean(footer) || rows.length > 0,
+    shape: {
+      topLevelKeys: safeKeys(root),
+      dataKeys: safeKeys(asRecord(root.data)),
+      contentTypes: [
+        ...new Set(
+          asArray(root[MCP_CONTENT_TYPES_FIELD])
+            .map(asString)
+            .filter((type): type is string => Boolean(type)),
+        ),
+      ],
+      textRows: rows.slice(0, 3).map((entity) => ({
+        guid: `${entity.id.slice(0, 8)}…${entity.id.slice(-4)}`,
+        name: entity.name.slice(0, 80),
+      })),
+    },
+  };
+}
+
+export async function discoverEvernoteNotebooks(
+  client: EvernoteReadOnlyToolCaller,
+  cached: EvernoteTaxonomyEntity[] = [],
+): Promise<EvernoteNotebookDiscoveryResult> {
+  const discovered = new Map<string, EvernoteTaxonomyEntity>();
+  const pageShapes: EvernoteNotebookDiscoveryResult["pageShapes"] = [];
+  let pages = 0;
+  const search = async (query: string): Promise<EvernoteNotebookListingPage> => {
+    const result = await callPacedReadTool(client, "search_notebooks", {
+      query,
+      maxResults: 100,
+      sortBy: "name",
+    });
+    const page = parseEvernoteNotebookListingPage(result, 0);
+    pageShapes.push({ query, ...page.shape });
+    pages += 1;
+    if (!page.recognized) {
+      throw new Error(
+        `Evernote MCP search_notebooks returned an unrecognized listing format for query ${JSON.stringify(query)}; keys=${page.shape.topLevelKeys.join(",") || "(none)"} dataKeys=${page.shape.dataKeys.join(",") || "(none)"} contentTypes=${page.shape.contentTypes.join(",") || "(none)"}`,
+      );
+    }
+    for (const entity of page.rows) discovered.set(entity.id, entity);
+    return page;
+  };
+
+  // search_notebooks has no offset/cursor. Its documented ranking puts exact
+  // and prefix matches before substring matches, so saturated prefixes can be
+  // subdivided without relying on unsupported arguments.
+  const root = await search("");
+  const totalWasReported = root.totalResultCount != null;
+  const expectedTotal = Math.max(
+    0,
+    Math.floor(root.totalResultCount ?? root.rows.length),
+  );
+  if (discovered.size < expectedTotal) {
+    const commonChars =
+      "abcdefghijklmnopqrstuvwxyz0123456789-_.'()[]&/".split("");
+    const observedInitials = root.rows
+      .concat(cached)
+      .map(
+        (entity) =>
+          [...entity.name.trim().toLocaleLowerCase()][0] ?? "",
+      )
+      .filter(Boolean);
+    const alphabet = [...new Set([...commonChars, ...observedInitials])];
+    const frontier = [...alphabet];
+    const visited = new Set<string>();
+    const maxQueries = 4_096;
+    while (
+      frontier.length > 0 &&
+      discovered.size < expectedTotal &&
+      visited.size < maxQueries
+    ) {
+      const query = frontier.shift()!;
+      if (!query || visited.has(query)) continue;
+      visited.add(query);
+      const page = await search(query);
+      const prefixMatches = page.rows.filter((entity) =>
+        entity.name.toLocaleLowerCase().startsWith(query),
+      );
+      if (prefixMatches.length < 100) continue;
+      if (query.length >= 24) {
+        throw new Error(
+          `Evernote notebook prefix ${JSON.stringify(query)} remains capped at 100 results`,
+        );
+      }
+      const nextChars = new Set(alphabet);
+      for (const entity of prefixMatches) {
+        const next = entity.name
+          .toLocaleLowerCase()
+          .slice(query.length);
+        const nextCharacter = [...next][0];
+        if (nextCharacter) nextChars.add(nextCharacter);
+      }
+      for (const char of nextChars) frontier.push(`${query}${char}`);
+    }
+  }
+  if (discovered.size !== expectedTotal) {
+    throw new Error(
+      `Evernote notebook listing is incomplete: received ${discovered.size} of ${expectedTotal} after ${pages} query partition(s); search_notebooks exposes no offset cursor`,
+    );
+  }
+  const cachedById = new Map(cached.map((entity) => [entity.id, entity]));
+  const notebooks = [...discovered.values()].map((entity) => {
+    const cachedEntity = cachedById.get(entity.id);
+    if (!cachedEntity) return entity;
+    return {
+      ...cachedEntity,
+      ...entity,
+      name:
+        entity.name === entity.id && cachedEntity.name !== cachedEntity.id
+          ? cachedEntity.name
+          : entity.name,
+      parentId: entity.parentId ?? cachedEntity.parentId,
+      stack: entity.stack ?? cachedEntity.stack,
+      spaceId: entity.spaceId ?? cachedEntity.spaceId,
+      access: entity.access ?? cachedEntity.access,
+      metadata: { ...cachedEntity.metadata, ...entity.metadata },
+    };
+  }).sort(
+    (left, right) =>
+      left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+  );
+  return {
+    notebooks,
+    totalResultCount: expectedTotal,
+    totalWasReported,
+    pages,
+    pageShapes,
+  };
+}
 
 function initialCheckpoint(
   checkpoint?: Partial<EvernoteMcpSyncCheckpoint>,
 ): EvernoteMcpSyncCheckpoint {
+  const notebookCursor =
+    checkpoint?.version === 2 &&
+    checkpoint.notebookCursor &&
+    typeof checkpoint.notebookCursor === "object"
+      ? checkpoint.notebookCursor
+      : undefined;
   return {
     startIndex: Math.max(0, Math.floor(checkpoint?.startIndex ?? 0)),
     expectedTotal:
@@ -1870,6 +2211,58 @@ function initialCheckpoint(
       Math.floor(checkpoint?.batchesProcessed ?? 0),
     ),
     listingAuthoritative: checkpoint?.listingAuthoritative !== false,
+    ...(notebookCursor
+      ? {
+          version: 2 as const,
+          notebookCursor: {
+            scopes: asArray(notebookCursor.scopes)
+              .map((value): EvernoteNotebookScope | null => {
+                const item = asRecord(value);
+                const notebookGuid = asString(item.notebookGuid);
+                const notebookName =
+                  asString(item.notebookName) ??
+                  (notebookGuid ? notebookGuid : "No notebook");
+                const expectedTotal = asNumber(item.expectedTotal);
+                return expectedTotal == null
+                  ? null
+                  : {
+                      notebookGuid,
+                      notebookName,
+                      expectedTotal: Math.max(0, Math.floor(expectedTotal)),
+                      queryMode:
+                        item.queryMode === "global" ? "global" : undefined,
+                    };
+              })
+              .filter((value): value is EvernoteNotebookScope =>
+                Boolean(value),
+              ),
+            scopeIndex: Math.max(
+              0,
+              Math.floor(asNumber(notebookCursor.scopeIndex) ?? 0),
+            ),
+            pendingRanges: asArray(notebookCursor.pendingRanges)
+              .map(parseEvernoteDateRange)
+              .filter((value): value is EvernoteDateRange => Boolean(value)),
+            activeRange: parseEvernoteDateRange(notebookCursor.activeRange),
+            legacyPrefixEnd: Math.max(
+              0,
+              Math.floor(asNumber(notebookCursor.legacyPrefixEnd) ?? 0),
+            ),
+            legacyScanIndex: Math.max(
+              0,
+              Math.floor(asNumber(notebookCursor.legacyScanIndex) ?? 0),
+            ),
+            legacyRetryIndex: Math.max(
+              0,
+              Math.floor(asNumber(notebookCursor.legacyRetryIndex) ?? 0),
+            ),
+            legacyRetryNotes: parseFailedNotes(notebookCursor.legacyRetryNotes),
+            retryReport: parseRetryReport(notebookCursor.retryReport),
+            skipExistingSourceRecords:
+              notebookCursor.skipExistingSourceRecords === true,
+          },
+        }
+      : {}),
   };
 }
 
@@ -1960,6 +2353,661 @@ export async function fetchEvernoteNoteListingPageWithRetry(
   return page!;
 }
 
+const EVERNOTE_SEARCH_RESULT_CAP = 2_000;
+
+export async function planEvernoteNotebookRanges(
+  client: EvernoteReadOnlyToolCaller,
+  scope: Pick<EvernoteNotebookScope, "notebookGuid" | "notebookName">,
+  baseQuery = "",
+): Promise<EvernoteDateRange[]> {
+  const count = async (range: EvernoteDateRange): Promise<number> => {
+    const page = await fetchEvernoteNoteListingPageWithRetry(
+      client,
+      {
+        query: evernoteNotebookRangeQuery(scope, range, baseQuery),
+        maxResults: 1,
+        startIndex: 0,
+      },
+      {
+        phase: "range-plan",
+        notebookGuid: scope.notebookGuid,
+      },
+    );
+    return Math.max(0, Math.floor(page.totalResultCount ?? page.rows.length));
+  };
+  const root: EvernoteDateRange = {
+    field: "created",
+    from: null,
+    before: null,
+    expectedTotal: 0,
+    startIndex: 0,
+  };
+  root.expectedTotal = await count(root);
+  const pending = [root];
+  const planned: EvernoteDateRange[] = [];
+  while (pending.length > 0) {
+    const candidate = pending.shift()!;
+    if (candidate.expectedTotal < EVERNOTE_SEARCH_RESULT_CAP) {
+      planned.push(candidate);
+      continue;
+    }
+    const midpoint = dateRangeMidpoint(candidate);
+    if (!midpoint) {
+      throw new Error(
+        `Evernote notebook ${scope.notebookName} (${scope.notebookGuid ?? "none"}) has ${EVERNOTE_SEARCH_RESULT_CAP} or more notes at one ${candidate.field} timestamp`,
+      );
+    }
+    const left: EvernoteDateRange = {
+      ...candidate,
+      before: midpoint,
+      expectedTotal: 0,
+      startIndex: 0,
+    };
+    const right: EvernoteDateRange = {
+      ...candidate,
+      from: midpoint,
+      expectedTotal: 0,
+      startIndex: 0,
+    };
+    [left.expectedTotal, right.expectedTotal] = await Promise.all([
+      count(left),
+      count(right),
+    ]);
+    if (left.expectedTotal + right.expectedTotal !== candidate.expectedTotal) {
+      throw new Error(
+        `Evernote notebook changed while planning ranges for ${scope.notebookName}: expected ${candidate.expectedTotal}, split returned ${left.expectedTotal + right.expectedTotal}`,
+      );
+    }
+    pending.unshift(left, right);
+  }
+  return planned;
+}
+
+async function streamEvernoteByNotebook(
+  client: EvernoteReadOnlyToolCaller,
+  options: EvernoteMcpStreamOptions,
+): Promise<
+  EvernoteMcpSyncCheckpoint & {
+    recordsDeferred: number;
+    listingComplete: boolean;
+    authoritativeListing: boolean;
+    taxonomyLookups: EvernoteTaxonomyLookupProgress;
+  }
+> {
+  const taxonomy = options.taxonomy ?? {
+    notebooks: [],
+    tags: [],
+    spaces: [],
+  };
+  let checkpoint = initialCheckpoint(options.checkpoint);
+  const legacyCheckpoint = checkpoint.version !== 2;
+  const resumedScopes = checkpoint.notebookCursor?.scopes ?? [];
+  const discoveredNotebooks = legacyCheckpoint
+    ? (await discoverEvernoteNotebooks(client, taxonomy.notebooks)).notebooks
+    : resumedScopes
+        .filter(
+          (scope): scope is EvernoteNotebookScope & { notebookGuid: string } =>
+            Boolean(scope.notebookGuid),
+        )
+        .map((scope) => ({
+          id: scope.notebookGuid,
+          name: scope.notebookName,
+          parentId: null,
+          stack: null,
+          spaceId: null,
+          access: null,
+          metadata: { restoredFromCheckpoint: true },
+        }));
+  if (legacyCheckpoint && discoveredNotebooks.length > 0) {
+    await options.onTaxonomyEntities?.({
+      notebooks: discoveredNotebooks,
+      tags: [],
+      spaces: [],
+    });
+  }
+  const notebooks = new Map(
+    discoveredNotebooks.map((item) => [item.id, item] as const),
+  );
+  const tags = new Map(taxonomy.tags.map((item) => [item.id, item] as const));
+  const taxonomyLookups = {
+    cached: Math.max(
+      0,
+      Math.floor(options.taxonomyLookupProgress?.cached ?? 0),
+    ),
+    fetched: Math.max(
+      0,
+      Math.floor(options.taxonomyLookupProgress?.fetched ?? 0),
+    ),
+  };
+  const maxBatches = options.stopAfterOneBatch
+    ? 1
+    : Math.max(1, Math.floor(options.maxBatchesPerInvocation ?? Infinity));
+  let invocationBatches = 0;
+  const emit = async (
+    batch: Omit<EvernoteMcpSyncBatch, "checkpoint" | "taxonomyLookups">,
+  ) => {
+    await options.processBatch({
+      ...batch,
+      checkpoint: structuredClone(checkpoint),
+      taxonomyLookups: { ...taxonomyLookups },
+    });
+    invocationBatches += 1;
+  };
+
+  if (legacyCheckpoint) {
+    const global = await fetchEvernoteNoteListingPageWithRetry(
+      client,
+      {
+        query: options.query ?? "",
+        maxResults: 1,
+        startIndex: 0,
+      },
+      { syncRunId: options.syncRunId, phase: "notebook-plan" },
+    );
+    const globalTotal = Math.max(
+      0,
+      Math.floor(global.totalResultCount ?? global.rows.length),
+    );
+    const scopes: EvernoteNotebookScope[] = [];
+    let assigned = 0;
+    for (const notebook of discoveredNotebooks) {
+      const page = await fetchEvernoteNoteListingPageWithRetry(
+        client,
+        {
+          query: evernoteNotebookRangeQuery(
+            { notebookGuid: notebook.id },
+            null,
+            options.query,
+          ),
+          maxResults: 1,
+          startIndex: 0,
+        },
+        {
+          syncRunId: options.syncRunId,
+          phase: "notebook-count",
+          notebookGuid: notebook.id,
+        },
+      );
+      const expectedTotal = Math.max(
+        0,
+        Math.floor(page.totalResultCount ?? page.rows.length),
+      );
+      assigned += expectedTotal;
+      scopes.push({
+        notebookGuid: notebook.id,
+        notebookName: notebook.name,
+        expectedTotal,
+      });
+    }
+    const unassigned = Math.max(0, globalTotal - assigned);
+    let noNotebookTotal = 0;
+    if (unassigned > 0) {
+      const page = await fetchEvernoteNoteListingPageWithRetry(
+        client,
+        {
+          query: evernoteNotebookRangeQuery(
+            { notebookGuid: null },
+            null,
+            options.query,
+          ),
+          maxResults: 1,
+          startIndex: 0,
+        },
+        {
+          syncRunId: options.syncRunId,
+          phase: "notebook-count",
+          notebookGuid: null,
+        },
+      );
+      const reportedNoNotebook = Math.max(
+        0,
+        Math.floor(page.totalResultCount ?? page.rows.length),
+      );
+      noNotebookTotal =
+        assigned + reportedNoNotebook <= globalTotal
+          ? reportedNoNotebook
+          : 0;
+      if (noNotebookTotal > 0) {
+        scopes.push({
+          notebookGuid: null,
+          notebookName: "No notebook",
+          expectedTotal: noNotebookTotal,
+        });
+      }
+    }
+    if (assigned + noNotebookTotal < globalTotal) {
+      scopes.push({
+        notebookGuid: null,
+        notebookName: "Global fallback",
+        expectedTotal: globalTotal,
+        queryMode: "global",
+      });
+    }
+    const oldStartIndex = checkpoint.startIndex;
+    checkpoint = {
+      ...checkpoint,
+      version: 2,
+      startIndex: 0,
+      expectedTotal: globalTotal,
+      recordsFetched: 0,
+      // MCP offset searches do not provide a snapshot token. Never use a
+      // partitioned traversal as authority for destructive reconciliation:
+      // equal-count concurrent delete/insert changes cannot be detected.
+      listingAuthoritative: false,
+      notebookCursor: {
+        scopes,
+        scopeIndex: 0,
+        pendingRanges: [],
+        activeRange: null,
+        legacyPrefixEnd: oldStartIndex,
+        legacyScanIndex: 0,
+        legacyRetryIndex: 0,
+        legacyRetryNotes: [],
+        retryReport: [],
+        skipExistingSourceRecords: oldStartIndex > 0,
+      },
+    };
+    await emit({
+      records: [],
+      seen: [],
+      replayExternalIds: [],
+      errors: [],
+      failedNotes: [],
+    });
+    if (invocationBatches >= maxBatches) {
+      return {
+        ...checkpoint,
+        recordsDeferred: globalTotal,
+        listingComplete: false,
+        authoritativeListing: false,
+        taxonomyLookups,
+      };
+    }
+  }
+
+  const cursor = checkpoint.notebookCursor!;
+  if (
+    checkpoint.expectedTotal != null &&
+    !cursor.scopes.some((scope) => scope.queryMode === "global") &&
+    cursor.scopes.reduce((sum, scope) => sum + scope.expectedTotal, 0) <
+      checkpoint.expectedTotal
+  ) {
+    // Upgrade v2 cursors written before global coverage was introduced.
+    // Appending preserves the current scope/range cursor; a cursor that had
+    // finished its prior scopes naturally points at this new fallback.
+    cursor.scopes.push({
+      notebookGuid: null,
+      notebookName: "Global fallback",
+      expectedTotal: checkpoint.expectedTotal,
+      queryMode: "global",
+    });
+  }
+  const pageSize = evernoteMcpBackfillChunkSize();
+
+  while (
+    cursor.legacyScanIndex < cursor.legacyPrefixEnd &&
+    invocationBatches < maxBatches
+  ) {
+    const requested = Math.min(
+      pageSize,
+      cursor.legacyPrefixEnd - cursor.legacyScanIndex,
+    );
+    const page = await fetchEvernoteNoteListingPageWithRetry(
+      client,
+      {
+        query: options.query ?? "",
+        maxResults: requested,
+        startIndex: cursor.legacyScanIndex,
+      },
+      { syncRunId: options.syncRunId, phase: "legacy-prefix-scan" },
+    );
+    if (page.rows.length === 0) {
+      throw new Error(
+        `Evernote MCP legacy prefix scan ended early at ${cursor.legacyScanIndex} of ${cursor.legacyPrefixEnd}`,
+      );
+    }
+    const listed = page.rows
+      .map((item) => ({
+        guid: noteGuid(item),
+        title: boundedScalar(item.title, 1_000) ?? "Untitled",
+      }))
+      .filter((item): item is { guid: string; title: string } =>
+        Boolean(item.guid),
+      );
+    const known = await options.loadKnownNotes(listed.map((item) => item.guid));
+    const queued = new Set(cursor.legacyRetryNotes.map((item) => item.guid));
+    for (const item of listed) {
+      const stored = known.get(item.guid);
+      const incompleteCurrentRun =
+        stored?.evernoteSeenSyncRunId === options.syncRunId &&
+        stored.evernoteProcessedSyncRunId !== options.syncRunId;
+      if ((!stored || incompleteCurrentRun) && !queued.has(item.guid)) {
+        cursor.legacyRetryNotes.push(item);
+        queued.add(item.guid);
+      }
+    }
+    cursor.legacyScanIndex += page.rows.length;
+    await emit({
+      records: [],
+      seen: [],
+      replayExternalIds: [],
+      errors: [],
+      failedNotes: [],
+    });
+  }
+
+  const fetchFullNote = async (guid: string): Promise<EvernoteRawRecord> => {
+    const note = compactNoteForSync(
+      await callPacedReadTool(client, "get_note", { noteId: guid }),
+    );
+    await resolveNoteTaxonomy(
+      client,
+      note,
+      notebooks,
+      tags,
+      taxonomyLookups,
+      options.onTaxonomyEntities,
+    );
+    const record = noteToRaw(note, notebooks, tags);
+    if (options.forceTrashed) record.metadata.trashed = true;
+    if (record.externalId !== guid) {
+      throw new Error(
+        `Evernote MCP get_note returned ${record.externalId} for ${guid}`,
+      );
+    }
+    return record;
+  };
+
+  while (
+    cursor.legacyScanIndex >= cursor.legacyPrefixEnd &&
+    cursor.legacyRetryIndex < cursor.legacyRetryNotes.length &&
+    invocationBatches < maxBatches
+  ) {
+    const retry = cursor.legacyRetryNotes[cursor.legacyRetryIndex]!;
+    const listingIndex = checkpoint.startIndex;
+    try {
+      const record = await fetchFullNote(retry.guid);
+      cursor.retryReport.push({ ...retry, status: "recovered" });
+      checkpoint.recordsFailed = Math.max(0, checkpoint.recordsFailed - 1);
+      cursor.legacyRetryIndex += 1;
+      checkpoint.batchesProcessed += 1;
+      await emit({
+        records: [record],
+        seen: [{ externalId: retry.guid, listingIndex }],
+        replayExternalIds: [retry.guid],
+        errors: [],
+        failedNotes: [],
+      });
+    } catch (error) {
+      if (isMcpTransientError(error)) throw error;
+      const message =
+        error instanceof Error
+          ? error.message.slice(0, 300)
+          : "get_note failed";
+      cursor.retryReport.push({
+        ...retry,
+        status: "failed",
+        error: message,
+      });
+      cursor.legacyRetryIndex += 1;
+      checkpoint.batchesProcessed += 1;
+      await emit({
+        records: [],
+        seen: [],
+        replayExternalIds: [],
+        errors: [`${retry.title} (${retry.guid}): ${message}`],
+        failedNotes: [{ ...retry, error: message }],
+      });
+    }
+  }
+
+  while (
+    cursor.legacyScanIndex >= cursor.legacyPrefixEnd &&
+    cursor.legacyRetryIndex >= cursor.legacyRetryNotes.length &&
+    cursor.scopeIndex < cursor.scopes.length &&
+    invocationBatches < maxBatches
+  ) {
+    const scope = cursor.scopes[cursor.scopeIndex]!;
+    if (!cursor.activeRange && cursor.pendingRanges.length === 0) {
+      cursor.pendingRanges.push({
+        field: "created",
+        from: null,
+        before: null,
+        expectedTotal: scope.expectedTotal,
+        startIndex: 0,
+      });
+    }
+    if (!cursor.activeRange) {
+      const candidate = cursor.pendingRanges.shift()!;
+      if (candidate.expectedTotal >= EVERNOTE_SEARCH_RESULT_CAP) {
+        const midpoint = dateRangeMidpoint(candidate);
+        if (!midpoint) {
+          throw new Error(
+            `Evernote notebook ${scope.notebookName} (${scope.notebookGuid ?? "none"}) has ${EVERNOTE_SEARCH_RESULT_CAP} or more notes at one ${candidate.field} timestamp`,
+          );
+        }
+        const left: EvernoteDateRange = {
+          ...candidate,
+          before: midpoint,
+          startIndex: 0,
+        };
+        const right: EvernoteDateRange = {
+          ...candidate,
+          from: midpoint,
+          startIndex: 0,
+        };
+        const leftPage = await fetchEvernoteNoteListingPageWithRetry(
+          client,
+          {
+            query: evernoteNotebookRangeQuery(scope, left, options.query),
+            maxResults: 1,
+            startIndex: 0,
+          },
+          {
+            syncRunId: options.syncRunId,
+            phase: "range-count",
+            notebookGuid: scope.notebookGuid,
+          },
+        );
+        const rightPage = await fetchEvernoteNoteListingPageWithRetry(
+          client,
+          {
+            query: evernoteNotebookRangeQuery(scope, right, options.query),
+            maxResults: 1,
+            startIndex: 0,
+          },
+          {
+            syncRunId: options.syncRunId,
+            phase: "range-count",
+            notebookGuid: scope.notebookGuid,
+          },
+        );
+        left.expectedTotal = Math.max(
+          0,
+          Math.floor(leftPage.totalResultCount ?? leftPage.rows.length),
+        );
+        right.expectedTotal = Math.max(
+          0,
+          Math.floor(rightPage.totalResultCount ?? rightPage.rows.length),
+        );
+        if (
+          left.expectedTotal + right.expectedTotal !==
+          candidate.expectedTotal
+        ) {
+          checkpoint.listingAuthoritative = false;
+        }
+        cursor.pendingRanges.unshift(left, right);
+        await emit({
+          records: [],
+          seen: [],
+          replayExternalIds: [],
+          errors: [],
+          failedNotes: [],
+        });
+        continue;
+      }
+      cursor.activeRange = candidate;
+    }
+
+    const range = cursor.activeRange;
+    if (range.expectedTotal === 0 || range.startIndex >= range.expectedTotal) {
+      cursor.activeRange = null;
+      if (cursor.pendingRanges.length === 0) cursor.scopeIndex += 1;
+      continue;
+    }
+    const pageStart = range.startIndex;
+    const listingPage = await fetchEvernoteNoteListingPageWithRetry(
+      client,
+      {
+        query: evernoteNotebookRangeQuery(scope, range, options.query),
+        maxResults: pageSize,
+        startIndex: pageStart,
+        sortBy: "created",
+        ascending: true,
+      },
+      {
+        syncRunId: options.syncRunId,
+        phase: "notes",
+        notebookGuid: scope.notebookGuid,
+      },
+    );
+    if (listingPage.rows.length === 0) {
+      throw new Error(
+        `Evernote MCP notebook range ended early at ${pageStart} of ${range.expectedTotal} for ${scope.notebookName}`,
+      );
+    }
+    if (
+      listingPage.totalResultCount != null &&
+      listingPage.totalResultCount !== range.expectedTotal
+    ) {
+      checkpoint.listingAuthoritative = false;
+    }
+    const page = listingPage.rows.slice(0, pageSize);
+    const summaries = page.map((raw) => ({
+      guid: noteGuid(raw),
+      title: boundedScalar(raw.title, 1_000) ?? "Untitled",
+      updatedAt: iso(noteUpdated(raw)),
+    }));
+    const ids = summaries
+      .map((summary) => summary.guid)
+      .filter((guid): guid is string => Boolean(guid));
+    const knownNotes = await options.loadKnownNotes([...new Set(ids)]);
+    let lastEmittedRangeStart = range.startIndex;
+
+    for (const summary of summaries) {
+      if (invocationBatches >= maxBatches) break;
+      const known = summary.guid ? knownNotes.get(summary.guid) : undefined;
+      const processedHere =
+        known?.evernoteProcessedSyncRunId === options.syncRunId;
+      if (scope.queryMode === "global" && processedHere) {
+        // The global coverage scope is a dedupe backstop. Advance its remote
+        // cursor without counting or rewriting GUIDs already covered by a
+        // notebook scope; persist trailing duplicate-only progress once/page.
+        range.startIndex += 1;
+        continue;
+      }
+      const listingIndex = checkpoint.startIndex;
+      const records: EvernoteRawRecord[] = [];
+      const seen =
+        summary.guid == null
+          ? []
+          : [{ externalId: summary.guid, listingIndex }];
+      const replayExternalIds: string[] = [];
+      const errors: string[] = [];
+      const failedNotes: EvernoteFailedNote[] = [];
+      let skipped = 0;
+      let failed = 0;
+      if (!summary.guid) {
+        failed = 1;
+        errors.push("Evernote MCP note summary is missing a GUID");
+        checkpoint.listingAuthoritative = false;
+      } else {
+        const seenHere = known?.evernoteSeenSyncRunId === options.syncRunId;
+        if (seenHere && !processedHere) replayExternalIds.push(summary.guid);
+        if (
+          processedHere ||
+          (cursor.skipExistingSourceRecords &&
+            Boolean(known) &&
+            !(seenHere && !processedHere)) ||
+          (!seenHere &&
+            known &&
+            summary.updatedAt &&
+            known.evernoteUpdated === summary.updatedAt &&
+            (known.trashed ?? false) === Boolean(options.forceTrashed))
+        ) {
+          skipped = 1;
+        } else {
+          try {
+            records.push(await fetchFullNote(summary.guid));
+          } catch (error) {
+            if (isMcpTransientError(error)) throw error;
+            failed = 1;
+            const message =
+              error instanceof Error
+                ? error.message.slice(0, 300)
+                : "get_note failed";
+            errors.push(`${summary.title} (${summary.guid}): ${message}`);
+            failedNotes.push({
+              guid: summary.guid,
+              title: summary.title,
+              error: message,
+            });
+          }
+        }
+      }
+      range.startIndex += 1;
+      checkpoint.startIndex += 1;
+      checkpoint.recordsFetched = checkpoint.startIndex;
+      checkpoint.recordsSkipped += skipped;
+      checkpoint.recordsFailed += failed;
+      checkpoint.batchesProcessed += 1;
+      await emit({
+        records,
+        seen,
+        replayExternalIds,
+        errors,
+        failedNotes,
+      });
+      lastEmittedRangeStart = range.startIndex;
+    }
+    if (
+      range.startIndex > lastEmittedRangeStart &&
+      invocationBatches < maxBatches
+    ) {
+      checkpoint.batchesProcessed += 1;
+      await emit({
+        records: [],
+        seen: [],
+        replayExternalIds: [],
+        errors: [],
+        failedNotes: [],
+      });
+    }
+    if (range.startIndex >= range.expectedTotal) {
+      cursor.activeRange = null;
+      if (cursor.pendingRanges.length === 0) cursor.scopeIndex += 1;
+    }
+  }
+
+  const listingComplete =
+    cursor.legacyScanIndex >= cursor.legacyPrefixEnd &&
+    cursor.legacyRetryIndex >= cursor.legacyRetryNotes.length &&
+    cursor.scopeIndex >= cursor.scopes.length;
+  const expectedTotal = checkpoint.expectedTotal ?? 0;
+  const recordsDeferred = Math.max(0, expectedTotal - checkpoint.startIndex);
+  const authoritativeListing =
+    listingComplete &&
+    checkpoint.startIndex === expectedTotal &&
+    checkpoint.listingAuthoritative;
+  return {
+    ...checkpoint,
+    recordsDeferred,
+    listingComplete,
+    authoritativeListing,
+    taxonomyLookups,
+  };
+}
+
 /**
  * Page through Evernote without retaining the library listing. Every page is
  * reduced to GUID/update metadata, fetched sequentially, persisted by the
@@ -1976,6 +3024,9 @@ export async function streamEvernoteViaMcp(
     taxonomyLookups: EvernoteTaxonomyLookupProgress;
   }
 > {
+  if (options.partitionByNotebook) {
+    return streamEvernoteByNotebook(client, options);
+  }
   // Taxonomy is an optional cache, never a prerequisite for listing notes.
   const taxonomy = options.taxonomy ?? {
     notebooks: [],
@@ -1985,9 +3036,7 @@ export async function streamEvernoteViaMcp(
   const notebooks = new Map(
     taxonomy.notebooks.map((item) => [item.id, item] as const),
   );
-  const tags = new Map(
-    taxonomy.tags.map((item) => [item.id, item] as const),
-  );
+  const tags = new Map(taxonomy.tags.map((item) => [item.id, item] as const));
   const taxonomyLookups = {
     cached: Math.max(
       0,
@@ -2041,6 +3090,7 @@ export async function streamEvernoteViaMcp(
           seen: [],
           replayExternalIds: [],
           errors: [],
+          failedNotes: [],
           checkpoint,
           taxonomyLookups: { ...taxonomyLookups },
         });
@@ -2077,6 +3127,7 @@ export async function streamEvernoteViaMcp(
       externalId: noteGuid(raw),
       listingIndex: pageStart + offset,
       updatedAt: iso(noteUpdated(raw)),
+      title: boundedScalar(raw.title, 1_000) ?? "Untitled",
     }));
     const ids = summaries
       .map((summary) => summary.externalId)
@@ -2093,6 +3144,7 @@ export async function streamEvernoteViaMcp(
           : [{ externalId: guid, listingIndex: summary.listingIndex }];
       const records: EvernoteRawRecord[] = [];
       const errors: string[] = [];
+      const failedNotes: EvernoteFailedNote[] = [];
       let replayExternalIds: string[] = [];
       let skipped = 0;
       let failed = 0;
@@ -2104,18 +3156,8 @@ export async function streamEvernoteViaMcp(
       } else {
         const known = knownNotes.get(guid);
         const processedHere =
-          known?.evernoteProcessedSyncRunId === options.syncRunId &&
-          known.evernoteProcessedAtIndex === summary.listingIndex;
-        const seenHere =
-          known?.evernoteSeenSyncRunId === options.syncRunId &&
-          known.evernoteSeenAtIndex === summary.listingIndex;
-        if (
-          (known?.evernoteSeenSyncRunId === options.syncRunId && !seenHere) ||
-          (known?.evernoteProcessedSyncRunId === options.syncRunId &&
-            !processedHere)
-        ) {
-          checkpoint = { ...checkpoint, listingAuthoritative: false };
-        }
+          known?.evernoteProcessedSyncRunId === options.syncRunId;
+        const seenHere = known?.evernoteSeenSyncRunId === options.syncRunId;
         if (seenHere && !processedHere) replayExternalIds = [guid];
         if (
           processedHere ||
@@ -2159,11 +3201,13 @@ export async function streamEvernoteViaMcp(
               throw error;
             }
             failed = 1;
-            errors.push(
+            const message =
               error instanceof Error
                 ? error.message.slice(0, 300)
-                : `Evernote MCP get_note failed for ${guid}`,
-            );
+                : `Evernote MCP get_note failed for ${guid}`;
+            const title = summary.title;
+            errors.push(`${title} (${guid}): ${message}`);
+            failedNotes.push({ guid, title, error: message });
           }
         }
       }
@@ -2182,6 +3226,7 @@ export async function streamEvernoteViaMcp(
         seen,
         replayExternalIds,
         errors,
+        failedNotes,
         checkpoint,
         taxonomyLookups: { ...taxonomyLookups },
       });
@@ -2209,10 +3254,7 @@ export async function streamEvernoteViaMcp(
       }
       const maxBatches = options.stopAfterOneBatch
         ? 1
-        : Math.max(
-            1,
-            Math.floor(options.maxBatchesPerInvocation ?? Infinity),
-          );
+        : Math.max(1, Math.floor(options.maxBatchesPerInvocation ?? Infinity));
       if (invocationBatches >= maxBatches) break;
     }
     if (listingComplete) break;
@@ -2296,9 +3338,7 @@ class EvernoteMcpDeadlineError extends Error {
 export async function withEvernoteMcpClient<T>(
   settings: Record<string, unknown>,
   operation: (client: EvernoteReadOnlyToolCaller) => Promise<T>,
-  onStateChanged?: (
-    settings: EvernoteMcpConnectorSettings,
-  ) => Promise<void>,
+  onStateChanged?: (settings: EvernoteMcpConnectorSettings) => Promise<void>,
   options: EvernoteMcpClientOptions = {},
 ): Promise<{
   value: T;
@@ -2319,7 +3359,7 @@ export async function withEvernoteMcpClient<T>(
         signal:
           requestSignal && init?.signal
             ? AbortSignal.any([requestSignal, init.signal])
-            : requestSignal ?? init?.signal,
+            : (requestSignal ?? init?.signal),
       },
       {
         fetchFn: options.fetchFn,
@@ -2405,9 +3445,7 @@ type EvernoteConnectionTestOptions = {
 
 export async function testEvernoteMcpConnection(
   settings: Record<string, unknown>,
-  onStateChanged?: (
-    settings: EvernoteMcpConnectorSettings,
-  ) => Promise<void>,
+  onStateChanged?: (settings: EvernoteMcpConnectorSettings) => Promise<void>,
   options: EvernoteConnectionTestOptions = {},
 ): Promise<{
   notebookCount: number;
@@ -2418,9 +3456,7 @@ export async function testEvernoteMcpConnection(
   const timeoutMs = Math.max(
     1,
     Math.min(
-      Math.floor(
-        options.timeoutMs ?? EVERNOTE_CONNECTION_TEST_TIMEOUT_MS,
-      ),
+      Math.floor(options.timeoutMs ?? EVERNOTE_CONNECTION_TEST_TIMEOUT_MS),
       EVERNOTE_CONNECTION_TEST_TIMEOUT_MS,
     ),
   );
@@ -2438,10 +3474,8 @@ export async function testEvernoteMcpConnection(
         ),
         "search_notebooks",
       );
-      const notebookCount = firstArray(
-        probe,
-        ["notebooks", "results", "items"],
-      ).length;
+      const notebookCount = parseEvernoteNotebookListingPage(probe, 0).rows
+        .length;
       return { notebookCount, tagCount: null };
     }, onStateChanged, {
       signal: controller.signal,

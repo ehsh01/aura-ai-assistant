@@ -5,6 +5,7 @@ import {
   parseItemSearchFilters,
   type SavedItemDto,
 } from "./items";
+import { isVisibleItemTag } from "./item-tags";
 
 export const GRAPH_NODE_TYPES = [
   "notes",
@@ -157,7 +158,11 @@ export function buildKnowledgeGraph(
       if (source) addEdge(source, id, "notebook");
     }
     if (allowed.has("tags")) {
-      for (const tag of item.tags.slice(0, 4)) {
+      const tags =
+        item.source === "evernote"
+          ? item.tags.filter(isVisibleItemTag)
+          : item.tags;
+      for (const tag of tags.slice(0, 4)) {
         if (nodes.size >= query.limit) break;
         const id = hubId("tags", tag);
         if (!nodes.has(id)) {

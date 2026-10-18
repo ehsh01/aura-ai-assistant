@@ -632,7 +632,10 @@ export function Everything() {
           )}
         </header>
 
-        <div className="absolute left-1/2 top-[76px] z-30 w-[min(680px,calc(100%-24px))] -translate-x-1/2">
+        <div
+          className="absolute left-1/2 top-[76px] z-30 w-[min(680px,calc(100%-24px))] -translate-x-1/2"
+          data-graph-fit-top-overlay="true"
+        >
           <CaptureBox
             value={capture}
             onChange={setCapture}
@@ -812,7 +815,10 @@ export function Everything() {
 
         {mode === "graph" && (
           <>
-            <div className="absolute bottom-[104px] right-3 z-30 flex gap-1.5 sm:bottom-24 sm:right-5">
+            <div
+              className="absolute bottom-[104px] right-3 z-30 flex gap-1.5 sm:bottom-24 sm:right-5"
+              data-graph-fit-mobile-controls="true"
+            >
               {[
                 ["Focus", focus, setFocus],
                 ["Holo", holo, setHolo],
@@ -1036,6 +1042,7 @@ export function Everything() {
 
             <form
               onSubmit={submitKeywordSearch}
+              data-graph-fit-bottom-overlay="true"
               className={`assistant-panel absolute bottom-3 sm:bottom-5 ${
                 detail
                   ? "left-3 right-3 z-50 sm:left-5 sm:right-[460px]"

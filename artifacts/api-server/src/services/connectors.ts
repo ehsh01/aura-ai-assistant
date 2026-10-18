@@ -2410,6 +2410,7 @@ export async function processEvernoteSyncJob(
         ),
         query: trashPhase ? "intrash:true" : "",
         forceTrashed: trashPhase,
+        partitionByNotebook: syncMode === "full",
         stopAtFirstUnchanged: syncMode === "incremental" && !trashPhase,
         taxonomy,
         taxonomyLookupProgress:
@@ -2516,6 +2517,14 @@ export async function processEvernoteSyncJob(
                 embeddingReserved,
             ) || 0;
           errors = [...errors, ...batch.errors].slice(-100);
+          const failedNotes = [
+            ...(Array.isArray(
+              currentRun[0]?.metadata?.evernoteFailedNotes,
+            )
+              ? currentRun[0]!.metadata!.evernoteFailedNotes
+              : []),
+            ...batch.failedNotes,
+          ].slice(-100);
           metadata = withEvernoteLookupProgress(
             {
               ...(currentRun[0]?.metadata ?? metadata),
@@ -2528,6 +2537,7 @@ export async function processEvernoteSyncJob(
               recordsEmbedded,
               evernoteEmbeddingReserved: embeddingReserved,
               errors,
+              evernoteFailedNotes: failedNotes,
             },
             batch.taxonomyLookups,
             new Date(),
@@ -2600,6 +2610,8 @@ export async function processEvernoteSyncJob(
       evernoteActiveSkipped: streamed.value.recordsSkipped,
       evernoteActiveFailed: streamed.value.recordsFailed,
       evernoteActiveAuthoritative: streamed.value.authoritativeListing,
+      evernoteRetryReport:
+        streamed.value.notebookCursor?.retryReport ?? [],
       evernoteTrashCheckpoint: {
         startIndex: 0,
         expectedTotal: null,

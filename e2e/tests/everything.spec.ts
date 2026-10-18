@@ -356,6 +356,23 @@ test.describe("Everything capture, graph, grid, and search", () => {
         Number((await graphCanvas.getAttribute("data-rendered-labels")) ?? 0),
       )
       .toBeGreaterThan(0);
+    await page.getByRole("button", { name: "Fit graph to view" }).click();
+    await expect
+      .poll(async () =>
+        Number((await graphCanvas.getAttribute("data-graph-stretch-x")) ?? 0),
+      )
+      .toBeCloseTo(0.64, 2);
+    const fitTop = Number(
+      await graphCanvas.getAttribute("data-graph-fit-top"),
+    );
+    const fitBottom = Number(
+      await graphCanvas.getAttribute("data-graph-fit-bottom"),
+    );
+    expect(fitTop).toBeGreaterThanOrEqual(18);
+    expect(fitBottom).toBeGreaterThan(fitTop + 300);
+    expect(
+      Number(await graphCanvas.getAttribute("data-rendered-labels")),
+    ).toBeLessThanOrEqual(20);
 
     const sample = await page.evaluate(
       () =>
@@ -395,10 +412,6 @@ test.describe("Everything capture, graph, grid, and search", () => {
     context,
     page,
   }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
-    const cdp = await context.newCDPSession(page);
-    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
-    await cdp.send("HeapProfiler.enable");
     const configuredCap = Number(process.env.RECALL_NOTEBOOK_EDGE_CAP);
     const notebookEdgeCap =
       Number.isFinite(configuredCap) && configuredCap > 0
@@ -409,11 +422,36 @@ test.describe("Everything capture, graph, grid, and search", () => {
       denseNotebook: true,
       notebookEdgeCap,
     });
+    const screenshotDir = process.env.GRAPH_SCREENSHOT_DIR;
+    const screenshotPrefix =
+      process.env.GRAPH_SCREENSHOT_PREFIX ?? "graph_fit_polish_after";
+    if (screenshotDir) {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto("/");
+      await page.getByRole("button", { name: "Fit graph to view" }).click();
+      await page.waitForTimeout(1_200);
+      await page.screenshot({
+        path: `${screenshotDir}/${screenshotPrefix}_desktop.png`,
+        fullPage: true,
+      });
+    }
 
+    await page.setViewportSize({ width: 390, height: 844 });
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+    await cdp.send("HeapProfiler.enable");
     await page.goto("/");
     const graphCanvas = page.getByLabel("Interactive knowledge graph");
     await expect(graphCanvas).toBeVisible();
     await page.waitForTimeout(1_800);
+    await page.getByRole("button", { name: "Fit graph to view" }).click();
+    await page.waitForTimeout(1_200);
+    if (screenshotDir) {
+      await page.screenshot({
+        path: `${screenshotDir}/${screenshotPrefix}_mobile_390x844.png`,
+        fullPage: true,
+      });
+    }
     await cdp.send("HeapProfiler.collectGarbage");
     const heapBefore = await cdp.send("Runtime.getHeapUsage");
     const sample = await page.evaluate(

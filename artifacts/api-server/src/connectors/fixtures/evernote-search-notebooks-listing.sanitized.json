@@ -1,0 +1,24 @@
+{
+  "textContentForm": {
+    "content": [
+      {
+        "type": "text",
+        "text": "1. aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa — [REDACTED_NOTEBOOK_1]\n2. bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb — [REDACTED_NOTEBOOK_2]\n3. cccccccc-cccc-4ccc-8ccc-cccccccccccc — [REDACTED_NOTEBOOK_3]\n\nShowing 3 of 284 (startIndex=0, more available)."
+      }
+    ],
+    "structuredContent": {
+      "totalResultCount": 284
+    }
+  },
+  "unrecognizedForm": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Evernote returned notebook data in an unknown representation."
+      }
+    ],
+    "structuredContent": {
+      "totalResultCount": 284
+    }
+  }
+}
