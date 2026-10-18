@@ -8,6 +8,10 @@ import {
 } from "./ask-threads";
 import { retrieveRelevantRecords, type RetrievedRecord } from "./retrieval";
 import { freeRetrievalTerms } from "./keyword-match";
+import {
+  extractHttpUrls,
+  extractRealHttpUrls,
+} from "./url-quality";
 import { withAiFeature } from "./ai-usage";
 import { writeAuditLog } from "./audit";
 
@@ -93,15 +97,13 @@ export function shortSpokenBody(raw: string): string {
 }
 
 const LINK_QUESTION = /\b(?:link|url|website|web\s*(?:site|page))\b/i;
-const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+/i;
 
 export function isVoiceLinkQuestion(question: string): boolean {
   return LINK_QUESTION.test(question);
 }
 
 export function extractFirstHttpUrl(text: string): string | null {
-  const match = text.match(URL_PATTERN)?.[0];
-  return match?.replace(/[),.;!?]+$/, "") ?? null;
+  return extractRealHttpUrls(text)[0] ?? null;
 }
 
 const VOICE_MODEL = "gpt-4.1-mini";
@@ -120,6 +122,7 @@ type VoiceLinkEvidence = {
   candidate: LoadedCandidate;
   url: string;
   label: string;
+  howToContext: LoadedCandidate[];
 };
 
 function capitalize(value: string): string {
@@ -147,20 +150,42 @@ function findVoiceLinkEvidence(
   candidates: LoadedCandidate[],
 ): VoiceLinkEvidence | null {
   if (!isVoiceLinkQuestion(question)) return null;
+  const howToContext: LoadedCandidate[] = [];
   for (const candidate of candidates) {
+    const allUrls = extractHttpUrls(candidate.record.text);
     const url = extractFirstHttpUrl(candidate.record.text);
-    if (!url) continue;
+    const looksLikeHowTo =
+      /\b(?:how\s+to|adding|editing|instructions?|guide|steps?)\b/i.test(
+        `${candidate.source.title}\n${candidate.record.text}`,
+      ) &&
+      LINK_QUESTION.test(`${candidate.source.title}\n${candidate.record.text}`);
+    if (!url) {
+      if (looksLikeHowTo || allUrls.length > 0) howToContext.push(candidate);
+      continue;
+    }
     return {
       candidate,
       url,
       label: linkLabel(question, candidate.source.title),
+      howToContext: howToContext.filter(
+        (context) => context.key !== candidate.key,
+      ),
     };
   }
   return null;
 }
 
 function deterministicLinkAnswer(evidence: VoiceLinkEvidence): string {
-  return `Your ${evidence.label} is ${evidence.url}, from your note ${evidence.candidate.source.title}.`;
+  const howTo = evidence.howToContext[0];
+  return `Your ${evidence.label} is ${evidence.url}, from your note ${evidence.candidate.source.title}.${
+    howTo
+      ? ` The note ${howTo.source.title} has related how-to instructions.`
+      : ""
+  }`;
+}
+
+function linkAnswerSources(evidence: VoiceLinkEvidence): LoadedCandidate[] {
+  return [evidence.candidate, ...evidence.howToContext].slice(0, 5);
 }
 
 export type VoiceQueryAnswer = {
@@ -194,8 +219,11 @@ export type VoiceQueryAnswer = {
   sources: VoiceAnswerSource[];
 };
 
-function loadCandidates(records: RetrievedRecord[]): LoadedCandidate[] {
-  return records.slice(0, 5).flatMap((record, index) => {
+function loadCandidates(
+  records: RetrievedRecord[],
+  limit = 5,
+): LoadedCandidate[] {
+  return records.slice(0, limit).flatMap((record, index) => {
     const itemId = itemIdFor(
       record.entityType,
       record.entityId,
@@ -314,9 +342,9 @@ export async function queryVoiceNotesForUser(
         ])
       )[0]
     : await retrieve();
-  const candidates = loadCandidates(retrieval.records);
+  const rankedCandidates = loadCandidates(retrieval.records, 8);
 
-  if (candidates.length === 0) {
+  if (rankedCandidates.length === 0) {
     if (!allowModel) return null;
     const assistant = await appendAskMessage({
       userId,
@@ -334,7 +362,14 @@ export async function queryVoiceNotesForUser(
     });
   }
 
-  const linkEvidence = findVoiceLinkEvidence(question, candidates);
+  const linkEvidence = findVoiceLinkEvidence(question, rankedCandidates);
+  const candidates = rankedCandidates.slice(0, 5);
+  if (
+    linkEvidence &&
+    !candidates.some((candidate) => candidate.key === linkEvidence.candidate.key)
+  ) {
+    candidates.push(linkEvidence.candidate);
+  }
   const finish = async (
     answer: string,
     sources: LoadedCandidate[],
@@ -382,7 +417,7 @@ export async function queryVoiceNotesForUser(
     });
     return finish(
       deterministicLinkAnswer(linkEvidence),
-      [linkEvidence.candidate],
+      linkAnswerSources(linkEvidence),
       false,
     );
   }
@@ -394,7 +429,12 @@ export async function queryVoiceNotesForUser(
           linkEvidence?.candidate.key === key
             ? `\nLink found: ${linkEvidence.url} (from ${source.title})`
             : "";
-        return `[${key}]\nTitle: ${source.title}${linkLine}\nNotebook: ${source.notebook ?? "None"}\nDate: ${source.date ?? "Unknown"}\nContent: ${record.text.slice(0, 1200)}`;
+        const howToLine = linkEvidence?.howToContext.some(
+          (candidate) => candidate.key === key,
+        )
+          ? `\nRelated how-to context: ${source.title}`
+          : "";
+        return `[${key}]\nTitle: ${source.title}${linkLine}${howToLine}\nNotebook: ${source.notebook ?? "None"}\nDate: ${source.date ?? "Unknown"}\nContent: ${record.text.slice(0, 1200)}`;
       },
     )
     .join("\n\n");
@@ -409,7 +449,7 @@ export async function queryVoiceNotesForUser(
     if (linkEvidence) {
       return finish(
         deterministicLinkAnswer(linkEvidence),
-        [linkEvidence.candidate],
+        linkAnswerSources(linkEvidence),
         false,
       );
     }
@@ -450,7 +490,7 @@ export async function queryVoiceNotesForUser(
     if (!linkEvidence) throw error;
     return finish(
       deterministicLinkAnswer(linkEvidence),
-      [linkEvidence.candidate],
+      linkAnswerSources(linkEvidence),
       true,
     );
   }
@@ -470,7 +510,7 @@ export async function queryVoiceNotesForUser(
   if (linkEvidence) {
     return finish(
       deterministicLinkAnswer(linkEvidence),
-      [linkEvidence.candidate],
+      linkAnswerSources(linkEvidence),
       true,
     );
   }
