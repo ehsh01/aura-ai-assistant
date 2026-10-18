@@ -201,7 +201,11 @@ const PSYCHIATRY_SECRET_RECORD = {
 SSH user: psychiatry-admin
 SSH password: FakePsychiatryPassword!42
 Spaces access key: DO00FAKEACCESSKEY123
-Spaces secret key: FAKESECRETKEY1234567890123456789012345678`,
+Spaces Key: QWxhZGRpbjpPcGVuU2VzYW1lMTIzNDU2Nzg5MDEAB12
+Spaces secret key: FAKESECRETKEY1234567890123456789012345678
+ssh root@1.2.3.4
+R00tPsychPass!
+deploy inventory:tok3nV4lue@inventory.example.health`,
   score: 10,
 } as const;
 

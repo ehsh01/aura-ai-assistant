@@ -10,12 +10,15 @@ import {
 export const FAKE_CREDENTIALS = {
   password: "FakePsychiatryPassword!42",
   spacesAccess: "DO00FAKEACCESSKEY123",
+  spacesKey43: "QWxhZGRpbjpPcGVuU2VzYW1lMTIzNDU2Nzg5MDEAB12",
   spacesSecret: "FAKESECRETKEY1234567890123456789012345678",
   awsAccess: "AKIAFAKEACCESSKEY123",
   openAi: "sk-proj-FakeOpenAiKey1234567890",
   github: "ghp_FakeGithubToken1234567890",
   slack: "xoxb-fake-slack-token-123456",
   jwt: "eyJhbGciOiJIUzI1NiJ9.ZmFrZXBheWxvYWQ.ZmFrZXNpZ25hdHVyZQ",
+  sshBare: "R00tPsychPass!",
+  commandToken: "tok3nV4lue",
 };
 
 export const PSYCHIATRY_SECRET_FIXTURE = `Psychiatry Inventory App
@@ -23,6 +26,7 @@ SSH host: inventory.example.health
 SSH user: psychiatry-admin
 SSH password: ${FAKE_CREDENTIALS.password}
 Spaces access key: ${FAKE_CREDENTIALS.spacesAccess}
+Spaces Key: ${FAKE_CREDENTIALS.spacesKey43}
 Spaces secret key: ${FAKE_CREDENTIALS.spacesSecret}
 AWS access key: ${FAKE_CREDENTIALS.awsAccess}
 API key: ${FAKE_CREDENTIALS.openAi}
@@ -30,6 +34,9 @@ Authorization: Bearer ${FAKE_CREDENTIALS.github}
 Slack token: ${FAKE_CREDENTIALS.slack}
 JWT: ${FAKE_CREDENTIALS.jwt}
 Database: postgres://inventory:${FAKE_CREDENTIALS.password}@db.example.health:5432/psychiatry
+ssh root@1.2.3.4
+${FAKE_CREDENTIALS.sshBare}
+deploy ${`inventory:${FAKE_CREDENTIALS.commandToken}@inventory.example.health`}
 -----BEGIN OPENSSH PRIVATE KEY-----
 ZmFrZS1wcml2YXRlLWtleQ==
 -----END OPENSSH PRIVATE KEY-----`;
@@ -47,6 +54,7 @@ describe("credential redaction", () => {
     );
     expect(redacted).toContain("SSH host: inventory.example.health");
     expect(redacted).toContain("SSH user: psychiatry-admin");
+    expect(FAKE_CREDENTIALS.spacesKey43).toHaveLength(43);
   });
 
   it("does not redact URLs, phone numbers, dates, or short numbers", () => {
@@ -56,8 +64,26 @@ describe("credential redaction", () => {
       "Call 305-555-0199 on 2026-10-18.",
       "Inventory count: 42",
       "Port: 5432",
+      "UUID: 123e4567-e89b-12d3-a456-426614174000",
+      "Commit: a878db24e5f53c80460b24ed9e17e9e8abbe74b8",
+      "https://psychiatry.med.miami.edu/path/AbCdEf1234567890AbCdEf1234567890",
     ].join("\n");
     expect(redactCredentials(safe)).toBe(safe);
+  });
+
+  it("redacts sshpass and same-line SSH password tokens", () => {
+    const input =
+      "sshpass -p ShortFake! ssh root@1.2.3.4 SameLineFake!";
+    const redacted = redactCredentials(input);
+    expect(redacted).not.toContain("ShortFake!");
+    expect(redacted).not.toContain("SameLineFake!");
+  });
+
+  it("uses the previous line as context for a bare Key label", () => {
+    const secret = "QWxhZGRpbjpPcGVuU2VzYW1lMTIzNDU2Nzg5MDEAB12";
+    expect(redactCredentials(`DigitalOcean Spaces\nKey: ${secret}`)).toBe(
+      `DigitalOcean Spaces\nKey: ${HIDDEN_CREDENTIAL}`,
+    );
   });
 
   it("redacts nested answer metadata without mutating raw input", () => {

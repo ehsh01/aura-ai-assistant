@@ -7,8 +7,10 @@ import { sanitizeAuditMetadata } from "./audit";
 describe("answer persistence and citation redaction", () => {
   it("redacts stored answer text and UI citation snippets", () => {
     const secret = "FakePsychiatryPassword!42";
+    const highEntropy =
+      "QWxhZGRpbjpPcGVuU2VzYW1lMTIzNDU2Nzg5MDEAB12";
     const stored = sanitizeAskMessageForStorage({
-      content: `SSH password: ${secret}`,
+      content: `SSH password: ${secret}\nEchoed ${highEntropy}`,
       metadata: {
         reasoning: `pwd: ${secret}`,
       },
@@ -54,15 +56,22 @@ describe("answer persistence and citation redaction", () => {
     });
 
     expect(JSON.stringify(stored)).not.toContain(secret);
+    expect(JSON.stringify(stored)).not.toContain(highEntropy);
     expect(JSON.stringify(metadata)).not.toContain(secret);
     expect(JSON.stringify(metadata)).toContain("[hidden credential]");
     expect(
       JSON.stringify(
         sanitizeAuditMetadata({
           question: `What is password: ${secret}`,
+          answer: `Echoed ${highEntropy}`,
         }),
       ),
     ).not.toContain(secret);
+    expect(
+      JSON.stringify(
+        sanitizeAuditMetadata({ answer: `Echoed ${highEntropy}` }),
+      ),
+    ).not.toContain(highEntropy);
   });
 
   it("does not redact the raw note read service used by open-note/show-me", async () => {
