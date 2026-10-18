@@ -20,6 +20,8 @@ import { writeAuditLog } from "./audit";
 export const VOICE_NO_MATCH_REPLY = "I couldn't find that in your notes.";
 export const VOICE_LIMIT_REPLY =
   "Daily voice limit reached. Free search still works.";
+export const VOICE_MONTHLY_LIMIT_REPLY =
+  "Monthly voice limit reached. Free search still works.";
 
 export type VoiceAnswerSource = {
   itemId: string;
