@@ -9,6 +9,7 @@ describe("explicit attachment AI OCR boundaries", () => {
     );
     expect(source).toContain("createOpenAiClient({");
     expect(source).toContain('feature: "attachment_ocr_ai"');
+    expect(source).toContain("redactOutput: false");
     expect(source).not.toMatch(/\bnew\s+OpenAI\s*\(/);
     expect(source).not.toContain("recordAiUsage(");
   });

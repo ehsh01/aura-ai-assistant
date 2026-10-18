@@ -21,6 +21,12 @@ import {
 } from "./url-quality";
 import { withAiFeature } from "./ai-usage";
 import { writeAuditLog } from "./audit";
+import {
+  credentialReferenceAnswer,
+  isCredentialRequest,
+  redactCredentials,
+  redactSensitiveValue,
+} from "./secret-redaction";
 
 export const VOICE_NO_MATCH_REPLY = "I couldn't find that in your notes.";
 export const VOICE_LIMIT_REPLY =
@@ -560,14 +566,16 @@ export async function queryVoiceNotesForUser(
     sources: LoadedCandidate[],
     modelCalled: boolean,
   ): Promise<VoiceQueryAnswer> => {
+    const safeAnswer = redactCredentials(answer);
+    const safeSources = redactSensitiveValue(sources);
     const assistant = await appendAskMessage({
       userId,
       threadId: thread.id,
       role: "assistant",
-      content: answer,
+      content: safeAnswer,
       metadata: {
         voice: true,
-        sourceItemIds: sources.map(({ source }) => source.itemId),
+        sourceItemIds: safeSources.map(({ source }) => source.itemId),
       },
     });
     await writeAuditLog({
@@ -578,19 +586,35 @@ export async function queryVoiceNotesForUser(
       metadata: {
         input: "voice",
         questionLength: question.length,
-        answerLength: answer.length,
-        sourceCount: sources.length,
+        answerLength: safeAnswer.length,
+        sourceCount: safeSources.length,
         model: modelCalled ? VOICE_MODEL : null,
       },
     });
     return resultFromAnswer({
-      answer,
+      answer: safeAnswer,
       threadId: thread.id,
       assistantMessageId: assistant.id,
-      sources,
+      sources: safeSources,
       modelCalled,
     });
   };
+
+  if (isCredentialRequest(question)) {
+    if (!allowModel) {
+      await appendAskMessage({
+        userId,
+        threadId: thread.id,
+        role: "user",
+        content: question,
+      });
+    }
+    return finish(
+      credentialReferenceAnswer(rankedCandidates[0]!.source.title),
+      [rankedCandidates[0]!],
+      false,
+    );
+  }
 
   if (isVoiceLinkQuestion(question)) {
     if (!allowModel) {

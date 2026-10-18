@@ -9,12 +9,18 @@ import {
   withAiSpendLock,
   type AiFeature,
 } from "./ai-usage";
+import {
+  redactCredentials,
+  redactSensitiveValue,
+} from "./secret-redaction";
 
 type ClientOptions = {
   apiKey: string;
   feature?: AiFeature;
   userId?: string | null;
   background?: boolean;
+  /** Preserve source extraction output (for example OCR shown in raw note views). */
+  redactOutput?: boolean;
 };
 
 type UsageLike = {
@@ -100,6 +106,31 @@ function transcriptionCostMicros(result: unknown): number {
   return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds * 100) : 0;
 }
 
+function redactBufferedChatChunks<T>(chunks: T[]): T[] {
+  const sanitized = redactSensitiveValue(chunks);
+  const deltas: Array<{ content?: unknown }> = [];
+  let fullContent = "";
+  for (const chunk of sanitized as Array<{
+    choices?: Array<{ delta?: { content?: unknown } }>;
+  }>) {
+    for (const choice of chunk.choices ?? []) {
+      if (!choice.delta) continue;
+      deltas.push(choice.delta);
+      if (typeof choice.delta.content === "string") {
+        fullContent += choice.delta.content;
+      }
+    }
+  }
+  const redactedContent = redactCredentials(fullContent);
+  let emitted = false;
+  for (const delta of deltas) {
+    if (typeof delta.content !== "string") continue;
+    delta.content = emitted ? "" : redactedContent;
+    emitted = true;
+  }
+  return sanitized;
+}
+
 /**
  * The only allowed OpenAI client constructor in the API. Every provider call
  * is recorded synchronously before control returns to the caller. Failed
@@ -151,17 +182,18 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
   completions.create = async (params, requestOptions) => {
     const model = String(params.model ?? "unknown");
     const callContext = context();
-    const request = params.stream
+    const sanitizedParams = redactSensitiveValue(params);
+    const request = sanitizedParams.stream
       ? {
-          ...params,
+          ...sanitizedParams,
           stream_options: {
-            ...((params.stream_options as
+            ...((sanitizedParams.stream_options as
               | Record<string, unknown>
               | undefined) ?? {}),
             include_usage: true,
           },
         }
-      : params;
+      : sanitizedParams;
     if (!params.stream) {
       return withAiSpendLock(async () => {
         await assertAiSpendAllowed(callContext);
@@ -179,7 +211,9 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
           undefined,
           callContext,
         );
-        return result;
+        return options.redactOutput === false
+          ? result
+          : redactSensitiveValue(result);
       });
     }
 
@@ -198,10 +232,11 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
         readySettled = true;
         ready.resolve();
         let usage: UsageLike | null = null;
+        const chunks: Array<{ usage?: UsageLike | null }> = [];
         try {
           for await (const chunk of stream) {
             if (chunk.usage) usage = chunk.usage;
-            queue.push(chunk);
+            chunks.push(chunk);
           }
         } catch (err) {
           await record(model, null, 0, undefined, callContext);
@@ -209,6 +244,9 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
           return;
         }
         await record(model, usage, undefined, undefined, callContext);
+        for (const chunk of redactBufferedChatChunks(chunks)) {
+          queue.push(chunk);
+        }
         queue.end();
       } catch (err) {
         if (!(err instanceof AiSpendBlockedError) && !providerStarted) {
@@ -239,7 +277,10 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
       await assertAiSpendAllowed(callContext);
       let result: unknown;
       try {
-        result = await createEmbedding(params, requestOptions);
+        result = await createEmbedding(
+          redactSensitiveValue(params),
+          requestOptions,
+        );
       } catch (err) {
         await record(model, null, 0, undefined, callContext);
         throw err;
@@ -265,11 +306,12 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
   speech.create = async (params, requestOptions) => {
     const model = String(params.model ?? "tts-1");
     const callContext = context();
+    const sanitizedParams = redactSensitiveValue(params);
     return withAiSpendLock(async () => {
       await assertAiSpendAllowed(callContext);
       let result: unknown;
       try {
-        result = await createSpeech(params, requestOptions);
+        result = await createSpeech(sanitizedParams, requestOptions);
       } catch (err) {
         await record(model, null, 0, undefined, callContext);
         throw err;
@@ -277,11 +319,11 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
       await record(
         model,
         {
-          prompt_tokens: estimatedTextTokens(params.input),
+          prompt_tokens: estimatedTextTokens(sanitizedParams.input),
           completion_tokens: 0,
         },
-        ttsCostMicros(model, params.input),
-        { characters: String(params.input ?? "").length },
+        ttsCostMicros(model, sanitizedParams.input),
+        { characters: String(sanitizedParams.input ?? "").length },
         callContext,
       );
       return result;
@@ -302,7 +344,10 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
       await assertAiSpendAllowed(callContext);
       let result: unknown;
       try {
-        result = await createTranscription(params, requestOptions);
+        result = await createTranscription(
+          redactSensitiveValue(params),
+          requestOptions,
+        );
       } catch (err) {
         await record(model, null, 0, undefined, callContext);
         throw err;
