@@ -78,12 +78,16 @@ function firstString(value: unknown): string | null {
 
 function strings(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()));
+  return value.filter(
+    (item): item is string => typeof item === "string" && Boolean(item.trim()),
+  );
 }
 
 function iso(value: unknown): string {
   const date = value instanceof Date ? value : new Date(String(value));
-  return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
+  return Number.isNaN(date.getTime())
+    ? new Date(0).toISOString()
+    : date.toISOString();
 }
 
 function toDto(row: ProjectedRow): SavedItemDto {
@@ -112,16 +116,23 @@ function toDto(row: ProjectedRow): SavedItemDto {
 
 function rowsFrom(result: unknown): ProjectedRow[] {
   const possible = result as { rows?: ProjectedRow[] };
-  return possible.rows ?? (Array.isArray(result) ? (result as ProjectedRow[]) : []);
+  return (
+    possible.rows ?? (Array.isArray(result) ? (result as ProjectedRow[]) : [])
+  );
 }
 
 function parseDate(value: unknown, endOfDay = false): Date | null {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const date = new Date(`${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z`);
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value))
+    return null;
+  const date = new Date(
+    `${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z`,
+  );
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-export function parseItemSearchFilters(query: Record<string, unknown>): ItemSearchFilters {
+export function parseItemSearchFilters(
+  query: Record<string, unknown>,
+): ItemSearchFilters {
   const type =
     typeof query.type === "string" &&
     (ITEM_KINDS as readonly string[]).includes(query.type.toLowerCase())
@@ -136,21 +147,30 @@ export function parseItemSearchFilters(query: Record<string, unknown>): ItemSear
   return {
     q: typeof query.q === "string" ? query.q.trim().slice(0, 300) : "",
     type,
-    tag: typeof query.tag === "string" ? query.tag.trim().slice(0, 100) || null : null,
+    tag:
+      typeof query.tag === "string"
+        ? query.tag.trim().slice(0, 100) || null
+        : null,
     dateFrom: parseDate(query.dateFrom),
     dateTo: parseDate(query.dateTo, true),
     source,
     notebook:
-      typeof query.notebook === "string" ? query.notebook.trim().slice(0, 500) || null : null,
+      typeof query.notebook === "string"
+        ? query.notebook.trim().slice(0, 500) || null
+        : null,
     trash: query.trash === "true" || query.trash === true,
-    limit: Number.isFinite(rawLimit) ? Math.min(Math.max(Math.floor(rawLimit), 1), 200) : 100,
+    limit: Number.isFinite(rawLimit)
+      ? Math.min(Math.max(Math.floor(rawLimit), 1), 200)
+      : 100,
     bodyTextLimit: ITEM_LIST_BODY_MAX_CHARS,
   };
 }
 
 function commonNativeConditions(userId: string, filters: ItemSearchFilters) {
   const clauses = [sql`i.user_id = ${userId}::uuid`];
-  clauses.push(filters.trash ? sql`i.deleted_at IS NOT NULL` : sql`i.deleted_at IS NULL`);
+  clauses.push(
+    filters.trash ? sql`i.deleted_at IS NOT NULL` : sql`i.deleted_at IS NULL`,
+  );
   if (filters.q) {
     clauses.push(
       sql`i.search_tsv @@ websearch_to_tsquery('simple', ${filters.q})`,
@@ -158,7 +178,8 @@ function commonNativeConditions(userId: string, filters: ItemSearchFilters) {
   }
   if (filters.type) clauses.push(sql`i.kind = ${filters.type}`);
   if (filters.source) clauses.push(sql`i.source = ${filters.source}`);
-  if (filters.notebook) clauses.push(sql`lower(i.notebook) = lower(${filters.notebook})`);
+  if (filters.notebook)
+    clauses.push(sql`lower(i.notebook) = lower(${filters.notebook})`);
   if (filters.tag) {
     clauses.push(
       sql`EXISTS (
@@ -172,7 +193,10 @@ function commonNativeConditions(userId: string, filters: ItemSearchFilters) {
   return clauses;
 }
 
-async function listNativeItems(userId: string, filters: ItemSearchFilters): Promise<SavedItemDto[]> {
+async function listNativeItems(
+  userId: string,
+  filters: ItemSearchFilters,
+): Promise<SavedItemDto[]> {
   if (filters.source === "evernote") return [];
   const where = sql.join(commonNativeConditions(userId, filters), sql` AND `);
   const result = await getDb().execute(sql`
@@ -189,12 +213,19 @@ async function listNativeItems(userId: string, filters: ItemSearchFilters): Prom
   return rowsFrom(result).map(toDto);
 }
 
-async function listNoteItems(userId: string, filters: ItemSearchFilters): Promise<SavedItemDto[]> {
+async function listNoteItems(
+  userId: string,
+  filters: ItemSearchFilters,
+): Promise<SavedItemDto[]> {
   if (filters.trash || filters.source === "evernote") return [];
   if (filters.type && filters.type !== "note") return [];
   const clauses = [sql`n.user_id = ${userId}::uuid`];
-  if (filters.q) clauses.push(sql`n.search_tsv @@ websearch_to_tsquery('simple', ${filters.q})`);
-  if (filters.notebook) clauses.push(sql`lower(nb.name) = lower(${filters.notebook})`);
+  if (filters.q)
+    clauses.push(
+      sql`n.search_tsv @@ websearch_to_tsquery('simple', ${filters.q})`,
+    );
+  if (filters.notebook)
+    clauses.push(sql`lower(nb.name) = lower(${filters.notebook})`);
   if (filters.tag) {
     clauses.push(
       sql`EXISTS (
@@ -249,7 +280,9 @@ async function listEvernoteItems(
     sr.record_metadata->>'deleted',
     'false'
   )) IN ('true', '1', 'yes')`;
-  clauses.push(filters.trash ? sql`${trashed} = true` : sql`${trashed} = false`);
+  clauses.push(
+    filters.trash ? sql`${trashed} = true` : sql`${trashed} = false`,
+  );
   if (filters.q) {
     clauses.push(sql`to_tsvector(
       'simple',
@@ -283,10 +316,14 @@ async function listEvernoteItems(
     )`);
   }
   if (filters.dateFrom) {
-    clauses.push(sql`coalesce(sr.source_created_at, sr.created_at) >= ${filters.dateFrom}`);
+    clauses.push(
+      sql`coalesce(sr.source_created_at, sr.created_at) >= ${filters.dateFrom}`,
+    );
   }
   if (filters.dateTo) {
-    clauses.push(sql`coalesce(sr.source_created_at, sr.created_at) <= ${filters.dateTo}`);
+    clauses.push(
+      sql`coalesce(sr.source_created_at, sr.created_at) <= ${filters.dateTo}`,
+    );
   }
 
   const result = await getDb().execute(sql`
@@ -345,6 +382,112 @@ async function getProjectedItem(
   id: string,
 ): Promise<SavedItemDto | null> {
   const rawId = id.slice(id.indexOf(":") + 1);
+  if (id.startsWith("source-record:")) {
+    const result = await getDb().execute(sql`
+      SELECT
+        concat('source-record:', sr.id) AS id,
+        sr.record_type AS kind,
+        'ready' AS state,
+        CASE sr.record_type
+          WHEN 'evernote_note' THEN 'evernote'
+          WHEN 'gmail_message' THEN 'gmail'
+          WHEN 'drive_file' THEN 'drive'
+          WHEN 'calendar_event' THEN 'calendar'
+          WHEN 'finance_transaction' THEN 'finance'
+          WHEN 'flipperforce_project' THEN 'flipperforce'
+          WHEN 'homey_device' THEN 'homey'
+          WHEN 'homey_flow' THEN 'homey'
+          WHEN 'homey_alert' THEN 'homey'
+          WHEN 'google_contact' THEN 'contact'
+          ELSE 'connector'
+        END AS source,
+        coalesce(sr.record_title, 'Untitled') AS title,
+        null::text AS description,
+        null::text AS domain,
+        sr.source_url,
+        left(coalesce(sr.record_text, ''), ${ITEM_DETAIL_BODY_MAX_CHARS}) AS body_text,
+        '{}'::jsonb AS media,
+        CASE
+          WHEN sr.record_type = 'evernote_note'
+            AND jsonb_typeof(sr.record_metadata->'tagNames') = 'array'
+            THEN sr.record_metadata->'tagNames'
+          WHEN sr.record_type = 'evernote_note'
+            AND jsonb_typeof(sr.record_metadata->'tags') = 'array'
+            THEN sr.record_metadata->'tags'
+          ELSE '[]'::jsonb
+        END AS tags,
+        CASE
+          WHEN sr.record_type = 'evernote_note'
+            THEN sr.record_metadata->>'notebookName'
+          ELSE null
+        END AS notebook,
+        null::timestamptz AS deleted_at,
+        coalesce(sr.source_updated_at, sr.updated_at) AS bumped_at,
+        coalesce(sr.source_created_at, sr.created_at) AS created_at,
+        coalesce(sr.source_updated_at, sr.updated_at) AS updated_at
+      FROM source_records sr
+      JOIN connectors c ON c.id = sr.connector_id AND c.enabled = true
+      WHERE sr.user_id = ${userId}::uuid AND sr.id = ${rawId}
+      LIMIT 1
+    `);
+    const row = rowsFrom(result)[0];
+    if (!row) return null;
+    const dto = toDto(row);
+    if (dto.source === "evernote") dto.tags = evernoteDisplayTags(dto.tags);
+    return dto;
+  }
+  if (id.startsWith("memory:")) {
+    const result = await getDb().execute(sql`
+      SELECT
+        concat('memory:', m.id) AS id,
+        'memory' AS kind,
+        'ready' AS state,
+        'memory' AS source,
+        m.title,
+        m.summary AS description,
+        null::text AS domain,
+        null::text AS source_url,
+        left(m.content, ${ITEM_DETAIL_BODY_MAX_CHARS}) AS body_text,
+        '{}'::jsonb AS media,
+        m.tags,
+        null::text AS notebook,
+        null::timestamptz AS deleted_at,
+        m.updated_at AS bumped_at,
+        m.created_at,
+        m.updated_at
+      FROM life_memories m
+      WHERE m.user_id = ${userId}::uuid AND m.id = ${rawId}
+      LIMIT 1
+    `);
+    const row = rowsFrom(result)[0];
+    return row ? toDto(row) : null;
+  }
+  if (id.startsWith("task:")) {
+    const result = await getDb().execute(sql`
+      SELECT
+        concat('task:', t.id) AS id,
+        'task' AS kind,
+        'ready' AS state,
+        'task' AS source,
+        t.title,
+        concat_ws(' · ', nullif(t.priority, 'none'), t.time) AS description,
+        null::text AS domain,
+        null::text AS source_url,
+        ''::text AS body_text,
+        '{}'::jsonb AS media,
+        t.tags,
+        null::text AS notebook,
+        null::timestamptz AS deleted_at,
+        t.updated_at AS bumped_at,
+        t.created_at,
+        t.updated_at
+      FROM tasks t
+      WHERE t.user_id = ${userId}::uuid AND t.id = ${rawId}
+      LIMIT 1
+    `);
+    const row = rowsFrom(result)[0];
+    return row ? toDto(row) : null;
+  }
   if (id.startsWith("note:")) {
     const result = await getDb().execute(sql`
       SELECT
@@ -419,8 +562,17 @@ async function getProjectedItem(
   return dto;
 }
 
-export async function getItemForUser(userId: string, id: string): Promise<SavedItemDto | null> {
-  if (id.startsWith("note:") || id.startsWith("evernote:")) {
+export async function getItemForUser(
+  userId: string,
+  id: string,
+): Promise<SavedItemDto | null> {
+  if (
+    id.startsWith("note:") ||
+    id.startsWith("evernote:") ||
+    id.startsWith("source-record:") ||
+    id.startsWith("memory:") ||
+    id.startsWith("task:")
+  ) {
     return getProjectedItem(userId, id);
   }
   const rows = await getDb()
@@ -470,8 +622,13 @@ function itemId(): string {
   return `item-${randomUUID()}`;
 }
 
-async function finishRawCapture(userId: string, captureId: string): Promise<void> {
-  await updateCaptureStatusForUser(userId, captureId, { processedStatus: "ignored" });
+async function finishRawCapture(
+  userId: string,
+  captureId: string,
+): Promise<void> {
+  await updateCaptureStatusForUser(userId, captureId, {
+    processedStatus: "ignored",
+  });
 }
 
 export async function saveTextItemForUser(
@@ -479,7 +636,10 @@ export async function saveTextItemForUser(
   value: string,
 ): Promise<SavedItemDto> {
   const text = value.trim();
-  if (!text) throw Object.assign(new Error("Enter a note or link to save"), { status: 400 });
+  if (!text)
+    throw Object.assign(new Error("Enter a note or link to save"), {
+      status: 400,
+    });
   if (text.length > 1_000_000) {
     throw Object.assign(new Error("Saved text is too large"), { status: 413 });
   }
@@ -525,46 +685,50 @@ export async function saveTextItemForUser(
     }
     const domain = metadata?.domain ?? url.hostname.replace(/^www\./, "");
     const id = itemId();
-    await getDb().insert(items).values({
-      id,
-      userId,
-      captureId: capture.id,
-      kind: "link",
-      state: "ready",
-      source: "recall",
-      title: metadata?.title ?? domain,
-      description: metadata?.description ?? null,
-      domain,
-      sourceUrl: canonicalUrl,
-      canonicalUrl: metadata?.canonicalUrl ?? canonicalUrl,
-      urlHash,
-      bodyText: "",
-      media: metadata?.imageUrl ? { remoteUrl: metadata.imageUrl } : {},
-      tags: heuristicItemTags({ url: canonicalUrl, date: now }),
-      bumpedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    });
+    await getDb()
+      .insert(items)
+      .values({
+        id,
+        userId,
+        captureId: capture.id,
+        kind: "link",
+        state: "ready",
+        source: "recall",
+        title: metadata?.title ?? domain,
+        description: metadata?.description ?? null,
+        domain,
+        sourceUrl: canonicalUrl,
+        canonicalUrl: metadata?.canonicalUrl ?? canonicalUrl,
+        urlHash,
+        bodyText: "",
+        media: metadata?.imageUrl ? { remoteUrl: metadata.imageUrl } : {},
+        tags: heuristicItemTags({ url: canonicalUrl, date: now }),
+        bumpedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
     await finishRawCapture(userId, capture.id);
     return (await getItemForUser(userId, id))!;
   }
 
   const id = itemId();
   const title = text.split(/\r?\n/, 1)[0]!.slice(0, 500) || "Untitled note";
-  await getDb().insert(items).values({
-    id,
-    userId,
-    captureId: capture.id,
-    kind: "note",
-    state: "ready",
-    source: "recall",
-    title,
-    bodyText: text,
-    tags: heuristicItemTags({ date: now }),
-    bumpedAt: now,
-    createdAt: now,
-    updatedAt: now,
-  });
+  await getDb()
+    .insert(items)
+    .values({
+      id,
+      userId,
+      captureId: capture.id,
+      kind: "note",
+      state: "ready",
+      source: "recall",
+      title,
+      bodyText: text,
+      tags: heuristicItemTags({ date: now }),
+      bumpedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
   await finishRawCapture(userId, capture.id);
   return (await getItemForUser(userId, id))!;
 }
@@ -581,12 +745,20 @@ function imageKind(mimeType: string): "image" | "pdf" | "file" {
 
 export async function saveFileItemForUser(
   userId: string,
-  file: { originalname: string; mimetype: string; size: number; buffer: Buffer },
+  file: {
+    originalname: string;
+    mimetype: string;
+    size: number;
+    buffer: Buffer;
+  },
   caption = "",
 ): Promise<SavedItemDto> {
-  if (!file.buffer.length) throw Object.assign(new Error("File is empty"), { status: 400 });
+  if (!file.buffer.length)
+    throw Object.assign(new Error("File is empty"), { status: 400 });
   if (file.size > config.attachmentMaxBytes) {
-    throw Object.assign(new Error("File exceeds the upload size cap"), { status: 413 });
+    throw Object.assign(new Error("File exceeds the upload size cap"), {
+      status: 413,
+    });
   }
 
   const fileName = safeFileName(file.originalname);
@@ -615,29 +787,33 @@ export async function saveFileItemForUser(
         });
 
     const now = new Date();
-    await getDb().insert(items).values({
-      id,
-      userId,
-      captureId: capture.id,
-      kind: imageKind(file.mimetype),
-      state: "ready",
-      source: "recall",
-      title: fileName.replace(/\.[^.]+$/, "") || fileName,
-      description: cleanCaption || null,
-      bodyText: [cleanCaption, extractedText].filter(Boolean).join("\n\n"),
-      media: {
-        storagePath,
-        fileName,
-        mimeType: file.mimetype,
-        sizeBytes: file.size,
-      },
-      tags: heuristicItemTags({ mimeType: file.mimetype, date: now }),
-      bumpedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    });
+    await getDb()
+      .insert(items)
+      .values({
+        id,
+        userId,
+        captureId: capture.id,
+        kind: imageKind(file.mimetype),
+        state: "ready",
+        source: "recall",
+        title: fileName.replace(/\.[^.]+$/, "") || fileName,
+        description: cleanCaption || null,
+        bodyText: [cleanCaption, extractedText].filter(Boolean).join("\n\n"),
+        media: {
+          storagePath,
+          fileName,
+          mimeType: file.mimetype,
+          sizeBytes: file.size,
+        },
+        tags: heuristicItemTags({ mimeType: file.mimetype, date: now }),
+        bumpedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
   } catch (error) {
-    await rm(absoluteDir, { recursive: true, force: true }).catch(() => undefined);
+    await rm(absoluteDir, { recursive: true, force: true }).catch(
+      () => undefined,
+    );
     throw error;
   }
   await finishRawCapture(userId, capture.id);
@@ -701,10 +877,19 @@ export async function listItemFacetsForUser(userId: string): Promise<{
   tags: string[];
   notebooks: string[];
 }> {
-  const recent = await listItemsForUser(userId, parseItemSearchFilters({ limit: 200 }));
+  const recent = await listItemsForUser(
+    userId,
+    parseItemSearchFilters({ limit: 200 }),
+  );
   return {
-    tags: [...new Set(recent.flatMap((item) => item.tags))].sort().slice(0, 100),
-    notebooks: [...new Set(recent.map((item) => item.notebook).filter(Boolean) as string[])]
+    tags: [...new Set(recent.flatMap((item) => item.tags))]
+      .sort()
+      .slice(0, 100),
+    notebooks: [
+      ...new Set(
+        recent.map((item) => item.notebook).filter(Boolean) as string[],
+      ),
+    ]
       .sort()
       .slice(0, 100),
   };

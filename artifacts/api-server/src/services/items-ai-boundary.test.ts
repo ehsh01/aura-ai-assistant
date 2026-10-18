@@ -58,6 +58,9 @@ describe("saved items AI boundary", () => {
       /left\(coalesce\(sr\.record_text, ''\), \$\{filters\.bodyTextLimit\}\)/,
     );
     expect(items).not.toMatch(/note_attachments|extracted_text/);
-    expect(graph).toContain("Math.min(1_501, query.limit + query.offset + 1)");
+    expect(graph).toContain("LIMIT ${quota + 1}");
+    expect(graph).toContain("OFFSET ${offset}");
+    expect(graph).toContain("ITEM_GRAPH_BODY_MAX_CHARS");
+    expect(graph).not.toMatch(/warmEntityEmbedding|embedding-cache|aiService/);
   });
 });

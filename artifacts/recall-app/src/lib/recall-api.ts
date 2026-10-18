@@ -2741,7 +2741,16 @@ export type KnowledgeGraphNodeType =
   | "tags"
   | "links"
   | "files"
-  | "evernote";
+  | "evernote"
+  | "gmail"
+  | "drive"
+  | "calendar"
+  | "finance"
+  | "flipperforce"
+  | "homey"
+  | "memories"
+  | "tasks"
+  | "contacts";
 
 export type KnowledgeGraphNode = {
   id: string;
@@ -2770,11 +2779,13 @@ export async function fetchKnowledgeGraph(input?: {
   types?: KnowledgeGraphNodeType[];
   limit?: number;
   offset?: number;
+  q?: string;
 }): Promise<KnowledgeGraphResponse> {
   const params = new URLSearchParams();
   if (input?.types?.length) params.set("types", input.types.join(","));
   if (input?.limit) params.set("limit", String(input.limit));
   if (input?.offset) params.set("offset", String(input.offset));
+  if (input?.q?.trim()) params.set("q", input.q.trim());
   const query = params.toString();
   return apiFetch(`/items/graph${query ? `?${query}` : ""}`);
 }
