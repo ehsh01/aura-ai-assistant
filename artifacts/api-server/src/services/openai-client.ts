@@ -12,6 +12,7 @@ import {
 import {
   redactCredentials,
   redactSensitiveValue,
+  withCredentialRedactionScope,
 } from "./secret-redaction";
 
 type ClientOptions = {
@@ -179,7 +180,8 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
     ) => Promise<unknown>;
   };
   const createCompletion = completions.create.bind(completions);
-  completions.create = async (params, requestOptions) => {
+  completions.create = (params, requestOptions) =>
+    withCredentialRedactionScope(async () => {
     const model = String(params.model ?? "unknown");
     const callContext = context();
     const sanitizedParams = redactSensitiveValue(params);
@@ -260,8 +262,8 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
       else queue.fail(err);
     });
     await ready.promise;
-    return queue;
-  };
+      return queue;
+    });
 
   const embeddings = client.embeddings as unknown as {
     create: (

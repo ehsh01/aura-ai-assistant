@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { buildAskAnswerMetadata } from "./ask-answer-metadata";
 import { sanitizeAskMessageForStorage } from "./ask-threads";
 import { sanitizeAuditMetadata } from "./audit";
+import {
+  redactCredentials,
+  withCredentialRedactionScope,
+} from "./secret-redaction";
 
 describe("answer persistence and citation redaction", () => {
   it("redacts stored answer text and UI citation snippets", () => {
@@ -98,5 +102,22 @@ describe("answer persistence and citation redaction", () => {
     expect(querySource).toContain(
       "credentialReferenceAnswer(credentialRecord.title)",
     );
+  });
+
+  it("carries exact source secrets into stored and audit output stripping", () => {
+    withCredentialRedactionScope(() => {
+      const secret = "R00t@Psych@Tail9";
+      redactCredentials(
+        `ssh root@1.2.3.4\n${secret}\ndeploy inventory:${secret}@inventory.example.health`,
+      );
+      const stored = sanitizeAskMessageForStorage({
+        content: "Model echoed tail Psych@Tail9",
+      });
+      const audit = sanitizeAuditMetadata({
+        answer: "Model echoed tail Psych@Tail9",
+      });
+      expect(JSON.stringify({ stored, audit })).not.toContain("Psych@Tail9");
+      expect(JSON.stringify({ stored, audit })).not.toContain("@Tail9");
+    });
   });
 });
