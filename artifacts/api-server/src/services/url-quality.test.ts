@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  extractLinkCandidates,
   extractRealHttpUrls,
   isPlaceholderUrl,
-  PLACEHOLDER_URL_RULES,
+  isTrackingOrUtilityUrl,
+  URL_REJECTION_RULES,
 } from "./url-quality";
 
 describe("placeholder URL classification", () => {
@@ -26,11 +28,11 @@ describe("placeholder URL classification", () => {
   });
 
   it("keeps the placeholder rules centralized", () => {
-    expect(PLACEHOLDER_URL_RULES.exactHosts).toContain("example.com");
-    expect(PLACEHOLDER_URL_RULES.hostFragments).toContain(
+    expect(URL_REJECTION_RULES.exactHosts).toContain("example.com");
+    expect(URL_REJECTION_RULES.hostFragments).toContain(
       "the-actual-link-here",
     );
-    expect(PLACEHOLDER_URL_RULES.urlFragments).toContain("placeholder");
+    expect(URL_REJECTION_RULES.urlFragments).toContain("placeholder");
   });
 
   it("keeps real links and preserves their source order", () => {
@@ -42,5 +44,33 @@ describe("placeholder URL classification", () => {
       "https://umiamihealth.org/treatments/psychiatry",
       "https://uhealthsystem.com/locations",
     ]);
+  });
+
+  it("recognizes and normalizes bare domains without extracting email domains", () => {
+    expect(
+      extractLinkCandidates(
+        "Use psychiatry.med.miami.edu or www.uhealthsystem.org. Email help@example.org.",
+      ).map((candidate) => candidate.url),
+    ).toEqual([
+      "https://psychiatry.med.miami.edu",
+      "https://www.uhealthsystem.org",
+    ]);
+  });
+
+  it.each([
+    "https://trk.policyemail.bestbuy.com/click/sale",
+    "https://click.vendor.com/path",
+    "https://company.list-manage.com/track/click",
+    "https://api.sendgrid.com/redirect",
+    "https://real-domain.com/unsubscribe?id=1",
+    "https://real-domain.com/?utm_source=email&utm_campaign=sale",
+  ])("rejects tracking, redirect, or unsubscribe URL %s", (url) => {
+    expect(isTrackingOrUtilityUrl(url)).toBe(true);
+  });
+
+  it("skips maps unless the question asks for location", () => {
+    const map = "https://maps.google.com/?q=UHealth+Psychiatry";
+    expect(isTrackingOrUtilityUrl(map)).toBe(true);
+    expect(isTrackingOrUtilityUrl(map, { allowMaps: true })).toBe(false);
   });
 });

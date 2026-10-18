@@ -64,16 +64,35 @@ const PSYCHIATRY_HOW_TO_RECORD = {
   score: 9,
 } as const;
 
-const PSYCHIATRY_REAL_LINK_RECORD = {
+const PSYCHIATRY_BEST_BUY_EMAIL = {
+  ...NOTE_RECORD,
+  entityId: "best-buy-promo",
+  title: "Best Buy weekend deals",
+  text: "Shop now: https://trk.policyemail.bestbuy.com/click/sale",
+  recordType: "gmail_message",
+  score: 8.8,
+} as const;
+
+const PSYCHIATRY_BUSINESS_CARD_RECORD = {
   ...NOTE_RECORD,
   entityId: "psychiatry-business-card",
   title: "Uhealth Psychiatry - Business Card",
-  text: "Contact information and website: https://umiamihealth.org/treatments/psychiatry",
+  text: "Location: https://maps.google.com/?q=UHealth+Psychiatry",
   score: 8,
+} as const;
+
+const PSYCHIATRY_REAL_LINK_RECORD = {
+  ...NOTE_RECORD,
+  entityId: "psychiatry-image-link",
+  title: "Turn an image into a link",
+  text: "Use the department site psychiatry.med.miami.edu when linking the image.",
+  score: 7.8,
 } as const;
 
 const PSYCHIATRY_CASE_RECORDS = [
   PSYCHIATRY_HOW_TO_RECORD,
+  PSYCHIATRY_BEST_BUY_EMAIL,
+  PSYCHIATRY_BUSINESS_CARD_RECORD,
   PSYCHIATRY_REAL_LINK_RECORD,
 ] as const;
 
@@ -205,53 +224,30 @@ describe("spoken grounded answers", () => {
     expect(voice.sources).toEqual([]);
   });
 
-  it("puts a retrieved Psychiatry URL front and center and requires a citation", async () => {
+  it("skips placeholder, tracking, and map links for the real Psychiatry bare domain", async () => {
     mocks.retrieve.mockResolvedValue({
       records: PSYCHIATRY_CASE_RECORDS,
       usedSemantic: false,
       namedPeople: [],
       tasks: [],
     });
-    mocks.completion.mockResolvedValue({
-      choices: [
-        {
-          message: {
-            content: JSON.stringify({
-              answer:
-                "The link is https://umiamihealth.org/treatments/psychiatry.",
-              sourceIds: ["n2"],
-            }),
-          },
-        },
-      ],
-    });
-
     const result = await queryVoiceNotesForUser(
       "u1",
-      'What does my note "Adding and editing a web link on the Psychiatry website" say?',
+      "[AppSmith test] what is the Psychiatry website link?",
       null,
     );
-    const request = mocks.completion.mock.calls[0]![0];
-    expect(request.messages[0].content).toContain(
-      "including a URL—you must answer the question and cite that record",
-    );
-    expect(request.messages[1].content).toContain(
-      "Link found: https://umiamihealth.org/treatments/psychiatry (from Uhealth Psychiatry - Business Card)",
-    );
-    expect(request.messages[1].content).toContain(
-      "Related how-to context: Adding and editing a web link on the Psychiatry website",
-    );
-    expect(result.answer).toContain(
-      "https://umiamihealth.org/treatments/psychiatry",
-    );
+    expect(result.answer).toContain("https://psychiatry.med.miami.edu");
     expect(result.answer).not.toContain("the-actual-link-here");
+    expect(result.answer).not.toContain("policyemail");
+    expect(result.answer).not.toContain("maps.google.com");
     expect(result.answer).toContain(
       "Adding and editing a web link on the Psychiatry website",
     );
     expect(result.sources.map((source) => source.title)).toEqual([
-      "Uhealth Psychiatry - Business Card",
+      "Turn an image into a link",
       "Adding and editing a web link on the Psychiatry website",
     ]);
+    expect(mocks.completion).not.toHaveBeenCalled();
   });
 
   it.each(["AI off", "daily cap exhausted"])(
@@ -272,11 +268,11 @@ describe("spoken grounded answers", () => {
       );
 
       expect(result?.answer).toBe(
-        "Your Psychiatry website link is https://umiamihealth.org/treatments/psychiatry, from your note Uhealth Psychiatry - Business Card. The note Adding and editing a web link on the Psychiatry website has related how-to instructions.",
+        "Your Psychiatry website link is https://psychiatry.med.miami.edu, from your note Turn an image into a link. The note Adding and editing a web link on the Psychiatry website has related how-to instructions.",
       );
       expect(result?.answer).not.toContain("the-actual-link-here");
       expect(result?.sources.map((source) => source.title)).toEqual([
-        "Uhealth Psychiatry - Business Card",
+        "Turn an image into a link",
         "Adding and editing a web link on the Psychiatry website",
       ]);
       expect(result?.privacy.model).toBeNull();
@@ -284,7 +280,7 @@ describe("spoken grounded answers", () => {
     },
   );
 
-  it("falls back to the deterministic link after an OpenAI error", async () => {
+  it("does not call OpenAI for a link ask even when model access is available", async () => {
     mocks.retrieve.mockResolvedValue({
       records: PSYCHIATRY_CASE_RECORDS,
       usedSemantic: false,
@@ -300,9 +296,35 @@ describe("spoken grounded answers", () => {
     );
 
     expect(result.answer).toContain(
-      "Your Psychiatry link is https://umiamihealth.org/treatments/psychiatry",
+      "Your Psychiatry link is https://psychiatry.med.miami.edu",
     );
-    expect(mocks.completion).toHaveBeenCalledOnce();
+    expect(mocks.completion).not.toHaveBeenCalled();
+  });
+
+  it("names the closest note instead of returning an unrelated URL", async () => {
+    mocks.retrieve.mockResolvedValue({
+      records: [
+        PSYCHIATRY_HOW_TO_RECORD,
+        PSYCHIATRY_BEST_BUY_EMAIL,
+        PSYCHIATRY_BUSINESS_CARD_RECORD,
+      ],
+      usedSemantic: false,
+      namedPeople: [],
+      tasks: [],
+    });
+
+    const result = await queryVoiceNotesForUser(
+      "u1",
+      "What is my Psychiatry website link?",
+      null,
+    );
+
+    expect(result.answer).toBe(
+      "I couldn't find a relevant Psychiatry website link. The closest note is Adding and editing a web link on the Psychiatry website.",
+    );
+    expect(result.answer).not.toContain("policyemail");
+    expect(result.answer).not.toContain("maps.google.com");
+    expect(mocks.completion).not.toHaveBeenCalled();
   });
 
   it("does not let prior unrelated turns dilute a current title query", async () => {
