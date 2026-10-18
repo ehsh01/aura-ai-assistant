@@ -53,6 +53,7 @@ import {
   VoiceQueryError,
 } from "@/lib/recall-api";
 import { speakText, stopSpeaking } from "@/lib/speech-synthesis";
+import { RecallExplore } from "@/pages/RecallExplore";
 
 const GRAPH_TYPES: Array<{
   type: KnowledgeGraphNodeType;
@@ -371,6 +372,10 @@ function MarkdownAnswer({ value }: { value: string }) {
 }
 
 export function Everything() {
+  return <RecallExplore />;
+}
+
+function LegacyEverything() {
   const [location, navigate] = useLocation();
   const detailItemId = location.match(/^\/everything\/([^/?#]+)/)?.[1];
   const lowMotionFallback = useLowMotionFallback();
