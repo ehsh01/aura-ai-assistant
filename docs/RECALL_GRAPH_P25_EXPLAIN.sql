@@ -55,7 +55,9 @@ WHERE lower(coalesce(
   AND btrim(coalesce(er.record_title, '')) <> '';
 
 -- Populate the psql variable used by Q1/Q3/Q7 exactly as the API's cached
--- text[] bind parameter. Run this once per benchmark session/cache fill.
+-- single text[] bind parameter. The API uses sql.param(titles), not direct
+-- array interpolation, so 5,000+ titles remain one PostgreSQL parameter.
+-- Run this once per benchmark session/cache fill.
 SELECT coalesce(array_agg(title_norm), '{}'::text[])::text AS evernote_titles
 FROM (
   WITH evernote_rows AS MATERIALIZED (

@@ -666,8 +666,10 @@ async function normalizedEvernoteTitlesForUser(
   }
 }
 
-function cachedEvernoteTitlesSql(titles: readonly string[]) {
-  return sql`SELECT unnest(${titles}::text[]) AS title_norm`;
+export function cachedEvernoteTitlesSql(titles: readonly string[]) {
+  // sql.param is required here: interpolating the JS array directly makes
+  // Drizzle expand every title into a ROW expression (Postgres limit: 1,664).
+  return sql`SELECT unnest(${sql.param([...titles])}::text[]) AS title_norm`;
 }
 
 function graphSourceTypeSql(types: SourceRecordType[]) {

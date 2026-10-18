@@ -71,6 +71,8 @@ describe("saved items AI boundary", () => {
     expect(
       graph.match(/cachedEvernoteTitlesSql\(evernoteTitles\)/g),
     ).toHaveLength(3);
+    expect(graph).toContain("sql.param([...titles])");
+    expect(graph).not.toContain("unnest(${titles}");
     expect(graph).not.toContain("NOT EXISTS (");
     expect(graph).not.toMatch(/coalesce\([insr]+\.search_tsv/);
     expect(graph).toContain("ITEM_GRAPH_BODY_MAX_CHARS");
