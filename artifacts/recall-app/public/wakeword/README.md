@@ -6,18 +6,37 @@ openWakeWord's bundled wake-word models.
 
 ## Files and licenses
 
-| File                   | Purpose                                                               | License    |
-| ---------------------- | --------------------------------------------------------------------- | ---------- |
-| `melspectrogram.onnx`  | openWakeWord shared mel feature extractor                             | Apache-2.0 |
-| `embedding_model.onnx` | openWakeWord conversion of Google's `speech_embedding/1` shared model | Apache-2.0 |
-| `mic-worklet.js`       | openWakeWord same-origin microphone worklet                           | Apache-2.0 |
-| `hey_recall.onnx`      | Recall-trained classifier head                                        | CC BY 4.0  |
+| File                   | Purpose                                                               | License          |
+| ---------------------- | --------------------------------------------------------------------- | ---------------- |
+| `melspectrogram.onnx`  | openWakeWord shared mel feature extractor                             | Apache-2.0 + MIT |
+| `embedding_model.onnx` | openWakeWord conversion of Google's `speech_embedding/1` shared model | Apache-2.0       |
+| `mic-worklet.js`       | openWakeWord same-origin microphone worklet                           | Apache-2.0       |
+| `hey_recall.onnx`      | Recall-trained classifier head                                        | CC BY 4.0        |
 
-The two shared models are the v0.5.1 openWakeWord release assets. The
-openWakeWord code and mel model are Apache-2.0. The embedding model is based on
-Google's Apache-2.0
-[`speech_embedding/1`](https://tfhub.dev/google/speech_embedding/1). A copy of
-the Apache license is in `LICENSE-APACHE-2.0.txt`.
+The shared binaries were regenerated locally; the ambiguous prebuilt
+openWakeWord v0.5.1 binaries are not shipped. `melspectrogram.onnx` was exported
+from openWakeWord's Apache-2.0 conversion notebook and torchlibrosa's MIT
+implementation. `embedding_model.onnx` was reconstructed from Google's
+Apache-2.0 [`speech_embedding/1`](https://tfhub.dev/google/speech_embedding/1)
+checkpoint using the architecture documented by openWakeWord. The reproducible
+exporter is `scripts/wakeword/export-shared-models.py`, based on openWakeWord
+v0.6.0 commit `c8ef6912c5feccf1037b852d9bc6c7ed644135ba`.
+
+The regenerated models were compared with the historical v0.5.1 models on
+seeded tensors: both produced identical shapes and bit-identical outputs
+(`max_abs_error=0.0`). The historical binaries were used only as a validation
+oracle and are not included. Two clean regeneration runs produced the same
+SHA-256 values listed below. License texts are in
+`LICENSE-APACHE-2.0.txt` and `LICENSE-TORCHLIBROSA-MIT.txt`.
+
+The complete feature extraction and head training were then rerun using only
+the regenerated shared models. The regenerated feature arrays and
+`hey_recall.onnx` were byte-identical to the first run, including the custom
+head SHA-256 listed below.
+
+The dynamically loaded browser pipeline is `openwakeword-web@0.1.0`
+(Apache-2.0) with `onnxruntime-web@1.30.0` (MIT). The package contains no model
+files. ONNX Runtime's notice is in `LICENSE-ONNXRUNTIME-MIT.txt`.
 
 `hey_recall.onnx` was trained for Recall from synthetic speech generated with
 Piper's `en_US-libritts-high` voice. The voice is trained from LibriTTS
@@ -57,8 +76,8 @@ Model sizes and SHA-256:
 
 | File                   |     Bytes | SHA-256                                                            |
 | ---------------------- | --------: | ------------------------------------------------------------------ |
-| `melspectrogram.onnx`  | 1,087,958 | `ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f` |
-| `embedding_model.onnx` | 1,326,578 | `70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f` |
+| `melspectrogram.onnx`  | 1,087,757 | `153d111d6a63aa1158218cf644bac27916207d58043f0484d0440fd1112c5658` |
+| `embedding_model.onnx` | 1,320,340 | `34c183ab7c79c1ae7c18c8964809dd43003b1f9b99f82cfdd4d5b09c164e744a` |
 | `hey_recall.onnx`      |   415,224 | `c6337bb313ac5bd286ada97e7a63bea7ce417da51cb2adcf501357d854d3b5f3` |
 
 ## Reproduce or retrain
@@ -66,6 +85,15 @@ Model sizes and SHA-256:
 From the repository root:
 
 ```bash
+python3 -m venv /tmp/recall-shared-model-venv
+/tmp/recall-shared-model-venv/bin/pip install --upgrade pip
+/tmp/recall-shared-model-venv/bin/pip install \
+  -r scripts/wakeword/requirements-shared-models.txt
+TF_USE_LEGACY_KERAS=1 \
+  /tmp/recall-shared-model-venv/bin/python \
+  scripts/wakeword/export-shared-models.py \
+  /tmp/recall-shared-models
+
 python3 -m venv /tmp/recall-wake-venv
 /tmp/recall-wake-venv/bin/pip install --upgrade pip piper-tts onnx
 /tmp/recall-wake-venv/bin/python \
@@ -75,9 +103,8 @@ python3 -m venv /tmp/recall-wake-venv
 git clone https://github.com/9zax/wakekit.git /tmp/wakekit
 git -C /tmp/wakekit checkout f07112a0424e8ca5cdd36e6a6d5613956d897d4a
 git -C /tmp/wakekit apply "$PWD/scripts/wakeword/openwakeword-int16.patch"
-curl -fsSL \
-  https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/embedding_model.onnx \
-  -o /tmp/wakekit/models/embedding_model.onnx
+cp /tmp/recall-shared-models/{melspectrogram,embedding_model}.onnx \
+  /tmp/wakekit/models/
 
 npm --prefix /tmp/wakekit install --omit=dev
 cd /tmp/wakekit
