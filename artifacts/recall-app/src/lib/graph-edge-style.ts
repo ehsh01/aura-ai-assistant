@@ -2,17 +2,17 @@ export const GRAPH_EDGE_CORE_COLOR = "#8cfff1";
 export const GRAPH_EDGE_GLOW_COLOR = "#35e9e1";
 export const GRAPH_EDGE_HIGHLIGHT_COLOR = "#d8fff8";
 
-const MIN_CORE_WIDTH = 1.35;
-const BASE_CORE_WIDTH = 2;
-const MAX_CORE_WIDTH = 3;
-const GLOW_EXTRA_WIDTH = 3.2;
-const MAX_GLOW_WIDTH = 6;
+const MIN_CORE_WIDTH = 0.675;
+const BASE_CORE_WIDTH = 1;
+const MAX_CORE_WIDTH = 1.5;
+const GLOW_EXTRA_WIDTH = 1.6;
+const MAX_GLOW_WIDTH = 3;
 export const GRAPH_EDGE_OPACITY_SCALE = 0.75;
 
 /**
  * Edge widths are expressed in CSS pixels because the graph projects node
- * positions into screen space before drawing. Keep the core above one pixel
- * when zoomed out, then grow it gently rather than scaling linearly.
+ * positions into screen space before drawing. Widths are half the original
+ * values in every state, while still growing gently rather than linearly.
  */
 export function graphEdgeCoreWidth(scale: number): number {
   const safeScale = Number.isFinite(scale) ? Math.max(scale, 0) : 1;
