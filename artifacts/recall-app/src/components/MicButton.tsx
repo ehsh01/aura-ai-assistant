@@ -15,13 +15,15 @@ interface MicButtonProps {
   iconSize?: number;
   title?: string;
   children?: React.ReactNode;
-  listeningLabel?: string;
+  listeningLabel?: React.ReactNode;
   allowServerTranscription?: boolean;
   onListeningChange?: (listening: boolean) => void;
   testId?: string;
   controller?: MicButtonController;
   /** Return false to consume the activation (for example, to stop speech). */
   onBeforeToggle?: () => boolean | void;
+  /** Called after a new listening session starts successfully. */
+  onActivated?: () => void;
   /** A long press listens only while held; a quick tap uses auto-stop. */
   holdToTalk?: boolean;
   /** Suppress transient listening/recording toasts for always-visible controls. */
@@ -42,6 +44,7 @@ function MicButtonControl({
   listeningLabel,
   testId,
   onBeforeToggle,
+  onActivated,
   holdToTalk = false,
   quiet = false,
 }: MicButtonProps & { controller: MicButtonController }) {
@@ -71,6 +74,7 @@ function MicButtonControl({
       }
       return;
     }
+    onActivated?.();
 
     if (!quiet)
       toast({

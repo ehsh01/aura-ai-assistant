@@ -27,6 +27,7 @@ import {
   GRAPH_EDGE_HIGHLIGHT_COLOR,
   graphEdgeCoreWidth,
   graphEdgeGlowWidth,
+  graphEdgeOpacity,
 } from "@/lib/graph-edge-style";
 import {
   calculateGraphFit,
@@ -313,7 +314,7 @@ export function KnowledgeGraph({
               viewRef.current.stretchY,
         );
       }
-      context.globalAlpha = alpha;
+      context.globalAlpha = graphEdgeOpacity(alpha);
       context.lineWidth = lineWidth;
       context.strokeStyle = strokeStyle;
       context.stroke();
@@ -757,7 +758,7 @@ export function KnowledgeGraph({
       <button
         type="button"
         onClick={() => setFitVersion((value) => value + 1)}
-        className="hud-chip absolute left-3 top-[132px] z-30 inline-flex items-center gap-1.5 sm:top-24"
+        className="graph-fit-control absolute left-3 top-[132px] z-30 inline-flex items-center gap-1.5 sm:top-24"
         aria-label="Fit graph to view"
       >
         <Maximize2 size={12} />

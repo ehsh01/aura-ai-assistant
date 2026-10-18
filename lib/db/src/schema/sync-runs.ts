@@ -21,6 +21,10 @@ export const syncRuns = pgTable(
     recordsSkipped: integer("records_skipped").notNull().default(0),
     recordsFailed: integer("records_failed").notNull().default(0),
     errorMessage: text("error_message"),
+    sourceErrors: jsonb("source_errors")
+      .$type<Record<string, string>>()
+      .notNull()
+      .default({}),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
   },
   (table) => [

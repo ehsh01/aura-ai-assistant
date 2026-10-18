@@ -42,7 +42,8 @@ const TIMER_SAFE_JOB_TYPES = [JOB_TYPE_ATTACHMENT_EXTRACT] as const;
 
 const workerId = `recall-api:${hostname()}:${process.pid}`;
 
-type JobHandler = (job: Job) => Promise<"continue" | void>;
+type JobHandlerResult = "continue" | { continueAfterMs: number } | void;
+type JobHandler = (job: Job) => Promise<JobHandlerResult>;
 
 function scheduleExplicitJobResume(job: Pick<Job, "id" | "availableAt">): void {
   if (scheduledResumeIds.has(job.id)) return;
@@ -131,13 +132,24 @@ const handlers: Record<string, JobHandler> = {
     if (!meta) {
       throw new Error("connector_sync job missing connectorId/syncRunId");
     }
-    const { processEvernoteSyncJob } = await import("./connectors");
+    const connectorsService = await import("./connectors");
+    if (meta.connectorType === "google") {
+      const complete = await connectorsService.processGoogleSyncJob(
+        job.userId,
+        meta.connectorId,
+        meta.syncRunId,
+        () => heartbeatJob(job.id),
+      );
+      return complete
+        ? undefined
+        : { continueAfterMs: 30 * 60 * 1000 };
+    }
     const lease = setInterval(() => {
       void heartbeatJob(job.id).catch(() => undefined);
     }, 60_000);
     lease.unref?.();
     try {
-      const complete = await processEvernoteSyncJob(
+      const complete = await connectorsService.processEvernoteSyncJob(
         job.userId,
         meta.connectorId,
         meta.syncRunId,
@@ -148,6 +160,7 @@ const handlers: Record<string, JobHandler> = {
       clearInterval(lease);
     }
   },
+
 };
 
 async function runOneJob(job: Job): Promise<void> {
@@ -159,14 +172,20 @@ async function runOneJob(job: Job): Promise<void> {
 
   try {
     const result = await handler(job);
-    if (result === "continue") {
-      await continueJob(job.id);
+    if (result === "continue" || typeof result === "object") {
+      const continueAfterMs =
+        typeof result === "object" ? result.continueAfterMs : 1_000;
+      if (result === "continue") {
+        await continueJob(job.id);
+      } else {
+        await continueJob(job.id, continueAfterMs);
+      }
       // Timer polling intentionally claims only local attachment extraction.
       // A durable multi-slice connector job must explicitly request its own
-      // next slice after continueJob's one-second availability delay.
+      // next slice after its bounded availability delay.
       scheduleExplicitJobResume({
         id: job.id,
-        availableAt: new Date(Date.now() + 1_000),
+        availableAt: new Date(Date.now() + continueAfterMs),
       });
     } else {
       await completeJob(job.id);
@@ -232,8 +251,8 @@ async function runOneJob(job: Job): Promise<void> {
     if (terminal && job.type === JOB_TYPE_CONNECTOR_SYNC) {
       const meta = connectorSyncFromPayload(job.payload);
       if (meta) {
-        const { failEvernoteSyncRun } = await import("./connectors");
-        await failEvernoteSyncRun(job.userId, meta.syncRunId, message).catch(
+        const { failConnectorSyncRun } = await import("./connectors");
+        await failConnectorSyncRun(job.userId, meta.syncRunId, message).catch(
           () => undefined,
         );
       }

@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { once } from "node:events";
 import {
   AiChatBody,
   AiChatResponse,
@@ -38,7 +39,10 @@ import {
   confirmProposedAction,
   type ProposedActionType,
 } from "../services/action-orchestrator";
-import { assertServerTtsEnabled, synthesizeSpeech } from "../services/tts";
+import {
+  assertServerTtsEnabled,
+  streamSynthesizeSpeech,
+} from "../services/tts";
 import {
   createAskThreadForUser,
   getAskThreadForUser,
@@ -55,10 +59,17 @@ import {
 } from "../services/voice-first";
 import { askAiAvailabilityForUser } from "../services/ask-ai-availability";
 import { isEnabled } from "../lib/feature-flags";
-import { voiceAiAllowance, withVoiceAiLock } from "../services/ai-usage";
 import {
+  recordAiUsage,
+  voiceAiAllowance,
+  voiceSessionSilenceMs,
+  withVoiceAiLock,
+} from "../services/ai-usage";
+import {
+  isVoiceLinkQuestion,
   queryVoiceNotesForUser,
   VOICE_LIMIT_REPLY,
+  VOICE_MONTHLY_LIMIT_REPLY,
 } from "../services/voice-answer";
 
 const voiceAudioUpload = multer({
@@ -222,15 +233,72 @@ router.post("/ai/tts", async (req, res, next) => {
   try {
     assertServerTtsEnabled();
     const body = AiTtsBody.parse(req.body);
-    const { buffer, contentType } = await synthesizeSpeech(
+    await streamSynthesizeSpeech(
       body.text,
       req.user!.id,
+      async ({ chunks, contentType }) => {
+        const iterator = chunks[Symbol.asyncIterator]();
+        let first = await iterator.next();
+        while (!first.done && first.value.byteLength === 0) {
+          first = await iterator.next();
+        }
+        if (first.done) {
+          await iterator.return?.();
+          throw Object.assign(new Error("OpenAI TTS returned no audio"), {
+            status: 502,
+          });
+        }
+
+        res.status(200);
+        res.setHeader("Content-Type", contentType);
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.flushHeaders();
+
+        const cancelStream = () => {
+          void iterator.return?.().catch(() => undefined);
+        };
+        res.once("close", cancelStream);
+        try {
+          if (!res.write(Buffer.from(first.value))) {
+            await Promise.race([once(res, "drain"), once(res, "close")]);
+          }
+          while (!res.destroyed) {
+            const { done, value } = await iterator.next();
+            if (done) break;
+            if (value.byteLength > 0 && !res.write(Buffer.from(value))) {
+              await Promise.race([once(res, "drain"), once(res, "close")]);
+            }
+          }
+          if (!res.destroyed) res.end();
+        } finally {
+          res.off("close", cancelStream);
+          if (res.destroyed) await iterator.return?.().catch(() => undefined);
+        }
+      },
     );
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Content-Length", String(buffer.length));
-    res.send(buffer);
   } catch (err) {
+    if (res.headersSent) {
+      res.destroy(err instanceof Error ? err : undefined);
+      return;
+    }
+    const reason =
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err.code === "disabled" ||
+        err.code === "daily_limit" ||
+        err.code === "monthly_limit")
+        ? err.code
+        : null;
+    if (reason) {
+      res.status(reason === "disabled" ? 503 : 429).json({
+        error: "VOICE_TTS_BLOCKED",
+        reason,
+        message: err instanceof Error ? err.message : "Server TTS unavailable",
+      });
+      return;
+    }
     next(err);
   }
 });
@@ -238,7 +306,10 @@ router.post("/ai/tts", async (req, res, next) => {
 router.get("/ai/voice/availability", async (req, res, next) => {
   try {
     const allowance = await voiceAiAllowance("voice_ask", req.user!.id);
-    res.json(allowance);
+    res.json({
+      ...allowance,
+      sessionSilenceMs: voiceSessionSilenceMs(),
+    });
   } catch (err) {
     next(err);
   }
@@ -250,11 +321,42 @@ router.post("/ai/voice/query", async (req, res, next) => {
     await withVoiceAiLock(req.user!.id, async () => {
       const allowance = await voiceAiAllowance("voice_ask", req.user!.id);
       if (!allowance.allowed) {
-        const dailyLimit = allowance.reason === "daily_limit";
-        res.status(dailyLimit ? 429 : 503).json({
-          error: dailyLimit ? "VOICE_DAILY_LIMIT" : "VOICE_AI_UNAVAILABLE",
+        const linkFallback = isVoiceLinkQuestion(body.question)
+          ? await queryVoiceNotesForUser(
+              req.user!.id,
+              body.question,
+              body.threadId ?? null,
+              { allowModel: false },
+            )
+          : null;
+        if (linkFallback) {
+          res.json({
+            ...linkFallback,
+            limitReason:
+              allowance.reason === "daily_limit" ||
+              allowance.reason === "monthly_limit"
+                ? allowance.reason
+                : null,
+          });
+          return;
+        }
+        const capReached =
+          allowance.reason === "daily_limit" ||
+          allowance.reason === "monthly_limit";
+        res.status(capReached ? 429 : 503).json({
+          error:
+            allowance.reason === "monthly_limit"
+              ? "VOICE_MONTHLY_LIMIT"
+              : capReached
+                ? "VOICE_DAILY_LIMIT"
+                : "VOICE_AI_UNAVAILABLE",
           reason: allowance.reason,
-          message: dailyLimit ? VOICE_LIMIT_REPLY : "Voice AI is unavailable",
+          message:
+            allowance.reason === "monthly_limit"
+              ? VOICE_MONTHLY_LIMIT_REPLY
+              : capReached
+                ? VOICE_LIMIT_REPLY
+                : "Voice AI is unavailable",
         });
         return;
       }
@@ -264,6 +366,20 @@ router.post("/ai/voice/query", async (req, res, next) => {
         body.question,
         body.threadId ?? null,
       );
+      // Model-backed turns are recorded by the instrumented OpenAI client.
+      // Deterministic and no-match turns still consume exactly one Ask.
+      if (result.privacy.model === null) {
+        await recordAiUsage(
+          {
+            userId: req.user!.id,
+            feature: "voice_ask",
+            provider: "recall",
+            model: "notes-only",
+            costMicros: 0,
+          },
+          { strict: true },
+        );
+      }
       res.json(result);
     });
   } catch (err) {
