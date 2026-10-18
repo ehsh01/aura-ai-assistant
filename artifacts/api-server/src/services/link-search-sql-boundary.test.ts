@@ -17,6 +17,11 @@ describe("link search SQL boundary", () => {
     const noteSearch = between(
       notes,
       "export async function searchNoteRecordsForUser",
+      "export async function searchNoteHostnameFallbackForUser",
+    );
+    const fallbackSearch = between(
+      notes,
+      "export async function searchNoteHostnameFallbackForUser",
       "function vinHeuristicMatch",
     );
     const sourceSearches = between(
@@ -27,8 +32,16 @@ describe("link search SQL boundary", () => {
 
     expect(noteSearch).not.toContain("~*");
     expect(noteSearch).not.toMatch(/\s~\s/);
+    expect(noteSearch).not.toContain("hostnameFallbackRegex");
     expect(sourceSearches).not.toContain("~*");
     expect(sourceSearches).not.toMatch(/\s~\s/);
-    expect(sourceSearches).not.toContain("hostnameIlikePatterns");
+    expect(fallbackSearch.match(/~\*/g)).toHaveLength(1);
+    expect(fallbackSearch).not.toContain(".orderBy(");
+    expect(fallbackSearch).toContain(
+      "set local statement_timeout = '400ms'",
+    );
+    expect(fallbackSearch).toContain(
+      "Math.min(Math.max(Math.trunc(limit), 1), 3)",
+    );
   });
 });

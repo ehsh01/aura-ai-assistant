@@ -4,6 +4,7 @@ import { getDb } from "../lib/db";
 import { listTasksForUser } from "./tasks";
 import {
   listNotesForUser,
+  searchNoteHostnameFallbackForUser,
   searchNoteRecordsForUser,
   shouldExpandUrlTokens,
 } from "./notes";
@@ -49,6 +50,7 @@ import { FAMILY_RELATION_INTENT, formatInstantForUser } from "./query-utils";
 import { logger } from "../lib/logger";
 import {
   extractLinkCandidates,
+  isConsoleOrAdminUrl,
   isPlaceholderUrl,
   isTrackingOrUtilityUrl,
 } from "./url-quality";
@@ -110,6 +112,67 @@ export function hasSubjectMatchingUrlHostname(
     );
     return subjectTerms.some((term) => hostTokens.has(term));
   });
+}
+
+function wholeTokens(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean),
+  );
+}
+
+export function hasAcceptableSubjectLink(
+  question: string,
+  record: { title: string; text: string },
+): boolean {
+  if (!shouldExpandUrlTokens(question)) return false;
+  const subjectTerms = freeRetrievalTerms(question);
+  const titleTokens = wholeTokens(record.title);
+  const websiteAsk = /\bwebsite\b/i.test(question);
+  const allowMaps = /\b(?:directions?|location|map|address|where)\b/i.test(
+    question,
+  );
+  return extractLinkCandidates(record.text).some((candidate) => {
+    if (
+      isPlaceholderUrl(candidate.url) ||
+      isTrackingOrUtilityUrl(candidate.url, { allowMaps }) ||
+      (websiteAsk && isConsoleOrAdminUrl(candidate.url))
+    ) {
+      return false;
+    }
+    if (subjectTerms.length === 0) return true;
+    const parsed = new URL(candidate.url);
+    const linkTokens = wholeTokens(
+      `${parsed.hostname} ${parsed.pathname} ${parsed.search}`,
+    );
+    const nearTokens = wholeTokens(
+      record.text.slice(
+        Math.max(0, candidate.index - 240),
+        Math.min(
+          record.text.length,
+          candidate.index + candidate.raw.length + 240,
+        ),
+      ),
+    );
+    return subjectTerms.some(
+      (term) =>
+        titleTokens.has(term) ||
+        nearTokens.has(term) ||
+        linkTokens.has(term),
+    );
+  });
+}
+
+export function shouldRunHostnameFallback(
+  question: string,
+  records: Array<{ title: string; text: string }>,
+): boolean {
+  return (
+    shouldExpandUrlTokens(question) &&
+    !records.some((record) => hasAcceptableSubjectLink(question, record))
+  );
 }
 
 export function pinSubjectHostnameMatchesBeforeCut<
@@ -1143,6 +1206,33 @@ export async function searchSourceRecordsForUser(
   return rows.map((row) => sourceRowToContext({ ...row, mailbox: null }));
 }
 
+function rankFreeNoteRecords(
+  query: string,
+  records: ContextRecord[],
+  limit: number,
+): ContextRecord[] {
+  const rankedRawHits = rankFreeTextMatches(
+    query,
+    records,
+    records.length,
+  );
+  return pinSubjectHostnameMatchesBeforeCut(
+    query,
+    rankedRawHits,
+    limit,
+    2,
+  ).map(
+    ({
+      score: _score,
+      matchedTerms: _matched,
+      allTerms: _all,
+      titleMatches: _title,
+      exactTitle: _exactTitle,
+      ...record
+    }) => record,
+  );
+}
+
 /**
  * Shared free note retrieval for typed Ask and Talk to Recall. Both native and
  * imported notes use the same normalized query, title weighting, complete-match
@@ -1164,26 +1254,7 @@ export async function retrieveFreeNoteRecordsForUser(
     })),
     ...evernoteNotes,
   ];
-  const rankedRawHits = rankFreeTextMatches(
-    query,
-    records,
-    records.length,
-  );
-  return pinSubjectHostnameMatchesBeforeCut(
-    query,
-    rankedRawHits,
-    limit,
-    2,
-  ).map(
-    ({
-      score: _score,
-      matchedTerms: _matched,
-      allTerms: _all,
-      titleMatches: _title,
-      exactTitle: _exactTitle,
-      ...record
-    }) => record,
-  );
+  return rankFreeNoteRecords(query, records, limit);
 }
 
 async function collectCorpus(userId: string): Promise<{
@@ -1532,7 +1603,7 @@ export async function retrieveRelevantRecords(
   // corpus, so this removes a sequential OpenAI round-trip from the critical path.
   const [
     { records: baseCorpus, people, tasks },
-    noteSearchHits,
+    initialNoteSearchHits,
     sourceSearchHits,
     queryVec,
   ] = await Promise.all([
@@ -1547,6 +1618,39 @@ export async function retrieveRelevantRecords(
       ? Promise.resolve(null)
       : embedQuery(question).catch(() => null),
   ]);
+  let noteSearchHits = initialNoteSearchHits;
+  if (
+    shouldRunHostnameFallback(noteQuery, [
+      ...noteSearchHits,
+      ...sourceSearchHits,
+    ])
+  ) {
+    const fallbackNotes = await searchNoteHostnameFallbackForUser(
+      userId,
+      noteQuery,
+      3,
+    );
+    if (fallbackNotes.length > 0) {
+      const combined = [
+        ...noteSearchHits,
+        ...fallbackNotes.map((note) => ({
+          ...note,
+          sourceMetadata: null,
+        })),
+      ];
+      const seen = new Set<string>();
+      noteSearchHits = rankFreeNoteRecords(
+        noteQuery,
+        combined.filter((record) => {
+          const key = retrievalRecordKey(record);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }),
+        noteSearchCandidateLimit(noteQuery),
+      );
+    }
+  }
   const corpus = [...baseCorpus];
   // Full-library note search covers older notes outside the recency corpus cap.
   // Replace recent-prefix copies so ranking and grounding use match-centered text.

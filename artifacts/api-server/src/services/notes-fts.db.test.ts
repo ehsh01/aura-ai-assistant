@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { hostnameIlikePatterns } from "./notes";
+import { hostnameFallbackRegex } from "./notes";
 
 const migrationUrl = new URL("../../../../lib/db/migrations/0016_notes_fts.sql", import.meta.url);
 
@@ -113,37 +113,15 @@ describe("notes FTS migration", () => {
       ["psychiatry", "note-en-xfbhdx"],
       ["khaila", "note-khaila"],
     ] as const) {
-      const patterns = hostnameIlikePatterns(term);
+      const pattern = hostnameFallbackRegex(term);
       const expandedHit = await db.query<{ id: string }>(
         `SELECT id
          FROM notes
-         WHERE search_document ILIKE $1
-            OR search_document ILIKE $2
-            OR search_document ILIKE $3
-            OR search_document ILIKE $4`,
-        patterns,
+         WHERE search_document ~* $1
+         LIMIT 3`,
+        [pattern],
       );
       expect(expandedHit.rows.map((row) => row.id)).toContain(expectedId);
     }
-
-    const patterns = hostnameIlikePatterns("psychiatry");
-    const pinned = await db.query<{ id: string }>(
-      `SELECT id
-       FROM notes
-       WHERE search_tsv @@ to_tsquery('simple', 'psychiatry:*')
-          OR search_document ILIKE $1
-          OR search_document ILIKE $2
-          OR search_document ILIKE $3
-          OR search_document ILIKE $4
-       ORDER BY CASE
-         WHEN search_document ILIKE $1
-           OR search_document ILIKE $2
-           OR search_document ILIKE $3
-           OR search_document ILIKE $4
-         THEN 1 ELSE 0 END DESC
-       LIMIT 50`,
-      patterns,
-    );
-    expect(pinned.rows[0]?.id).toBe("note-en-xfbhdx");
   });
 });
