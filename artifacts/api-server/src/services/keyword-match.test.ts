@@ -75,6 +75,25 @@ describe("free Ask retrieval ranking", () => {
     });
   });
 
+  it("ranks an exact multi-word Evernote title first", () => {
+    const inventory = {
+      id: "evernote-psychiatry-inventory",
+      kind: "evernote",
+      title: "Psychiatry Inventory App",
+      text: "Inventory workflow details for the Psychiatry team.",
+    };
+    const ranked = rankFreeTextMatches(
+      "What's in my psychiatry inventory app note",
+      [...receipts, otherEvernote, inventory],
+      8,
+    );
+    expect(ranked[0]).toMatchObject({
+      id: inventory.id,
+      exactTitle: true,
+      allTerms: true,
+    });
+  });
+
   it("drops conversational filler and normalizes simple paraphrases", () => {
     expect(
       freeRetrievalTerms(

@@ -129,6 +129,14 @@ const KHAILA_RECORD = {
   score: 9,
 } as const;
 
+const PSYCHIATRY_INVENTORY_RECORD = {
+  ...NOTE_RECORD,
+  entityId: "psychiatry-inventory-app",
+  title: "Psychiatry Inventory App",
+  text: "The note describes the inventory app workflow and access details.",
+  score: 9,
+} as const;
+
 beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "test-key");
   for (const mock of Object.values(mocks)) mock.mockReset();
@@ -416,6 +424,44 @@ describe("spoken grounded answers", () => {
     expect(result.answer).toContain("https://khaila.schoolportal.com");
     expect(result.sources[0]?.title).toBe("Khaila school portal");
     expect(mocks.completion).not.toHaveBeenCalled();
+  });
+
+  it("treats the exact multi-word Psychiatry Inventory App title as relevant", async () => {
+    mocks.retrieve.mockResolvedValue({
+      records: [PSYCHIATRY_INVENTORY_RECORD, NOTE_RECORD],
+      usedSemantic: false,
+      namedPeople: [],
+      tasks: [],
+    });
+    mocks.completion.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              answer:
+                "It describes the inventory app workflow and access details.",
+              sourceIds: ["n1"],
+            }),
+          },
+        },
+      ],
+    });
+
+    const result = await queryVoiceNotesForUser(
+      "u1",
+      "What's in my psychiatry inventory app note",
+      null,
+    );
+    const request = mocks.completion.mock.calls[0]![0];
+
+    expect(request.messages[0].content).toContain(
+      "exact title match for a named note",
+    );
+    expect(request.messages[1].content).toContain(
+      "Exact title match for the named note: Psychiatry Inventory App",
+    );
+    expect(result.answer).toContain("inventory app workflow");
+    expect(result.sources[0]?.title).toBe("Psychiatry Inventory App");
   });
 
   it("does not let prior unrelated turns dilute a current title query", async () => {
