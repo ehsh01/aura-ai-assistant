@@ -56,9 +56,11 @@ a single `text[]` bind parameter, a `MATERIALIZED` CTE, and
 `LEFT JOIN ... IS NULL`. The one-parameter binding avoids PostgreSQL's 1,664
 ROW-entry limit even above 5,000 titles, while preserving the hash anti-join and
 avoiding three title-set rebuilds per request. Every graph read runs in a
-transaction with `SET LOCAL statement_timeout = '5s'`. The noisy-notebook set
-is cached per user for 30 seconds with a 100-user process cap. Exact production
-EXPLAIN SQL is in `docs/RECALL_GRAPH_P25_EXPLAIN.sql`.
+transaction with `SET LOCAL statement_timeout = '5s'`; page statements are
+awaited sequentially so one `pg` client never executes concurrent queries. The
+noisy-notebook set is cached per user for 30 seconds with a 100-user process
+cap. Exact production EXPLAIN SQL is in
+`docs/RECALL_GRAPH_P25_EXPLAIN.sql`.
 
 ## Hub de-noising
 
@@ -75,9 +77,10 @@ EXPLAIN SQL is in `docs/RECALL_GRAPH_P25_EXPLAIN.sql`.
 
 The existing graph edge width and opacity treatment is unchanged.
 
-Every digit run in every graph label (including hubs and all source types) is
-masked before it reaches canvas labels, tooltips, or accessibility text. The
-display keeps at most the last four digits and prefixes them with `****`.
+Digit runs of five or more characters in every graph label (including hubs and
+all source types) are masked before they reach canvas labels, tooltips, or
+accessibility text. The display keeps the last four digits and prefixes them
+with `****`; shorter numbers and tooltip link counts remain unchanged.
 
 ## Verification
 

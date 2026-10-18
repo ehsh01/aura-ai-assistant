@@ -124,7 +124,7 @@ function normalizedTwinTitle(value: string): string {
 }
 
 export function maskGraphLabel(value: string): string {
-  return value.replace(/(?:\*{4})?\d+/g, (match) => {
+  return value.replace(/(?:\*{4})?\d{5,}/g, (match) => {
     const digits = match.replace(/\*/g, "");
     return `****${digits.slice(-4)}`;
   });
@@ -858,10 +858,9 @@ async function listGraphRowsForUser(
   const activeSourceTypes = SOURCE_RECORD_TYPES.filter(
     (type) => quotas[type] > 0,
   );
-  const [itemResult, noteResult, sourceResult, memoryResult, taskResult] =
-    await Promise.all([
-      quotas.items > 0
-        ? db.execute(sql`
+  const itemResult =
+    quotas.items > 0
+      ? await db.execute(sql`
             SELECT
               'items'::text AS source_key,
               i.id, i.kind, i.source, i.title, i.description, i.domain,
@@ -875,10 +874,11 @@ async function listGraphRowsForUser(
             ORDER BY i.bumped_at DESC, i.id DESC
             LIMIT ${quotas.items + 1}
             OFFSET ${pageOffset(query, quotas.items)}
-          `)
-        : Promise.resolve([]),
-      quotas.notes > 0
-        ? db.execute(sql`
+        `)
+      : [];
+  const noteResult =
+    quotas.notes > 0
+      ? await db.execute(sql`
             WITH evernote_titles AS MATERIALIZED (
               ${cachedEvernoteTitlesSql(evernoteTitles)}
             )
@@ -909,10 +909,11 @@ async function listGraphRowsForUser(
             ORDER BY n.updated_at DESC, n.id DESC
             LIMIT ${quotas.notes + 1}
             OFFSET ${pageOffset(query, quotas.notes)}
-          `)
-        : Promise.resolve([]),
-      activeSourceTypes.length > 0
-        ? db.execute(sql`
+        `)
+      : [];
+  const sourceResult =
+    activeSourceTypes.length > 0
+      ? await db.execute(sql`
             WITH quota_config(source_key, row_offset, row_limit) AS (
               VALUES ${sourceQuotaValues(query, quotas)}
             ),
@@ -983,10 +984,11 @@ async function listGraphRowsForUser(
               AND ranked.rn > quota.row_offset
               AND ranked.rn <= quota.row_offset + quota.row_limit + 1
             ORDER BY bumped_at DESC, id DESC
-          `)
-        : Promise.resolve([]),
-      quotas.memories > 0
-        ? db.execute(sql`
+        `)
+      : [];
+  const memoryResult =
+    quotas.memories > 0
+      ? await db.execute(sql`
             SELECT
               'memories'::text AS source_key,
               concat('memory:', m.id) AS id,
@@ -1011,10 +1013,11 @@ async function listGraphRowsForUser(
             ORDER BY m.pinned DESC, m.updated_at DESC, m.id DESC
             LIMIT ${quotas.memories + 1}
             OFFSET ${pageOffset(query, quotas.memories)}
-          `)
-        : Promise.resolve([]),
-      quotas.tasks > 0
-        ? db.execute(sql`
+        `)
+      : [];
+  const taskResult =
+    quotas.tasks > 0
+      ? await db.execute(sql`
             SELECT
               'tasks'::text AS source_key,
               concat('task:', t.id) AS id,
@@ -1037,9 +1040,8 @@ async function listGraphRowsForUser(
             ORDER BY t.completed ASC, t.updated_at DESC, t.id DESC
             LIMIT ${quotas.tasks + 1}
             OFFSET ${pageOffset(query, quotas.tasks)}
-          `)
-        : Promise.resolve([]),
-    ]);
+        `)
+      : [];
 
   const fetchedRows = [
     ...projectedRows(itemResult),
