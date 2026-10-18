@@ -312,9 +312,12 @@ describe("knowledge graph caps and filters", () => {
     );
   });
 
-  it("masks every digit run in labels for every graph source and hub", () => {
+  it("masks only 5+ digit runs for every graph source and hub", () => {
     expect(maskGraphLabel("Policy 12 / account 12345678")).toBe(
-      "Policy ****12 / account ****5678",
+      "Policy 12 / account ****5678",
+    );
+    expect(maskGraphLabel("Year 2026 / code 12345")).toBe(
+      "Year 2026 / code ****2345",
     );
     expect(maskGraphLabel("Policy ****5678")).toBe("Policy ****5678");
     const sources = [
@@ -352,15 +355,16 @@ describe("knowledge graph caps and filters", () => {
       { noisyNotebookKeys: new Set() },
     );
     expect(graph.nodes.length).toBeGreaterThan(0);
-    expect(
-      graph.nodes.every(
-        (node) => !/\d/.test(node.label.replace(/\*{4}\d{1,4}/g, "")),
-      ),
-    ).toBe(true);
+    expect(graph.nodes.every((node) => !node.label.includes("12345678"))).toBe(
+      true,
+    );
     expect(graph.nodes.some((node) => node.label.includes("****5678"))).toBe(
       true,
     );
-    expect(graph.nodes.some((node) => node.label.includes("****2026"))).toBe(
+    expect(graph.nodes.some((node) => node.label.includes("Garage 2026"))).toBe(
+      true,
+    );
+    expect(graph.nodes.some((node) => node.label.includes("invoice 42"))).toBe(
       true,
     );
   });

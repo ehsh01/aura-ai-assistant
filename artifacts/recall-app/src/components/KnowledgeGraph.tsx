@@ -35,6 +35,7 @@ import {
   shouldRenderGraphLabel,
   type GraphViewportRect,
 } from "@/lib/graph-viewport";
+import { graphTooltipText, maskGraphDisplayText } from "@/lib/graph-privacy";
 
 type LayoutNode = KnowledgeGraphNode &
   SimulationNodeDatum & {
@@ -52,13 +53,6 @@ type GraphTooltip = {
   links: number;
   touch: boolean;
 };
-
-function maskGraphDisplayText(value: string): string {
-  return value.replace(/(?:\*{4})?\d+/g, (match) => {
-    const digits = match.replace(/\*/g, "");
-    return `****${digits.slice(-4)}`;
-  });
-}
 
 const COLORS: Record<KnowledgeGraphNodeType, string> = {
   notes: "#75baff",
@@ -844,8 +838,7 @@ export function KnowledgeGraph({
           data-testid="graph-tooltip"
         >
           <p className="truncate font-medium">
-            {hover.node.label} · {maskGraphDisplayText(String(hover.links))}{" "}
-            links
+            {graphTooltipText(hover.node.label, hover.links)}
           </p>
           <span className="mt-1 inline-flex rounded-full border border-cyan-100/20 px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-[0.12em] text-[#8fd8c2]">
             {TYPE_BADGES[hover.node.type]}
