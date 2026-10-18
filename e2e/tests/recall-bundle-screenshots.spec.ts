@@ -162,37 +162,64 @@ async function mockRecall(page: Page) {
       });
     }
     if (url.pathname === "/api/items/graph") {
-      const itemNodes = Array.from({ length: 72 }, (_, index) => ({
+      const requestedLimit = Math.min(
+        Number(url.searchParams.get("limit") ?? 350),
+        500,
+      );
+      const itemCount = Math.floor(requestedLimit * 0.8);
+      const itemNodes = Array.from({ length: itemCount }, (_, index) => ({
         id: `item-node-${index}`,
         itemId: items[index % items.length]!.id,
-        type: (["notes", "evernote", "links", "files"] as const)[index % 4],
-        label: `${items[index % items.length]!.title} ${index + 1}`,
-        value: 5 + (index % 8),
+        type: index % 5 === 0 ? ("evernote" as const) : ("notes" as const),
+        label: `Imported note ${index + 1}`,
+        value: 4 + (index % 3),
         hub: false,
         href: `/everything/${items[index % items.length]!.id}`,
       }));
-      const hubs = Array.from({ length: 12 }, (_, index) => ({
-        id: `${index % 2 ? "tags" : "notebooks"}-hub-${index}`,
+      const notebookHub = {
+        id: "notebooks:everything",
         itemId: null,
-        type: index % 2 ? ("tags" as const) : ("notebooks" as const),
-        label: ["Vehicles", "Home", "Planning", "Projects"][index % 4],
-        value: 11 + (index % 4),
+        type: "notebooks" as const,
+        label: "Everything",
+        value: 18,
+        hub: true,
+        href: "/everything?notebook=Everything",
+      };
+      const tagHubs = Array.from({ length: 10 }, (_, index) => ({
+        id: `tags:one-off-${index}`,
+        itemId: null,
+        type: "tags" as const,
+        label: `Topic ${index + 1}`,
+        value: 8,
         hub: true,
         href: "/everything",
       }));
-      return json(route, {
-        nodes: [...itemNodes, ...hubs],
-        edges: itemNodes.map((node, index) => ({
-          id: `edge-${index}`,
+      const notebookEdgeCount =
+        captureState === "before" ? 8 : Math.max(0, itemCount - 3);
+      const notebookEdges = itemNodes
+        .slice(0, notebookEdgeCount)
+        .map((node, index) => ({
+          id: `notebook-edge-${index}`,
           source: node.id,
-          target: hubs[index % hubs.length]!.id,
-          signal: index % 2 ? "tag" : "notebook",
-        })),
+          target: notebookHub.id,
+          signal: "notebook" as const,
+        }));
+      const tagEdges = itemNodes
+        .filter((_, index) => index % 29 === 0)
+        .map((node, index) => ({
+          id: `tag-edge-${index}`,
+          source: node.id,
+          target: tagHubs[index % tagHubs.length]!.id,
+          signal: "tag" as const,
+        }));
+      return json(route, {
+        nodes: [...itemNodes, notebookHub, ...tagHubs],
+        edges: [...notebookEdges, ...tagEdges],
         page: {
           offset: 0,
-          limit: 350,
-          nextOffset: null,
-          sourceCount: itemNodes.length,
+          limit: requestedLimit,
+          nextOffset: requestedLimit,
+          sourceCount: 2_900,
         },
       });
     }
@@ -232,13 +259,13 @@ test("captures the requested Recall states", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/");
   await expect(page.getByTestId("knowledge-graph")).toBeVisible();
-  await page.waitForTimeout(1_200);
+  await page.waitForTimeout(2_000);
   await screenshot(page, "graph_desktop");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
   await expect(page.getByTestId("knowledge-graph")).toBeVisible();
-  await page.waitForTimeout(1_200);
+  await page.waitForTimeout(2_000);
   await screenshot(page, "graph_mobile");
 
   await page.setViewportSize({ width: 1280, height: 800 });
