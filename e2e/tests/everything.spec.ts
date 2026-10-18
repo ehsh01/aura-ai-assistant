@@ -423,13 +423,15 @@ test.describe("Everything capture, graph, grid, and search", () => {
       notebookEdgeCap,
     });
     const screenshotDir = process.env.GRAPH_SCREENSHOT_DIR;
+    const screenshotPrefix =
+      process.env.GRAPH_SCREENSHOT_PREFIX ?? "graph_fit_polish_after";
     if (screenshotDir) {
       await page.setViewportSize({ width: 1280, height: 800 });
       await page.goto("/");
       await page.getByRole("button", { name: "Fit graph to view" }).click();
       await page.waitForTimeout(1_200);
       await page.screenshot({
-        path: `${screenshotDir}/graph_fit_polish_after_desktop.png`,
+        path: `${screenshotDir}/${screenshotPrefix}_desktop.png`,
         fullPage: true,
       });
     }
@@ -446,7 +448,7 @@ test.describe("Everything capture, graph, grid, and search", () => {
     await page.waitForTimeout(1_200);
     if (screenshotDir) {
       await page.screenshot({
-        path: `${screenshotDir}/graph_fit_polish_after_mobile_390x844.png`,
+        path: `${screenshotDir}/${screenshotPrefix}_mobile_390x844.png`,
         fullPage: true,
       });
     }
