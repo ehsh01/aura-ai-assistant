@@ -11,6 +11,7 @@ import {
   evernoteMatchExcerpt,
   evernoteMatchedText,
   hasSubjectMatchingUrlHostname,
+  noteSearchCandidateLimit,
   rankFreeTextMatches,
   reserveSubjectUrlCandidates,
   type RetrievedRecord,
@@ -47,7 +48,7 @@ describe("evernoteMatchExcerpt", () => {
 
 describe("link candidate slot reservation", () => {
   const psychiatryTitleDecoys: RetrievedRecord[] = Array.from(
-    { length: 8 },
+    { length: 36 },
     (_, index) => ({
       entityType: "note",
       entityId: `psychiatry-title-${index}`,
@@ -78,7 +79,7 @@ describe("link candidate slot reservation", () => {
   ])("reserves a top-eight slot for the subject-matching hostname in %s", (query) => {
     const ranked = reserveSubjectUrlCandidates(
       query,
-      psychiatryTitleDecoys,
+      psychiatryTitleDecoys.slice(0, 8),
       [...psychiatryTitleDecoys, hostnameMatch],
       8,
       2,
@@ -90,6 +91,7 @@ describe("link candidate slot reservation", () => {
     expect(
       hasSubjectMatchingUrlHostname(query, psychiatryTitleDecoys[0]!),
     ).toBe(false);
+    expect(noteSearchCandidateLimit(query)).toBe(50);
   });
 });
 
