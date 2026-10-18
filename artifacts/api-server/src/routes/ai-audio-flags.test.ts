@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import aiRouter from "./ai";
 
 const TTS_FLAGS = [
+  "RECALL_VOICE_AI_ENABLED",
   "RECALL_SERVER_TTS_ENABLED",
   "RECALL_OPENAI_TTS_ENABLED",
 ] as const;
@@ -61,7 +62,7 @@ async function postTts() {
 }
 
 describe("POST /ai/tts paid-audio gates", () => {
-  it("returns 503 when both flags are unset", async () => {
+  it("returns 503 when all flags are unset", async () => {
     for (const key of TTS_FLAGS) delete process.env[key];
     expect((await postTts()).status).toBe(503);
   });

@@ -108,7 +108,7 @@ describe("instrumented OpenAI client", () => {
     mocks.transcriptions.mockResolvedValue({ text: "hello", duration: 2.5 });
     const client = createOpenAiClient({
       apiKey: "test",
-      feature: "tts",
+      feature: "voice_tts",
       userId: "user-1",
     });
 
@@ -124,12 +124,23 @@ describe("instrumented OpenAI client", () => {
 
     expect(mocks.record).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ promptTokens: 2, costMicros: 120 }),
+      expect.objectContaining({
+        provider: "openai",
+        feature: "voice_tts",
+        promptTokens: 2,
+        characters: 8,
+        costMicros: 120,
+      }),
       { strict: true },
     );
     expect(mocks.record).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ model: "whisper-1", costMicros: 250 }),
+      expect.objectContaining({
+        provider: "openai",
+        model: "whisper-1",
+        seconds: 2.5,
+        costMicros: 250,
+      }),
       { strict: true },
     );
   });

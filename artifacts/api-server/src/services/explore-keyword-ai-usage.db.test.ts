@@ -61,11 +61,14 @@ describe("Explore free search and explicit AI accounting", () => {
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id uuid REFERENCES users(id),
         feature varchar(64) NOT NULL,
+        provider varchar(32),
         model varchar(96) NOT NULL,
         background boolean NOT NULL DEFAULT false,
         prompt_tokens integer NOT NULL DEFAULT 0,
         completion_tokens integer NOT NULL DEFAULT 0,
         total_tokens integer NOT NULL DEFAULT 0,
+        characters integer NOT NULL DEFAULT 0,
+        seconds integer NOT NULL DEFAULT 0,
         cost_micros bigint NOT NULL DEFAULT 0,
         created_at timestamptz NOT NULL DEFAULT now()
       );
@@ -133,5 +136,71 @@ describe("Explore free search and explicit AI accounting", () => {
     );
     expect(mockedLlm).toHaveBeenCalledTimes(1);
     expect(usage.rows).toEqual([{ feature: "ask_query", count: "1" }]);
+  });
+
+  it("records one voice Ask and one voice TTS row without storing text", async () => {
+    await withAiFeature({ feature: "voice_ask", userId: USER_ID }, async () => {
+      const context = currentAiFeature();
+      await recordAiUsage(
+        {
+          feature: context.feature,
+          userId: context.userId,
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          promptTokens: 120,
+          completionTokens: 24,
+        },
+        { strict: true },
+      );
+    });
+    await recordAiUsage(
+      {
+        feature: "voice_tts",
+        userId: USER_ID,
+        provider: "openai",
+        model: "tts-1",
+        characters: 84,
+        costMicros: 84 * 15,
+      },
+      { strict: true },
+    );
+
+    const usage = await db.query<{
+      feature: string;
+      provider: string;
+      model: string;
+      characters: number;
+      seconds: number;
+    }>(`
+      SELECT feature, provider, model, characters, seconds
+      FROM ai_usage
+      WHERE feature IN ('voice_ask', 'voice_tts')
+      ORDER BY feature
+    `);
+    expect(usage.rows).toEqual([
+      {
+        feature: "voice_ask",
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        characters: 0,
+        seconds: 0,
+      },
+      {
+        feature: "voice_tts",
+        provider: "openai",
+        model: "tts-1",
+        characters: 84,
+        seconds: 0,
+      },
+    ]);
+
+    const columns = await db.query<{ column_name: string }>(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_name = 'ai_usage'
+    `);
+    expect(columns.rows.map((row) => row.column_name)).not.toEqual(
+      expect.arrayContaining(["transcript", "answer", "text"]),
+    );
   });
 });

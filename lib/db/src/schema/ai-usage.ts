@@ -21,15 +21,23 @@ export const aiUsage = pgTable(
     userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
     /** Product area that spent the money, e.g. "attachment_ocr". */
     feature: varchar("feature", { length: 64 }).notNull(),
+    /** Billable API provider. Null for legacy rows. */
+    provider: varchar("provider", { length: 32 }),
     model: varchar("model", { length: 96 }).notNull(),
     /** True when a background job made the call, not a user action. */
     background: boolean("background").notNull().default(false),
     promptTokens: integer("prompt_tokens").notNull().default(0),
     completionTokens: integer("completion_tokens").notNull().default(0),
     totalTokens: integer("total_tokens").notNull().default(0),
+    /** Input text size for character-priced APIs such as TTS. */
+    characters: integer("characters").notNull().default(0),
+    /** Rounded-up audio duration for time-priced APIs such as STT. */
+    seconds: integer("seconds").notNull().default(0),
     /** Micro-dollars (1e-6 USD); integers avoid float drift on tiny costs. */
     costMicros: bigint("cost_micros", { mode: "number" }).notNull().default(0),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => [
     index("ai_usage_created_idx").on(table.createdAt),

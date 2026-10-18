@@ -1857,7 +1857,7 @@ export function createAiService(): AiService {
   if (_instance) return _instance;
 
   const apiKey = process.env.OPENAI_API_KEY?.trim();
-  const model = process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
+  const model = process.env.OPENAI_MODEL?.trim() || "gpt-4.1-mini";
   const embeddingModel =
     process.env.OPENAI_EMBEDDING_MODEL?.trim() || "text-embedding-3-small";
 
