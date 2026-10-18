@@ -132,29 +132,30 @@ const handlers: Record<string, JobHandler> = {
     if (!meta) {
       throw new Error("connector_sync job missing connectorId/syncRunId");
     }
+    const connectorsService = await import("./connectors");
+    if (meta.connectorType === "google") {
+      const complete = await connectorsService.processGoogleSyncJob(
+        job.userId,
+        meta.connectorId,
+        meta.syncRunId,
+        () => heartbeatJob(job.id),
+      );
+      return complete
+        ? undefined
+        : { continueAfterMs: 30 * 60 * 1000 };
+    }
     const lease = setInterval(() => {
       void heartbeatJob(job.id).catch(() => undefined);
     }, 60_000);
     lease.unref?.();
     try {
-      const connectorsService = await import("./connectors");
-      const complete =
-        meta.connectorType === "google"
-          ? await connectorsService.processGoogleSyncJob(
-              job.userId,
-              meta.connectorId,
-              meta.syncRunId,
-            )
-          : await connectorsService.processEvernoteSyncJob(
-              job.userId,
-              meta.connectorId,
-              meta.syncRunId,
-              () => heartbeatJob(job.id),
-            );
-      if (complete) return undefined;
-      return meta.connectorType === "google"
-        ? { continueAfterMs: 30 * 60 * 1000 }
-        : "continue";
+      const complete = await connectorsService.processEvernoteSyncJob(
+        job.userId,
+        meta.connectorId,
+        meta.syncRunId,
+        () => heartbeatJob(job.id),
+      );
+      return complete ? undefined : "continue";
     } finally {
       clearInterval(lease);
     }

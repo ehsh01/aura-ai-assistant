@@ -89,6 +89,7 @@ export async function exchangeGoogleCode(code: string): Promise<{
   };
   if (!tokens.access_token)
     throw new Error("Google did not return an access token");
+  const grantedScopes = parseGoogleScopes(tokens.scope);
 
   const profileRes = await fetch(
     "https://www.googleapis.com/oauth2/v2/userinfo",
@@ -109,7 +110,8 @@ export async function exchangeGoogleCode(code: string): Promise<{
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token ?? null,
     expiresIn: tokens.expires_in ?? 3600,
-    scopes: parseGoogleScopes(tokens.scope),
+    scopes:
+      grantedScopes.length > 0 ? grantedScopes : [...GOOGLE_OAUTH_SCOPES],
     email: profile.email,
     name: profile.name ?? null,
   };
@@ -414,6 +416,7 @@ async function fetchGmailMessageDetails(
 
 type GooglePage = {
   records: GoogleRawRecord[];
+  consumedRows: number;
   nextPageToken: string | null;
   error?: string;
   errorStatus?: number;
@@ -442,22 +445,31 @@ async function fetchGmailPage(
     nextPageToken?: string;
   }>(accessToken, url.toString());
   const out: GoogleRawRecord[] = [];
-  const errors: string[] = [];
+  const errors: Array<{ message: string; status: number | null }> = [];
   for (const msg of list.messages ?? []) {
     try {
       const row = await fetchGmailMessageDetails(accessToken, msg.id);
       if (row) out.push(row);
     } catch (error) {
-      errors.push(
-        error instanceof Error ? error.message : "Gmail message fetch failed",
-      );
+      errors.push({
+        message:
+          error instanceof Error ? error.message : "Gmail message fetch failed",
+        status: googleErrorStatus(error),
+      });
     }
   }
   return {
     records: out,
+    consumedRows: list.messages?.length ?? 0,
     nextPageToken: list.nextPageToken ?? null,
     ...(errors.length > 0
-      ? { error: `${errors.length} Gmail message(s) failed: ${errors[0]}` }
+      ? {
+          error: `${errors.length} Gmail message(s) failed: ${errors[0]!.message}`,
+          errorStatus:
+            errors.find((error) => error.status === 401)?.status ??
+            errors[0]!.status ??
+            undefined,
+        }
       : {}),
   };
 }
@@ -492,10 +504,10 @@ export async function searchGmailMessages(
 async function fetchCalendarPage(
   accessToken: string,
   limit: number,
+  timeMin: string,
+  timeMax: string,
   pageToken?: string | null,
 ): Promise<GooglePage> {
-  const timeMin = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const timeMax = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
   const url = new URL(
     "https://www.googleapis.com/calendar/v3/calendars/primary/events",
   );
@@ -553,7 +565,11 @@ async function fetchCalendarPage(
         metadata: { start, end, location: e.location ?? null },
       };
     });
-  return { records, nextPageToken: data.nextPageToken ?? null };
+  return {
+    records,
+    consumedRows: data.items?.length ?? 0,
+    nextPageToken: data.nextPageToken ?? null,
+  };
 }
 
 async function fetchContactsPage(
@@ -624,7 +640,11 @@ async function fetchContactsPage(
         },
       };
     });
-  return { records, nextPageToken: data.nextPageToken ?? null };
+  return {
+    records,
+    consumedRows: data.connections?.length ?? 0,
+    nextPageToken: data.nextPageToken ?? null,
+  };
 }
 
 async function fetchDrivePage(
@@ -696,7 +716,11 @@ async function fetchDrivePage(
       metadata: { mimeType: f.mimeType ?? null },
     });
   }
-  return { records: out, nextPageToken: data.nextPageToken ?? null };
+  return {
+    records: out,
+    consumedRows: data.files?.length ?? 0,
+    nextPageToken: data.nextPageToken ?? null,
+  };
 }
 
 /** Max text we pull per Drive file (Docs/Sheets/Slides/text) for the top hits. */
@@ -845,12 +869,14 @@ export type GoogleSourceResult = {
   source: GoogleSyncSource;
   ok: boolean;
   count: number;
+  consumedRows: number;
   error: string | null;
   errorStatus: number | null;
 };
 
 export type GoogleBundleResult = {
   records: GoogleRawRecord[];
+  rowsConsumed: number;
   sources: GoogleSourceResult[];
   nextCursor: GoogleSyncCursor | null;
   complete: boolean;
@@ -875,6 +901,8 @@ export async function fetchGoogleBundle(
     since?: string | null;
     cursor?: GoogleSyncCursor | null;
     maxRows?: number;
+    calendarTimeMin?: string;
+    calendarTimeMax?: string;
   },
 ): Promise<GoogleBundleResult> {
   const maxRows = Math.max(1, Math.floor(options?.maxRows ?? 500));
@@ -882,11 +910,18 @@ export async function fetchGoogleBundle(
   let index = Math.max(0, sourceIndex(initialSource));
   let pageToken = options?.cursor?.pageToken ?? null;
   const out: GoogleRawRecord[] = [];
+  let rowsConsumed = 0;
   const sources: GoogleSourceResult[] = [];
+  const calendarTimeMin =
+    options?.calendarTimeMin ??
+    new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const calendarTimeMax =
+    options?.calendarTimeMax ??
+    new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
 
-  while (index < GOOGLE_SYNC_SOURCES.length && out.length < maxRows) {
+  while (index < GOOGLE_SYNC_SOURCES.length && rowsConsumed < maxRows) {
     const source = GOOGLE_SYNC_SOURCES[index]!;
-    const remaining = maxRows - out.length;
+    const remaining = maxRows - rowsConsumed;
     try {
       let page: GooglePage;
       if (source === "gmail") {
@@ -897,7 +932,13 @@ export async function fetchGoogleBundle(
           pageToken,
         );
       } else if (source === "calendar") {
-        page = await fetchCalendarPage(accessToken, remaining, pageToken);
+        page = await fetchCalendarPage(
+          accessToken,
+          remaining,
+          calendarTimeMin,
+          calendarTimeMax,
+          pageToken,
+        );
       } else if (source === "contacts") {
         page = await fetchContactsPage(accessToken, remaining, pageToken);
       } else {
@@ -908,17 +949,22 @@ export async function fetchGoogleBundle(
           pageToken,
         );
       }
-      out.push(...page.records.slice(0, remaining));
+      out.push(...page.records);
+      rowsConsumed += page.consumedRows;
       sources.push({
         source,
         ok: !page.error,
         count: page.records.length,
+        consumedRows: page.consumedRows,
         error: page.error ?? null,
         errorStatus: page.errorStatus ?? null,
       });
       if (page.nextPageToken) {
         pageToken = page.nextPageToken;
-        if (out.length >= maxRows) break;
+        // Do not spin through an upstream sequence of empty pages in one tick.
+        // The durable cursor will resume from this token on the next tick.
+        if (page.consumedRows === 0) break;
+        if (rowsConsumed >= maxRows) break;
         continue;
       }
     } catch (error) {
@@ -926,6 +972,7 @@ export async function fetchGoogleBundle(
         source,
         ok: false,
         count: 0,
+        consumedRows: 0,
         error:
           error instanceof Error ? error.message : `${source} fetch failed`,
         errorStatus: googleErrorStatus(error),
@@ -950,6 +997,7 @@ export async function fetchGoogleBundle(
       : { source: GOOGLE_SYNC_SOURCES[index]!, pageToken };
   return {
     records: out,
+    rowsConsumed,
     sources,
     nextCursor,
     complete: nextCursor === null,

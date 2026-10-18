@@ -259,5 +259,7 @@ describe("durable Google sync jobs", () => {
         },
       },
     });
+    const [connector] = await pgliteDb.select().from(schema.connectors);
+    expect(connector?.lastSyncAt).toBeNull();
   });
 });

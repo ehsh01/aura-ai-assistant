@@ -1661,7 +1661,12 @@ export async function createGoogleConnectorForUser(
           accessTokenExpiresAt: new Date(
             now.getTime() + input.expiresIn * 1000,
           ).toISOString(),
-          grantedScopes: input.scopes,
+          grantedScopes:
+            input.scopes.length > 0
+              ? input.scopes
+              : Array.isArray(currentSettings.grantedScopes)
+                ? currentSettings.grantedScopes
+                : [],
           googleAuthError: null,
         }),
         updatedAt: now,
@@ -2064,11 +2069,14 @@ type GoogleRunMetadata = {
       {
         ok: boolean;
         count: number;
+        consumedRows: number;
         error: string | null;
         errorStatus: number | null;
       }
     >;
     rowsProcessed?: number;
+    calendarTimeMin?: string;
+    calendarTimeMax?: string;
     scheduled?: boolean;
   };
 };
@@ -2104,6 +2112,7 @@ function mergeGoogleSourceResults(
     sources[result.source] = {
       ok: (prior?.ok ?? true) && result.ok,
       count: (prior?.count ?? 0) + result.count,
+      consumedRows: (prior?.consumedRows ?? 0) + result.consumedRows,
       error: result.error ?? prior?.error ?? null,
       errorStatus: result.errorStatus ?? prior?.errorStatus ?? null,
     };
@@ -2292,6 +2301,12 @@ export async function enqueueGoogleSyncForUser(
 
     const syncRunId = newSyncRunId();
     const now = new Date();
+    const calendarTimeMin = new Date(
+      now.getTime() - 30 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const calendarTimeMax = new Date(
+      now.getTime() + 90 * 24 * 60 * 60 * 1000,
+    ).toISOString();
     await tx.insert(syncRuns).values({
       id: syncRunId,
       userId,
@@ -2305,6 +2320,8 @@ export async function enqueueGoogleSyncForUser(
           cursor: null,
           sources: {},
           rowsProcessed: 0,
+          calendarTimeMin,
+          calendarTimeMax,
           scheduled: options?.scheduled === true,
         },
       },
@@ -2380,17 +2397,31 @@ async function processGoogleSyncJobLocked(
       since: typeof googleState.since === "string" ? googleState.since : null,
       cursor,
       maxRows,
+      calendarTimeMin:
+        typeof googleState.calendarTimeMin === "string"
+          ? googleState.calendarTimeMin
+          : undefined,
+      calendarTimeMax:
+        typeof googleState.calendarTimeMax === "string"
+          ? googleState.calendarTimeMax
+          : undefined,
     });
     if (
-      bundle.records.length === 0 &&
-      bundle.sources.length > 0 &&
-      bundle.sources.every((source) => source.errorStatus === 401)
+      bundle.sources.some((source) => source.errorStatus === 401)
     ) {
       token = await ensureGoogleAccessToken(conn, { forceRefresh: true });
       bundle = await fetchGoogleBundle(token.accessToken, token.mailbox, {
         since: typeof googleState.since === "string" ? googleState.since : null,
         cursor,
         maxRows,
+        calendarTimeMin:
+          typeof googleState.calendarTimeMin === "string"
+            ? googleState.calendarTimeMin
+            : undefined,
+        calendarTimeMax:
+          typeof googleState.calendarTimeMax === "string"
+            ? googleState.calendarTimeMax
+            : undefined,
       });
     }
 
@@ -2401,7 +2432,7 @@ async function processGoogleSyncJobLocked(
     );
     const merged = mergeGoogleSourceResults(metadata, bundle.sources);
     const rowsProcessed =
-      (Number(googleState.rowsProcessed) || 0) + bundle.records.length;
+      (Number(googleState.rowsProcessed) || 0) + bundle.rowsConsumed;
     const recordsFetched = run.recordsFetched + bundle.records.length;
     const recordsCreated = run.recordsCreated + persisted.created;
     const recordsUpdated = run.recordsUpdated + persisted.updated;
@@ -2411,6 +2442,9 @@ async function processGoogleSyncJobLocked(
     );
     const complete = bundle.complete;
     const partial = Object.keys(merged.sourceErrors).length > 0;
+    const incrementalSourceFailed = Boolean(
+      merged.sourceErrors.gmail || merged.sourceErrors.drive,
+    );
     const errorMessage = partial
       ? Object.entries(merged.sourceErrors)
           .map(([source, error]) => `${source}: ${error}`)
@@ -2455,7 +2489,7 @@ async function processGoogleSyncJobLocked(
           // Use the run start as the incremental high-water mark. This
           // intentionally overlaps the next query so records arriving while
           // this run was paging cannot fall into a completion-time gap.
-          lastSyncAt: run.startedAt,
+          ...(incrementalSourceFailed ? {} : { lastSyncAt: run.startedAt }),
           updatedAt: new Date(),
         })
         .where(eq(connectors.id, connectorId));
@@ -2479,7 +2513,7 @@ async function processGoogleSyncJobLocked(
       {
         connectorId,
         syncRunId,
-        rowsThisTick: bundle.records.length,
+        rowsThisTick: bundle.rowsConsumed,
         rowsProcessed,
         maxRows,
         rss: memory.rss,
@@ -2529,9 +2563,21 @@ export async function processGoogleSyncJob(
   userId: string,
   connectorId: string,
   syncRunId: string,
+  heartbeat?: () => Promise<void>,
 ): Promise<boolean> {
-  return withDbAdvisoryLock(`google-sync:${connectorId}`, () =>
-    processGoogleSyncJobLocked(userId, connectorId, syncRunId),
+  return withDbAdvisoryLock(`google-sync:${connectorId}`, async () => {
+    // Created inside the advisory-lock AsyncLocalStorage scope so heartbeats
+    // share this job's single checked-out PG connection.
+    const lease = heartbeat
+      ? setInterval(() => void heartbeat().catch(() => undefined), 60_000)
+      : null;
+    lease?.unref?.();
+    try {
+      return await processGoogleSyncJobLocked(userId, connectorId, syncRunId);
+    } finally {
+      if (lease) clearInterval(lease);
+    }
+  },
   );
 }
 

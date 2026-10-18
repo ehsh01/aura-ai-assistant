@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  exchangeGoogleCode,
   fetchGoogleBundle,
+  GOOGLE_OAUTH_SCOPES,
   GoogleNeedsReauthError,
   refreshGoogleAccessToken,
 } from "./google";
@@ -118,6 +120,81 @@ describe("fetchGoogleBundle", () => {
       ]),
     );
   });
+
+  it("counts consumed Gmail rows even when detail fetches fail", async () => {
+    const requested: URL[] = [];
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = new URL(String(input));
+      requested.push(url);
+      if (url.pathname.endsWith("/messages")) {
+        return jsonResponse({
+          messages: [{ id: "one" }, { id: "two" }, { id: "three" }],
+          nextPageToken: "gmail-page-2",
+        });
+      }
+      if (url.pathname.endsWith("/messages/two")) {
+        return jsonResponse({ error: "expired" }, 401);
+      }
+      return jsonResponse({
+        id: url.pathname.split("/").at(-1),
+        payload: { headers: [] },
+      });
+    }) as typeof fetch;
+
+    const result = await fetchGoogleBundle("token", null, { maxRows: 3 });
+    expect(result.rowsConsumed).toBe(3);
+    expect(result.records).toHaveLength(2);
+    expect(result.nextCursor).toEqual({
+      source: "gmail",
+      pageToken: "gmail-page-2",
+    });
+    expect(result.sources[0]).toMatchObject({
+      source: "gmail",
+      consumedRows: 3,
+      errorStatus: 401,
+    });
+    expect(requested).toHaveLength(4);
+  });
+
+  it("reuses a fixed Calendar window with a resumed page token", async () => {
+    const calendarRequests: URL[] = [];
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = new URL(String(input));
+      calendarRequests.push(url);
+      return jsonResponse(
+        url.searchParams.get("pageToken")
+          ? { items: [{ id: "event-2", summary: "Event 2" }] }
+          : {
+              items: [{ id: "event-1", summary: "Event" }],
+              nextPageToken: "calendar-page-2",
+            },
+      );
+    }) as typeof fetch;
+    const window = {
+      calendarTimeMin: "2026-09-01T00:00:00.000Z",
+      calendarTimeMax: "2027-01-01T00:00:00.000Z",
+    };
+
+    const first = await fetchGoogleBundle("token", null, {
+      cursor: { source: "calendar", pageToken: null },
+      maxRows: 1,
+      ...window,
+    });
+    await fetchGoogleBundle("token", null, {
+      cursor: first.nextCursor,
+      maxRows: 1,
+      ...window,
+    });
+
+    expect(calendarRequests).toHaveLength(2);
+    expect(calendarRequests[1]?.searchParams.get("pageToken")).toBe(
+      "calendar-page-2",
+    );
+    for (const request of calendarRequests) {
+      expect(request.searchParams.get("timeMin")).toBe(window.calendarTimeMin);
+      expect(request.searchParams.get("timeMax")).toBe(window.calendarTimeMax);
+    }
+  });
 });
 
 describe("refreshGoogleAccessToken", () => {
@@ -134,5 +211,27 @@ describe("refreshGoogleAccessToken", () => {
     await expect(refreshGoogleAccessToken("revoked")).rejects.toBeInstanceOf(
       GoogleNeedsReauthError,
     );
+  });
+});
+
+describe("exchangeGoogleCode", () => {
+  it("records requested scopes when Google omits the redundant scope field", async () => {
+    process.env.GOOGLE_CLIENT_ID = "client";
+    process.env.GOOGLE_CLIENT_SECRET = "secret";
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          access_token: "access",
+          refresh_token: "refresh",
+          expires_in: 3600,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ email: "test@example.com", name: "Test" }),
+      ) as typeof fetch;
+
+    const result = await exchangeGoogleCode("code");
+    expect(result.scopes).toEqual([...GOOGLE_OAUTH_SCOPES]);
   });
 });

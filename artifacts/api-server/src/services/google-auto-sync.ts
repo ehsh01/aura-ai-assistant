@@ -1,5 +1,13 @@
-import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
-import { connectors } from "@workspace/db/schema";
+import {
+  and,
+  eq,
+  isNull,
+  lt,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
+import { connectors, jobs } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { isEnabled } from "../lib/feature-flags";
 import { logger } from "../lib/logger";
@@ -23,7 +31,8 @@ export async function syncStaleGoogleConnectors(): Promise<number> {
   running = true;
   try {
     const cutoff = new Date(Date.now() - GOOGLE_STALE_MS);
-    const rows = await getDb()
+    const db = getDb();
+    const rows = await db
       .select({
         id: connectors.id,
         userId: connectors.userId,
@@ -33,13 +42,21 @@ export async function syncStaleGoogleConnectors(): Promise<number> {
         and(
           eq(connectors.type, "google"),
           eq(connectors.enabled, true),
+          ne(connectors.syncStatus, "needs_reauth"),
           or(isNull(connectors.lastSyncAt), lt(connectors.lastSyncAt, cutoff)),
+          sql`not exists (
+            select 1
+            from ${jobs}
+            where ${jobs.type} = 'connector_sync'
+              and ${jobs.status} in ('queued', 'processing')
+              and ${jobs.payload}->>'connectorId' = ${connectors.id}
+              and ${jobs.payload}->>'connectorType' = 'google'
+          )`,
         ),
       )
-      .orderBy(
-        sql`${connectors.lastSyncAt} asc nulls first`,
-        connectors.createdAt,
-      )
+      // updatedAt is advanced on queue/failure, rotating stale connectors
+      // fairly instead of letting one broken account monopolize every tick.
+      .orderBy(connectors.updatedAt)
       .limit(1);
     const connector = rows[0];
     if (!connector) return 0;
