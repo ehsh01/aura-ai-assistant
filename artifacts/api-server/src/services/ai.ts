@@ -6,6 +6,10 @@ import type {
 import { searchNotesForUser } from "./notes";
 import { createOpenAiClient } from "./openai-client";
 import {
+  redactCredentials,
+  redactSensitiveValue,
+} from "./secret-redaction";
+import {
   QUERY_ANSWER_SYSTEM_PROMPT,
   QUERY_ANSWER_STREAM_SYSTEM_PROMPT,
 } from "../prompts/queryAnswer.v1";
@@ -1822,7 +1826,10 @@ class OpenAiService implements AiService {
     }
 
     return {
-      answer: answer.trim() || "I couldn't find enough to answer that confidently.",
+      answer: redactCredentials(
+        answer.trim() ||
+          "I couldn't find enough to answer that confidently.",
+      ),
       degraded: false,
     };
   }
@@ -1853,6 +1860,29 @@ export function salvageAnswerField(raw: string): string | null {
 
 let _instance: AiService | null = null;
 
+function withRedactedOutputs(service: AiService): AiService {
+  return new Proxy(service, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => {
+        const result = value.apply(target, args);
+        if (
+          result &&
+          typeof result === "object" &&
+          "then" in result &&
+          typeof result.then === "function"
+        ) {
+          return result.then((resolved: unknown) =>
+            redactSensitiveValue(resolved),
+          );
+        }
+        return redactSensitiveValue(result);
+      };
+    },
+  }) as AiService;
+}
+
 export function createAiService(): AiService {
   if (_instance) return _instance;
 
@@ -1861,9 +1891,11 @@ export function createAiService(): AiService {
   const embeddingModel =
     process.env.OPENAI_EMBEDDING_MODEL?.trim() || "text-embedding-3-small";
 
-  _instance = apiKey
-    ? new OpenAiService(apiKey, model, embeddingModel)
-    : new DisabledAiService();
+  _instance = withRedactedOutputs(
+    apiKey
+      ? new OpenAiService(apiKey, model, embeddingModel)
+      : new DisabledAiService(),
+  );
 
   return _instance;
 }

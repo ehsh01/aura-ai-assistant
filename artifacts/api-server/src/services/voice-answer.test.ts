@@ -193,6 +193,18 @@ const KENNY_RECORDS = [
   },
 ] as const;
 
+const PSYCHIATRY_SECRET_RECORD = {
+  ...NOTE_RECORD,
+  entityId: "psychiatry-secret",
+  title: "Psychiatry Inventory App",
+  text: `SSH host: inventory.example.health
+SSH user: psychiatry-admin
+SSH password: FakePsychiatryPassword!42
+Spaces access key: DO00FAKEACCESSKEY123
+Spaces secret key: FAKESECRETKEY1234567890123456789012345678`,
+  score: 10,
+} as const;
+
 beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "test-key");
   for (const mock of Object.values(mocks)) mock.mockReset();
@@ -552,6 +564,36 @@ describe("spoken grounded answers", () => {
     );
     expect(result.answer).toContain("inventory app workflow");
     expect(result.sources[0]?.title).toBe("Psychiatry Inventory App");
+  });
+
+  it("references the raw note instead of exposing a requested credential", async () => {
+    mocks.retrieve.mockResolvedValue({
+      records: [PSYCHIATRY_SECRET_RECORD],
+      usedSemantic: false,
+      namedPeople: [],
+      tasks: [],
+    });
+
+    const result = await queryVoiceNotesForUser(
+      "u1",
+      "What is the SSH password in my Psychiatry Inventory App note?",
+      null,
+    );
+
+    expect(result.answer).toBe(
+      "That credential is stored in your note Psychiatry Inventory App. Open the note or say “show me” to view it.",
+    );
+    expect(JSON.stringify(result)).not.toContain(
+      "FakePsychiatryPassword!42",
+    );
+    expect(result.sources[0]?.itemId).toBe("evernote:psychiatry-secret");
+    expect(mocks.completion).not.toHaveBeenCalled();
+    expect(mocks.appendMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        role: "assistant",
+        content: expect.not.stringContaining("FakePsychiatryPassword!42"),
+      }),
+    );
   });
 
   it("does not let prior unrelated turns dilute a current title query", async () => {

@@ -37,6 +37,7 @@ vi.mock("./ai-usage", () => ({
 }));
 
 import { createOpenAiClient } from "./openai-client";
+import { HIDDEN_CREDENTIAL } from "./secret-redaction";
 
 beforeEach(() => {
   for (const mock of Object.values(mocks)) mock.mockReset();
@@ -46,6 +47,56 @@ beforeEach(() => {
 });
 
 describe("instrumented OpenAI client", () => {
+  it("redacts chat and TTS request bodies before the provider call", async () => {
+    const password = "FakePsychiatryPassword!42";
+    const spacesKey = "DO00FAKEACCESSKEY123";
+    const spacesSecret = "FAKESECRETKEY1234567890123456789012345678";
+    const fixture = `Psychiatry Inventory App
+SSH host: inventory.example.health
+SSH user: psychiatry-admin
+SSH password: ${password}
+Spaces access key: ${spacesKey}
+Spaces secret key: ${spacesSecret}`;
+    mocks.chat.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: `The password is ${password}`,
+          },
+        },
+      ],
+      usage: { prompt_tokens: 12, completion_tokens: 3 },
+    });
+    mocks.speech.mockResolvedValue({
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+    const client = createOpenAiClient({
+      apiKey: "test",
+      feature: "voice_ask",
+      userId: "user-1",
+    });
+
+    const chat = await client.chat.completions.create({
+      model: "gpt-test",
+      messages: [{ role: "user", content: fixture }],
+    });
+    await client.audio.speech.create({
+      model: "tts-1",
+      voice: "onyx",
+      input: fixture,
+    });
+
+    const chatBody = JSON.stringify(mocks.chat.mock.calls[0]?.[0]);
+    const speechBody = JSON.stringify(mocks.speech.mock.calls[0]?.[0]);
+    for (const secret of [password, spacesKey, spacesSecret]) {
+      expect(chatBody).not.toContain(secret);
+      expect(speechBody).not.toContain(secret);
+      expect(JSON.stringify(chat)).not.toContain(secret);
+    }
+    expect(chatBody).toContain(HIDDEN_CREDENTIAL);
+    expect(speechBody).toContain(HIDDEN_CREDENTIAL);
+  });
+
   it("records chat and embedding tokens before returning", async () => {
     mocks.chat.mockResolvedValue({
       choices: [],
@@ -200,6 +251,44 @@ describe("instrumented OpenAI client", () => {
       "lock:end",
     ]);
     expect(mocks.record).toHaveBeenCalledOnce();
+  });
+
+  it("redacts a credential split across streamed chunks before emission", async () => {
+    const secret = "FakePsychiatryPassword!42";
+    mocks.chat.mockResolvedValue({
+      async *[Symbol.asyncIterator]() {
+        yield {
+          choices: [
+            { delta: { content: "The SSH password is FakePsychiatry" } },
+          ],
+          usage: null,
+        };
+        yield {
+          choices: [{ delta: { content: "Password!42" } }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        };
+      },
+    });
+    const client = createOpenAiClient({
+      apiKey: "test",
+      feature: "ask_query",
+      userId: "user-1",
+    });
+    const stream = await client.chat.completions.create({
+      model: "gpt-test",
+      messages: [],
+      stream: true,
+    });
+
+    let output = "";
+    for await (const chunk of stream as unknown as AsyncIterable<{
+      choices?: Array<{ delta?: { content?: string } }>;
+    }>) {
+      output += chunk.choices?.[0]?.delta?.content ?? "";
+    }
+
+    expect(output).not.toContain(secret);
+    expect(output).toContain(HIDDEN_CREDENTIAL);
   });
 
   it("does not start a concurrent provider call before the locked call records usage", async () => {
