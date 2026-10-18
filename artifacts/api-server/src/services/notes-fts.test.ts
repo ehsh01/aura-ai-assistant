@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildNotesTsQuery,
+  getHostnameFallbackTimeoutCount,
   hostnameFallbackTerm,
-  hostnameIlikePatterns,
+  hostnameFallbackRegex,
+  runHostnameFallbackSafely,
   shouldExpandUrlTokens,
 } from "./notes";
 
@@ -31,13 +33,26 @@ describe("buildNotesTsQuery", () => {
         "[AppSmith test] what is the Psychiatry website link",
       ),
     ).toBe("psychiatry");
-    expect(hostnameIlikePatterns("psychiatry")).toEqual([
-      "%psychiatry.%",
-      "%.psychiatry%",
-      "%://psychiatry-%",
-      "%://%.psychiatry-%",
-    ]);
+    expect(hostnameFallbackRegex("psychiatry")).toBe(
+      "((^|[^a-z0-9])psychiatry[.-]|[.-]psychiatry([^a-z0-9]|$))",
+    );
     expect(shouldExpandUrlTokens("khaila school portal link")).toBe(true);
     expect(shouldExpandUrlTokens("ordinary note summary")).toBe(false);
+  });
+
+  it("degrades gracefully and counts hostname fallback timeouts", async () => {
+    const before = getHostnameFallbackTimeoutCount();
+    const timeout = Object.assign(new Error("statement timeout"), {
+      code: "57014",
+    });
+    await expect(
+      runHostnameFallbackSafely(
+        async () => {
+          throw timeout;
+        },
+        [] as string[],
+      ),
+    ).resolves.toEqual([]);
+    expect(getHostnameFallbackTimeoutCount()).toBe(before + 1);
   });
 });

@@ -15,6 +15,7 @@ import {
   pinSubjectHostnameMatchesBeforeCut,
   rankFreeTextMatches,
   reserveSubjectUrlCandidates,
+  shouldRunHostnameFallback,
   type RetrievedRecord,
 } from "./retrieval";
 import { FAMILY_RELATION_INTENT, PERSON_INTENT, WAITING_INTENT } from "./query-utils";
@@ -113,6 +114,40 @@ describe("link candidate slot reservation", () => {
       hasSubjectMatchingUrlHostname(query, psychiatryTitleDecoys[0]!),
     ).toBe(false);
     expect(noteSearchCandidateLimit(query)).toBe(50);
+  });
+
+  it("skips fallback when a normal Halogen-like hit has an acceptable link", () => {
+    expect(
+      shouldRunHostnameFallback("what is the Halogen portal link", [
+        {
+          title: "Halogen Portals",
+          text: "Portal: eappraisal.miami.edu",
+        },
+      ]),
+    ).toBe(false);
+    expect(
+      shouldRunHostnameFallback("what is the UM Marketplace link", [
+        {
+          title: "UM Marketplace link",
+          text: "https://secure.touchnet.net/central",
+        },
+      ]),
+    ).toBe(false);
+  });
+
+  it("runs fallback when normal website hits only contain rejected links", () => {
+    expect(
+      shouldRunHostnameFallback("what is the Psychiatry website link", [
+        {
+          title: "Psychiatry Inventory App",
+          text: "https://cloud.digitalocean.com/spaces/psychiatry-inventory?i=abc",
+        },
+        {
+          title: "Uhealth Psychiatry - Business Card",
+          text: "https://maps.google.com/?q=UHealth+Psychiatry",
+        },
+      ]),
+    ).toBe(true);
   });
 });
 

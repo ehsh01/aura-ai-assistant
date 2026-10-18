@@ -21,6 +21,7 @@ import {
   syncPersonTag,
 } from "./person-tags";
 import { syncPrimaryPersonLink } from "./entity-links";
+import { logger } from "../lib/logger";
 import {
   KEYWORD_STOP_WORDS,
   freeRetrievalTerms,
@@ -443,14 +444,39 @@ export function hostnameFallbackTerm(query: string): string | null {
   );
 }
 
-export function hostnameIlikePatterns(term: string): string[] {
+export function hostnameFallbackRegex(term: string): string {
   const normalized = term.toLowerCase();
-  return [
-    `%${normalized}.%`,
-    `%.${normalized}%`,
-    `%://${normalized}-%`,
-    `%://%.${normalized}-%`,
-  ];
+  return `((^|[^a-z0-9])${normalized}[.-]|[.-]${normalized}([^a-z0-9]|$))`;
+}
+
+let hostnameFallbackTimeouts = 0;
+
+export function getHostnameFallbackTimeoutCount(): number {
+  return hostnameFallbackTimeouts;
+}
+
+export async function runHostnameFallbackSafely<T>(
+  operation: () => Promise<T>,
+  empty: T,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "57014"
+    ) {
+      hostnameFallbackTimeouts += 1;
+      logger.info(
+        { hostname_fallback_timeouts: hostnameFallbackTimeouts },
+        "note_hostname_fallback_timed_out",
+      );
+      return empty;
+    }
+    throw error;
+  }
 }
 
 export type NoteRetrievalHit = {
@@ -478,56 +504,9 @@ export async function searchNoteRecordsForUser(
   const anyTsQuery = prefixes.join(" | ");
   const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 50);
   const anyMatch = sql`${notes.searchTsv} @@ to_tsquery('simple', ${anyTsQuery})`;
-  const fallbackTerm = hostnameFallbackTerm(query);
-  const fallbackPatterns = fallbackTerm
-    ? hostnameIlikePatterns(fallbackTerm)
-    : [];
-  const fallbackMatch =
-    fallbackPatterns.length > 0
-      ? or(
-          ...fallbackPatterns.map((pattern) =>
-            ilike(notes.searchDocument, pattern),
-          ),
-        )
-      : undefined;
-  const normalHasHostnameMatch =
-    fallbackPatterns.length > 0
-      ? sql`exists (
-          select 1
-          from (
-            select n2.search_document
-            from notes n2
-            where n2.user_id = ${userId}::uuid
-              and n2.search_tsv @@ to_tsquery('simple', ${anyTsQuery})
-            order by
-              case when to_tsvector('simple', coalesce(n2.title, ''))
-                @@ to_tsquery('simple', ${allTsQuery})
-                then 1 else 0 end desc,
-              ts_rank_cd(
-                coalesce(n2.search_tsv, ''::tsvector),
-                to_tsquery('simple', ${anyTsQuery})
-              ) desc,
-              n2.updated_at desc
-            limit 50
-          ) normal_link_hits
-          where ${sql.join(
-            fallbackPatterns.map(
-              (pattern) =>
-                sql`normal_link_hits.search_document ilike ${pattern}`,
-            ),
-            sql` OR `,
-          )}
-        )`
-      : sql`false`;
-  const conditionalFallbackMatch = fallbackMatch
-    ? and(sql`not (${normalHasHostnameMatch})`, fallbackMatch)
-    : undefined;
-  const textMatch = conditionalFallbackMatch
-    ? or(anyMatch, conditionalFallbackMatch)
-    : anyMatch;
   const whereMatch = terms.includes("vin")
-    ? or(textMatch, vinHeuristicMatch())
-    : textMatch;
+    ? or(anyMatch, vinHeuristicMatch())
+    : anyMatch;
   const rows = await getDb()
     .select({
       id: notes.id,
@@ -551,9 +530,6 @@ export async function searchNoteRecordsForUser(
     .from(notes)
     .where(and(eq(notes.userId, userId), whereMatch))
     .orderBy(
-      conditionalFallbackMatch
-        ? sql`CASE WHEN ${conditionalFallbackMatch} THEN 1 ELSE 0 END DESC`
-        : sql`0`,
       sql`CASE WHEN to_tsvector('simple', coalesce(${notes.title}, '')) @@ to_tsquery('simple', ${allTsQuery}) THEN 1 ELSE 0 END DESC`,
       sql`CASE WHEN ${notes.searchTsv} @@ to_tsquery('simple', ${allTsQuery}) THEN 1 ELSE 0 END DESC`,
       sql`(
@@ -581,6 +557,61 @@ export async function searchNoteRecordsForUser(
       .join("\n"),
     updatedAt: row.updatedAt.toISOString(),
   }));
+}
+
+export async function searchNoteHostnameFallbackForUser(
+  userId: string,
+  query: string,
+  limit = 3,
+): Promise<NoteRetrievalHit[]> {
+  const term = hostnameFallbackTerm(query);
+  if (!term) return [];
+  const pattern = hostnameFallbackRegex(term);
+  const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 3);
+  return runHostnameFallbackSafely(
+    () =>
+      getDb().transaction(async (tx) => {
+        await tx.execute(sql`set local statement_timeout = '400ms'`);
+        const rows = await tx
+          .select({
+            id: notes.id,
+            title: notes.title,
+            content: sql<string>`left(${notes.content}, ${NOTE_SEARCH_CONTENT_CHARS})`,
+            preview: notes.preview,
+            summary: notes.summary,
+            factBullets: notes.factBullets,
+            tags: notes.tags,
+            matchText: sql<string>`left(${notes.searchDocument}, ${NOTE_SEARCH_MATCH_CHARS})`,
+            updatedAt: notes.updatedAt,
+          })
+          .from(notes)
+          .where(
+            and(
+              eq(notes.userId, userId),
+              sql`${notes.searchDocument} ~* ${pattern}`,
+            ),
+          )
+          .limit(safeLimit);
+        return rows.map((row) => ({
+          entityType: "note" as const,
+          entityId: row.id,
+          title: row.title,
+          text: [
+            row.title,
+            row.summary,
+            ...(row.factBullets ?? []),
+            row.content,
+            row.preview,
+            ...(row.tags ?? []),
+            row.matchText,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          updatedAt: row.updatedAt.toISOString(),
+        }));
+      }),
+    [],
+  );
 }
 
 function vinHeuristicMatch() {
