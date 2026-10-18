@@ -1,6 +1,8 @@
 const VOICE_PREF_KEY = "recall.voiceAnswers";
 /** Paid OpenAI TTS — off by default; browser speech is free and good enough. */
 const PREMIUM_TTS_PREF_KEY = "recall.premiumTts";
+/** Paid server transcription is an explicit, local opt-in. */
+const SERVER_STT_PREF_KEY = "recall.serverStt";
 
 export function isSpeechSynthesisSupported(): boolean {
   return (
@@ -11,22 +13,19 @@ export function isSpeechSynthesisSupported(): boolean {
 }
 
 export function isVoiceAnswersSupported(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    (typeof Audio !== "undefined" || isSpeechSynthesisSupported())
-  );
+  return isSpeechSynthesisSupported();
 }
 
 export function getVoiceAnswersEnabled(): boolean {
-  if (typeof window === "undefined") return true;
-  const raw = localStorage.getItem(VOICE_PREF_KEY);
-  if (raw === null) return true;
+  if (typeof window === "undefined") return false;
+  const raw = window.localStorage.getItem(VOICE_PREF_KEY);
+  if (raw === null) return false;
   return raw === "1" || raw === "true";
 }
 
 export function setVoiceAnswersEnabled(enabled: boolean): void {
   if (typeof window === "undefined") return;
-  localStorage.setItem(VOICE_PREF_KEY, enabled ? "1" : "0");
+  window.localStorage.setItem(VOICE_PREF_KEY, enabled ? "1" : "0");
 }
 
 /**
@@ -43,6 +42,17 @@ export function getPremiumTtsEnabled(): boolean {
 export function setPremiumTtsEnabled(enabled: boolean): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(PREMIUM_TTS_PREF_KEY, enabled ? "1" : "0");
+}
+
+export function getServerSttEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  const raw = window.localStorage.getItem(SERVER_STT_PREF_KEY);
+  return raw === "1" || raw === "true";
+}
+
+export function setServerSttEnabled(enabled: boolean): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(SERVER_STT_PREF_KEY, enabled ? "1" : "0");
 }
 
 /** Prefer a natural English voice when the browser exposes several. */

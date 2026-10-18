@@ -38,7 +38,11 @@ import {
   confirmProposedAction,
   type ProposedActionType,
 } from "../services/action-orchestrator";
-import { OPENAI_TTS_VOICES, synthesizeSpeech } from "../services/tts";
+import {
+  assertServerTtsEnabled,
+  OPENAI_TTS_VOICES,
+  synthesizeSpeech,
+} from "../services/tts";
 import {
   createAskThreadForUser,
   getAskThreadForUser,
@@ -54,6 +58,7 @@ import {
   TranscriptionValidationError,
 } from "../services/voice-first";
 import { askAiAvailabilityForUser } from "../services/ask-ai-availability";
+import { isEnabled } from "../lib/feature-flags";
 
 const voiceAudioUpload = multer({
   storage: multer.memoryStorage(),
@@ -215,6 +220,7 @@ const AiTtsBody = z.object({
 
 router.post("/ai/tts", async (req, res, next) => {
   try {
+    assertServerTtsEnabled();
     const body = AiTtsBody.parse(req.body);
     const { buffer, contentType } = await synthesizeSpeech(
       body.text,
@@ -448,6 +454,13 @@ router.post("/ai/plan", async (req, res, next) => {
 
 /** Server-side STT for PWA / browsers where Web Speech is unavailable. */
 router.post("/ai/transcribe", (req, res, next) => {
+  if (!isEnabled("RECALL_SERVER_STT_ENABLED")) {
+    res.status(503).json({
+      error: "TRANSCRIBE_UNAVAILABLE",
+      message: "Server transcription is disabled",
+    });
+    return;
+  }
   voiceAudioUpload.single("audio")(req, res, (err) => {
     if (err) {
       if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {

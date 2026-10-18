@@ -1,5 +1,4 @@
 import {
-  getPremiumTtsEnabled,
   isSpeechSynthesisSupported,
   pickPreferredVoice,
   setVoiceAnswersEnabled as setVoicePref,
@@ -8,11 +7,13 @@ import {
 
 export {
   getPremiumTtsEnabled,
+  getServerSttEnabled,
   getVoiceAnswersEnabled,
   isSpeechSynthesisSupported,
   isVoiceAnswersSupported,
   pickPreferredVoice,
   setPremiumTtsEnabled,
+  setServerSttEnabled,
   textForSpeech,
 } from "./speech-synthesis-shared";
 
@@ -53,7 +54,7 @@ export type SpeakOptions = {
   rate?: number;
   pitch?: number;
   voice?: string;
-  /** Force OpenAI TTS even when the premium preference is off. */
+  /** Explicitly opt this call into paid OpenAI TTS. No UI passes this. */
   premium?: boolean;
   onEnd?: () => void;
   onError?: () => void;
@@ -78,7 +79,11 @@ async function fetchOpenAiTts(text: string, voice?: string): Promise<Blob> {
   return res.blob();
 }
 
-function speakBrowser(cleaned: string, options: SpeakOptions, generation: number): boolean {
+function speakBrowser(
+  cleaned: string,
+  options: SpeakOptions,
+  generation: number,
+): boolean {
   if (!isSpeechSynthesisSupported()) {
     options.onError?.();
     return false;
@@ -113,7 +118,8 @@ function speakBrowser(cleaned: string, options: SpeakOptions, generation: number
     window.speechSynthesis.addEventListener("voiceschanged", onVoices);
     window.setTimeout(() => {
       window.speechSynthesis.removeEventListener("voiceschanged", onVoices);
-      if (generation === speakGeneration && !window.speechSynthesis.speaking) start();
+      if (generation === speakGeneration && !window.speechSynthesis.speaking)
+        start();
     }, 250);
   } else {
     start();
@@ -123,16 +129,19 @@ function speakBrowser(cleaned: string, options: SpeakOptions, generation: number
 }
 
 /**
- * Speak an Ask answer. Browser speech is the default (free). OpenAI TTS only
- * runs when the user has enabled premium voice or the caller opts in.
+ * Speak an Ask answer. Browser speech is always the default (free). The paid
+ * endpoint is reachable only when a caller explicitly passes premium: true.
  */
-export async function speakText(text: string, options: SpeakOptions = {}): Promise<boolean> {
+export async function speakText(
+  text: string,
+  options: SpeakOptions = {},
+): Promise<boolean> {
   const cleaned = textForSpeech(text);
   if (!cleaned) return false;
 
   stopSpeaking();
   const generation = speakGeneration;
-  const usePremium = options.premium === true || getPremiumTtsEnabled();
+  const usePremium = options.premium === true;
 
   if (!usePremium) {
     return speakBrowser(cleaned, options, generation);

@@ -253,6 +253,75 @@ async function screenshot(page: Page, name: string) {
   });
 }
 
+async function voiceScreenshot(page: Page, name: string) {
+  await mkdir(captureDir!, { recursive: true });
+  await page.screenshot({
+    path: `${captureDir}/${name}.png`,
+    fullPage: false,
+  });
+}
+
+test("captures the requested Recall voice states", async ({ page }) => {
+  test.skip(
+    process.env.RECALL_VOICE_SCREENSHOTS !== "1",
+    "Voice screenshot harness",
+  );
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: async () => ({
+          getTracks: () => [{ stop() {} }],
+        }),
+      },
+    });
+    class ScreenshotSpeechRecognition {
+      continuous = false;
+      interimResults = false;
+      lang = "";
+      onend: (() => void) | null = null;
+      start() {}
+      stop() {
+        this.onend?.();
+      }
+      abort() {
+        this.onend?.();
+      }
+    }
+    Object.assign(window, {
+      SpeechRecognition: ScreenshotSpeechRecognition,
+      webkitSpeechRecognition: ScreenshotSpeechRecognition,
+    });
+    localStorage.removeItem("recall.voiceAnswers");
+  });
+  await mockRecall(page);
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/");
+  await expect(page.getByTestId("assistant-ring-desktop")).toBeVisible();
+  await page.waitForTimeout(800);
+  await voiceScreenshot(page, "desktop-ready");
+  await page.getByTestId("ask-bar-mic").click();
+  await expect(page.getByTestId("assistant-ring-desktop")).toHaveClass(
+    /is-listening/,
+  );
+  await page.waitForTimeout(350);
+  await voiceScreenshot(page, "desktop-listening");
+  await page.getByTestId("ask-bar-mic").click();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await expect(page.getByTestId("assistant-ring-mobile")).toBeVisible();
+  await page.waitForTimeout(800);
+  await voiceScreenshot(page, "mobile-ready");
+  await page.getByTestId("ask-bar-mic").click();
+  await expect(page.getByTestId("assistant-ring-mobile")).toHaveClass(
+    /is-listening/,
+  );
+  await page.waitForTimeout(350);
+  await voiceScreenshot(page, "mobile-listening");
+});
+
 test("captures the requested Recall states", async ({ page }) => {
   await mockRecall(page);
 

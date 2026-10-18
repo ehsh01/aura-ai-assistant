@@ -62,7 +62,13 @@ async function mockRecall(
   } = {},
 ) {
   const items = [...baseItems];
-  const calls = { ai: 0, itemSearch: 0 };
+  const calls = {
+    ai: 0,
+    itemSearch: 0,
+    itemQueries: [] as string[],
+    transcribe: 0,
+    tts: 0,
+  };
   let graphMetrics: {
     sourceCount: number;
     returnedNodes: number;
@@ -112,6 +118,14 @@ async function mockRecall(
           'event: done\ndata: {"answer":"**Permit approved.** The revision is ready.","confidence":0.9,"caveats":null,"evidence":[],"relatedRecords":[{"entityType":"item","entityId":"item-permit","title":"Permit revision"}],"images":[],"suggestedNextAction":null,"threadId":"thread-1"}\n\n',
         ].join(""),
       });
+    }
+    if (url.pathname === "/api/ai/transcribe") {
+      calls.transcribe += 1;
+      return json(route, { message: "Server transcription disabled" }, 503);
+    }
+    if (url.pathname === "/api/ai/tts") {
+      calls.tts += 1;
+      return json(route, { message: "Server TTS disabled" }, 503);
     }
     if (url.pathname === "/api/finance/refresh") {
       return json(route, { ok: true, synced: false, skipped: true });
@@ -262,6 +276,7 @@ async function mockRecall(
     if (url.pathname === "/api/items" && request.method() === "GET") {
       calls.itemSearch += 1;
       const q = url.searchParams.get("q")?.toLowerCase();
+      if (q) calls.itemQueries.push(q);
       return json(route, {
         items: q
           ? items.filter((item) =>
@@ -280,6 +295,73 @@ async function mockRecall(
     return json(route, {});
   });
   return { getGraphMetrics: () => graphMetrics, calls };
+}
+
+async function installVoiceHarness(
+  page: Page,
+  mode: "permission-denied" | "manual-result",
+) {
+  await page.addInitScript((voiceMode) => {
+    const state = {
+      stopCalls: 0,
+      abortCalls: 0,
+      trackStops: 0,
+      speakCalls: 0,
+    };
+    Object.assign(window, { __recallVoiceTest: state });
+
+    const track = { stop: () => (state.trackStops += 1) };
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: async () => ({
+          getTracks: () => [track],
+        }),
+      },
+    });
+
+    class FakeSpeechRecognition {
+      continuous = false;
+      interimResults = false;
+      lang = "";
+      onresult: ((event: unknown) => void) | null = null;
+      onend: (() => void) | null = null;
+      onerror: ((event: unknown) => void) | null = null;
+      onnomatch: (() => void) | null = null;
+
+      start() {
+        if (voiceMode === "permission-denied") {
+          setTimeout(() => this.onerror?.({ error: "not-allowed" }), 20);
+        }
+      }
+
+      stop() {
+        state.stopCalls += 1;
+        if (voiceMode === "manual-result") {
+          const result = Object.assign([{ transcript: "permit" }], {
+            isFinal: true,
+          });
+          this.onresult?.({ results: [result] });
+          this.onend?.();
+        }
+      }
+
+      abort() {
+        state.abortCalls += 1;
+        this.onend?.();
+      }
+    }
+
+    Object.assign(window, {
+      SpeechRecognition: FakeSpeechRecognition,
+      webkitSpeechRecognition: FakeSpeechRecognition,
+    });
+
+    const synthesis = window.speechSynthesis;
+    synthesis.speak = () => {
+      state.speakCalls += 1;
+    };
+  }, mode);
 }
 
 test.describe("Everything capture, graph, grid, and search", () => {
@@ -338,7 +420,10 @@ test.describe("Everything capture, graph, grid, and search", () => {
 
     await page.goto("/");
     await expect(page.getByTestId("knowledge-graph")).toBeVisible();
-    await expect(page.getByLabel(/R\.E\.C\.A\.L\.L\. ready/i)).toBeVisible();
+    await expect(page.getByTestId("assistant-ring-mobile")).toBeVisible();
+    await expect(
+      page.getByLabel(/R\.E\.C\.A\.L\.L\. ready/i).last(),
+    ).toBeVisible();
     const graphCanvas = page.getByLabel("Interactive knowledge graph");
     await expect(graphCanvas).toHaveAttribute("data-graph-nodes", "180");
     await expect
@@ -604,6 +689,137 @@ test.describe("Everything capture, graph, grid, and search", () => {
       "Permit revision",
     );
     expect(mock.calls.ai).toBe(1);
+  });
+
+  test("voice answers default off and a finished AI answer never calls paid or browser TTS", async ({
+    page,
+  }) => {
+    await installVoiceHarness(page, "manual-result");
+    const mock = await mockRecall(page);
+    await page.goto("/");
+    await page.evaluate(() => localStorage.removeItem("recall.voiceAnswers"));
+    await page.reload();
+
+    await page.getByLabel("Ask Recall").fill("permit");
+    await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+    await expect(page.getByTestId("ask-output-panel")).toContainText(
+      "Permit approved.",
+    );
+
+    const speakCalls = await page.evaluate(
+      () =>
+        (
+          window as unknown as Window & {
+            __recallVoiceTest: { speakCalls: number };
+          }
+        ).__recallVoiceTest.speakCalls,
+    );
+    expect(speakCalls).toBe(0);
+    expect(mock.calls.tts).toBe(0);
+  });
+
+  test("permission denial shows an error, stops permission tracks, and restores READY", async ({
+    page,
+  }) => {
+    await installVoiceHarness(page, "permission-denied");
+    await mockRecall(page);
+    await page.goto("/");
+
+    await page.getByTestId("ask-bar-mic").click();
+    await expect(
+      page.getByText("Microphone blocked", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByTestId("assistant-ring-desktop")).toHaveClass(
+      /is-ready/,
+    );
+    const trackStops = await page.evaluate(
+      () =>
+        (
+          window as unknown as Window & {
+            __recallVoiceTest: { trackStops: number };
+          }
+        ).__recallVoiceTest.trackStops,
+    );
+    expect(trackStops).toBe(1);
+  });
+
+  test("push-to-talk stop delivers one transcript to free search and returns READY", async ({
+    page,
+  }) => {
+    await installVoiceHarness(page, "manual-result");
+    const mock = await mockRecall(page);
+    await page.goto("/");
+
+    await page.getByTestId("ring-mic-desktop").click();
+    await expect(page.getByTestId("assistant-ring-desktop")).toHaveClass(
+      /is-listening/,
+    );
+    await expect(page.getByTestId("ask-bar-mic")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await page.getByTestId("ask-bar-mic").click();
+
+    await expect(page.getByLabel("Ask Recall")).toHaveValue("permit");
+    await expect(page.getByTestId("keyword-results")).toContainText(
+      "Permit revision",
+    );
+    await expect(page.getByTestId("assistant-ring-desktop")).toHaveClass(
+      /is-ready/,
+    );
+    const state = await page.evaluate(
+      () =>
+        (
+          window as unknown as Window & {
+            __recallVoiceTest: {
+              stopCalls: number;
+              abortCalls: number;
+            };
+          }
+        ).__recallVoiceTest,
+    );
+    expect(state.stopCalls).toBe(1);
+    expect(state.abortCalls).toBe(0);
+    expect(
+      mock.calls.itemQueries.filter((query) => query === "permit"),
+    ).toHaveLength(1);
+    expect(mock.calls.ai).toBe(0);
+    expect(mock.calls.transcribe).toBe(0);
+  });
+
+  test("iOS standalone shows the dictation guidance and never uploads audio", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "userAgent", {
+        configurable: true,
+        value:
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
+      });
+      Object.defineProperty(navigator, "standalone", {
+        configurable: true,
+        value: true,
+      });
+      class FakeSpeechRecognition {}
+      Object.assign(window, {
+        SpeechRecognition: FakeSpeechRecognition,
+        webkitSpeechRecognition: FakeSpeechRecognition,
+      });
+    });
+    const mock = await mockRecall(page);
+    await page.goto("/");
+
+    await page.getByTestId("ask-bar-mic").click();
+    await expect(
+      page.getByText(
+        "Voice works in Safari/Chrome tab, or use your keyboard's dictation mic",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(page.getByTestId("assistant-ring-desktop")).toHaveClass(
+      /is-ready/,
+    );
+    expect(mock.calls.transcribe).toBe(0);
   });
 
   test("disables Ask AI when the server kill switch is off", async ({
