@@ -80,6 +80,16 @@ export const KEYWORD_STOP_WORDS = new Set([
   "content",
   "contents",
   "recall",
+  "link",
+  "links",
+  "url",
+  "urls",
+  "website",
+  "web",
+  "site",
+  "portal",
+  "appsmith",
+  "test",
 ]);
 
 /** 17-char VIN or common Porsche/VW WP0… forms found in titles and OCR. */
@@ -123,9 +133,13 @@ const FREE_RETRIEVAL_ALIASES: Record<string, string> = {
  * It intentionally does not call a model or alter the Explore search endpoint.
  */
 export function freeRetrievalTerms(query: string, maxTerms = 12): string[] {
+  const normalizedQuery = query
+    .replace(/\[[^\]]*\]/g, " ")
+    .replace(/&(?:apos|rsquo);|&#0*39;/gi, "'")
+    .replace(/\b([a-z0-9]+)['’]s\b/gi, "$1");
   return [
     ...new Set(
-      query
+      normalizedQuery
         .toLowerCase()
         .split(/[^a-z0-9@]+/)
         .map(normalizeKeywordToken)

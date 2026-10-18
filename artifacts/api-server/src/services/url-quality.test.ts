@@ -4,6 +4,8 @@ import {
   extractRealHttpUrls,
   isPlaceholderUrl,
   isTrackingOrUtilityUrl,
+  unwrapRedirectUrl,
+  urlSelectionPenalty,
   URL_REJECTION_RULES,
 } from "./url-quality";
 
@@ -85,5 +87,38 @@ describe("placeholder URL classification", () => {
     const map = "https://maps.google.com/?q=UHealth+Psychiatry";
     expect(isTrackingOrUtilityUrl(map)).toBe(true);
     expect(isTrackingOrUtilityUrl(map, { allowMaps: true })).toBe(false);
+  });
+
+  it.each([
+    [
+      "https://nam10.safelinks.protection.outlook.com/?url=https%3A%2F%2Fsecure.touchnet.net%2Fcentral&data=abc",
+      "https://secure.touchnet.net/central",
+    ],
+    [
+      "https://www.google.com/url?q=https%3A%2F%2Fsmartersoftware.io%2F&sa=D",
+      "https://smartersoftware.io/",
+    ],
+  ])("unwraps redirect wrapper %s", (wrapper, target) => {
+    expect(unwrapRedirectUrl(wrapper)).toBe(target);
+    expect(extractLinkCandidates(wrapper)[0]?.url).toBe(target);
+  });
+
+  it("down-ranks consoles, query-heavy apps, and checkout URLs for website asks", () => {
+    expect(
+      urlSelectionPenalty(
+        "https://cloud.digitalocean.com/spaces/psychiatry-inventory?i=abc",
+        { websiteAsk: true },
+      ),
+    ).toBeGreaterThan(150);
+    expect(
+      urlSelectionPenalty("https://build.com/checkout/order?id=1", {
+        websiteAsk: true,
+      }),
+    ).toBeGreaterThan(100);
+    expect(
+      urlSelectionPenalty("https://psychiatry.med.miami.edu", {
+        websiteAsk: true,
+      }),
+    ).toBe(0);
   });
 });

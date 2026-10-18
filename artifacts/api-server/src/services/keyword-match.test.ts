@@ -60,7 +60,7 @@ describe("free Ask retrieval ranking", () => {
   ])("ranks the matching title first for %s", (query) => {
     const ranked = rankFreeTextMatches(query, records, 8);
     expect(ranked[0]?.id).toBe(target.id);
-    expect(ranked[0]?.titleMatches).toBeGreaterThanOrEqual(2);
+    expect(ranked[0]?.titleMatches).toBeGreaterThanOrEqual(1);
   });
 
   it("breaks all-word ties in favor of the exact normalized title order", () => {
@@ -99,12 +99,19 @@ describe("free Ask retrieval ranking", () => {
       freeRetrievalTerms(
         'What does my note "Adding and editing a web link on the Psychiatry website" say?',
       ),
-    ).toEqual(["add", "edit", "web", "link", "psychiatry", "website"]);
-    expect(freeRetrievalTerms("Psychiatry site")).toEqual([
-      "psychiatry",
-      "website",
-    ]);
+    ).toEqual(["add", "edit", "psychiatry"]);
+    expect(freeRetrievalTerms("Psychiatry site")).toEqual(["psychiatry"]);
     expect(freeRetrievalTerms("what does it say?")).toEqual([]);
+    expect(
+      freeRetrievalTerms(
+        "[AppSmith test] what is Kenny&apos;s company website link",
+      ),
+    ).toEqual(["kenny", "company"]);
+    expect(
+      freeRetrievalTerms(
+        "[AppSmith test] what is the Psychiatry website link",
+      ),
+    ).toEqual(["psychiatry"]);
   });
 
   it("returns no candidate for a truly absent topic", () => {
@@ -136,7 +143,7 @@ describe("free Ask retrieval ranking", () => {
     expect(ranked[0]).toMatchObject({
       id: psychiatryLink.id,
       allTerms: true,
-      matchedTerms: 2,
+      matchedTerms: 1,
     });
   });
 });
