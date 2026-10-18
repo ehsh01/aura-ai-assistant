@@ -50,18 +50,28 @@ describe("instrumented OpenAI client", () => {
   it("redacts chat and TTS request bodies before the provider call", async () => {
     const password = "FakePsychiatryPassword!42";
     const spacesKey = "DO00FAKEACCESSKEY123";
+    const bareSpacesKey =
+      "QWxhZGRpbjpPcGVuU2VzYW1lMTIzNDU2Nzg5MDEAB12";
     const spacesSecret = "FAKESECRETKEY1234567890123456789012345678";
+    const sshBare = "R00tPsychPass!";
+    const commandToken = "tok3nV4lue";
+    const apiKey = "sk-proj-FakeOpenAiKey1234567890";
     const fixture = `Psychiatry Inventory App
 SSH host: inventory.example.health
 SSH user: psychiatry-admin
 SSH password: ${password}
 Spaces access key: ${spacesKey}
-Spaces secret key: ${spacesSecret}`;
+Spaces Key: ${bareSpacesKey}
+Spaces secret key: ${spacesSecret}
+API Key: ${apiKey}
+ssh root@1.2.3.4
+${sshBare}
+deploy inventory:${commandToken}@inventory.example.health`;
     mocks.chat.mockResolvedValue({
       choices: [
         {
           message: {
-            content: `The password is ${password}`,
+            content: `The password is ${password}. Spaces key: ${bareSpacesKey}`,
           },
         },
       ],
@@ -88,7 +98,15 @@ Spaces secret key: ${spacesSecret}`;
 
     const chatBody = JSON.stringify(mocks.chat.mock.calls[0]?.[0]);
     const speechBody = JSON.stringify(mocks.speech.mock.calls[0]?.[0]);
-    for (const secret of [password, spacesKey, spacesSecret]) {
+    for (const secret of [
+      password,
+      spacesKey,
+      bareSpacesKey,
+      spacesSecret,
+      sshBare,
+      commandToken,
+      apiKey,
+    ]) {
       expect(chatBody).not.toContain(secret);
       expect(speechBody).not.toContain(secret);
       expect(JSON.stringify(chat)).not.toContain(secret);
