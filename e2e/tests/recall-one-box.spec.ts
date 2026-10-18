@@ -47,6 +47,7 @@ async function mockRecall(page: Page) {
     ai: 0,
     voice: 0,
     ttsTexts: [] as string[],
+    graphQueries: [] as Array<{ q: string; offset: string; limit: string }>,
   };
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -80,10 +81,57 @@ async function mockRecall(page: Page) {
       });
     }
     if (url.pathname === "/api/items/graph") {
+      if (url.searchParams.get("q") === "graph fails") {
+        return json(route, { message: "Graph unavailable" }, 503);
+      }
+      calls.graphQueries.push({
+        q: url.searchParams.get("q") ?? "",
+        offset: url.searchParams.get("offset") ?? "0",
+        limit: url.searchParams.get("limit") ?? "350",
+      });
+      const graphLimit = Number(url.searchParams.get("limit") ?? 350);
+      const graphOffset = Number(url.searchParams.get("offset") ?? 0);
+      const graphQuery = url.searchParams.get("q") ?? "";
+      const graphNode =
+        graphQuery === "psychiatry"
+          ? {
+              id: "item-node:psychiatry",
+              itemId: "source-record:psychiatry",
+              type: "evernote",
+              label: "Adding and editing a web link on the Psychiatry website",
+              value: 4,
+              hub: false,
+              href: "/everything/source-record%3Apsychiatry",
+            }
+          : graphQuery === "no graph match"
+            ? null
+            : graphQuery
+              ? {
+                  id: "item-node:gmail-roofer",
+                  itemId: "source-record:gmail-roofer",
+                  type: "gmail",
+                  label: "Roof contract 12345678",
+                  value: 4,
+                  hub: false,
+                  href: "/everything/source-record%3Agmail-roofer",
+                }
+              : {
+                  id: "item-node:item-permit",
+                  itemId: "item-permit",
+                  type: "notes",
+                  label: "Permit revision",
+                  value: 4,
+                  hub: false,
+                  href: "/everything/item-permit",
+                };
       return json(route, {
-        nodes: [],
+        nodes: graphNode ? [graphNode] : [],
         edges: [],
-        page: { offset: 0, limit: 350, nextOffset: null, sourceCount: 0 },
+        page: {
+          offset: graphOffset,
+          limit: graphLimit,
+          nextOffset: graphQuery && graphNode ? graphOffset + graphLimit : null,
+        },
       });
     }
     if (url.pathname === "/api/items" && request.method() === "GET") {
@@ -238,7 +286,16 @@ async function mockRecall(page: Page) {
     }
     if (url.pathname.startsWith("/api/items/")) {
       const id = decodeURIComponent(url.pathname.slice("/api/items/".length));
-      const item = items.find((candidate) => candidate.id === id);
+      const item =
+        id === "source-record:gmail-roofer"
+          ? savedItem({
+              id,
+              source: "gmail",
+              kind: "gmail_message",
+              title: "Roof contract",
+              bodyText: "Attached signed contract.",
+            })
+          : items.find((candidate) => candidate.id === id);
       return item
         ? json(route, { item })
         : json(route, { message: "Not found" }, 404);
@@ -391,6 +448,144 @@ test.describe("Recall one-box Phase 1", () => {
     await expect(page.getByTestId("keyword-results")).toContainText("Gmail");
     await expect(page.getByTestId("keyword-results")).toContainText("Drive");
     expect(calls.searches).toEqual(["when does my roof warranty expire?"]);
+    await expect
+      .poll(() =>
+        calls.graphQueries.some((entry) => entry.q === "roof warranty expire"),
+      )
+      .toBe(true);
+    expect(
+      calls.graphQueries.some(
+        (entry) => entry.q === "when does my roof warranty expire?",
+      ),
+    ).toBe(false);
+    expect(calls.ai).toBe(0);
+  });
+
+  test("a free search seeds the graph and graph pages preserve the query", async ({
+    page,
+  }) => {
+    const calls = await mockRecall(page);
+    await page.goto("/");
+    await page.getByLabel("Tell or ask Recall").fill("roof contract");
+    await page.getByLabel("Tell or ask Recall").press("Enter");
+    await expect
+      .poll(() =>
+        calls.graphQueries.some((entry) => entry.q === "roof contract"),
+      )
+      .toBe(true);
+    await page.getByRole("button", { name: "Older", exact: true }).click();
+    await expect
+      .poll(() =>
+        calls.graphQueries.some(
+          (entry) => entry.q === "roof contract" && entry.offset === "350",
+        ),
+      )
+      .toBe(true);
+    const canvas = page.getByLabel(/Interactive knowledge graph/);
+    await expect(canvas).toHaveAttribute(
+      "aria-label",
+      /Roof contract \*{4}5678/,
+    );
+    await canvas.focus();
+    await canvas.press("Enter");
+    await expect(page.locator(".hud-detail")).toContainText("Roof contract");
+    await expect(page.locator(".hud-detail")).toContainText("Gmail");
+    await page.getByRole("button", { name: "Close item" }).click();
+    const unseededBefore = calls.graphQueries.filter(
+      (entry) => entry.q === "",
+    ).length;
+    await page.getByRole("button", { name: "Clear graph search" }).click();
+    await expect
+      .poll(() => calls.graphQueries.filter((entry) => entry.q === "").length)
+      .toBeGreaterThan(unseededBefore);
+    await expect(
+      page.getByRole("button", { name: "Clear graph search" }),
+    ).toHaveCount(0);
+    expect(calls.ai).toBe(0);
+  });
+
+  test("Psychiatry search seeds its matching note on page one", async ({
+    page,
+  }) => {
+    const calls = await mockRecall(page);
+    await page.goto("/");
+    await page.getByLabel("Tell or ask Recall").fill("psychiatry");
+    await page.getByLabel("Tell or ask Recall").press("Enter");
+    await expect
+      .poll(() =>
+        calls.graphQueries.some(
+          (entry) => entry.q === "psychiatry" && entry.offset === "0",
+        ),
+      )
+      .toBe(true);
+    await expect(
+      page.getByLabel(/Interactive knowledge graph/),
+    ).toHaveAttribute("aria-label", /Psychiatry website/);
+  });
+
+  test("an empty seeded graph falls back to the unseeded page", async ({
+    page,
+  }) => {
+    const calls = await mockRecall(page);
+    await page.goto("/");
+    const unseededBefore = calls.graphQueries.filter(
+      (entry) => entry.q === "",
+    ).length;
+    await page.getByLabel("Tell or ask Recall").fill("no graph match");
+    await page.getByLabel("Tell or ask Recall").press("Enter");
+    await expect
+      .poll(() =>
+        calls.graphQueries.some((entry) => entry.q === "no graph match"),
+      )
+      .toBe(true);
+    await expect
+      .poll(() => calls.graphQueries.filter((entry) => entry.q === "").length)
+      .toBeGreaterThan(unseededBefore);
+    await expect(
+      page.getByLabel(/Interactive knowledge graph/),
+    ).toHaveAttribute("aria-label", /Permit revision/);
+  });
+
+  test("mobile graph paging uses the visible 180-row page", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const calls = await mockRecall(page);
+    await page.goto("/");
+    await page.getByLabel("Tell or ask Recall").fill("roof contract");
+    await page.getByLabel("Tell or ask Recall").press("Enter");
+    await expect
+      .poll(() =>
+        calls.graphQueries.some(
+          (entry) =>
+            entry.q === "roof contract" &&
+            entry.offset === "0" &&
+            entry.limit === "180",
+        ),
+      )
+      .toBe(true);
+    await page.getByRole("button", { name: "Older", exact: true }).click();
+    await expect
+      .poll(() =>
+        calls.graphQueries.some(
+          (entry) =>
+            entry.q === "roof contract" &&
+            entry.offset === "180" &&
+            entry.limit === "180",
+        ),
+      )
+      .toBe(true);
+  });
+
+  test("keyword results survive an auxiliary graph failure", async ({
+    page,
+  }) => {
+    const calls = await mockRecall(page);
+    await page.goto("/");
+    await page.getByLabel("Tell or ask Recall").fill("graph fails");
+    await page.getByLabel("Tell or ask Recall").press("Enter");
+    await expect(page.getByTestId("keyword-results")).toContainText("Evernote");
+    expect(calls.searches).toEqual(["graph fails"]);
     expect(calls.ai).toBe(0);
   });
 

@@ -58,6 +58,24 @@ describe("saved items AI boundary", () => {
       /left\(coalesce\(sr\.record_text, ''\), \$\{filters\.bodyTextLimit\}\)/,
     );
     expect(items).not.toMatch(/note_attachments|extracted_text/);
-    expect(graph).toContain("Math.min(1_501, query.limit + query.offset + 1)");
+    expect(graph).toContain("WITH evernote_titles AS MATERIALIZED");
+    expect(graph).toContain("LEFT JOIN evernote_titles et");
+    expect(graph).toContain("ranked_source_ids");
+    expect(graph).toContain("LIMIT ${quotas.items + 1}");
+    expect(graph).toContain("SET LOCAL statement_timeout = '5s'");
+    expect(graph).toContain("NOISY_NOTEBOOK_CACHE_TTL_MS = 30_000");
+    expect(graph).toContain("EVERNOTE_TITLE_CACHE_TTL_MS = 60_000");
+    expect(graph).toContain("WITH evernote_rows AS MATERIALIZED");
+    expect(graph).toContain("sr.record_type = 'evernote_note'");
+    expect(graph).toContain("evernoteTitleInflight");
+    expect(
+      graph.match(/cachedEvernoteTitlesSql\(evernoteTitles\)/g),
+    ).toHaveLength(3);
+    expect(graph).toContain("sql.param([...titles])");
+    expect(graph).not.toContain("unnest(${titles}");
+    expect(graph).not.toContain("NOT EXISTS (");
+    expect(graph).not.toMatch(/coalesce\([insr]+\.search_tsv/);
+    expect(graph).toContain("ITEM_GRAPH_BODY_MAX_CHARS");
+    expect(graph).not.toMatch(/warmEntityEmbedding|embedding-cache|aiService/);
   });
 });

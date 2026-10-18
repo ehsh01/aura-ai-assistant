@@ -31,6 +31,7 @@ import { toast } from "@/hooks/use-toast";
 import { shouldUseGridFallback } from "@/lib/graph-performance";
 import {
   classifyOneBoxInput,
+  graphSeedQuery,
   isShowMeFollowUp,
   voiceAnswerForSpeech,
   voicePresentationFor,
@@ -73,6 +74,15 @@ const ALL_GRAPH_TYPES: KnowledgeGraphNodeType[] = [
   "links",
   "files",
   "evernote",
+  "gmail",
+  "drive",
+  "calendar",
+  "finance",
+  "flipperforce",
+  "homey",
+  "memories",
+  "tasks",
+  "contacts",
 ];
 const VOICE_LIMIT_REPLY = "Daily voice limit reached. Free search still works.";
 const VOICE_MONTHLY_LIMIT_REPLY =
@@ -126,6 +136,23 @@ function displayDate(value: string | null): string | null {
 function itemVisual(item: SavedItemRecord): string | null {
   if (item.media.storagePath) return savedItemMediaUrl(item.id);
   return item.media.remoteUrl ?? null;
+}
+
+function itemSourceLabel(item: SavedItemRecord): string {
+  const labels: Record<string, string> = {
+    recall: "Recall",
+    evernote: "Evernote",
+    gmail: "Gmail",
+    drive: "Drive",
+    calendar: "Calendar",
+    finance: "Finance",
+    flipperforce: "FlipperForce",
+    homey: "Homey",
+    memory: "Memory",
+    task: "Task",
+    contact: "Contact",
+  };
+  return labels[item.source] ?? "Recall";
 }
 
 function SourceMeta({
@@ -329,6 +356,8 @@ export function RecallExplore() {
     edges: [],
     page: { offset: 0, limit: 350, nextOffset: null },
   });
+  const [graphQuery, setGraphQuery] = useState("");
+  const [graphLoading, setGraphLoading] = useState(false);
   const [selectedItem, setSelectedItem] = useState<SavedItemRecord | null>(
     null,
   );
@@ -354,18 +383,48 @@ export function RecallExplore() {
   );
   const chipTimer = useRef<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const graphRequestId = useRef(0);
+
+  const loadGraph = useCallback(async (q = "", offset = 0) => {
+    const requestId = ++graphRequestId.current;
+    setGraphLoading(true);
+    try {
+      const mapped = await fetchKnowledgeGraph({
+        types: ALL_GRAPH_TYPES,
+        // Mobile keeps a smaller, explicit page instead of silently losing
+        // everything beyond the first response.
+        limit: window.innerWidth < 640 ? 180 : 350,
+        offset,
+        q,
+      });
+      if (requestId === graphRequestId.current) {
+        setGraph(mapped);
+        setGraphQuery(q);
+      }
+      return mapped;
+    } finally {
+      if (requestId === graphRequestId.current) setGraphLoading(false);
+    }
+  }, []);
+
+  const loadSeededGraph = useCallback(
+    async (rawQuery: string) => {
+      const seed = graphSeedQuery(rawQuery);
+      if (!seed) return loadGraph("", 0);
+      const seeded = await loadGraph(seed, 0);
+      if (seeded.nodes.some((node) => node.itemId)) return seeded;
+      return loadGraph("", 0);
+    },
+    [loadGraph],
+  );
 
   const loadWorkspace = useCallback(async () => {
-    const [listed, mapped] = await Promise.all([
+    const [listed] = await Promise.all([
       listSavedItems({ limit: 150 }),
-      fetchKnowledgeGraph({
-        types: ALL_GRAPH_TYPES,
-        limit: window.innerWidth < 640 ? 180 : 350,
-      }),
+      loadGraph("", 0),
     ]);
     setItems(listed.items);
-    setGraph(mapped);
-  }, []);
+  }, [loadGraph]);
 
   useEffect(() => {
     if (lowMotionFallback) setMode("grid");
@@ -463,8 +522,10 @@ export function RecallExplore() {
       setVoiceTurn(null);
       showChip({ kind: "search", value: clean }, 0);
       try {
+        const graphLoad = loadSeededGraph(clean).catch(() => null);
         const response = await searchExplore(clean, 20);
         setResults(response.results);
+        void graphLoad;
         return response.results;
       } catch (error) {
         toast({
@@ -478,7 +539,7 @@ export function RecallExplore() {
         setBusy(false);
       }
     },
-    [busy, showChip],
+    [busy, loadSeededGraph, showChip],
   );
 
   const submit = useCallback(
@@ -515,9 +576,11 @@ export function RecallExplore() {
       showChip({ kind: "search", value: question }, 0);
       setValue(question);
       try {
+        const graphLoad = loadSeededGraph(question).catch(() => null);
         const free = await searchExplore(question, 20).catch(() => ({
           results: [] as ExploreSearchResult[],
         }));
+        void graphLoad;
         freeResults = free.results;
         setResults(freeResults);
         const result = await queryVoiceRecall(question, {
@@ -689,7 +752,7 @@ export function RecallExplore() {
         setBusy(false);
       }
     },
-    [busy, showChip, voiceThreadId],
+    [busy, loadSeededGraph, showChip, voiceThreadId],
   );
 
   const submitVoice = useCallback(
@@ -902,6 +965,17 @@ export function RecallExplore() {
       .catch(() => undefined);
   };
 
+  const pageGraph = (offset: number) => {
+    if (graphLoading) return;
+    void loadGraph(graphQuery, Math.max(0, offset)).catch(() =>
+      toast({
+        title: "Could not load that graph page",
+        description: "Try again in a moment.",
+        variant: "destructive",
+      }),
+    );
+  };
+
   const voiceDocument = voiceTurn?.results.find((entry) => entry.document);
   const showPanel =
     panelMode !== "idle" &&
@@ -957,6 +1031,50 @@ export function RecallExplore() {
               labels={false}
               onNodeClick={openGraphNode}
             />
+            <div
+              className="graph-page-control absolute right-3 top-16 z-30 flex items-center gap-2 sm:right-5 sm:top-20"
+              data-testid="graph-pagination"
+              aria-label="Graph pages"
+            >
+              {graphQuery && (
+                <>
+                  <span
+                    className="hidden max-w-44 truncate text-[10px] text-[#9fb4ab] sm:block"
+                    title={graphQuery}
+                  >
+                    Matches: {graphQuery}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void loadGraph("", 0)}
+                    disabled={graphLoading}
+                    aria-label="Clear graph search"
+                  >
+                    Clear
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                onClick={() => pageGraph(graph.page.offset - graph.page.limit)}
+                disabled={graph.page.offset === 0 || graphLoading}
+              >
+                Newer
+              </button>
+              <span className="font-mono text-[9px] text-[#8aa69c]">
+                {Math.floor(graph.page.offset / graph.page.limit) + 1}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  graph.page.nextOffset != null &&
+                  pageGraph(graph.page.nextOffset)
+                }
+                disabled={graph.page.nextOffset == null || graphLoading}
+              >
+                {graphLoading ? "Loading" : "Older"}
+              </button>
+            </div>
           </div>
         ) : (
           <div className="absolute inset-0 overflow-y-auto px-3 pb-48 pt-20 sm:px-6 sm:pb-52 sm:pt-24">
@@ -1247,9 +1365,7 @@ export function RecallExplore() {
               <X size={16} />
             </button>
             <SourceMeta
-              source={
-                selectedItem.source === "evernote" ? "Evernote" : "Recall"
-              }
+              source={itemSourceLabel(selectedItem)}
               notebook={selectedItem.notebook}
               date={selectedItem.createdAt}
             />

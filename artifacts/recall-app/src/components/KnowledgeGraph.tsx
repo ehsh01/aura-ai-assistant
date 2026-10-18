@@ -53,6 +53,13 @@ type GraphTooltip = {
   touch: boolean;
 };
 
+function maskGraphDisplayText(value: string): string {
+  return value.replace(/(?:\*{4})?\d+/g, (match) => {
+    const digits = match.replace(/\*/g, "");
+    return `****${digits.slice(-4)}`;
+  });
+}
+
 const COLORS: Record<KnowledgeGraphNodeType, string> = {
   notes: "#75baff",
   notebooks: "#6dffe0",
@@ -60,6 +67,15 @@ const COLORS: Record<KnowledgeGraphNodeType, string> = {
   links: "#b695ff",
   files: "#ff8f82",
   evernote: "#74e59b",
+  gmail: "#ff7d8f",
+  drive: "#6da8ff",
+  calendar: "#8e82ff",
+  finance: "#ffcf6d",
+  flipperforce: "#ff9f5c",
+  homey: "#49d3ff",
+  memories: "#f18cff",
+  tasks: "#5fe0c1",
+  contacts: "#d8e06b",
 };
 
 const TYPE_BADGES: Record<KnowledgeGraphNodeType, string> = {
@@ -69,6 +85,15 @@ const TYPE_BADGES: Record<KnowledgeGraphNodeType, string> = {
   links: "link",
   files: "file",
   evernote: "evernote",
+  gmail: "gmail",
+  drive: "drive",
+  calendar: "calendar",
+  finance: "finance",
+  flipperforce: "property",
+  homey: "homey",
+  memories: "memory",
+  tasks: "task",
+  contacts: "contact",
 };
 
 function stableSeed(value: string): number {
@@ -92,6 +117,24 @@ function laneOffset(type: KnowledgeGraphNodeType): { x: number; y: number } {
       return { x: 62, y: 12 };
     case "evernote":
       return { x: -62, y: 12 };
+    case "gmail":
+      return { x: 68, y: -46 };
+    case "drive":
+      return { x: 74, y: 38 };
+    case "calendar":
+      return { x: 10, y: 68 };
+    case "finance":
+      return { x: -10, y: 74 };
+    case "flipperforce":
+      return { x: -70, y: 48 };
+    case "homey":
+      return { x: -36, y: 70 };
+    case "memories":
+      return { x: -76, y: -34 };
+    case "tasks":
+      return { x: 8, y: -70 };
+    case "contacts":
+      return { x: 62, y: 72 };
     default:
       return { x: -20, y: -8 };
   }
@@ -135,6 +178,8 @@ export function KnowledgeGraph({
   const hoverRef = useRef<GraphTooltip | null>(null);
   const [hover, setHover] = useState<GraphTooltip | null>(null);
   const [fitVersion, setFitVersion] = useState(0);
+  const [keyboardNodeIndex, setKeyboardNodeIndex] = useState(0);
+  const keyboardNode = nodes[keyboardNodeIndex % Math.max(1, nodes.length)];
   const degree = useMemo(() => {
     const result = new Map<string, number>();
     for (const edge of edges) {
@@ -154,6 +199,7 @@ export function KnowledgeGraph({
       const lane = laneOffset(node.type);
       return {
         ...node,
+        label: maskGraphDisplayText(node.label),
         radius: Math.max(3, Math.min(node.hub ? 13 : 9, node.value)),
         // Stable seeded positions prevent same-name tag/notebook hubs from
         // starting on top of each other before collision forces settle.
@@ -258,15 +304,11 @@ export function KnowledgeGraph({
       x:
         width / 2 +
         viewRef.current.x +
-        (node.x ?? 0) *
-          viewRef.current.scale *
-          viewRef.current.stretchX,
+        (node.x ?? 0) * viewRef.current.scale * viewRef.current.stretchX,
       y:
         height / 2 +
         viewRef.current.y +
-        (node.y ?? 0) *
-          viewRef.current.scale *
-          viewRef.current.stretchY,
+        (node.y ?? 0) * viewRef.current.scale * viewRef.current.stretchY,
     });
 
     const strokeEdgeLayer = (
@@ -292,26 +334,18 @@ export function KnowledgeGraph({
         context.moveTo(
           width / 2 +
             viewRef.current.x +
-            (source.x ?? 0) *
-              viewRef.current.scale *
-              viewRef.current.stretchX,
+            (source.x ?? 0) * viewRef.current.scale * viewRef.current.stretchX,
           height / 2 +
             viewRef.current.y +
-            (source.y ?? 0) *
-              viewRef.current.scale *
-              viewRef.current.stretchY,
+            (source.y ?? 0) * viewRef.current.scale * viewRef.current.stretchY,
         );
         context.lineTo(
           width / 2 +
             viewRef.current.x +
-            (target.x ?? 0) *
-              viewRef.current.scale *
-              viewRef.current.stretchX,
+            (target.x ?? 0) * viewRef.current.scale * viewRef.current.stretchX,
           height / 2 +
             viewRef.current.y +
-            (target.y ?? 0) *
-              viewRef.current.scale *
-              viewRef.current.stretchY,
+            (target.y ?? 0) * viewRef.current.scale * viewRef.current.stretchY,
         );
       }
       context.globalAlpha = graphEdgeOpacity(alpha);
@@ -448,8 +482,7 @@ export function KnowledgeGraph({
             )
             .sort(
               (a, b) =>
-                Number(b.id === activeNodeId) -
-                  Number(a.id === activeNodeId) ||
+                Number(b.id === activeNodeId) - Number(a.id === activeNodeId) ||
                 Number(b.hub) - Number(a.hub) ||
                 b.value - a.value,
             )
@@ -517,15 +550,14 @@ export function KnowledgeGraph({
                   visibleViewport,
                 ),
               )
-              .find(
-                (candidate) =>
-                  occupied.every(
-                    (existing) =>
-                      candidate.right + 4 < existing.left ||
-                      candidate.left - 4 > existing.right ||
-                      candidate.bottom + 3 < existing.top ||
-                      candidate.top - 3 > existing.bottom,
-                  ),
+              .find((candidate) =>
+                occupied.every(
+                  (existing) =>
+                    candidate.right + 4 < existing.left ||
+                    candidate.left - 4 > existing.right ||
+                    candidate.bottom + 3 < existing.top ||
+                    candidate.top - 3 > existing.bottom,
+                ),
               );
             if (!box) continue;
             occupied.push(box);
@@ -752,9 +784,40 @@ export function KnowledgeGraph({
     >
       <canvas
         ref={canvasRef}
-        className="block h-full w-full touch-none"
-        aria-label="Interactive knowledge graph"
+        className="block h-full w-full touch-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#7dffd9]/70"
+        aria-label={
+          keyboardNode
+            ? `Interactive knowledge graph. Selected ${maskGraphDisplayText(keyboardNode.label)}, ${TYPE_BADGES[keyboardNode.type]}. Use left and right arrows to choose a node and Enter to open it.`
+            : "Interactive knowledge graph"
+        }
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (!nodes.length) return;
+          if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+            event.preventDefault();
+            setKeyboardNodeIndex((value) => (value + 1) % nodes.length);
+          } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+            event.preventDefault();
+            setKeyboardNodeIndex(
+              (value) => (value - 1 + nodes.length) % nodes.length,
+            );
+          } else if (event.key === "Home") {
+            event.preventDefault();
+            setKeyboardNodeIndex(0);
+          } else if (event.key === "End") {
+            event.preventDefault();
+            setKeyboardNodeIndex(nodes.length - 1);
+          } else if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            if (keyboardNode) onNodeClick(keyboardNode);
+          }
+        }}
       />
+      <span className="sr-only" aria-live="polite">
+        {keyboardNode
+          ? `${maskGraphDisplayText(keyboardNode.label)}, ${TYPE_BADGES[keyboardNode.type]}`
+          : ""}
+      </span>
       <button
         type="button"
         onClick={() => setFitVersion((value) => value + 1)}
@@ -781,7 +844,8 @@ export function KnowledgeGraph({
           data-testid="graph-tooltip"
         >
           <p className="truncate font-medium">
-            {hover.node.label} · {hover.links} links
+            {hover.node.label} · {maskGraphDisplayText(String(hover.links))}{" "}
+            links
           </p>
           <span className="mt-1 inline-flex rounded-full border border-cyan-100/20 px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-[0.12em] text-[#8fd8c2]">
             {TYPE_BADGES[hover.node.type]}
