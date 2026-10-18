@@ -345,6 +345,112 @@ async function getProjectedItem(
   id: string,
 ): Promise<SavedItemDto | null> {
   const rawId = id.slice(id.indexOf(":") + 1);
+  if (id.startsWith("source-record:")) {
+    const result = await getDb().execute(sql`
+      SELECT
+        concat('source-record:', sr.id) AS id,
+        sr.record_type AS kind,
+        'ready' AS state,
+        CASE sr.record_type
+          WHEN 'evernote_note' THEN 'evernote'
+          WHEN 'gmail_message' THEN 'gmail'
+          WHEN 'drive_file' THEN 'drive'
+          WHEN 'calendar_event' THEN 'calendar'
+          WHEN 'finance_transaction' THEN 'finance'
+          WHEN 'flipperforce_project' THEN 'flipperforce'
+          WHEN 'homey_device' THEN 'homey'
+          WHEN 'homey_flow' THEN 'homey'
+          WHEN 'homey_alert' THEN 'homey'
+          WHEN 'google_contact' THEN 'contact'
+          ELSE 'connector'
+        END AS source,
+        coalesce(sr.record_title, 'Untitled') AS title,
+        null::text AS description,
+        null::text AS domain,
+        sr.source_url,
+        left(coalesce(sr.record_text, ''), ${ITEM_DETAIL_BODY_MAX_CHARS}) AS body_text,
+        '{}'::jsonb AS media,
+        CASE
+          WHEN sr.record_type = 'evernote_note'
+            AND jsonb_typeof(sr.record_metadata->'tagNames') = 'array'
+            THEN sr.record_metadata->'tagNames'
+          WHEN sr.record_type = 'evernote_note'
+            AND jsonb_typeof(sr.record_metadata->'tags') = 'array'
+            THEN sr.record_metadata->'tags'
+          ELSE '[]'::jsonb
+        END AS tags,
+        CASE
+          WHEN sr.record_type = 'evernote_note'
+            THEN sr.record_metadata->>'notebookName'
+          ELSE null
+        END AS notebook,
+        null::timestamptz AS deleted_at,
+        coalesce(sr.source_updated_at, sr.updated_at) AS bumped_at,
+        coalesce(sr.source_created_at, sr.created_at) AS created_at,
+        coalesce(sr.source_updated_at, sr.updated_at) AS updated_at
+      FROM source_records sr
+      JOIN connectors c ON c.id = sr.connector_id AND c.enabled = true
+      WHERE sr.user_id = ${userId}::uuid AND sr.id = ${rawId}
+      LIMIT 1
+    `);
+    const row = rowsFrom(result)[0];
+    if (!row) return null;
+    const dto = toDto(row);
+    if (dto.source === "evernote") dto.tags = evernoteDisplayTags(dto.tags);
+    return dto;
+  }
+  if (id.startsWith("memory:")) {
+    const result = await getDb().execute(sql`
+      SELECT
+        concat('memory:', m.id) AS id,
+        'memory' AS kind,
+        'ready' AS state,
+        'memory' AS source,
+        m.title,
+        m.summary AS description,
+        null::text AS domain,
+        null::text AS source_url,
+        left(m.content, ${ITEM_DETAIL_BODY_MAX_CHARS}) AS body_text,
+        '{}'::jsonb AS media,
+        m.tags,
+        null::text AS notebook,
+        null::timestamptz AS deleted_at,
+        m.updated_at AS bumped_at,
+        m.created_at,
+        m.updated_at
+      FROM life_memories m
+      WHERE m.user_id = ${userId}::uuid AND m.id = ${rawId}
+      LIMIT 1
+    `);
+    const row = rowsFrom(result)[0];
+    return row ? toDto(row) : null;
+  }
+  if (id.startsWith("task:")) {
+    const result = await getDb().execute(sql`
+      SELECT
+        concat('task:', t.id) AS id,
+        'task' AS kind,
+        'ready' AS state,
+        'task' AS source,
+        t.title,
+        concat_ws(' · ', nullif(t.priority, 'none'), t.time) AS description,
+        null::text AS domain,
+        null::text AS source_url,
+        ''::text AS body_text,
+        '{}'::jsonb AS media,
+        t.tags,
+        null::text AS notebook,
+        null::timestamptz AS deleted_at,
+        t.updated_at AS bumped_at,
+        t.created_at,
+        t.updated_at
+      FROM tasks t
+      WHERE t.user_id = ${userId}::uuid AND t.id = ${rawId}
+      LIMIT 1
+    `);
+    const row = rowsFrom(result)[0];
+    return row ? toDto(row) : null;
+  }
   if (id.startsWith("note:")) {
     const result = await getDb().execute(sql`
       SELECT
@@ -420,7 +526,13 @@ async function getProjectedItem(
 }
 
 export async function getItemForUser(userId: string, id: string): Promise<SavedItemDto | null> {
-  if (id.startsWith("note:") || id.startsWith("evernote:")) {
+  if (
+    id.startsWith("note:") ||
+    id.startsWith("evernote:") ||
+    id.startsWith("source-record:") ||
+    id.startsWith("memory:") ||
+    id.startsWith("task:")
+  ) {
     return getProjectedItem(userId, id);
   }
   const rows = await getDb()

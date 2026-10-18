@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyOneBoxInput,
+  graphSeedQuery,
   isBareUrl,
   isShowMeFollowUp,
   voiceAnswerForSpeech,
@@ -48,12 +49,7 @@ describe("Recall one-box deterministic routing", () => {
       "search-verb",
       "last month's receipts",
     ],
-    [
-      "show me the roof contract",
-      "search",
-      "search-verb",
-      "the roof contract",
-    ],
+    ["show me the roof contract", "search", "search-verb", "the roof contract"],
     [
       "https://example.com/roof",
       "save",
@@ -137,6 +133,20 @@ describe("Recall one-box deterministic routing", () => {
     expect(isBareUrl("https://example.com/a?b=1")).toBe(true);
     expect(isBareUrl("see https://example.com")).toBe(false);
     expect(isBareUrl("file:///tmp/a")).toBe(false);
+  });
+
+  it("extracts bounded graph keywords instead of the full question", () => {
+    expect(graphSeedQuery("When does my roof warranty expire?")).toBe(
+      "roof warranty expire",
+    );
+    expect(graphSeedQuery("psychiatry psychiatry website")).toBe(
+      "psychiatry website",
+    );
+    expect(
+      graphSeedQuery(
+        "Could you please tell me if there are any notes about the psychiatry website?",
+      ),
+    ).toBe("psychiatry website");
   });
 });
 
