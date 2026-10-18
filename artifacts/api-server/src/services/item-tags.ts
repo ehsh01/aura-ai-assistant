@@ -24,6 +24,15 @@ export function isVisibleItemTag(value: string): boolean {
   );
 }
 
+/** Evernote display tags contain only names returned by Evernote, not Recall facets. */
+export function evernoteDisplayTags(values: string[]): string[] {
+  const tags = new Set<string>();
+  for (const value of values) {
+    if (isVisibleItemTag(value)) add(tags, value);
+  }
+  return [...tags];
+}
+
 /** Deterministic, free labels only. No model or embedding call is made here. */
 export function heuristicItemTags(input: HeuristicTagInput): string[] {
   const tags = new Set<string>();
@@ -46,14 +55,14 @@ export function heuristicItemTags(input: HeuristicTagInput): string[] {
     add(tags, subtype ? `format:${subtype.replace(/^x-/, "")}` : null);
   }
 
-  for (const tag of input.evernoteTags ?? []) {
-    if (isVisibleItemTag(tag)) add(tags, tag);
-  }
+  for (const tag of input.evernoteTags ?? []) add(tags, tag);
+  if (input.notebook) add(tags, `notebook:${input.notebook}`);
 
   const date = input.date ?? new Date();
   if (!Number.isNaN(date.getTime())) {
     const year = String(date.getUTCFullYear());
     const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+    add(tags, `year:${year}`);
     add(tags, `date:${year}-${month}`);
   }
 

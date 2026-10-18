@@ -146,7 +146,11 @@ export function buildKnowledgeGraph(
       if (source) addEdge(source, id, "notebook");
     }
     if (allowed.has("tags")) {
-      for (const tag of item.tags.filter(isVisibleItemTag).slice(0, 4)) {
+      const tags =
+        item.source === "evernote"
+          ? item.tags.filter(isVisibleItemTag)
+          : item.tags;
+      for (const tag of tags.slice(0, 4)) {
         if (nodes.size >= query.limit) break;
         const id = hubId("tags", tag);
         if (!nodes.has(id)) {

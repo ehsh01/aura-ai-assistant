@@ -10,7 +10,7 @@ import { config } from "../lib/config";
 import { getDb } from "../lib/db";
 import { createCaptureForUser, updateCaptureStatusForUser } from "./captures";
 import { canonicalizeUrl, fetchLinkMetadata } from "./link-metadata";
-import { heuristicItemTags } from "./item-tags";
+import { evernoteDisplayTags, heuristicItemTags } from "./item-tags";
 
 export const ITEM_KINDS = ["note", "link", "image", "pdf", "file"] as const;
 export const ITEM_SOURCES = ["recall", "evernote"] as const;
@@ -320,12 +320,7 @@ async function listEvernoteItems(
   `);
   return rowsFrom(result).map((row) => {
     const dto = toDto(row);
-    dto.tags = heuristicItemTags({
-      url: dto.sourceUrl,
-      evernoteTags: dto.tags,
-      notebook: dto.notebook,
-      date: new Date(dto.createdAt),
-    });
+    dto.tags = evernoteDisplayTags(dto.tags);
     return dto;
   });
 }
@@ -419,12 +414,7 @@ async function getProjectedItem(
   const row = rowsFrom(result)[0];
   if (!row) return null;
   const dto = toDto(row);
-  dto.tags = heuristicItemTags({
-    url: dto.sourceUrl,
-    evernoteTags: dto.tags,
-    notebook: dto.notebook,
-    date: new Date(dto.createdAt),
-  });
+  dto.tags = evernoteDisplayTags(dto.tags);
   return dto;
 }
 

@@ -91,6 +91,7 @@ describe("knowledge graph caps and filters", () => {
     const graph = buildKnowledgeGraph(
       [
         item("facets", {
+          source: "evernote",
           tags: [
             "real tag",
             "notebook:cf240195-dcdb-486a-8ab5-example",
