@@ -9,8 +9,10 @@ import {
 import { retrieveRelevantRecords, type RetrievedRecord } from "./retrieval";
 import { freeRetrievalTerms } from "./keyword-match";
 import {
-  extractHttpUrls,
+  extractLinkCandidates,
   extractRealHttpUrls,
+  isPlaceholderUrl,
+  isTrackingOrUtilityUrl,
 } from "./url-quality";
 import { withAiFeature } from "./ai-usage";
 import { writeAuditLog } from "./audit";
@@ -125,11 +127,42 @@ type VoiceLinkEvidence = {
   howToContext: LoadedCandidate[];
 };
 
+const LINK_SUBJECT_STOP_WORDS = new Set([
+  "appsmith",
+  "test",
+  "link",
+  "url",
+  "website",
+  "web",
+  "site",
+  "page",
+  "add",
+  "edit",
+  "turn",
+  "image",
+  "direction",
+  "location",
+  "map",
+  "address",
+]);
+
+function linkSubjectKeywords(question: string): string[] {
+  return freeRetrievalTerms(question).filter(
+    (term) => !LINK_SUBJECT_STOP_WORDS.has(term),
+  );
+}
+
 function capitalize(value: string): string {
   return value ? `${value[0]!.toUpperCase()}${value.slice(1)}` : value;
 }
 
 function linkLabel(question: string, title: string): string {
+  const subject = linkSubjectKeywords(question)[0];
+  if (subject) {
+    return `${capitalize(subject)}${
+      /\bwebsite\b/i.test(question) ? " website" : ""
+    } link`;
+  }
   const titleTopic = title.match(
     /\b([a-z][a-z0-9'’-]*)\s+website\b/i,
   )?.[1];
@@ -150,29 +183,102 @@ function findVoiceLinkEvidence(
   candidates: LoadedCandidate[],
 ): VoiceLinkEvidence | null {
   if (!isVoiceLinkQuestion(question)) return null;
+  const subjectTerms = linkSubjectKeywords(question);
+  const allowMaps = /\b(?:directions?|location|map|address|where)\b/i.test(
+    question,
+  );
   const howToContext: LoadedCandidate[] = [];
-  for (const candidate of candidates) {
-    const allUrls = extractHttpUrls(candidate.record.text);
-    const url = extractFirstHttpUrl(candidate.record.text);
+  const scored: Array<{
+    candidate: LoadedCandidate;
+    url: string;
+    score: number;
+    candidateIndex: number;
+    linkIndex: number;
+  }> = [];
+  for (const [candidateIndex, candidate] of candidates.entries()) {
+    const links = extractLinkCandidates(candidate.record.text);
     const looksLikeHowTo =
       /\b(?:how\s+to|adding|editing|instructions?|guide|steps?)\b/i.test(
         `${candidate.source.title}\n${candidate.record.text}`,
       ) &&
       LINK_QUESTION.test(`${candidate.source.title}\n${candidate.record.text}`);
-    if (!url) {
-      if (looksLikeHowTo || allUrls.length > 0) howToContext.push(candidate);
-      continue;
+    if (looksLikeHowTo) howToContext.push(candidate);
+
+    for (const [linkIndex, link] of links.entries()) {
+      if (
+        isPlaceholderUrl(link.url) ||
+        isTrackingOrUtilityUrl(link.url, { allowMaps })
+      ) {
+        continue;
+      }
+      const parsed = new URL(link.url);
+      let decodedPath = parsed.pathname;
+      try {
+        decodedPath = decodeURIComponent(parsed.pathname);
+      } catch {
+        // Keep the encoded path for relevance matching.
+      }
+      const urlText =
+        `${parsed.hostname}${decodedPath}`.toLowerCase();
+      const titleText = candidate.source.title.toLowerCase();
+      const nearText = candidate.record.text
+        .slice(
+          Math.max(0, link.index - 240),
+          Math.min(
+            candidate.record.text.length,
+            link.index + link.raw.length + 240,
+          ),
+        )
+        .toLowerCase();
+      const urlMatches = subjectTerms.filter((term) =>
+        urlText.includes(term),
+      ).length;
+      const titleMatches = subjectTerms.filter((term) =>
+        titleText.includes(term),
+      ).length;
+      const nearMatches = subjectTerms.filter((term) =>
+        nearText.includes(term),
+      ).length;
+      if (
+        subjectTerms.length > 0 &&
+        urlMatches + titleMatches + nearMatches === 0
+      ) {
+        continue;
+      }
+      const isNote =
+        candidate.record.entityType === "note" ||
+        candidate.record.recordType === "evernote_note";
+      const isEmail = candidate.record.recordType === "gmail_message";
+      scored.push({
+        candidate,
+        url: link.url,
+        score:
+          urlMatches * 100 +
+          nearMatches * 50 +
+          titleMatches * 35 +
+          (isNote ? 20 : 0) -
+          (isEmail ? 20 : 0) -
+          candidateIndex,
+        candidateIndex,
+        linkIndex,
+      });
     }
-    return {
-      candidate,
-      url,
-      label: linkLabel(question, candidate.source.title),
-      howToContext: howToContext.filter(
-        (context) => context.key !== candidate.key,
-      ),
-    };
   }
-  return null;
+  const best = scored.sort(
+    (a, b) =>
+      b.score - a.score ||
+      a.candidateIndex - b.candidateIndex ||
+      a.linkIndex - b.linkIndex,
+  )[0];
+  if (!best) return null;
+  return {
+    candidate: best.candidate,
+    url: best.url,
+    label: linkLabel(question, best.candidate.source.title),
+    howToContext: howToContext.filter(
+      (context) => context.key !== best.candidate.key,
+    ),
+  };
 }
 
 function deterministicLinkAnswer(evidence: VoiceLinkEvidence): string {
@@ -186,6 +292,39 @@ function deterministicLinkAnswer(evidence: VoiceLinkEvidence): string {
 
 function linkAnswerSources(evidence: VoiceLinkEvidence): LoadedCandidate[] {
   return [evidence.candidate, ...evidence.howToContext].slice(0, 5);
+}
+
+function closestLinkNote(
+  question: string,
+  candidates: LoadedCandidate[],
+): LoadedCandidate | null {
+  const subjectTerms = linkSubjectKeywords(question);
+  const notes = candidates.filter(
+    (candidate) =>
+      candidate.record.entityType === "note" ||
+      candidate.record.recordType === "evernote_note",
+  );
+  const pool = notes.length > 0 ? notes : candidates;
+  return (
+    [...pool].sort((a, b) => {
+      const score = (candidate: LoadedCandidate) => {
+        const hay =
+          `${candidate.source.title}\n${candidate.record.text}`.toLowerCase();
+        return subjectTerms.filter((term) => hay.includes(term)).length;
+      };
+      return score(b) - score(a);
+    })[0] ?? null
+  );
+}
+
+function noRelevantLinkAnswer(
+  question: string,
+  closest: LoadedCandidate | null,
+): string {
+  const label = linkLabel(question, closest?.source.title ?? "");
+  return `I couldn't find a relevant ${label}.${
+    closest ? ` The closest note is ${closest.source.title}.` : ""
+  }`;
 }
 
 export type VoiceQueryAnswer = {
@@ -407,20 +546,30 @@ export async function queryVoiceNotesForUser(
     });
   };
 
-  if (!allowModel) {
-    if (!linkEvidence) return null;
-    await appendAskMessage({
-      userId,
-      threadId: thread.id,
-      role: "user",
-      content: question,
-    });
+  if (isVoiceLinkQuestion(question)) {
+    if (!allowModel) {
+      await appendAskMessage({
+        userId,
+        threadId: thread.id,
+        role: "user",
+        content: question,
+      });
+    }
+    if (linkEvidence) {
+      return finish(
+        deterministicLinkAnswer(linkEvidence),
+        linkAnswerSources(linkEvidence),
+        false,
+      );
+    }
+    const closest = closestLinkNote(question, rankedCandidates);
     return finish(
-      deterministicLinkAnswer(linkEvidence),
-      linkAnswerSources(linkEvidence),
+      noRelevantLinkAnswer(question, closest),
+      closest ? [closest] : [],
       false,
     );
   }
+  if (!allowModel) return null;
 
   const context = candidates
     .map(
