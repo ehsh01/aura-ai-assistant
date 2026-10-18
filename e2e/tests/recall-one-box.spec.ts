@@ -270,6 +270,7 @@ async function installVoice(page: Page, transcript = "find roof contract") {
       onend: (() => void) | null = null;
       onerror: ((event: unknown) => void) | null = null;
       onspeechstart: (() => void) | null = null;
+      onspeechend: (() => void) | null = null;
       start() {
         Object.assign(window, { __recallRecognition: this });
       }
@@ -285,6 +286,7 @@ async function installVoice(page: Page, transcript = "find roof contract") {
           isFinal: true,
         });
         this.onresult?.({ results: [result] });
+        this.onspeechend?.();
         this.onend?.();
       }
       abort() {

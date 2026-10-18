@@ -737,6 +737,9 @@ export function RecallExplore() {
       }
       dispatchVoiceSession({ type: "speech-started", now: Date.now() });
     },
+    onSpeechEnd: () => {
+      dispatchVoiceSession({ type: "speech-ended", now: Date.now() });
+    },
   });
   const voiceSessionActive = isVoiceSessionActive(voiceSession);
 

@@ -39,6 +39,8 @@ type UseSpeechInputOptions = {
   onListeningChange?: (listening: boolean) => void;
   /** Fires on detected speech, before the final transcript (used for barge-in). */
   onSpeechStart?: () => void;
+  /** Fires when an active utterance ends without closing the session. */
+  onSpeechEnd?: () => void;
   /** Explore sets this false so voice can never invoke paid transcription. */
   allowServerTranscription?: boolean;
 };
@@ -70,11 +72,13 @@ export function useSpeechInput(
   const onTranscribingRef = useRef(options.onTranscribingChange);
   const onListeningRef = useRef(options.onListeningChange);
   const onSpeechStartRef = useRef(options.onSpeechStart);
+  const onSpeechEndRef = useRef(options.onSpeechEnd);
   onFinalRef.current = onFinal;
   onErrorRef.current = options.onError;
   onTranscribingRef.current = options.onTranscribingChange;
   onListeningRef.current = options.onListeningChange;
   onSpeechStartRef.current = options.onSpeechStart;
+  onSpeechEndRef.current = options.onSpeechEnd;
 
   useEffect(() => {
     const next = pickSpeechMode(
@@ -120,6 +124,7 @@ export function useSpeechInput(
     const useLocalRecognition = await canProcessSpeechLocally(Ctor, "en-US");
     const recognition = new Ctor();
     let speechStarted = false;
+    let speechEnded = false;
     recognition.continuous = false;
     recognition.interimResults = isIosDevice();
     recognition.lang = "en-US";
@@ -132,6 +137,12 @@ export function useSpeechInput(
       speechStarted = true;
       onSpeechStartRef.current?.();
     };
+    const notifySpeechEnd = () => {
+      if (!speechStarted || speechEnded || deliveredRef.current) return;
+      speechEnded = true;
+      onSpeechEndRef.current?.();
+    };
+    recognition.onspeechend = notifySpeechEnd;
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       if (!speechStarted) {
         speechStarted = true;
@@ -145,16 +156,19 @@ export function useSpeechInput(
     recognition.onend = () => {
       if (recognitionRef.current === recognition) recognitionRef.current = null;
       setListening(false);
+      notifySpeechEnd();
     };
     recognition.onerror = (event: Event) => {
       if (recognitionRef.current === recognition) recognitionRef.current = null;
       setListening(false);
+      notifySpeechEnd();
       const code = (event as SpeechRecognitionErrorEvent).error ?? "unknown";
       if (code === "aborted" || deliveredRef.current) return;
       onErrorRef.current?.(mapRecognitionError(code));
     };
     recognition.onnomatch = () => {
       setListening(false);
+      notifySpeechEnd();
       if (!deliveredRef.current) onErrorRef.current?.("no-speech");
     };
 

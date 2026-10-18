@@ -1,6 +1,7 @@
 export type VoiceSessionPhase =
   | "inactive"
   | "listening"
+  | "hearing"
   | "thinking"
   | "speaking"
   | "ended"
@@ -17,6 +18,7 @@ export type VoiceSessionAction =
   | { type: "configure"; silenceTimeoutMs: number; now: number }
   | { type: "start"; now: number }
   | { type: "speech-started"; now: number }
+  | { type: "speech-ended"; now: number }
   | { type: "turn-started" }
   | { type: "speaking-started" }
   | { type: "listen"; now: number }
@@ -38,6 +40,7 @@ export function createVoiceSessionState(
 export function isVoiceSessionActive(state: VoiceSessionState): boolean {
   return (
     state.phase === "listening" ||
+    state.phase === "hearing" ||
     state.phase === "thinking" ||
     state.phase === "speaking"
   );
@@ -86,6 +89,15 @@ export function voiceSessionReducer(
         : state;
     case "speech-started":
       return isVoiceSessionActive(state)
+        ? {
+            ...state,
+            phase: "hearing",
+            silenceDeadlineAt: null,
+            message: null,
+          }
+        : state;
+    case "speech-ended":
+      return state.phase === "hearing"
         ? listeningState(state, action.now)
         : state;
     case "turn-started":
