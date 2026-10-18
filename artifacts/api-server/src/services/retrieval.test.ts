@@ -10,7 +10,10 @@ import {
   extractMailboxHint,
   evernoteMatchExcerpt,
   evernoteMatchedText,
+  hasSubjectMatchingUrlHostname,
   rankFreeTextMatches,
+  reserveSubjectUrlCandidates,
+  type RetrievedRecord,
 } from "./retrieval";
 import { FAMILY_RELATION_INTENT, PERSON_INTENT, WAITING_INTENT } from "./query-utils";
 
@@ -39,6 +42,54 @@ describe("evernoteMatchExcerpt", () => {
     expect(
       rankFreeTextMatches("what's my psychiatry link", [record], 1)[0]?.id,
     ).toBe(record.id);
+  });
+});
+
+describe("link candidate slot reservation", () => {
+  const psychiatryTitleDecoys: RetrievedRecord[] = Array.from(
+    { length: 8 },
+    (_, index) => ({
+      entityType: "note",
+      entityId: `psychiatry-title-${index}`,
+      title:
+        index === 0
+          ? "Psychiatry Inventory App"
+          : `Psychiatry reference ${index + 1}`,
+      text:
+        index === 0
+          ? "https://cloud.digitalocean.com/spaces/psychiatry-inventory?i=abc"
+          : `Reference note ${index + 1}`,
+      score: 10 - index,
+      method: "keyword",
+    }),
+  );
+  const hostnameMatch: RetrievedRecord = {
+    entityType: "note",
+    entityId: "note-en-xfbhdx",
+    title: "Turn an image into a link",
+    text: "Use psychiatry.med.miami.edu when linking the image.",
+    score: 1,
+    method: "keyword",
+  };
+
+  it.each([
+    "what is the Psychiatry website link",
+    "[AppSmith test] what is the Psychiatry website link",
+  ])("reserves a top-eight slot for the subject-matching hostname in %s", (query) => {
+    const ranked = reserveSubjectUrlCandidates(
+      query,
+      psychiatryTitleDecoys,
+      [...psychiatryTitleDecoys, hostnameMatch],
+      8,
+      2,
+    );
+    expect(ranked.slice(0, 8).map((record) => record.entityId)).toContain(
+      "note-en-xfbhdx",
+    );
+    expect(hasSubjectMatchingUrlHostname(query, hostnameMatch)).toBe(true);
+    expect(
+      hasSubjectMatchingUrlHostname(query, psychiatryTitleDecoys[0]!),
+    ).toBe(false);
   });
 });
 
