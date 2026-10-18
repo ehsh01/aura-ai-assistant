@@ -60,14 +60,14 @@ describe("paid /ai/tts flags", () => {
 });
 
 describe("server-side TTS settings", () => {
-  it("defaults to tts-1 and nova", () => {
+  it("defaults to tts-1 and the selected onyx voice", () => {
     delete process.env.RECALL_TTS_MODEL;
     delete process.env.RECALL_TTS_VOICE;
     delete process.env.OPENAI_TTS_MODEL;
     delete process.env.OPENAI_TTS_VOICE;
     expect(getOpenAiTtsSettings()).toEqual({
       model: "tts-1",
-      voice: "nova",
+      voice: "onyx",
     });
   });
 
@@ -79,13 +79,15 @@ describe("server-side TTS settings", () => {
     expect(() => getOpenAiTtsSettings()).toThrow(/voice is not allowed/);
   });
 
-  it("sends instructions only for gpt-4o-mini-tts", () => {
+  it("keeps tts-1/Onyx as the only supported voice configuration", () => {
     process.env.RECALL_TTS_INSTRUCTIONS = "Warm and concise";
     process.env.RECALL_TTS_MODEL = "tts-1";
-    expect(getOpenAiTtsSettings()).not.toHaveProperty("instructions");
-    process.env.RECALL_TTS_MODEL = "gpt-4o-mini-tts";
-    expect(getOpenAiTtsSettings()).toMatchObject({
-      instructions: "Warm and concise",
+    process.env.RECALL_TTS_VOICE = "onyx";
+    expect(getOpenAiTtsSettings()).toEqual({
+      model: "tts-1",
+      voice: "onyx",
     });
+    process.env.RECALL_TTS_MODEL = "gpt-4o-mini-tts";
+    expect(() => getOpenAiTtsSettings()).toThrow(/model is not allowed/);
   });
 });
