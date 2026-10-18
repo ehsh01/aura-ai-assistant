@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   speech: vi.fn(),
   transcriptions: vi.fn(),
   record: vi.fn(),
+  spendGuard: vi.fn(),
 }));
 
 vi.mock("openai", () => ({
@@ -20,6 +21,8 @@ vi.mock("openai", () => ({
 }));
 
 vi.mock("./ai-usage", () => ({
+  AiSpendBlockedError: class extends Error {},
+  assertAiSpendAllowed: mocks.spendGuard,
   currentAiFeature: () => ({ feature: "other" }),
   isBackgroundFeature: () => false,
   recordAiUsage: mocks.record,
@@ -36,6 +39,7 @@ import { createOpenAiClient } from "./openai-client";
 beforeEach(() => {
   for (const mock of Object.values(mocks)) mock.mockReset();
   mocks.record.mockResolvedValue(undefined);
+  mocks.spendGuard.mockResolvedValue(undefined);
 });
 
 describe("instrumented OpenAI client", () => {
@@ -68,6 +72,7 @@ describe("instrumented OpenAI client", () => {
       }),
       { strict: true },
     );
+    expect(mocks.spendGuard).toHaveBeenCalledTimes(2);
     expect(mocks.record).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
@@ -114,7 +119,7 @@ describe("instrumented OpenAI client", () => {
 
     await client.audio.speech.create({
       model: "tts-1",
-      voice: "nova",
+      voice: "onyx",
       input: "12345678",
     });
     await client.audio.transcriptions.create({
@@ -143,5 +148,6 @@ describe("instrumented OpenAI client", () => {
       }),
       { strict: true },
     );
+    expect(mocks.spendGuard).toHaveBeenCalledTimes(2);
   });
 });

@@ -4,17 +4,28 @@ import express, {
   type Request,
   type Response,
 } from "express";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const mocks = vi.hoisted(() => ({
   allowance: vi.fn(),
   queryVoice: vi.fn(),
+  recordUsage: vi.fn(),
 }));
 
 vi.mock("../services/ai-usage", () => ({
   voiceAiAllowance: mocks.allowance,
-  withVoiceAiLock: vi.fn(
-    async (_userId: string, fn: () => Promise<unknown>) => fn(),
+  voiceSessionSilenceMs: () => 8_000,
+  recordAiUsage: mocks.recordUsage,
+  withVoiceAiLock: vi.fn(async (_userId: string, fn: () => Promise<unknown>) =>
+    fn(),
   ),
 }));
 
@@ -22,6 +33,8 @@ vi.mock("../services/voice-answer", () => ({
   isVoiceLinkQuestion: (question: string) => /\blink\b/i.test(question),
   queryVoiceNotesForUser: mocks.queryVoice,
   VOICE_LIMIT_REPLY: "Daily voice limit reached. Free search still works.",
+  VOICE_MONTHLY_LIMIT_REPLY:
+    "Monthly voice limit reached. Free search still works.",
 }));
 
 import aiRouter from "./ai";
@@ -64,10 +77,13 @@ beforeAll(async () => {
 beforeEach(() => {
   mocks.allowance.mockReset();
   mocks.queryVoice.mockReset();
+  mocks.recordUsage.mockReset();
+  mocks.recordUsage.mockResolvedValue(undefined);
   mocks.queryVoice.mockResolvedValue({
     answer:
       "Your Psychiatry website link is https://psychiatry.example.com/edit-links, from your note Adding and editing a web link on the Psychiatry website.",
     sources: [],
+    privacy: { model: null },
   });
 });
 
@@ -78,7 +94,7 @@ afterAll(async () => {
 });
 
 describe("POST /ai/voice/query deterministic link fallback", () => {
-  it.each(["disabled", "daily_limit"] as const)(
+  it.each(["disabled", "daily_limit", "monthly_limit"] as const)(
     "answers without model access when voice AI is %s",
     async (reason) => {
       mocks.allowance.mockResolvedValue({ allowed: false, reason });
@@ -94,6 +110,10 @@ describe("POST /ai/voice/query deterministic link fallback", () => {
         answer: expect.stringContaining(
           "https://psychiatry.example.com/edit-links",
         ),
+        limitReason:
+          reason === "daily_limit" || reason === "monthly_limit"
+            ? reason
+            : null,
       });
       expect(mocks.queryVoice).toHaveBeenCalledWith(
         "11111111-1111-4111-8111-111111111111",
@@ -103,4 +123,25 @@ describe("POST /ai/voice/query deterministic link fallback", () => {
       );
     },
   );
+
+  it("records a deterministic session turn against the voice Ask cap", async () => {
+    mocks.allowance.mockResolvedValue({ allowed: true, remaining: 99 });
+
+    const response = await fetch(`${baseUrl}/ai/voice/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question: "What's my Psychiatry link?" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "11111111-1111-4111-8111-111111111111",
+        feature: "voice_ask",
+        model: "notes-only",
+        costMicros: 0,
+      }),
+      { strict: true },
+    );
+  });
 });

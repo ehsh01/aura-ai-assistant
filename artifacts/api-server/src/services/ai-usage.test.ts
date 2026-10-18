@@ -17,23 +17,27 @@ import {
   allowAttachmentOcrAi,
   allowBackgroundAi,
   allowUserAi,
+  aiSpendAllowance,
   attachmentOcrAiDailyLimit,
   backgroundDailyBudgetUsdPerUser,
   costMicrosFor,
   currentAiFeature,
   dailyBudgetUsd,
   dailyBudgetUsdPerUser,
+  monthlyBudgetUsd,
   isBackgroundFeature,
   priceFor,
   recordAiUsage,
   resetBudgetCacheForTests,
   startOfAiBudgetDay,
+  startOfAiBudgetMonth,
   usageSummary,
   usageTokens,
   userAiAllowance,
   voiceAiAllowance,
   voiceAskDailyLimit,
   voiceTtsDailyCharacters,
+  voiceSessionSilenceMs,
   withAiFeature,
   withVoiceAiLock,
 } from "./ai-usage";
@@ -45,6 +49,32 @@ function stubSpend(micros: number): void {
       where: () => Promise.resolve([{ micros: String(micros) }]),
     }),
   });
+}
+
+function stubVoiceAllowance(input: {
+  dailyMicros: number;
+  monthlyMicros: number;
+  calls?: number;
+  characters?: number;
+}): void {
+  const results = [
+    [{ micros: String(input.dailyMicros) }],
+    [{ micros: String(input.monthlyMicros) }],
+    [
+      {
+        calls: String(input.calls ?? 0),
+        totalTokens: "0",
+        characters: String(input.characters ?? 0),
+        seconds: "0",
+      },
+    ],
+  ];
+  let call = 0;
+  mocks.select.mockImplementation(() => ({
+    from: () => ({
+      where: () => Promise.resolve(results[call++] ?? []),
+    }),
+  }));
 }
 
 type SqlRow = Record<string, string>;
@@ -107,6 +137,7 @@ const ENV_KEYS = [
   "AI_DAILY_BUDGET_USD",
   "AI_BACKGROUND_DAILY_BUDGET_USD_PER_USER",
   "AI_DAILY_BUDGET_USD_PER_USER",
+  "RECALL_AI_MONTHLY_BUDGET_USD",
   "RECALL_BACKGROUND_AI_ENABLED",
   "RECALL_ATTACHMENT_OCR_ENABLED",
   "RECALL_ATTACHMENT_OCR_AI_DAILY_LIMIT",
@@ -117,6 +148,7 @@ const ENV_KEYS = [
   "RECALL_VOICE_AI_ENABLED",
   "RECALL_VOICE_ASK_DAILY_LIMIT",
   "RECALL_VOICE_TTS_DAILY_CHARS",
+  "RECALL_VOICE_SESSION_SILENCE_MS",
 ] as const;
 
 let savedEnv: Record<string, string | undefined> = {};
@@ -129,6 +161,10 @@ beforeEach(() => {
   mocks.select.mockReset();
   mocks.insert.mockReturnValue({ values: () => Promise.resolve() });
   stubSpend(0);
+  process.env.AI_DAILY_BUDGET_USD = "1";
+  process.env.RECALL_AI_MONTHLY_BUDGET_USD = "15";
+  process.env.AI_BACKGROUND_DAILY_BUDGET_USD_PER_USER = "1";
+  process.env.AI_DAILY_BUDGET_USD_PER_USER = "1";
   process.env.RECALL_BACKGROUND_AI_ENABLED = "true";
   process.env.RECALL_ATTACHMENT_OCR_ENABLED = "true";
   process.env.RECALL_AI_DIGESTS_ENABLED = "true";
@@ -237,13 +273,26 @@ describe("recordAiUsage", () => {
 });
 
 describe("background budget guard", () => {
-  it("uses finite conservative defaults when budgets are unset or zero", () => {
-    expect(dailyBudgetUsd()).toBe(0.5);
-    expect(backgroundDailyBudgetUsdPerUser()).toBe(0.5);
+  it("reads explicit budgets and rejects missing, zero, or invalid values", () => {
+    expect(dailyBudgetUsd()).toBe(1);
+    expect(monthlyBudgetUsd()).toBe(15);
+    expect(backgroundDailyBudgetUsdPerUser()).toBe(1);
     process.env.AI_DAILY_BUDGET_USD = "0";
-    process.env.AI_BACKGROUND_DAILY_BUDGET_USD_PER_USER = "0";
-    expect(dailyBudgetUsd()).toBe(0.5);
-    expect(backgroundDailyBudgetUsdPerUser()).toBe(0.5);
+    process.env.RECALL_AI_MONTHLY_BUDGET_USD = "invalid";
+    delete process.env.AI_BACKGROUND_DAILY_BUDGET_USD_PER_USER;
+    expect(dailyBudgetUsd()).toBeNull();
+    expect(monthlyBudgetUsd()).toBeNull();
+    expect(backgroundDailyBudgetUsdPerUser()).toBeNull();
+  });
+
+  it("fails closed when a required budget environment variable is missing", async () => {
+    delete process.env.AI_DAILY_BUDGET_USD;
+    await expect(aiSpendAllowance()).resolves.toEqual({
+      allowed: false,
+      reason: "unavailable",
+    });
+    await expect(allowBackgroundAi("digest", "u1")).resolves.toBe(false);
+    expect(mocks.select).not.toHaveBeenCalled();
   });
 
   it("allows background work while default spend is under the cap", async () => {
@@ -307,7 +356,7 @@ describe("background budget guard", () => {
     await allowBackgroundAi("attachment_ocr");
     await allowBackgroundAi("attachment_ocr");
     await allowBackgroundAi("attachment_ocr");
-    expect(mocks.select).toHaveBeenCalledTimes(1);
+    expect(mocks.select).toHaveBeenCalledTimes(2);
   });
 
   it("fails closed when the spend query errors", async () => {
@@ -320,13 +369,13 @@ describe("background budget guard", () => {
 });
 
 describe("per-user Ask budget guard", () => {
-  it("parses a positive per-user budget and defaults invalid/unset values to $0.50", () => {
+  it("parses a positive per-user budget and fails closed when invalid or unset", () => {
     delete process.env.AI_DAILY_BUDGET_USD_PER_USER;
-    expect(dailyBudgetUsdPerUser()).toBe(0.5);
+    expect(dailyBudgetUsdPerUser()).toBeNull();
     process.env.AI_DAILY_BUDGET_USD_PER_USER = "1.25";
     expect(dailyBudgetUsdPerUser()).toBe(1.25);
     process.env.AI_DAILY_BUDGET_USD_PER_USER = "invalid";
-    expect(dailyBudgetUsdPerUser()).toBe(0.5);
+    expect(dailyBudgetUsdPerUser()).toBeNull();
   });
 
   it("blocks Ask when the user's spend reaches their cap", async () => {
@@ -366,8 +415,9 @@ describe("per-user Ask budget guard", () => {
 
 describe("voice AI caps", () => {
   it("defaults the master switch off and uses conservative daily limits", async () => {
-    expect(voiceAskDailyLimit()).toBe(30);
-    expect(voiceTtsDailyCharacters()).toBe(15_000);
+    expect(voiceAskDailyLimit()).toBe(100);
+    expect(voiceTtsDailyCharacters()).toBe(30_000);
+    expect(voiceSessionSilenceMs()).toBe(8_000);
     await expect(voiceAiAllowance("voice_ask", "u1")).resolves.toEqual({
       allowed: false,
       reason: "disabled",
@@ -379,24 +429,11 @@ describe("voice AI caps", () => {
     process.env.RECALL_VOICE_AI_ENABLED = "true";
     process.env.AI_DAILY_BUDGET_USD = "1";
     process.env.RECALL_VOICE_ASK_DAILY_LIMIT = "30";
-    let call = 0;
-    mocks.select.mockImplementation(() => ({
-      from: () => ({
-        where: () =>
-          Promise.resolve(
-            call++ === 0
-              ? [{ micros: "250000" }]
-              : [
-                  {
-                    calls: "29",
-                    totalTokens: "0",
-                    characters: "0",
-                    seconds: "0",
-                  },
-                ],
-          ),
-      }),
-    }));
+    stubVoiceAllowance({
+      dailyMicros: 250_000,
+      monthlyMicros: 2_000_000,
+      calls: 29,
+    });
 
     await expect(voiceAiAllowance("voice_ask", "u1")).resolves.toEqual({
       allowed: true,
@@ -407,28 +444,42 @@ describe("voice AI caps", () => {
   it("blocks TTS when the requested text would cross the character cap", async () => {
     process.env.RECALL_VOICE_AI_ENABLED = "true";
     process.env.RECALL_VOICE_TTS_DAILY_CHARS = "100";
-    let call = 0;
-    mocks.select.mockImplementation(() => ({
-      from: () => ({
-        where: () =>
-          Promise.resolve(
-            call++ === 0
-              ? [{ micros: "0" }]
-              : [
-                  {
-                    calls: "1",
-                    totalTokens: "0",
-                    characters: "90",
-                    seconds: "0",
-                  },
-                ],
-          ),
-      }),
-    }));
+    stubVoiceAllowance({
+      dailyMicros: 0,
+      monthlyMicros: 0,
+      calls: 1,
+      characters: 90,
+    });
 
     await expect(voiceAiAllowance("voice_tts", "u1", 11)).resolves.toEqual({
       allowed: false,
       reason: "daily_limit",
+    });
+  });
+
+  it("blocks every paid voice path at the install-wide daily cap", async () => {
+    process.env.RECALL_VOICE_AI_ENABLED = "true";
+    stubVoiceAllowance({
+      dailyMicros: 1_000_000,
+      monthlyMicros: 2_000_000,
+    });
+
+    await expect(voiceAiAllowance("voice_ask", "u1")).resolves.toEqual({
+      allowed: false,
+      reason: "daily_limit",
+    });
+  });
+
+  it("blocks every paid voice path at the install-wide monthly cap", async () => {
+    process.env.RECALL_VOICE_AI_ENABLED = "true";
+    stubVoiceAllowance({
+      dailyMicros: 100_000,
+      monthlyMicros: 15_000_000,
+    });
+
+    await expect(voiceAiAllowance("voice_tts", "u1", 10)).resolves.toEqual({
+      allowed: false,
+      reason: "monthly_limit",
     });
   });
 
@@ -468,6 +519,15 @@ describe("AI budget day", () => {
     expect(
       startOfAiBudgetDay(new Date("2026-07-04T04:00:00Z")).toISOString(),
     ).toBe("2026-07-04T04:00:00.000Z");
+  });
+
+  it("starts the monthly cap at New York midnight on the first", () => {
+    expect(
+      startOfAiBudgetMonth(new Date("2026-11-01T03:59:59Z")).toISOString(),
+    ).toBe("2026-10-01T04:00:00.000Z");
+    expect(
+      startOfAiBudgetMonth(new Date("2026-11-01T04:00:00Z")).toISOString(),
+    ).toBe("2026-11-01T04:00:00.000Z");
   });
 });
 

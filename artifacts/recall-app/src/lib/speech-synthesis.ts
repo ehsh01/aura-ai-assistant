@@ -60,10 +60,14 @@ export type SpeakOptions = {
   premium?: boolean;
   onEnd?: () => void;
   onError?: () => void;
+  /** Return true when the caller supplied its own fallback speech. */
+  onBlocked?: (
+    reason: "disabled" | "daily_limit" | "monthly_limit",
+  ) => boolean | void;
 };
 
 class ServerTtsBlockedError extends Error {
-  constructor(readonly reason: "disabled" | "daily_limit") {
+  constructor(readonly reason: "disabled" | "daily_limit" | "monthly_limit") {
     super(`Server TTS blocked: ${reason}`);
   }
 }
@@ -89,7 +93,11 @@ async function fetchOpenAiTts(
       message?: string;
       reason?: string;
     };
-    if (err.reason === "disabled" || err.reason === "daily_limit") {
+    if (
+      err.reason === "disabled" ||
+      err.reason === "daily_limit" ||
+      err.reason === "monthly_limit"
+    ) {
       throw new ServerTtsBlockedError(err.reason);
     }
     throw new Error(err.message ?? `TTS failed (${res.status})`);
@@ -327,6 +335,7 @@ export async function speakText(
   } catch (error) {
     if (generation !== speakGeneration) return false;
     if (error instanceof ServerTtsBlockedError) {
+      if (options.onBlocked?.(error.reason) === true) return false;
       return speakBrowser(cleaned, options, generation);
     }
     cleanupAudio();

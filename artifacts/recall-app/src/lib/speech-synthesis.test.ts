@@ -95,7 +95,7 @@ describe("speakText paid-audio boundary", () => {
     expect(browserSpeak).not.toHaveBeenCalled();
   });
 
-  it.each(["disabled", "daily_limit"] as const)(
+  it.each(["disabled", "daily_limit", "monthly_limit"] as const)(
     "uses browser speech only after the server reports %s",
     async (reason) => {
       const browserSpeak = vi.fn();
@@ -129,7 +129,7 @@ describe("speakText paid-audio boundary", () => {
         "fetch",
         vi.fn().mockResolvedValue({
           ok: false,
-          status: reason === "daily_limit" ? 429 : 503,
+          status: reason === "disabled" ? 503 : 429,
           json: vi.fn().mockResolvedValue({ reason }),
         }),
       );

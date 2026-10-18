@@ -5,7 +5,15 @@ import express, {
   type Request,
   type Response,
 } from "express";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const mocks = vi.hoisted(() => ({
   speechCreate: vi.fn(),
@@ -22,13 +30,15 @@ vi.mock("../services/openai-client", () => ({
 }));
 
 vi.mock("../services/ai-usage", () => ({
+  recordAiUsage: vi.fn(),
   voiceAiAllowance: vi.fn().mockResolvedValue({
     allowed: true,
     remaining: 100_000,
   }),
-  withVoiceAiLock: vi.fn(
-    async (_userId: string, fn: () => Promise<unknown>) => fn(),
+  withVoiceAiLock: vi.fn(async (_userId: string, fn: () => Promise<unknown>) =>
+    fn(),
   ),
+  voiceSessionSilenceMs: () => 8_000,
 }));
 
 import aiRouter from "./ai";

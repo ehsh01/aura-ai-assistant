@@ -1494,13 +1494,14 @@ export type QueryRecallStreamMeta = {
 export type AskAiAvailability = {
   allowed: boolean;
   model: string | null;
-  reason: "disabled" | "unavailable" | "daily_limit" | null;
+  reason: "disabled" | "unavailable" | "daily_limit" | "monthly_limit" | null;
 };
 
 export type VoiceAiAvailability = {
   allowed: boolean;
   remaining?: number;
-  reason?: "disabled" | "daily_limit" | "unavailable";
+  reason?: "disabled" | "daily_limit" | "monthly_limit" | "unavailable";
+  sessionSilenceMs: number;
 };
 
 export type VoiceAnswerSource = {
@@ -1515,12 +1516,17 @@ export type VoiceAnswerSource = {
 
 export type VoiceQueryResult = QueryRecallResult & {
   sources: VoiceAnswerSource[];
+  limitReason?: "daily_limit" | "monthly_limit" | null;
 };
 
 export class VoiceQueryError extends Error {
   constructor(
     message: string,
-    readonly reason: "disabled" | "daily_limit" | "unavailable",
+    readonly reason:
+      | "disabled"
+      | "daily_limit"
+      | "monthly_limit"
+      | "unavailable",
   ) {
     super(message);
     this.name = "VoiceQueryError";
@@ -1552,7 +1558,7 @@ export async function queryVoiceRecall(
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as {
       message?: string;
-      reason?: "disabled" | "daily_limit" | "unavailable";
+      reason?: "disabled" | "daily_limit" | "monthly_limit" | "unavailable";
     };
     throw new VoiceQueryError(
       body.message ?? "Voice AI is unavailable",

@@ -6,7 +6,7 @@ export type AskAiAvailability =
   | {
       allowed: false;
       model: string | null;
-      reason: "disabled" | "unavailable" | "daily_limit";
+      reason: "disabled" | "unavailable" | "daily_limit" | "monthly_limit";
     };
 
 export async function askAiAvailabilityForUser(

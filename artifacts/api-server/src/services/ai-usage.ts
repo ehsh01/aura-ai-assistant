@@ -4,8 +4,9 @@
  * Two jobs:
  *  1. Record what every model call cost, attributed to a feature, so spend is
  *     explainable instead of a single opaque number on the OpenAI dashboard.
- *  2. Stop background work at the global daily cap and softly degrade new Ask
- *     queries at the per-user cap. In-flight streams are never interrupted.
+ *  2. Stop every provider path at the global daily/monthly caps and softly
+ *     degrade new Ask queries at the per-user cap. In-flight calls are never
+ *     interrupted.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { and, eq, gte, sql } from "drizzle-orm";
@@ -213,6 +214,15 @@ export function startOfAiBudgetDay(now: Date = new Date()): Date {
   return result;
 }
 
+/** Instant corresponding to the first day of the local New York month. */
+export function startOfAiBudgetMonth(now: Date = new Date()): Date {
+  const p = timeZoneParts(now);
+  const firstAsUtc = Date.UTC(p.year!, p.month! - 1, 1);
+  let result = new Date(firstAsUtc - offsetAt(new Date(firstAsUtc)));
+  result = new Date(firstAsUtc - offsetAt(result));
+  return result;
+}
+
 /** Total spend in USD since midnight America/New_York across all users. */
 export async function spendTodayUsd(now: Date = new Date()): Promise<number> {
   try {
@@ -249,11 +259,36 @@ export async function spendTodayUsdForUser(
   }
 }
 
-const DEFAULT_BACKGROUND_DAILY_BUDGET_USD = 0.5;
+/** Total spend in USD in the current America/New_York calendar month. */
+export async function spendCurrentMonthUsd(
+  now: Date = new Date(),
+): Promise<number> {
+  try {
+    const rows = await getDb()
+      .select({ micros: sql<string>`COALESCE(SUM(${aiUsage.costMicros}), 0)` })
+      .from(aiUsage)
+      .where(gte(aiUsage.createdAt, startOfAiBudgetMonth(now)));
+    return Number(rows[0]?.micros ?? 0) / 1_000_000;
+  } catch (err) {
+    logger.warn({ err }, "Failed to read current-month AI spend");
+    throw err;
+  }
+}
 
-function positiveNumber(raw: string | undefined, fallback: number): number {
+const invalidBudgetWarnings = new Set<string>();
+
+function configuredPositiveNumber(name: string): number | null {
+  const raw = process.env[name];
   const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
+  if (raw?.trim() && Number.isFinite(value) && value > 0) return value;
+  if (!invalidBudgetWarnings.has(name)) {
+    invalidBudgetWarnings.add(name);
+    logger.warn(
+      { environmentVariable: name },
+      "AI budget is missing or invalid — paid AI is disabled",
+    );
+  }
+  return null;
 }
 
 function nonNegativeInteger(raw: string | undefined, fallback: number): number {
@@ -261,36 +296,40 @@ function nonNegativeInteger(raw: string | undefined, fallback: number): number {
   return Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback;
 }
 
-/** Install-wide daily cap in USD for background work. Unset/zero uses $0.50. */
-export function dailyBudgetUsd(): number {
-  return positiveNumber(
-    process.env.AI_DAILY_BUDGET_USD,
-    DEFAULT_BACKGROUND_DAILY_BUDGET_USD,
-  );
+/** Install-wide daily cap in USD. Missing/invalid configuration fails closed. */
+export function dailyBudgetUsd(): number | null {
+  return configuredPositiveNumber("AI_DAILY_BUDGET_USD");
 }
 
-/** Per-user daily cap in USD for background work. Unset/zero uses $0.50. */
-export function backgroundDailyBudgetUsdPerUser(): number {
-  return positiveNumber(
-    process.env.AI_BACKGROUND_DAILY_BUDGET_USD_PER_USER,
-    DEFAULT_BACKGROUND_DAILY_BUDGET_USD,
-  );
+/** Install-wide monthly cap in USD. Missing/invalid configuration fails closed. */
+export function monthlyBudgetUsd(): number | null {
+  return configuredPositiveNumber("RECALL_AI_MONTHLY_BUDGET_USD");
 }
 
-/** Per-user daily cap in USD for Ask. 0 or unset disables the cap. */
-export function dailyBudgetUsdPerUser(): number {
-  return positiveNumber(
-    process.env.AI_DAILY_BUDGET_USD_PER_USER,
-    DEFAULT_BACKGROUND_DAILY_BUDGET_USD,
-  );
+/** Per-user daily cap in USD for background work. */
+export function backgroundDailyBudgetUsdPerUser(): number | null {
+  return configuredPositiveNumber("AI_BACKGROUND_DAILY_BUDGET_USD_PER_USER");
+}
+
+/** Per-user daily cap in USD for Ask. */
+export function dailyBudgetUsdPerUser(): number | null {
+  return configuredPositiveNumber("AI_DAILY_BUDGET_USD_PER_USER");
 }
 
 export function voiceAskDailyLimit(): number {
-  return nonNegativeInteger(process.env.RECALL_VOICE_ASK_DAILY_LIMIT, 30);
+  return nonNegativeInteger(process.env.RECALL_VOICE_ASK_DAILY_LIMIT, 100);
 }
 
 export function voiceTtsDailyCharacters(): number {
-  return nonNegativeInteger(process.env.RECALL_VOICE_TTS_DAILY_CHARS, 15_000);
+  return nonNegativeInteger(process.env.RECALL_VOICE_TTS_DAILY_CHARS, 30_000);
+}
+
+export function voiceSessionSilenceMs(): number {
+  const parsed = nonNegativeInteger(
+    process.env.RECALL_VOICE_SESSION_SILENCE_MS,
+    8_000,
+  );
+  return Math.min(120_000, Math.max(1_000, parsed));
 }
 
 /** Explicit attachment vision OCR calls allowed per user and New York day. */
@@ -381,6 +420,7 @@ function featureEnabled(feature: AiFeature): boolean {
  */
 const BUDGET_CACHE_MS = 60_000;
 let budgetCache: { at: number; spend: number } | null = null;
+let monthlyBudgetCache: { at: number; spend: number } | null = null;
 const userBudgetCache = new Map<string, { at: number; spend: number }>();
 const backgroundUserBudgetCache = new Map<
   string,
@@ -389,8 +429,77 @@ const backgroundUserBudgetCache = new Map<
 
 export function resetBudgetCacheForTests(): void {
   budgetCache = null;
+  monthlyBudgetCache = null;
   userBudgetCache.clear();
   backgroundUserBudgetCache.clear();
+  invalidBudgetWarnings.clear();
+}
+
+export type AiSpendAllowance =
+  | { allowed: true }
+  | {
+      allowed: false;
+      reason: "daily_limit" | "monthly_limit" | "unavailable";
+    };
+
+/**
+ * Shared install-wide spend gate. Every provider call goes through this via
+ * createOpenAiClient; route-level checks call it too for graceful responses.
+ */
+export async function aiSpendAllowance(): Promise<AiSpendAllowance> {
+  const dailyBudget = dailyBudgetUsd();
+  const monthlyBudget = monthlyBudgetUsd();
+  if (dailyBudget === null || monthlyBudget === null) {
+    return { allowed: false, reason: "unavailable" };
+  }
+
+  try {
+    const [dailySpend, monthlySpend] = await Promise.all([
+      spendTodayUsd(),
+      spendCurrentMonthUsd(),
+    ]);
+    if (dailySpend >= dailyBudget) {
+      logger.warn(
+        { spend: dailySpend, budget: dailyBudget },
+        "Install-wide daily AI budget reached",
+      );
+      return { allowed: false, reason: "daily_limit" };
+    }
+    if (monthlySpend >= monthlyBudget) {
+      logger.warn(
+        { spend: monthlySpend, budget: monthlyBudget },
+        "Install-wide monthly AI budget reached",
+      );
+      return { allowed: false, reason: "monthly_limit" };
+    }
+    return { allowed: true };
+  } catch (err) {
+    logger.warn({ err }, "Install-wide AI spend guard failed closed");
+    return { allowed: false, reason: "unavailable" };
+  }
+}
+
+export class AiSpendBlockedError extends Error {
+  readonly status: number;
+
+  constructor(
+    readonly reason: "daily_limit" | "monthly_limit" | "unavailable",
+  ) {
+    super(
+      reason === "monthly_limit"
+        ? "Monthly AI budget reached"
+        : reason === "daily_limit"
+          ? "Daily AI budget reached"
+          : "AI spend accounting is unavailable",
+    );
+    this.name = "AiSpendBlockedError";
+    this.status = reason === "unavailable" ? 503 : 429;
+  }
+}
+
+export async function assertAiSpendAllowed(): Promise<void> {
+  const allowance = await aiSpendAllowance();
+  if (!allowance.allowed) throw new AiSpendBlockedError(allowance.reason);
 }
 
 /**
@@ -405,10 +514,25 @@ export async function allowBackgroundAi(
   if (!featureEnabled(feature)) return false;
 
   const budget = dailyBudgetUsd();
+  const monthlyBudget = monthlyBudgetUsd();
+  const userBudget = userId ? backgroundDailyBudgetUsdPerUser() : 1;
+  if (budget === null || monthlyBudget === null || userBudget === null) {
+    return false;
+  }
   const now = Date.now();
   try {
-    if (!budgetCache || now - budgetCache.at > BUDGET_CACHE_MS) {
-      budgetCache = { at: now, spend: await spendTodayUsd() };
+    if (
+      !budgetCache ||
+      now - budgetCache.at > BUDGET_CACHE_MS ||
+      !monthlyBudgetCache ||
+      now - monthlyBudgetCache.at > BUDGET_CACHE_MS
+    ) {
+      const [dailySpend, monthlySpend] = await Promise.all([
+        spendTodayUsd(),
+        spendCurrentMonthUsd(),
+      ]);
+      budgetCache = { at: now, spend: dailySpend };
+      monthlyBudgetCache = { at: now, spend: monthlySpend };
     }
     if (budgetCache.spend >= budget) {
       logger.warn(
@@ -417,9 +541,15 @@ export async function allowBackgroundAi(
       );
       return false;
     }
+    if (monthlyBudgetCache.spend >= monthlyBudget) {
+      logger.warn(
+        { feature, spend: monthlyBudgetCache.spend, budget: monthlyBudget },
+        "Monthly AI budget reached — skipping background work",
+      );
+      return false;
+    }
 
     if (userId) {
-      const userBudget = backgroundDailyBudgetUsdPerUser();
       let cached = backgroundUserBudgetCache.get(userId);
       if (!cached || now - cached.at > BUDGET_CACHE_MS) {
         cached = { at: now, spend: await spendTodayUsdForUser(userId) };
@@ -453,7 +583,10 @@ export async function allowUserAi(
 
 export type UserAiAllowance =
   | { allowed: true }
-  | { allowed: false; reason: "daily_limit" | "unavailable" };
+  | {
+      allowed: false;
+      reason: "daily_limit" | "monthly_limit" | "unavailable";
+    };
 
 export async function userAiAllowance(
   feature: AiFeature,
@@ -461,6 +594,10 @@ export async function userAiAllowance(
 ): Promise<UserAiAllowance> {
   if (feature !== "ask_query") return { allowed: true };
   const budget = dailyBudgetUsdPerUser();
+  if (budget === null) return { allowed: false, reason: "unavailable" };
+
+  const installAllowance = await aiSpendAllowance();
+  if (!installAllowance.allowed) return installAllowance;
 
   const now = Date.now();
   let cached = userBudgetCache.get(userId);
@@ -533,7 +670,7 @@ export type VoiceAiAllowance =
   | { allowed: true; remaining: number }
   | {
       allowed: false;
-      reason: "disabled" | "daily_limit" | "unavailable";
+      reason: "disabled" | "daily_limit" | "monthly_limit" | "unavailable";
     };
 
 const voiceLocks = new Map<string, Promise<void>>();
@@ -581,14 +718,12 @@ export async function voiceAiAllowance(
   if (limit <= 0) return { allowed: false, reason: "daily_limit" };
 
   try {
-    const [spend, usage] = await Promise.all([
-      spendTodayUsd(),
+    const [spendAllowance, usage] = await Promise.all([
+      aiSpendAllowance(),
       dailyFeatureUsageForUser(userId, feature),
     ]);
+    if (!spendAllowance.allowed) return spendAllowance;
     if (!usage) return { allowed: false, reason: "unavailable" };
-    if (spend >= dailyBudgetUsd()) {
-      return { allowed: false, reason: "daily_limit" };
-    }
 
     const used = feature === "voice_ask" ? usage.calls : usage.characters;
     const requested =
@@ -689,7 +824,7 @@ export async function usageSummary(
     todayUsd: userId
       ? await spendTodayUsdForUser(userId)
       : await spendTodayUsd(),
-    budgetUsd: dailyBudgetUsd(),
+    budgetUsd: dailyBudgetUsd() ?? 0,
     rows: mapped,
     daily: daily.map((d) => ({
       date: d.day,

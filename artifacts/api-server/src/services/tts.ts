@@ -2,18 +2,11 @@ import { isEnabled } from "../lib/feature-flags";
 import { createOpenAiClient } from "./openai-client";
 import { voiceAiAllowance, withVoiceAiLock } from "./ai-usage";
 
-export const OPENAI_TTS_VOICES = [
-  "alloy",
-  "echo",
-  "fable",
-  "onyx",
-  "nova",
-  "shimmer",
-] as const;
+export const OPENAI_TTS_VOICES = ["onyx"] as const;
 
 export type OpenAiTtsVoice = (typeof OPENAI_TTS_VOICES)[number];
 
-export const OPENAI_TTS_MODELS = ["tts-1", "gpt-4o-mini-tts"] as const;
+export const OPENAI_TTS_MODELS = ["tts-1"] as const;
 export type OpenAiTtsModel = (typeof OPENAI_TTS_MODELS)[number];
 
 export function isOpenAiTtsVoice(value: string): value is OpenAiTtsVoice {
@@ -27,7 +20,6 @@ export function isOpenAiTtsModel(value: string): value is OpenAiTtsModel {
 export function getOpenAiTtsSettings(): {
   model: OpenAiTtsModel;
   voice: OpenAiTtsVoice;
-  instructions?: string;
 } {
   const configuredModel =
     process.env.RECALL_TTS_MODEL?.trim() ||
@@ -47,14 +39,9 @@ export function getOpenAiTtsSettings(): {
       status: 503,
     });
   }
-  const instructions = process.env.RECALL_TTS_INSTRUCTIONS?.trim();
   return {
     model: configuredModel,
     voice: configuredVoice,
-    // The legacy tts-1 endpoint does not accept instructions.
-    ...(configuredModel === "gpt-4o-mini-tts" && instructions
-      ? { instructions: instructions.slice(0, 2000) }
-      : {}),
   };
 }
 
@@ -114,9 +101,12 @@ function audioChunk(value: unknown): Uint8Array {
 }
 
 function streamFailure(error: unknown): Error & { status: number } {
-  return Object.assign(new Error("OpenAI TTS stream failed", { cause: error }), {
-    status: 502,
-  });
+  return Object.assign(
+    new Error("OpenAI TTS stream failed", { cause: error }),
+    {
+      status: 502,
+    },
+  );
 }
 
 /**
@@ -168,9 +158,12 @@ export function speechBodyChunks(body: unknown): AsyncIterable<Uint8Array> {
     };
   }
 
-  throw Object.assign(new Error("OpenAI TTS returned no readable audio stream"), {
-    status: 502,
-  });
+  throw Object.assign(
+    new Error("OpenAI TTS returned no readable audio stream"),
+    {
+      status: 502,
+    },
+  );
 }
 
 async function createSpeechForUser(
@@ -203,11 +196,17 @@ async function createSpeechForUser(
     );
     if (!allowance.allowed) {
       const message =
-        allowance.reason === "daily_limit"
-          ? "Daily voice limit reached. Free search still works."
-          : "Server TTS is unavailable";
+        allowance.reason === "monthly_limit"
+          ? "Monthly voice limit reached. Free search still works."
+          : allowance.reason === "daily_limit"
+            ? "Daily voice limit reached. Free search still works."
+            : "Server TTS is unavailable";
       throw Object.assign(new Error(message), {
-        status: allowance.reason === "daily_limit" ? 429 : 503,
+        status:
+          allowance.reason === "daily_limit" ||
+          allowance.reason === "monthly_limit"
+            ? 429
+            : 503,
         code: allowance.reason,
       });
     }
@@ -219,7 +218,6 @@ async function createSpeechForUser(
       voice: settings.voice,
       input: cleaned,
       response_format: "mp3",
-      ...(settings.instructions ? { instructions: settings.instructions } : {}),
     })) as SpeechResponse;
     return response;
   });
