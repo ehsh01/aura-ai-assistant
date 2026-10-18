@@ -48,6 +48,11 @@ import {
 } from "./embedding-text";
 import { FAMILY_RELATION_INTENT, formatInstantForUser } from "./query-utils";
 import { logger } from "../lib/logger";
+import {
+  extractLinkCandidates,
+  isPlaceholderUrl,
+  isTrackingOrUtilityUrl,
+} from "./url-quality";
 
 export {
   extractVinCandidates,
@@ -79,6 +84,63 @@ export type RetrievedRecord = {
   pinned?: boolean;
   expandPreferred?: boolean;
 };
+
+function retrievalRecordKey(record: {
+  entityType: string;
+  entityId: string;
+}): string {
+  return `${record.entityType}:${record.entityId}`;
+}
+
+export function hasSubjectMatchingUrlHostname(
+  question: string,
+  record: { text: string },
+): boolean {
+  if (!shouldExpandUrlTokens(question)) return false;
+  const subjectTerms = freeRetrievalTerms(question);
+  if (subjectTerms.length === 0) return false;
+  return extractLinkCandidates(record.text).some((candidate) => {
+    if (
+      isPlaceholderUrl(candidate.url) ||
+      isTrackingOrUtilityUrl(candidate.url)
+    ) {
+      return false;
+    }
+    const hostTokens = new Set(
+      new URL(candidate.url).hostname.toLowerCase().split(/[^a-z0-9]+/),
+    );
+    return subjectTerms.some((term) => hostTokens.has(term));
+  });
+}
+
+export function reserveSubjectUrlCandidates(
+  question: string,
+  ranked: RetrievedRecord[],
+  noteCandidates: RetrievedRecord[],
+  limit: number,
+  reserveSlots = 2,
+): RetrievedRecord[] {
+  if (!shouldExpandUrlTokens(question) || limit <= 0 || reserveSlots <= 0) {
+    return ranked;
+  }
+  const reserved = noteCandidates
+    .filter((record) => hasSubjectMatchingUrlHostname(question, record))
+    .slice(0, Math.min(reserveSlots, limit));
+  if (reserved.length === 0) return ranked;
+  const reservedKeys = new Set(reserved.map(retrievalRecordKey));
+  const remaining = ranked.filter(
+    (record) => !reservedKeys.has(retrievalRecordKey(record)),
+  );
+  const beforeReserved = Math.max(0, limit - reserved.length);
+  const firstWindow = [
+    ...remaining.slice(0, beforeReserved),
+    ...reserved,
+  ];
+  return [
+    ...firstWindow,
+    ...remaining.slice(beforeReserved),
+  ].slice(0, Math.max(ranked.length, limit));
+}
 
 type ContextRecord = {
   entityType: string;
@@ -2007,6 +2069,23 @@ export async function retrieveRelevantRecords(
         ),
       ].slice(0, Math.max(limit, Math.min(16, titleMatches.length + 6)));
     }
+  }
+
+  if (shouldExpandUrlTokens(noteQuery) && noteSearchHits.length > 0) {
+    const noteCandidates = noteSearchHits.map((record) =>
+      toRetrieved(
+        record,
+        freeTextRelevance(noteQuery, record.title, record.text).score,
+        "keyword",
+      ),
+    );
+    top = reserveSubjectUrlCandidates(
+      noteQuery,
+      top,
+      noteCandidates,
+      limit,
+      2,
+    );
   }
 
   // If semantic threshold filtered everything, fall back to keyword hits.

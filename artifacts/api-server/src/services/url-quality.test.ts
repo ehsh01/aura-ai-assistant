@@ -120,5 +120,20 @@ describe("placeholder URL classification", () => {
         websiteAsk: true,
       }),
     ).toBe(0);
+    expect(
+      urlSelectionPenalty("https://dashboard.vendor.com/app?id=1", {
+        websiteAsk: true,
+      }),
+    ).toBeGreaterThan(150);
+    expect(
+      urlSelectionPenalty("https://tenant.amazonaws.com/console?id=1", {
+        websiteAsk: true,
+      }),
+    ).toBeGreaterThan(100);
+    expect(
+      urlSelectionPenalty("https://portal.vendor.com/portal/admin?id=1", {
+        websiteAsk: true,
+      }),
+    ).toBeGreaterThan(100);
   });
 });

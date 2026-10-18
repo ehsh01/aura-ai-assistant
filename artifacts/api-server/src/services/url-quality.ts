@@ -338,9 +338,13 @@ export function urlSelectionPenalty(
     .split(/[^a-z0-9]+/)
     .filter(Boolean);
   let penalty = 0;
-  const isConsoleHost = URL_REJECTION_RULES.consoleHosts.some(
-    (candidate) => host === candidate || host.endsWith(`.${candidate}`),
-  );
+  const hostLabels = host.split(".");
+  const isConsoleHost =
+    URL_REJECTION_RULES.consoleHosts.some(
+      (candidate) => host === candidate || host.endsWith(`.${candidate}`),
+    ) ||
+    hostLabels.includes("console") ||
+    hostLabels.includes("dashboard");
   if (isConsoleHost) penalty += 180;
   if (
     pathTokens.some((token) =>
@@ -363,6 +367,24 @@ export function urlSelectionPenalty(
   if (options.websiteAsk && url.searchParams.size >= 2) penalty += 70;
   else if (options.websiteAsk && url.searchParams.size === 1 && isConsoleHost)
     penalty += 30;
+  const adminIdParams = ["id", "i", "account", "project", "space", "tenant"];
+  const hasAdminId = adminIdParams.some((key) => url.searchParams.has(key));
+  if (
+    options.websiteAsk &&
+    host.endsWith("amazonaws.com") &&
+    (hasAdminId ||
+      pathTokens.includes("console") ||
+      pathTokens.includes("admin"))
+  ) {
+    penalty += 140;
+  }
+  if (
+    options.websiteAsk &&
+    (hostLabels.includes("portal") || pathTokens.includes("portal")) &&
+    (hasAdminId || pathTokens.includes("admin"))
+  ) {
+    penalty += 120;
+  }
   return penalty;
 }
 
