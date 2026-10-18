@@ -3,6 +3,9 @@
 This document is the implementation spec for the Phase 1 Explore change. The
 user-facing product name is **Recall**.
 
+Implementation is stacked on the PR #30 voice/TTS foundation at
+`ab5bb9fb80ca5a39907c6bd96995a48653360c0e`.
+
 ## One box
 
 Explore has one input at the bottom on desktop and mobile. It accepts text,
