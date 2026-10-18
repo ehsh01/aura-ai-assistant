@@ -113,6 +113,31 @@ export function hasSubjectMatchingUrlHostname(
   });
 }
 
+export function pinSubjectHostnameMatchesBeforeCut<
+  T extends { entityType: string; entityId: string; text: string },
+>(
+  question: string,
+  rankedRawHits: T[],
+  limit: number,
+  reserveSlots = 2,
+): T[] {
+  if (!shouldExpandUrlTokens(question) || limit <= 0 || reserveSlots <= 0) {
+    return rankedRawHits.slice(0, Math.max(0, limit));
+  }
+  const reserved = rankedRawHits
+    .filter((record) => hasSubjectMatchingUrlHostname(question, record))
+    .slice(0, Math.min(reserveSlots, limit));
+  if (reserved.length === 0) return rankedRawHits.slice(0, limit);
+  const reservedKeys = new Set(reserved.map(retrievalRecordKey));
+  const remaining = rankedRawHits.filter(
+    (record) => !reservedKeys.has(retrievalRecordKey(record)),
+  );
+  return [
+    ...remaining.slice(0, Math.max(0, limit - reserved.length)),
+    ...reserved,
+  ];
+}
+
 export function reserveSubjectUrlCandidates(
   question: string,
   ranked: RetrievedRecord[],
@@ -1163,7 +1188,17 @@ export async function retrieveFreeNoteRecordsForUser(
     })),
     ...evernoteNotes,
   ];
-  return rankFreeTextMatches(query, records, limit).map(
+  const rankedRawHits = rankFreeTextMatches(
+    query,
+    records,
+    records.length,
+  );
+  return pinSubjectHostnameMatchesBeforeCut(
+    query,
+    rankedRawHits,
+    limit,
+    2,
+  ).map(
     ({
       score: _score,
       matchedTerms: _matched,
