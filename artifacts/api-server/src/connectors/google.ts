@@ -451,6 +451,18 @@ type GooglePage = {
   errorStatus?: number;
 };
 
+/** Re-read a bounded window so pre-fix skipped/racing messages are recovered idempotently. */
+export const GOOGLE_GMAIL_INCREMENTAL_OVERLAP_MS = 24 * 60 * 60 * 1000;
+
+export function gmailIncrementalQuery(since: string | null): string {
+  const sinceMs = since ? Date.parse(since) : Number.NaN;
+  return Number.isFinite(sinceMs)
+    ? `after:${Math.floor(
+        Math.max(0, sinceMs - GOOGLE_GMAIL_INCREMENTAL_OVERLAP_MS) / 1000,
+      )}`
+    : "newer_than:365d";
+}
+
 async function fetchGmailPage(
   accessToken: string,
   limit: number,
@@ -461,13 +473,7 @@ async function fetchGmailPage(
     "https://gmail.googleapis.com/gmail/v1/users/me/messages",
   );
   url.searchParams.set("maxResults", String(Math.min(Math.max(limit, 1), 500)));
-  const sinceMs = since ? Date.parse(since) : Number.NaN;
-  url.searchParams.set(
-    "q",
-    Number.isFinite(sinceMs)
-      ? `after:${Math.floor(sinceMs / 1000)}`
-      : "newer_than:365d",
-  );
+  url.searchParams.set("q", gmailIncrementalQuery(since));
   if (pageToken) url.searchParams.set("pageToken", pageToken);
   const list = await googleGet<{
     messages?: { id: string }[];
