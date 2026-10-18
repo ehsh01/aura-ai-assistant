@@ -18,6 +18,7 @@ import {
   type EvernoteKnownNote,
   type EvernoteRawRecord,
 } from "./evernote";
+import { logger } from "../lib/logger";
 
 export const EVERNOTE_MCP_URL = "https://mcp.evernote.com/mcp";
 const READ_TOOLS = new Set([
@@ -34,6 +35,8 @@ const READ_TOOLS = new Set([
 ]);
 
 type JsonRecord = Record<string, unknown>;
+const MCP_TEXT_FIELD = "__recallMcpText";
+const MCP_CONTENT_TYPES_FIELD = "__recallMcpContentTypes";
 
 export type EvernoteMcpOAuthState = {
   oauthState: string;
@@ -143,6 +146,29 @@ function evernoteRateLimitError(
   return wrapped;
 }
 
+function evernoteTransientError(
+  error: unknown,
+  retryAfterMs: number,
+  status = 503,
+): Error & {
+  status: number;
+  retryAfterMs: number;
+  evernoteTransient: true;
+} {
+  const wrapped = new Error(
+    "Evernote MCP transient backend response",
+    { cause: error },
+  ) as Error & {
+    status: number;
+    retryAfterMs: number;
+    evernoteTransient: true;
+  };
+  wrapped.status = status;
+  wrapped.retryAfterMs = retryAfterMs;
+  wrapped.evernoteTransient = true;
+  return wrapped;
+}
+
 export async function evernoteMcpFetch(
   input: string | URL | Request,
   init?: Parameters<FetchLike>[1],
@@ -154,23 +180,33 @@ export async function evernoteMcpFetch(
     const response = options?.fetchFn
       ? await options.fetchFn(request, init)
       : await fetch(request, init);
-    if (response.status !== 429) return response;
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    const htmlResponse = contentType.includes("text/html");
+    const transientStatus =
+      response.status === 429 ||
+      response.status === 502 ||
+      response.status === 503 ||
+      response.status === 504;
+    if (!transientStatus && !htmlResponse) return response;
     const retryAfterMs =
       retryAfterHeaderMs(response.headers.get("retry-after")) ?? 1_000;
     const backoffMs = evernoteRateLimitBackoffMs(attempt, retryAfterMs);
+    await response.body?.cancel().catch(() => undefined);
     if (attempt >= retries) {
-      const error = new Error(
-        `Evernote MCP HTTP 429 after ${attempt + 1} request(s)`,
-      ) as Error & {
-        status: number;
-        mcpRetriesExhausted: boolean;
-        retryAfterMs: number;
-        evernoteRateLimited: true;
-      };
-      error.status = 429;
-      error.mcpRetriesExhausted = true;
-      error.retryAfterMs = backoffMs;
-      error.evernoteRateLimited = true;
+      const error =
+        response.status === 429
+          ? evernoteRateLimitError(
+              new Error(
+                `Evernote MCP HTTP 429 after ${attempt + 1} request(s)`,
+              ),
+              backoffMs,
+            )
+          : evernoteTransientError(
+              new Error("Evernote MCP returned a transient HTTP/HTML response"),
+              backoffMs,
+              response.status >= 500 ? response.status : 503,
+            );
+      Object.assign(error, { mcpRetriesExhausted: true });
       throw error;
     }
     await new Promise((resolve) => setTimeout(resolve, backoffMs));
@@ -504,15 +540,33 @@ function invokeTool(
 }
 
 function parseToolResult(raw: JsonRecord, name: string): JsonRecord {
-  const text = asArray(raw.content)
-    .map((part) => asRecord(part))
-    .find(
-      (part) => part.type === "text" && typeof part.text === "string",
-    )?.text;
+  const content = asArray(raw.content).map((part) => asRecord(part));
+  const contentTypes = [
+    ...new Set(
+      content
+        .map((part) => asString(part.type))
+        .filter((type): type is string => Boolean(type)),
+    ),
+  ];
+  const text = content
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => String(part.text))
+    .join("\n");
+  if (
+    /^\s*(?:<!doctype html|<html\b)/i.test(text) ||
+    /^\s*503\b.*backend read error/i.test(text)
+  ) {
+    const transient = new Error(
+      "Evernote MCP transient HTML/backend response",
+    ) as Error & { status: number; evernoteTransient: true };
+    transient.status = 503;
+    transient.evernoteTransient = true;
+    throw transient;
+  }
   if (raw.isError === true) {
     const structuredError = asRecord(raw.structuredContent);
     const error = new Error(
-      typeof text === "string"
+      text
         ? text.slice(0, 300)
         : `Evernote MCP ${name} failed`,
     ) as Error & { status?: number; retryAfterMs?: number };
@@ -539,13 +593,30 @@ function parseToolResult(raw: JsonRecord, name: string): JsonRecord {
     throw error;
   }
   if (raw.structuredContent !== undefined) {
-    return asRecord(raw.structuredContent);
+    return {
+      ...asRecord(raw.structuredContent),
+      ...(text ? { [MCP_TEXT_FIELD]: text } : {}),
+      [MCP_CONTENT_TYPES_FIELD]: contentTypes,
+    };
   }
-  if (typeof text !== "string") return raw;
+  if (!text) {
+    return {
+      ...raw,
+      [MCP_CONTENT_TYPES_FIELD]: contentTypes,
+    };
+  }
   try {
-    return asRecord(JSON.parse(text));
+    return {
+      ...asRecord(JSON.parse(text)),
+      [MCP_TEXT_FIELD]: text,
+      [MCP_CONTENT_TYPES_FIELD]: contentTypes,
+    };
   } catch {
-    return { text };
+    return {
+      text,
+      [MCP_TEXT_FIELD]: text,
+      [MCP_CONTENT_TYPES_FIELD]: contentTypes,
+    };
   }
 }
 
@@ -573,7 +644,11 @@ async function callReadTool(
       const message = error instanceof Error ? error.message : "";
       const rateLimited =
         status === 429 || /\b429\b|rate.?limit/i.test(message);
-      if (!rateLimited) throw error;
+      const transientBackend =
+        row.evernoteTransient === true ||
+        (status != null && [502, 503, 504].includes(status)) ||
+        /\b50[234]\b|backend read error|<!doctype html|<html/i.test(message);
+      if (!rateLimited && !transientBackend) throw error;
       const headersValue = row.headers ?? data.headers;
       const headerRetryAfter =
         headersValue instanceof Headers
@@ -630,7 +705,13 @@ async function callReadTool(
         row.mcpRetriesExhausted === true ||
         attempt >= maxRetries
       ) {
-        throw evernoteRateLimitError(error, boundedDelay);
+        throw rateLimited
+          ? evernoteRateLimitError(error, boundedDelay)
+          : evernoteTransientError(
+              error,
+              boundedDelay,
+              status != null && status >= 500 ? status : 503,
+            );
       }
       await new Promise((resolve) => setTimeout(resolve, boundedDelay));
     }
@@ -646,14 +727,22 @@ export async function callEvernoteReadTool(
   return callPacedReadTool(client, name, args);
 }
 
-function isMcpRateLimitError(error: unknown): boolean {
+function isMcpTransientError(error: unknown): boolean {
   const row = asRecord(error);
   const data = asRecord(row.data);
   const status = asNumber(
     row.status ?? row.statusCode ?? data.status ?? data.statusCode,
   );
   const message = error instanceof Error ? error.message : "";
-  return status === 429 || /\b429\b|rate.?limit/i.test(message);
+  return (
+    row.evernoteRateLimited === true ||
+    row.evernoteTransient === true ||
+    status === 429 ||
+    (status != null && [502, 503, 504].includes(status)) ||
+    /\b429\b|rate.?limit|\b50[234]\b|backend read error|<!doctype html|<html/i.test(
+      message,
+    )
+  );
 }
 
 function idAndName(value: unknown): { id: string; name: string } | null {
@@ -677,7 +766,7 @@ function idAndName(value: unknown): { id: string; name: string } | null {
 
 function noteGuid(value: unknown): string | null {
   const row = asRecord(value);
-  for (const candidate of [row.id, row.guid, row.noteId]) {
+  for (const candidate of [row.id, row.guid, row.noteId, row.noteGuid]) {
     if (typeof candidate !== "string") continue;
     const id = candidate.slice(0, 500).trim();
     if (id) return id;
@@ -693,6 +782,223 @@ function noteUpdated(value: unknown): string | null {
     boundedScalar(row.updateTime, 100) ??
     null
   );
+}
+
+export type EvernoteNoteListingPage = {
+  rows: JsonRecord[];
+  totalResultCount: number | null;
+  startIndex: number;
+  hasMore: boolean | null;
+  shape: {
+    topLevelKeys: string[];
+    dataKeys: string[];
+    contentTypes: string[];
+  };
+};
+
+function recordGraph(value: unknown, maxDepth = 5): JsonRecord[] {
+  const output: JsonRecord[] = [];
+  const queue: Array<{ value: unknown; depth: number }> = [
+    { value, depth: 0 },
+  ];
+  const seen = new Set<object>();
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (
+      !current.value ||
+      typeof current.value !== "object" ||
+      Array.isArray(current.value) ||
+      seen.has(current.value)
+    ) {
+      continue;
+    }
+    seen.add(current.value);
+    const currentRecord = current.value as JsonRecord;
+    output.push(currentRecord);
+    if (current.depth >= maxDepth) continue;
+    for (const child of Object.values(currentRecord)) {
+      if (child && typeof child === "object" && !Array.isArray(child)) {
+        queue.push({ value: child, depth: current.depth + 1 });
+      }
+    }
+  }
+  return output;
+}
+
+function noteRowsFromStructured(value: unknown): JsonRecord[] {
+  const records = recordGraph(value);
+  const preferredKeys = [
+    "notes",
+    "results",
+    "items",
+    "noteList",
+    "matches",
+  ];
+  const noteRows = (candidate: unknown): JsonRecord[] =>
+    asArray(candidate)
+      .map(asRecord)
+      .filter((item) => Boolean(noteGuid(item)));
+  for (const record of records) {
+    for (const key of preferredKeys) {
+      const rows = noteRows(record[key]);
+      if (rows.length > 0) return rows;
+    }
+  }
+  for (const record of records) {
+    for (const candidate of Object.values(record)) {
+      const rows = noteRows(candidate);
+      if (rows.length > 0) return rows;
+    }
+  }
+  return [];
+}
+
+function mcpTextParts(value: unknown): string[] {
+  const records = recordGraph(value);
+  const parts: string[] = [];
+  for (const record of records) {
+    for (const candidate of [
+      record[MCP_TEXT_FIELD],
+      record.text,
+    ]) {
+      if (typeof candidate === "string" && candidate.trim()) {
+        parts.push(candidate);
+      }
+    }
+    for (const part of asArray(record.content)) {
+      const contentPart = asRecord(part);
+      if (contentPart.type === "text" && typeof contentPart.text === "string") {
+        parts.push(contentPart.text);
+      }
+    }
+  }
+  return [...new Set(parts)];
+}
+
+function noteRowsFromText(text: string): JsonRecord[] {
+  const guidPattern =
+    "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+  const linePattern = new RegExp(
+    `^\\s*\\d+\\.\\s+(${guidPattern})(?:\\s+[—-]\\s+(.+?))?\\s*$`,
+    "i",
+  );
+  const rows: JsonRecord[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.match(linePattern);
+    if (!match) continue;
+    rows.push({
+      id: match[1],
+      guid: match[1],
+      title: match[2]?.trim() || "Untitled",
+    });
+  }
+  return rows;
+}
+
+function nestedScalar(
+  value: unknown,
+  keys: string[],
+): unknown {
+  for (const record of recordGraph(value)) {
+    for (const key of keys) {
+      if (record[key] !== undefined && record[key] !== null) {
+        return record[key];
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse both MCP structured listings and Evernote's numbered text fallback.
+ * Shape metadata deliberately contains keys/types only, never note content.
+ */
+export function parseEvernoteNoteListingPage(
+  value: unknown,
+  fallbackStartIndex = 0,
+): EvernoteNoteListingPage {
+  const root = asRecord(value);
+  let rows = noteRowsFromStructured(root);
+  const textParts = mcpTextParts(root);
+  if (rows.length === 0) {
+    for (const textPart of textParts) {
+      rows = noteRowsFromText(textPart);
+      if (rows.length > 0) break;
+    }
+  }
+  const footerPattern =
+    /Showing\s+(\d+)\s+of\s+(\d+)\s+\(startIndex=(\d+)(?:,\s*([^)]+))?\)\.?/i;
+  const footer = textParts
+    .map((textPart) => textPart.match(footerPattern))
+    .find((match): match is RegExpMatchArray => Boolean(match));
+  const nestedTotalValue = nestedScalar(root, [
+    "totalResultCount",
+    "totalResults",
+    "totalNotes",
+    "totalCount",
+    "total",
+  ]);
+  const nestedTotal =
+    nestedTotalValue == null ? null : asNumber(nestedTotalValue);
+  const totalResultCount =
+    nestedTotal ?? (footer ? Number(footer[2]) : null);
+  const nestedStartValue = nestedScalar(root, [
+    "startIndex",
+    "start",
+    "offset",
+  ]);
+  const nestedStart =
+    nestedStartValue == null ? null : asNumber(nestedStartValue);
+  const startIndex = Math.max(
+    0,
+    Math.floor(nestedStart ?? (footer ? Number(footer[3]) : fallbackStartIndex)),
+  );
+  const explicitHasMore = nestedScalar(root, [
+    "hasMore",
+    "moreAvailable",
+  ]);
+  const isLastPage = nestedScalar(root, ["isLastPage"]);
+  const footerStatus = footer?.[4]?.toLowerCase() ?? "";
+  const hasMore =
+    typeof explicitHasMore === "boolean"
+      ? explicitHasMore
+      : typeof isLastPage === "boolean"
+        ? !isLastPage
+        : footer
+          ? /more available/.test(footerStatus) ||
+            startIndex + Number(footer[1]) < Number(footer[2])
+          : totalResultCount != null
+            ? startIndex + rows.length < totalResultCount
+            : null;
+  const contentTypes = [
+    ...new Set([
+      ...asArray(root[MCP_CONTENT_TYPES_FIELD])
+        .map(asString)
+        .filter((type): type is string => Boolean(type)),
+      ...asArray(root.content)
+        .map((part) => asString(asRecord(part).type))
+        .filter((type): type is string => Boolean(type)),
+    ]),
+  ];
+  const safeKeys = (record: JsonRecord): string[] =>
+    Object.keys(record)
+      .filter(
+        (key) =>
+          key !== MCP_TEXT_FIELD &&
+          key !== MCP_CONTENT_TYPES_FIELD,
+      )
+      .sort();
+  return {
+    rows,
+    totalResultCount,
+    startIndex,
+    hasMore,
+    shape: {
+      topLevelKeys: safeKeys(root),
+      dataKeys: safeKeys(asRecord(root.data)),
+      contentTypes,
+    },
+  };
 }
 
 function iso(value: unknown): string | null {
@@ -1360,7 +1666,7 @@ async function lookupTaxonomyEntity(
       })
     );
   } catch (error) {
-    if (isMcpRateLimitError(error)) throw error;
+    if (isMcpTransientError(error)) throw error;
     const retryable = new Error(
       error instanceof Error
         ? error.message
@@ -1567,6 +1873,93 @@ function initialCheckpoint(
   };
 }
 
+export async function fetchEvernoteNoteListingPage(
+  client: EvernoteReadOnlyToolCaller,
+  input: {
+    query?: string;
+    maxResults: number;
+    startIndex: number;
+    sortBy?: "updated" | "created" | "relevance" | "title";
+    ascending?: boolean;
+  },
+): Promise<EvernoteNoteListingPage> {
+  const result = await callPacedReadTool(client, "search_notes", {
+    query: input.query ?? "",
+    maxResults: input.maxResults,
+    startIndex: input.startIndex,
+    sortBy: input.sortBy ?? "updated",
+    ascending: input.ascending ?? false,
+  });
+  return parseEvernoteNoteListingPage(result, input.startIndex);
+}
+
+export async function fetchEvernoteNoteListingPageWithRetry(
+  client: EvernoteReadOnlyToolCaller,
+  input: {
+    query?: string;
+    maxResults: number;
+    startIndex: number;
+    sortBy?: "updated" | "created" | "relevance" | "title";
+    ascending?: boolean;
+  },
+  logContext: Record<string, unknown>,
+): Promise<EvernoteNoteListingPage> {
+  let page: EvernoteNoteListingPage | null = null;
+  for (let listingAttempt = 0; listingAttempt < 2; listingAttempt += 1) {
+    page = await fetchEvernoteNoteListingPage(client, input);
+    const offsetMatches = page.startIndex === input.startIndex;
+    const unexpectedlyEmpty =
+      page.rows.length === 0 &&
+      (page.hasMore === true ||
+        (page.totalResultCount != null &&
+          page.totalResultCount > input.startIndex));
+    if (offsetMatches && !unexpectedlyEmpty) return page;
+    logger.warn(
+      {
+        ...logContext,
+        requestedStartIndex: input.startIndex,
+        parsedStartIndex: page.startIndex,
+        listingAttempt: listingAttempt + 1,
+        rowsParsed: page.rows.length,
+        totalResultCount: page.totalResultCount,
+        topLevelKeys: page.shape.topLevelKeys,
+        dataKeys: page.shape.dataKeys,
+        contentTypes: page.shape.contentTypes,
+      },
+      offsetMatches
+        ? "Evernote note listing page parsed empty"
+        : "Evernote note listing page offset mismatch",
+    );
+  }
+  if (page && page.startIndex !== input.startIndex) {
+    const error = new Error(
+      `Evernote MCP note listing offset mismatch: requested ${input.startIndex}, received ${page.startIndex}`,
+    ) as Error & {
+      status: number;
+      retryAfterMs: number;
+      evernoteTransient: true;
+    };
+    error.status = 503;
+    error.retryAfterMs = 1_000;
+    error.evernoteTransient = true;
+    throw error;
+  }
+  if (
+    page &&
+    page.rows.length === 0 &&
+    (page.hasMore === true ||
+      (page.totalResultCount != null &&
+        page.totalResultCount > input.startIndex))
+  ) {
+    throw new Error(
+      page.totalResultCount != null
+        ? `Evernote MCP note listing ended early at ${input.startIndex} of ${page.totalResultCount}`
+        : `Evernote MCP note listing ended early at ${input.startIndex} with more available`,
+    );
+  }
+  return page!;
+}
+
 /**
  * Page through Evernote without retaining the library listing. Every page is
  * reduced to GUID/update metadata, fetched sequentially, persisted by the
@@ -1619,19 +2012,17 @@ export async function streamEvernoteViaMcp(
     checkpoint.startIndex < checkpoint.expectedTotal
   ) {
     const pageStart = checkpoint.startIndex;
-    const result = await callReadTool(client, "search_notes", {
-      query: options.query ?? "",
-      maxResults: pageSize,
-      startIndex: pageStart,
-      sortBy: "updated",
-      ascending: false,
-    });
-    // Keep the same global pacing before either a body fetch or the next page.
-    await pace();
-    const rawPage = firstArray(result, ["notes", "results", "items"]);
-    const reportedTotal = asNumber(
-      result.totalResultCount ?? result.total ?? result.totalNotes,
+    const listingPage = await fetchEvernoteNoteListingPageWithRetry(
+      client,
+      {
+        query: options.query ?? "",
+        maxResults: pageSize,
+        startIndex: pageStart,
+      },
+      { syncRunId: options.syncRunId, phase: "notes" },
     );
+    const rawPage = listingPage.rows;
+    const reportedTotal = listingPage.totalResultCount;
     if (reportedTotal != null) {
       if (
         checkpoint.expectedTotal != null &&
@@ -1762,7 +2153,7 @@ export async function streamEvernoteViaMcp(
             records.push(record);
           } catch (error) {
             if (
-              isMcpRateLimitError(error) ||
+              isMcpTransientError(error) ||
               asRecord(error).evernoteTaxonomyLookupRetryable === true
             ) {
               throw error;

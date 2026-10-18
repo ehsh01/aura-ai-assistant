@@ -44,7 +44,7 @@ export function attemptsAfterDeferredClaim(claimedAttempts: number): number {
   return Math.max(0, Math.floor(claimedAttempts) - 1);
 }
 
-export function evernoteRateLimitDeferral(error: unknown): {
+export function evernoteTransientDeferral(error: unknown): {
   retryAfterMs: number;
 } | null {
   if (!error || typeof error !== "object") return null;
@@ -59,8 +59,12 @@ export function evernoteRateLimitDeferral(error: unknown): {
   const message = error instanceof Error ? error.message : "";
   if (
     details.evernoteRateLimited !== true &&
+    details.evernoteTransient !== true &&
     status !== 429 &&
-    !/\b429\b|rate.?limit/i.test(message)
+    ![502, 503, 504].includes(status) &&
+    !/\b429\b|rate.?limit|\b50[234]\b|backend read error|<!doctype html|<html/i.test(
+      message,
+    )
   ) {
     return null;
   }

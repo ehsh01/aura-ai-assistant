@@ -17,6 +17,7 @@ import {
   fetchEvernoteViaMcp,
   mcpOAuthStateFromSettings,
   mcpSettingsFromOAuthState,
+  parseEvernoteNoteListingPage,
   streamEvernoteViaMcp,
   testEvernoteMcpConnection,
   type EvernoteTaxonomyCheckpoint,
@@ -34,8 +35,17 @@ afterEach(() => {
   delete process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  vi.restoreAllMocks();
 });
+
+const noteListingFixture = JSON.parse(
+  readFileSync(
+    new URL(
+      "./fixtures/evernote-search-notes-listing.sanitized.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+) as Record<string, unknown>;
 
 describe("Evernote MCP read-only boundary", () => {
   it("passes every read-only tool-name shape through to the SDK client", async () => {
@@ -146,6 +156,20 @@ describe("Evernote MCP read-only boundary", () => {
     expect(
       mcpSource.slice(wrapperStart, wrapperEnd).match(/\.callTool\(/g),
     ).toHaveLength(1);
+  });
+
+  it("keeps the listing dry-run read-only and output metadata-only", () => {
+    const source = readFileSync(
+      new URL("../evernote-dry-run-list-cli.ts", import.meta.url),
+      "utf8",
+    );
+    expect(source).not.toMatch(/\.(?:insert|update|delete)\s*\(/);
+    expect(source).toContain("fetchEvernoteNoteListingPage");
+    expect(source).toContain("rowsParsed");
+    expect(source).toContain("totalResultCount");
+    expect(source).toContain("startIndex");
+    expect(source).toContain("hasMore");
+    expect(source).not.toContain("onStateChanged");
   });
 });
 
@@ -340,6 +364,49 @@ describe("Evernote MCP auth persistence", () => {
   });
 });
 
+describe("Evernote search_notes page parsing", () => {
+  it("parses the sanitized production text listing and footer", () => {
+    const page = parseEvernoteNoteListingPage(
+      noteListingFixture.textContentForm,
+      0,
+    );
+    expect(page.rows).toEqual([
+      expect.objectContaining({
+        id: "11111111-1111-4111-8111-111111111111",
+        title: "[REDACTED_TITLE_1]",
+      }),
+      expect.objectContaining({
+        id: "22222222-2222-4222-8222-222222222222",
+        title: "[REDACTED_TITLE_2]",
+      }),
+    ]);
+    expect(page).toMatchObject({
+      totalResultCount: 4927,
+      startIndex: 0,
+      hasMore: true,
+      shape: {
+        contentTypes: ["text"],
+      },
+    });
+  });
+
+  it("parses nested structuredContent noteList rows", () => {
+    const page = parseEvernoteNoteListingPage(
+      noteListingFixture.structuredContentForm,
+      2,
+    );
+    expect(page.rows.map((row) => row.noteGuid)).toEqual([
+      "33333333-3333-4333-8333-333333333333",
+      "44444444-4444-4444-8444-444444444444",
+    ]);
+    expect(page).toMatchObject({
+      totalResultCount: 4927,
+      startIndex: 2,
+      hasMore: true,
+    });
+  });
+});
+
 describe("Evernote MCP HTTP pacing", () => {
   it("uses exponential jitter while honoring longer Retry-After values", () => {
     expect(evernoteRateLimitBackoffMs(0, null, 0.5)).toBe(1_125);
@@ -392,6 +459,50 @@ describe("Evernote MCP HTTP pacing", () => {
     expect(bodies).toEqual(['{"probe":true}', '{"probe":true}']);
   });
 
+  it("retries HTTP 503 and HTML error responses as transient", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.stubGlobal("setTimeout", (callback: () => void) => {
+      callback();
+      return 0;
+    });
+    const responses = [
+      new Response("backend unavailable", { status: 503 }),
+      new Response("<html><body>proxy error</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+      new Response("ok", { status: 200 }),
+    ];
+    const fetchFn = vi.fn(async () => responses.shift()!);
+
+    const response = await evernoteMcpFetch(
+      "https://mcp.evernote.com/mcp",
+      undefined,
+      { fetchFn, maxRetries: 2 },
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+  });
+
+  it("marks exhausted HTTP 503 responses for attempt-free deferral", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const fetchFn = vi.fn(async () =>
+      new Response("backend unavailable", { status: 503 }),
+    );
+
+    await expect(
+      evernoteMcpFetch("https://mcp.evernote.com/mcp", undefined, {
+        fetchFn,
+        maxRetries: 0,
+      }),
+    ).rejects.toMatchObject({
+      status: 503,
+      evernoteTransient: true,
+      retryAfterMs: 1_000,
+    });
+  });
+
   it("marks exhausted HTTP retries so tool retries cannot multiply them", async () => {
     process.env.EVERNOTE_MCP_MAX_429_RETRIES = "2";
     vi.spyOn(Math, "random").mockReturnValue(0);
@@ -425,6 +536,224 @@ describe("Evernote MCP HTTP pacing", () => {
 });
 
 describe("Evernote MCP read sync", () => {
+  it("streams the sanitized production text listing without structured rows", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const fixture = noteListingFixture.textContentForm;
+    const records: string[] = [];
+    let searchCalls = 0;
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notes") {
+          searchCalls += 1;
+          return fixture;
+        }
+        if (input.name === "get_note") {
+          return {
+            structuredContent: {
+              id: input.arguments?.noteId,
+              title: "[REDACTED_TITLE]",
+              content: "<en-note>[REDACTED_CONTENT]</en-note>",
+            },
+          };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+
+    const result = await streamEvernoteViaMcp(client, {
+      syncRunId: "text-listing",
+      taxonomy: { notebooks: [], tags: [], spaces: [] },
+      loadKnownNotes: async () => new Map(),
+      processBatch: async (batch) => {
+        records.push(...batch.records.map((record) => record.externalId));
+      },
+      maxBatchesPerInvocation: 2,
+    });
+
+    expect(searchCalls).toBe(1);
+    expect(records).toEqual([
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+    ]);
+    expect(result).toMatchObject({
+      startIndex: 2,
+      expectedTotal: 4927,
+      recordsDeferred: 4925,
+    });
+  });
+
+  it("retries one parsed-empty page before continuing", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    let searchCalls = 0;
+    const processBatch = vi.fn();
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        if (input.name === "search_notes") {
+          searchCalls += 1;
+          if (searchCalls === 1) {
+            return {
+              structuredContent: { totalResultCount: 1 },
+              content: [
+                {
+                  type: "text",
+                  text: "Showing 0 of 1 (startIndex=0, more available).",
+                },
+              ],
+            };
+          }
+          return {
+            structuredContent: { totalResultCount: 1 },
+            content: [
+              {
+                type: "text",
+                text: "1. 55555555-5555-4555-8555-555555555555 — [REDACTED_TITLE]\n\nShowing 1 of 1 (startIndex=0).",
+              },
+            ],
+          };
+        }
+        if (input.name === "get_note") {
+          return {
+            structuredContent: {
+              id: input.arguments?.noteId,
+              content: "<en-note>[REDACTED_CONTENT]</en-note>",
+            },
+          };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+
+    const result = await streamEvernoteViaMcp(client, {
+      syncRunId: "empty-retry",
+      taxonomy: { notebooks: [], tags: [], spaces: [] },
+      loadKnownNotes: async () => new Map(),
+      processBatch,
+    });
+
+    expect(searchCalls).toBe(2);
+    expect(processBatch).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      startIndex: 1,
+      expectedTotal: 1,
+      listingComplete: true,
+    });
+  });
+
+  it("fails after two positive-total empty pages without checkpointing", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    let searchCalls = 0;
+    const processBatch = vi.fn();
+    const client = {
+      async callTool(input: { name: string }): Promise<unknown> {
+        if (input.name !== "search_notes") {
+          throw new Error(`Unexpected tool ${input.name}`);
+        }
+        searchCalls += 1;
+        return {
+          structuredContent: { totalResultCount: 4927 },
+          content: [
+            {
+              type: "text",
+              text: "Showing 0 of 4927 (startIndex=0, more available).",
+            },
+          ],
+        };
+      },
+    };
+
+    await expect(
+      streamEvernoteViaMcp(client, {
+        syncRunId: "empty-twice",
+        taxonomy: { notebooks: [], tags: [], spaces: [] },
+        loadKnownNotes: async () => new Map(),
+        processBatch,
+      }),
+    ).rejects.toThrow("note listing ended early at 0 of 4927");
+    expect(searchCalls).toBe(2);
+    expect(processBatch).not.toHaveBeenCalled();
+  });
+
+  it("fails after two empty pages that report more without a total", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    let searchCalls = 0;
+    const processBatch = vi.fn();
+    const client = {
+      async callTool(input: { name: string }): Promise<unknown> {
+        if (input.name !== "search_notes") {
+          throw new Error(`Unexpected tool ${input.name}`);
+        }
+        searchCalls += 1;
+        return {
+          structuredContent: {
+            data: {
+              noteList: [],
+              pageInfo: { startIndex: 0, hasMore: true },
+            },
+          },
+        };
+      },
+    };
+
+    await expect(
+      streamEvernoteViaMcp(client, {
+        syncRunId: "empty-more",
+        taxonomy: { notebooks: [], tags: [], spaces: [] },
+        loadKnownNotes: async () => new Map(),
+        processBatch,
+      }),
+    ).rejects.toThrow("note listing ended early at 0 with more available");
+    expect(searchCalls).toBe(2);
+    expect(processBatch).not.toHaveBeenCalled();
+  });
+
+  it("retries and defers a mismatched listing offset without advancing", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    let searchCalls = 0;
+    const processBatch = vi.fn();
+    const client = {
+      async callTool(input: { name: string }): Promise<unknown> {
+        if (input.name !== "search_notes") {
+          throw new Error(`Unexpected tool ${input.name}`);
+        }
+        searchCalls += 1;
+        return {
+          structuredContent: { totalResultCount: 4 },
+          content: [
+            {
+              type: "text",
+              text: "1. 66666666-6666-4666-8666-666666666666 — [REDACTED_TITLE]\n2. 77777777-7777-4777-8777-777777777777 — [REDACTED_TITLE]\n\nShowing 2 of 4 (startIndex=0, more available).",
+            },
+          ],
+        };
+      },
+    };
+
+    await expect(
+      streamEvernoteViaMcp(client, {
+        syncRunId: "offset-mismatch",
+        checkpoint: {
+          startIndex: 2,
+          expectedTotal: 4,
+          recordsFetched: 2,
+        },
+        taxonomy: { notebooks: [], tags: [], spaces: [] },
+        loadKnownNotes: async () => new Map(),
+        processBatch,
+      }),
+    ).rejects.toMatchObject({
+      status: 503,
+      evernoteTransient: true,
+    });
+    expect(searchCalls).toBe(2);
+    expect(processBatch).not.toHaveBeenCalled();
+  });
+
   it("lists locally, fetches only changed note bodies, and normalizes GUID evidence", async () => {
     process.env.EVERNOTE_MCP_PACE_MS = "0";
     const calls: Array<{ name: string; arguments?: Record<string, unknown> }> = [];
@@ -610,6 +939,43 @@ describe("Evernote MCP read sync", () => {
     };
     const result = await fetchEvernoteViaMcp(client, new Map());
     expect(noteSearchCalls).toBe(2);
+    expect(result.recordsFetched).toBe(0);
+  });
+
+  it("retries an MCP 503 backend read error", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    process.env.EVERNOTE_MCP_MAX_429_RETRIES = "1";
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.stubGlobal("setTimeout", (callback: () => void) => {
+      callback();
+      return 0;
+    });
+    let calls = 0;
+    const client = {
+      async callTool(input: { name: string }): Promise<unknown> {
+        if (input.name !== "search_notes") {
+          throw new Error(`Unexpected tool ${input.name}`);
+        }
+        calls += 1;
+        if (calls === 1) {
+          return {
+            isError: true,
+            structuredContent: { status: 503 },
+            content: [{ type: "text", text: "503 backend read error" }],
+          };
+        }
+        return {
+          structuredContent: {
+            totalResultCount: 0,
+            notes: [],
+          },
+        };
+      },
+    };
+
+    const result = await fetchEvernoteViaMcp(client, new Map());
+
+    expect(calls).toBe(2);
     expect(result.recordsFetched).toBe(0);
   });
 
