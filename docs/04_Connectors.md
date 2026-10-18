@@ -340,3 +340,22 @@ Public API key from [FlipperForce Integrations](https://tools.flipperforce.com/i
 - Evernote MCP is never an Ask-time tool. Ask uses local Postgres FTS/cached
   embeddings and one answer LLM over top-k evidence.
 - Live OAuth consent requires an eligible paid Evernote plan.
+
+### Evernote attachment operations
+
+- Inspect pending attachment volume and fetch a read-only sample with
+  `pnpm --filter @workspace/api-server run evernote:dry-run-list -- --connector-id <connector-id> --attachment-sample <N>`.
+  This mode opens its database transaction read-only, does not persist OAuth
+  refresh state, and does not update attachment rows.
+- The attachment worker checkpoints its phase in
+  `sync_runs.metadata.evernotePhase`. A restart recovers the same job and
+  enters the `attachments` branch before note enumeration, so imported notes
+  are not re-imported.
+- To park an attachment job operationally, change its `jobs.status` away from
+  `queued` only while no worker owns it. To un-park it, restore `queued` and a
+  due `available_at`; the existing sync run ID and `evernotePhase=attachments`
+  resume the pending attachment rows. Do not create a replacement sync run.
+- Raw attachment bytes are bounded in process memory and discarded after
+  hashing/text extraction. This path stores only size, SHA-256, and extracted
+  text metadata in `evernote_attachments`; it has no local-disk, object-storage,
+  or DB-bytea target.

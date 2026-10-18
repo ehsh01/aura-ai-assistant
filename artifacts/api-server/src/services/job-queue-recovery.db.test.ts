@@ -140,4 +140,40 @@ describe("stale job recovery", () => {
     `);
     expect(result.rows[0]).toEqual({ status: "queued", attempts: 0 });
   });
+
+  it("fails a non-retryable code error on its first claimed attempt", async () => {
+    await db.exec(`
+      INSERT INTO jobs (
+        id, user_id, type, payload, status, attempts, max_attempts,
+        locked_at, locked_by
+      ) VALUES (
+        'code-error-job', '${USER_ID}', 'connector_sync',
+        '{"connectorId":"evernote","syncRunId":"sync-4"}'::jsonb,
+        'processing', 1, 3, now(), 'worker'
+      )
+    `);
+
+    expect(
+      await failJob(
+        "code-error-job",
+        "Evernote attachments phase stopped: schema validation failed",
+        { forceTerminal: true },
+      ),
+    ).toBe(true);
+    const result = await db.query<{
+      status: string;
+      attempts: number;
+      last_error: string;
+    }>(`
+      SELECT status, attempts, last_error
+      FROM jobs
+      WHERE id = 'code-error-job'
+    `);
+    expect(result.rows[0]).toEqual({
+      status: "failed",
+      attempts: 1,
+      last_error:
+        "Evernote attachments phase stopped: schema validation failed",
+    });
+  });
 });

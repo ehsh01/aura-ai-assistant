@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   calculateEvernoteReport,
   evernoteAttachmentFailureTransition,
+  getEvernoteAttachmentDownloadUrl,
   interruptedAttachmentResetOutcome,
   isAllowedEvernoteAttachmentUrl,
+  isEvernoteMcpSchemaValidationError,
   shouldResetEvernoteAttachmentFailure,
 } from "./evernote-full-sync";
 import {
@@ -77,11 +80,80 @@ describe("Evernote completeness report", () => {
 describe("Evernote attachment URL boundary", () => {
   it("allows signed storage hosts and blocks internal redirect targets", () => {
     expect(
-      isAllowedEvernoteAttachmentUrl("https://storage.googleapis.com/bucket/file?sig=x"),
+      isAllowedEvernoteAttachmentUrl(
+        "https://storage.googleapis.com/bucket/file?sig=x",
+      ),
     ).toBe(true);
-    expect(isAllowedEvernoteAttachmentUrl("http://storage.googleapis.com/file")).toBe(false);
-    expect(isAllowedEvernoteAttachmentUrl("https://127.0.0.1/admin")).toBe(false);
-    expect(isAllowedEvernoteAttachmentUrl("https://metadata.google.internal/")).toBe(false);
+    expect(
+      isAllowedEvernoteAttachmentUrl("http://storage.googleapis.com/file"),
+    ).toBe(false);
+    expect(isAllowedEvernoteAttachmentUrl("https://127.0.0.1/admin")).toBe(
+      false,
+    );
+    expect(
+      isAllowedEvernoteAttachmentUrl("https://metadata.google.internal/"),
+    ).toBe(false);
+  });
+
+  it("uses the real get_attachment schema keys and accepts its response shape", async () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL(
+          "./fixtures/evernote-get-attachment.sanitized.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as {
+      inputSchema: {
+        required: string[];
+        additionalProperties: boolean;
+      };
+      request: { noteId: string; hash: string };
+      response: Record<string, unknown>;
+    };
+    const calls: unknown[] = [];
+    const previousPace = process.env.EVERNOTE_MCP_PACE_MS;
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    try {
+      const url = await getEvernoteAttachmentDownloadUrl(
+        {
+          async callTool(input) {
+            calls.push(input);
+            return fixture.response;
+          },
+        },
+        fixture.request,
+      );
+      expect(fixture.inputSchema.required).toEqual(["noteId", "hash"]);
+      expect(fixture.inputSchema.additionalProperties).toBe(false);
+      expect(calls).toEqual([
+        {
+          name: "get_attachment",
+          arguments: {
+            noteId: fixture.request.noteId,
+            hash: fixture.request.hash,
+          },
+        },
+      ]);
+      expect(url).toBe(
+        "https://storage.googleapis.com/sanitized-evernote/attachment?signature=redacted",
+      );
+    } finally {
+      if (previousPace == null) delete process.env.EVERNOTE_MCP_PACE_MS;
+      else process.env.EVERNOTE_MCP_PACE_MS = previousPace;
+    }
+  });
+
+  it("classifies MCP argument schema failures as code errors", () => {
+    expect(
+      isEvernoteMcpSchemaValidationError(
+        new Error("Required: noteId; Unrecognized key(s): attachmentId"),
+      ),
+    ).toBe(true);
+    expect(
+      isEvernoteMcpSchemaValidationError(new Error("503 backend read error")),
+    ).toBe(false);
   });
 });
 
@@ -198,12 +270,10 @@ describe("Evernote attachment retry policy", () => {
     });
     expect(shouldResetEvernoteAttachmentFailure("failed", 2)).toBe(true);
     expect(shouldResetEvernoteAttachmentFailure("failed", 3)).toBe(false);
-    expect(
-      shouldResetEvernoteAttachmentFailure("failed_oom", 1),
-    ).toBe(false);
-    expect(
-      shouldResetEvernoteAttachmentFailure("skipped_too_large", 0),
-    ).toBe(false);
+    expect(shouldResetEvernoteAttachmentFailure("failed_oom", 1)).toBe(false);
+    expect(shouldResetEvernoteAttachmentFailure("skipped_too_large", 0)).toBe(
+      false,
+    );
   });
 });
 

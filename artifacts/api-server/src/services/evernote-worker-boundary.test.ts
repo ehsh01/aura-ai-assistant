@@ -6,7 +6,10 @@ describe("Evernote worker boundary", () => {
     const [routes, worker, scheduler] = await Promise.all([
       readFile(new URL("../routes/connectors.ts", import.meta.url), "utf8"),
       readFile(new URL("./job-worker.ts", import.meta.url), "utf8"),
-      readFile(new URL("./evernote-sync-scheduler.ts", import.meta.url), "utf8"),
+      readFile(
+        new URL("./evernote-sync-scheduler.ts", import.meta.url),
+        "utf8",
+      ),
     ]);
 
     expect(routes).toMatch(
@@ -35,5 +38,31 @@ describe("Evernote worker boundary", () => {
       /resumeQueuedConnectorJobs[\s\S]*listQueuedJobsOfType\(JOB_TYPE_CONNECTOR_SYNC\)/,
     );
     expect(scheduler).toMatch(/nudgeJobWorker\(result\.jobId\)/);
+  });
+
+  it("resumes a restarted attachment-phase job without entering note import", async () => {
+    const [connectors, queue] = await Promise.all([
+      readFile(new URL("./connectors.ts", import.meta.url), "utf8"),
+      readFile(new URL("./job-queue.ts", import.meta.url), "utf8"),
+    ]);
+    const attachmentPhase = connectors.indexOf('if (phase === "attachments")');
+    const noteImport = connectors.indexOf(
+      "const streamed = await withEvernoteMcpClient",
+    );
+    expect(attachmentPhase).toBeGreaterThan(0);
+    expect(noteImport).toBeGreaterThan(attachmentPhase);
+    const attachmentBranch = connectors.slice(attachmentPhase, noteImport);
+    expect(attachmentBranch).toContain("resetInterruptedEvernoteAttachments");
+    expect(attachmentBranch).toContain("processOneEvernoteAttachment");
+    expect(attachmentBranch).toMatch(/return false;/);
+    const staleRecovery = queue.slice(
+      queue.indexOf("export async function recoverStaleProcessingJobs"),
+    );
+    expect(staleRecovery).toContain("else 'queued'");
+    const explicitClaim = queue.slice(
+      queue.indexOf("export async function claimJobById"),
+      queue.indexOf("export async function completeJob"),
+    );
+    expect(explicitClaim).toContain("AND status = 'queued'");
   });
 });

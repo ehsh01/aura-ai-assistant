@@ -22,6 +22,7 @@ import {
   failJob,
   getJobForUser,
   heartbeatJob,
+  isNonRetryableCodeError,
   listQueuedJobsOfType,
   recoverStaleProcessingJobs,
   type Job,
@@ -220,7 +221,10 @@ async function runOneJob(job: Job): Promise<void> {
       typeof err.retryAfterMs === "number"
         ? err.retryAfterMs
         : undefined;
-    const terminal = await failJob(job.id, message, { retryAfterMs });
+    const terminal = await failJob(job.id, message, {
+      retryAfterMs,
+      forceTerminal: isNonRetryableCodeError(err),
+    });
     if (!terminal) {
       const queued = await getJobForUser(job.userId, job.id);
       if (queued?.status === "queued") scheduleExplicitJobResume(queued);

@@ -5,6 +5,7 @@ import {
   captureIdFromPayload,
   connectorSyncFromPayload,
   evernoteTransientDeferral,
+  isNonRetryableCodeError,
   jobFailureIsTerminal,
   mapJobRow,
 } from "./job-queue";
@@ -51,6 +52,11 @@ describe("job-queue helpers", () => {
     expect(jobFailureIsTerminal(1, 3)).toBe(false);
     expect(jobFailureIsTerminal(2, 3)).toBe(false);
     expect(jobFailureIsTerminal(3, 3)).toBe(true);
+  });
+
+  it("recognizes code errors that must not consume all job attempts", () => {
+    expect(isNonRetryableCodeError({ nonRetryable: true })).toBe(true);
+    expect(isNonRetryableCodeError(new Error("ordinary failure"))).toBe(false);
   });
 
   it("maps snake_case claim rows onto Job", () => {

@@ -3,6 +3,7 @@ import {
   and,
   asc,
   eq,
+  ilike,
   inArray,
   isNotNull,
   lt,
@@ -72,7 +73,10 @@ function date(value: unknown): Date | null {
 }
 
 function stableId(...parts: string[]): string {
-  return createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 64);
+  return createHash("sha256")
+    .update(parts.join("\0"))
+    .digest("hex")
+    .slice(0, 64);
 }
 
 function taxonomyValues(
@@ -345,7 +349,12 @@ export async function persistEvernoteRecordChildren(input: {
     await getDb()
       .insert(evernoteAttachments)
       .values({
-        id: stableId("evernote-attachment", connectorId, sourceRecordId, externalId),
+        id: stableId(
+          "evernote-attachment",
+          connectorId,
+          sourceRecordId,
+          externalId,
+        ),
         userId,
         connectorId,
         sourceRecordId,
@@ -460,8 +469,7 @@ async function upsertEvernoteTask(input: {
     userId: input.userId,
     connectorId: input.connectorId,
     sourceRecordId: input.sourceRecordId,
-    noteExternalId:
-      text(input.task.noteId) ?? input.defaultNoteExternalId,
+    noteExternalId: text(input.task.noteId) ?? input.defaultNoteExternalId,
     externalId,
     label: text(input.task.label) ?? "",
     description: text(input.task.description),
@@ -501,9 +509,11 @@ async function upsertEvernoteTask(input: {
 }
 
 function firstArray(root: JsonRecord, keys: string[]): unknown[] {
-  for (const key of keys) if (Array.isArray(root[key])) return root[key] as unknown[];
+  for (const key of keys)
+    if (Array.isArray(root[key])) return root[key] as unknown[];
   const data = row(root.data);
-  for (const key of keys) if (Array.isArray(data[key])) return data[key] as unknown[];
+  for (const key of keys)
+    if (Array.isArray(data[key])) return data[key] as unknown[];
   return [];
 }
 
@@ -524,6 +534,42 @@ function attachmentDownloadUrl(result: JsonRecord): string | null {
   return null;
 }
 
+export class EvernoteAttachmentCodeError extends Error {
+  readonly nonRetryable = true;
+
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "EvernoteAttachmentCodeError";
+  }
+}
+
+export function isEvernoteMcpSchemaValidationError(error: unknown): boolean {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : JSON.stringify(error ?? "");
+  return /\b(?:required|unrecognized key|invalid[_ ]type|invalid (?:input|arguments?)|schema validation|validation error|zod|expected (?:string|number|object|array))\b/i.test(
+    message,
+  );
+}
+
+export async function getEvernoteAttachmentDownloadUrl(
+  client: EvernoteReadOnlyToolCaller,
+  input: { noteId: string; hash: string },
+): Promise<string> {
+  const result = await callEvernoteReadTool(client, "get_attachment", {
+    noteId: input.noteId,
+    hash: input.hash,
+  });
+  const downloadUrl = attachmentDownloadUrl(result);
+  if (!downloadUrl) {
+    throw new Error("Evernote get_attachment returned no download URL");
+  }
+  return downloadUrl;
+}
+
 export function isAllowedEvernoteAttachmentUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -539,13 +585,17 @@ export function isAllowedEvernoteAttachmentUrl(value: string): boolean {
       "evernote.com",
       ...configured,
     ];
-    return allowed.some((domain) => host === domain || host.endsWith(`.${domain}`));
+    return allowed.some(
+      (domain) => host === domain || host.endsWith(`.${domain}`),
+    );
   } catch {
     return false;
   }
 }
 
-async function fetchEvernoteAttachmentUrl(value: string): Promise<Response> {
+export async function fetchEvernoteAttachmentUrl(
+  value: string,
+): Promise<Response> {
   let url = value;
   for (let redirects = 0; redirects <= 3; redirects += 1) {
     if (!isAllowedEvernoteAttachmentUrl(url)) {
@@ -554,7 +604,8 @@ async function fetchEvernoteAttachmentUrl(value: string): Promise<Response> {
     const response = await fetch(url, { redirect: "manual" });
     if (response.status < 300 || response.status >= 400) return response;
     const location = response.headers.get("location");
-    if (!location) throw new Error("Evernote attachment redirect has no location");
+    if (!location)
+      throw new Error("Evernote attachment redirect has no location");
     await response.body?.cancel().catch(() => undefined);
     url = new URL(location, url).toString();
   }
@@ -564,7 +615,10 @@ async function fetchEvernoteAttachmentUrl(value: string): Promise<Response> {
 export function evernoteAttachmentFailureTransition(
   attempts: number,
   reason: "memory" | "too_large" | "error",
-): { attempts: number; fetchState: "pending" | "skipped_too_large" | "failed" } {
+): {
+  attempts: number;
+  fetchState: "pending" | "skipped_too_large" | "failed";
+} {
   if (reason === "memory") return { attempts, fetchState: "pending" };
   if (reason === "too_large") {
     return { attempts, fetchState: "skipped_too_large" };
@@ -577,9 +631,16 @@ export async function processOneEvernoteAttachment(
   connectorId: string,
 ): Promise<boolean> {
   const inNightWindow = isEvernoteNightWindow();
-  const [attachment] = await getDb()
-    .select()
+  const [selected] = await getDb()
+    .select({
+      attachment: evernoteAttachments,
+      noteExternalId: sourceRecords.externalId,
+    })
     .from(evernoteAttachments)
+    .innerJoin(
+      sourceRecords,
+      eq(sourceRecords.id, evernoteAttachments.sourceRecordId),
+    )
     .where(
       and(
         eq(evernoteAttachments.connectorId, connectorId),
@@ -597,10 +658,12 @@ export async function processOneEvernoteAttachment(
       asc(evernoteAttachments.createdAt),
     )
     .limit(1);
-  if (!attachment) return false;
+  if (!selected) return false;
+  const { attachment, noteExternalId } = selected;
 
   const mime = (attachment.mime ?? "").toLowerCase();
   const name = (attachment.fileName ?? "").toLowerCase();
+  const isPdf = mime === "application/pdf" || name.endsWith(".pdf");
   const isImage =
     mime.startsWith("image/") ||
     /\.(?:jpe?g|png|gif|webp|bmp|tiff?|heic)$/i.test(name);
@@ -608,7 +671,12 @@ export async function processOneEvernoteAttachment(
     isImage &&
     (attachment.sizeBytes == null || attachment.sizeBytes >= 20 * 1024);
   const maxBytes = evernoteAttachmentMaxBytes();
-  if (attachment.sizeBytes != null && attachment.sizeBytes > maxBytes) {
+  const pdfMaxBytes = evernotePdfParseMaxBytes();
+  const knownSizeLimit =
+    isPdf && attachment.sizeBytes != null && attachment.sizeBytes > pdfMaxBytes
+      ? pdfMaxBytes
+      : maxBytes;
+  if (attachment.sizeBytes != null && attachment.sizeBytes > knownSizeLimit) {
     const transition = evernoteAttachmentFailureTransition(
       attachment.attempts,
       "too_large",
@@ -618,7 +686,9 @@ export async function processOneEvernoteAttachment(
       .set({
         fetchState: transition.fetchState,
         attempts: transition.attempts,
-        fetchError: `resource metadata size ${attachment.sizeBytes} exceeds ${maxBytes}`,
+        fetchError: isPdf
+          ? `PDF metadata size ${attachment.sizeBytes} exceeds ${pdfMaxBytes} byte fetch limit`
+          : `resource metadata size ${attachment.sizeBytes} exceeds ${maxBytes} byte fetch limit`,
         updatedAt: new Date(),
       })
       .where(eq(evernoteAttachments.id, attachment.id));
@@ -634,11 +704,26 @@ export async function processOneEvernoteAttachment(
   let attemptStarted = false;
   let response: Response | null = null;
   try {
-    const result = await callEvernoteReadTool(client, "get_attachment", {
-      attachmentId: attachment.externalId,
-    });
-    const downloadUrl = attachmentDownloadUrl(result);
-    if (!downloadUrl) throw new Error("Evernote get_attachment returned no download URL");
+    if (!attachment.evernoteHash) {
+      throw new EvernoteAttachmentCodeError(
+        `Evernote attachments phase stopped: attachment ${attachment.id} is missing evernote_hash required by get_attachment`,
+      );
+    }
+    let downloadUrl: string;
+    try {
+      downloadUrl = await getEvernoteAttachmentDownloadUrl(client, {
+        noteId: noteExternalId,
+        hash: attachment.evernoteHash,
+      });
+    } catch (error) {
+      if (!isEvernoteMcpSchemaValidationError(error)) throw error;
+      const message =
+        error instanceof Error ? error.message : "unknown MCP validation error";
+      throw new EvernoteAttachmentCodeError(
+        `Evernote attachments phase stopped: get_attachment input schema validation failed: ${message}`,
+        { cause: error },
+      );
+    }
     const expectedSize = attachment.sizeBytes ?? maxBytes;
     await assertEvernoteImportSafe({
       minimumMemoryMb: requiredMemoryMbForBytes(expectedSize),
@@ -648,24 +733,29 @@ export async function processOneEvernoteAttachment(
     const contentLengthHeader = response.headers.get("content-length");
     const contentLength =
       contentLengthHeader == null ? null : Number(contentLengthHeader);
+    const responseSizeLimit = isPdf ? pdfMaxBytes : maxBytes;
     if (
       contentLength != null &&
       Number.isFinite(contentLength) &&
-      contentLength > maxBytes
+      contentLength > responseSizeLimit
     ) {
       await response.body?.cancel().catch(() => undefined);
       await getDb()
         .update(evernoteAttachments)
         .set({
           fetchState: "skipped_too_large",
-          fetchError: `Content-Length ${contentLength} exceeds ${maxBytes}`,
+          fetchError: isPdf
+            ? `PDF Content-Length ${contentLength} exceeds ${pdfMaxBytes} byte fetch limit`
+            : `Content-Length ${contentLength} exceeds ${maxBytes} byte fetch limit`,
           updatedAt: new Date(),
         })
         .where(eq(evernoteAttachments.id, attachment.id));
       return true;
     }
     const downloadSize =
-      contentLength != null && Number.isFinite(contentLength) && contentLength > 0
+      contentLength != null &&
+      Number.isFinite(contentLength) &&
+      contentLength > 0
         ? contentLength
         : expectedSize;
     await assertEvernoteImportSafe({
@@ -705,7 +795,7 @@ export async function processOneEvernoteAttachment(
     let textEngine = duplicate?.textEngine ?? null;
     let extractionSkipped: string | null = null;
     if (!duplicate) {
-      if (mime === "application/pdf" || name.endsWith(".pdf")) {
+      if (isPdf) {
         if (data.length > evernotePdfParseMaxBytes()) {
           extractionSkipped = "pdf_too_large_for_parse";
         } else {
@@ -738,6 +828,24 @@ export async function processOneEvernoteAttachment(
       .where(eq(evernoteAttachments.id, attachment.id));
   } catch (error) {
     await response?.body?.cancel().catch(() => undefined);
+    if (error instanceof EvernoteAttachmentCodeError) {
+      const message =
+        error instanceof Error ? error.message : "unknown MCP validation error";
+      await getDb()
+        .update(evernoteAttachments)
+        .set({
+          fetchState: "pending",
+          attempts: 0,
+          fetchError:
+            `non-retryable get_attachment code error: ${message}`.slice(
+              0,
+              1_000,
+            ),
+          updatedAt: new Date(),
+        })
+        .where(eq(evernoteAttachments.id, attachment.id));
+      throw error;
+    }
     if (error instanceof EvernoteWatchdogPauseError) {
       const transition = evernoteAttachmentFailureTransition(
         attachment.attempts,
@@ -782,7 +890,9 @@ export async function processOneEvernoteAttachment(
         fetchState: transition.fetchState,
         attempts: transition.attempts,
         fetchError:
-          error instanceof Error ? error.message.slice(0, 1_000) : "Attachment fetch failed",
+          error instanceof Error
+            ? error.message.slice(0, 1_000)
+            : "Attachment fetch failed",
         updatedAt: new Date(),
       })
       .where(eq(evernoteAttachments.id, attachment.id));
@@ -1033,8 +1143,7 @@ export function calculateEvernoteReport(
       evernoteNotes: sum.evernoteNotes + item.evernoteNotes,
       recallNotes: sum.recallNotes + item.recallNotes,
       missing: sum.missing + item.missing,
-      attachmentsExpected:
-        sum.attachmentsExpected + item.attachmentsExpected,
+      attachmentsExpected: sum.attachmentsExpected + item.attachmentsExpected,
       attachmentsStored: sum.attachmentsStored + item.attachmentsStored,
       tasksExpected: sum.tasksExpected + item.tasksExpected,
       tasksStored: sum.tasksStored + item.tasksStored,
@@ -1060,8 +1169,7 @@ export function calculateEvernoteReport(
     trashedEvernoteNotes,
     trashedRecallNotes,
     trashedMissing,
-    tasksExpected:
-      options?.expectedTaskCount ?? notebookTotals.tasksExpected,
+    tasksExpected: options?.expectedTaskCount ?? notebookTotals.tasksExpected,
     tasksStored: options?.storedTaskCount ?? notebookTotals.tasksStored,
   };
   const complete =
@@ -1130,15 +1238,14 @@ export async function buildEvernoteCompletenessReport(
       AND coalesce((sr.record_metadata->>'trashed')::boolean, false) = false
     GROUP BY sr.record_metadata->>'notebookGuid'
   `);
-  const countRows = (
-    (result as unknown as { rows?: unknown[] }).rows ??
-    (Array.isArray(result) ? result : [])
-  ) as NotebookCountRow[];
+  const countRows = ((result as unknown as { rows?: unknown[] }).rows ??
+    (Array.isArray(result) ? result : [])) as NotebookCountRow[];
   const counts = new Map(
     countRows.map((item) => [item.notebook_id, item] as const),
   );
-  const [trashCountResult, taskCountResult, taskExpectedResult] = await Promise.all([
-    getDb().execute(sql`
+  const [trashCountResult, taskCountResult, taskExpectedResult] =
+    await Promise.all([
+      getDb().execute(sql`
       SELECT cast(count(*) as int) AS count
       FROM source_records
       WHERE user_id = ${userId}
@@ -1146,12 +1253,12 @@ export async function buildEvernoteCompletenessReport(
         AND record_type = 'evernote_note'
         AND coalesce((record_metadata->>'trashed')::boolean, false) = true
     `),
-    getDb().execute(sql`
+      getDb().execute(sql`
       SELECT cast(count(*) as int) AS count
       FROM evernote_tasks
       WHERE user_id = ${userId} AND connector_id = ${connectorId}
     `),
-    getDb().execute(sql`
+      getDb().execute(sql`
       SELECT cast(count(*) as int) AS count
       FROM (
         SELECT task->>'id' AS external_id
@@ -1168,7 +1275,7 @@ export async function buildEvernoteCompletenessReport(
         WHERE user_id = ${userId} AND connector_id = ${connectorId}
       ) expected_tasks
     `),
-  ]);
+    ]);
   const resultCount = (value: unknown): number => {
     const rows =
       (value as { rows?: Array<Record<string, unknown>> })?.rows ?? [];
@@ -1270,16 +1377,24 @@ export async function searchEvernoteRecords(
   ];
   if (filters.source && filters.source !== "evernote") return [];
   if (filters.createdFrom) {
-    conditions.push(sql`${sourceRecords.sourceCreatedAt} >= ${filters.createdFrom}`);
+    conditions.push(
+      sql`${sourceRecords.sourceCreatedAt} >= ${filters.createdFrom}`,
+    );
   }
   if (filters.createdTo) {
-    conditions.push(sql`${sourceRecords.sourceCreatedAt} <= ${filters.createdTo}`);
+    conditions.push(
+      sql`${sourceRecords.sourceCreatedAt} <= ${filters.createdTo}`,
+    );
   }
   if (filters.updatedFrom) {
-    conditions.push(sql`${sourceRecords.sourceUpdatedAt} >= ${filters.updatedFrom}`);
+    conditions.push(
+      sql`${sourceRecords.sourceUpdatedAt} >= ${filters.updatedFrom}`,
+    );
   }
   if (filters.updatedTo) {
-    conditions.push(sql`${sourceRecords.sourceUpdatedAt} <= ${filters.updatedTo}`);
+    conditions.push(
+      sql`${sourceRecords.sourceUpdatedAt} <= ${filters.updatedTo}`,
+    );
   }
   if (filters.tag) {
     conditions.push(
@@ -1381,6 +1496,25 @@ export async function resetInterruptedEvernoteAttachments(
   await getDb()
     .update(evernoteAttachments)
     .set({
+      attempts: 0,
+      fetchState: "pending",
+      fetchError: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(evernoteAttachments.connectorId, connectorId),
+        eq(evernoteAttachments.fetchState, "failed"),
+        or(
+          ilike(evernoteAttachments.fetchError, "%attachmentId%"),
+          ilike(evernoteAttachments.fetchError, "%Unrecognized key%"),
+          ilike(evernoteAttachments.fetchError, "%Required%"),
+        ),
+      ),
+    );
+  await getDb()
+    .update(evernoteAttachments)
+    .set({
       attempts: sql`${evernoteAttachments.attempts} + 1`,
       fetchState: sql`case
         when ${evernoteAttachments.attempts} + 1 >= 3 then 'failed_oom'
@@ -1397,10 +1531,7 @@ export async function resetInterruptedEvernoteAttachments(
       and(
         eq(evernoteAttachments.connectorId, connectorId),
         eq(evernoteAttachments.fetchState, "fetching"),
-        lt(
-          evernoteAttachments.updatedAt,
-          new Date(Date.now() - 15 * 60_000),
-        ),
+        lt(evernoteAttachments.updatedAt, new Date(Date.now() - 15 * 60_000)),
       ),
     );
   await getDb()

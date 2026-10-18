@@ -1,0 +1,36 @@
+{
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "noteId": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "description": "GUID of the note that owns the attachment."
+      },
+      "hash": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{32}$",
+        "description": "The attachment content hash from the note ENML."
+      }
+    },
+    "required": ["noteId", "hash"],
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false
+  },
+  "request": {
+    "noteId": "0f2a41b6-7d83-4d2a-9b00-111111111111",
+    "hash": "5f4dcc3b5aa765d61d8327deb882cf99"
+  },
+  "response": {
+    "structuredContent": {
+      "downloadUrl": "https://storage.googleapis.com/sanitized-evernote/attachment?signature=redacted",
+      "expiresAt": "2026-10-18T08:45:00.000Z"
+    },
+    "content": [
+      {
+        "type": "text",
+        "text": "A short-lived attachment download URL was generated."
+      }
+    ]
+  }
+}
