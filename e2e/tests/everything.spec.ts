@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
 
 const now = "2026-10-17T12:00:00.000Z";
 const localFeatureTarget =
@@ -120,6 +121,19 @@ async function mockRecall(
     if (url.pathname === "/api/ai/voice/query") {
       calls.voiceAsk += 1;
       calls.voiceBodies.push(request.postDataJSON());
+      if (options.voiceAiReason) {
+        return json(
+          route,
+          {
+            message:
+              options.voiceAiReason === "daily_limit"
+                ? "Daily voice limit reached. Free search still works."
+                : "Voice AI is unavailable",
+            reason: options.voiceAiReason,
+          },
+          options.voiceAiReason === "daily_limit" ? 429 : 503,
+        );
+      }
       const noMatch = options.voiceNoMatch === true;
       return json(route, {
         answer: noMatch
@@ -171,7 +185,14 @@ async function mockRecall(
     }
     if (url.pathname === "/api/ai/tts") {
       calls.tts += 1;
-      return json(route, { message: "Server TTS disabled" }, 503);
+      return json(
+        route,
+        {
+          message: "Server TTS disabled",
+          reason: "disabled",
+        },
+        503,
+      );
     }
     if (url.pathname === "/api/finance/refresh") {
       return json(route, { ok: true, synced: false, skipped: true });
@@ -503,9 +524,9 @@ test.describe("Everything capture, graph, grid, and search", () => {
     await page.goto("/");
     await expect(page.getByTestId("knowledge-graph")).toBeVisible();
     await expect(page.getByTestId("assistant-ring-mobile")).toBeVisible();
-    await expect(
-      page.getByLabel(/R\.E\.C\.A\.L\.L\. ready/i).last(),
-    ).toBeVisible();
+    await expect(page.getByTestId("assistant-ring-mobile")).toContainText(
+      "READY",
+    );
     const graphCanvas = page.getByLabel("Interactive knowledge graph");
     await expect(graphCanvas).toHaveAttribute("data-graph-nodes", "180");
     await expect
@@ -872,18 +893,32 @@ test.describe("Everything capture, graph, grid, and search", () => {
     expect(mock.calls.tts).toBe(0);
   });
 
-  test("Talk asks once, speaks with browser fallback, shows sources, and reuses its thread", async ({
+  test("the full Talk ring toggles capture, shows sources, and reuses its thread", async ({
     page,
   }) => {
     await installVoiceHarness(page, "manual-result");
     const mock = await mockRecall(page);
     await page.goto("/");
 
-    await page.getByTestId("ring-mic-desktop").click();
+    const screenshotDir = process.env.TALK_RING_SCREENSHOT_DIR;
+    if (screenshotDir) {
+      await mkdir(screenshotDir, { recursive: true });
+      await page.screenshot({
+        path: `${screenshotDir}/talk_ring_desktop_ready.png`,
+        fullPage: true,
+      });
+    }
+    await page.getByTestId("assistant-ring-desktop").click();
     await expect(page.getByTestId("assistant-ring-desktop")).toHaveClass(
       /is-listening/,
     );
-    await page.getByTestId("ring-mic-desktop").click();
+    if (screenshotDir) {
+      await page.screenshot({
+        path: `${screenshotDir}/talk_ring_desktop_listening.png`,
+        fullPage: true,
+      });
+    }
+    await page.getByTestId("assistant-ring-desktop").click();
 
     await expect(page.getByTestId("talk-transcript")).toContainText("You");
     await expect(page.getByTestId("talk-transcript")).toContainText(
@@ -906,18 +941,61 @@ test.describe("Everything capture, graph, grid, and search", () => {
             ).__recallVoiceTest.speakCalls,
         ),
       )
-      .toBe(2);
+      .toBe(1);
 
     // A tap while speaking stops output rather than starting another capture.
-    await page.getByTestId("ring-mic-desktop").click();
+    await page.getByTestId("assistant-ring-desktop").click();
     await expect(page.getByTestId("assistant-ring-desktop")).not.toHaveClass(
       /is-speaking/,
     );
 
-    await page.getByTestId("ring-mic-desktop").click();
-    await page.getByTestId("ring-mic-desktop").click();
+    await page.getByTestId("assistant-ring-desktop").click();
+    await page.getByTestId("assistant-ring-desktop").click();
     await expect.poll(() => mock.calls.voiceAsk).toBe(2);
     expect(mock.calls.voiceBodies[1]?.threadId).toBe("voice-thread-1");
+  });
+
+  test("Talk ring is a large keyboard-operable target on desktop and mobile", async ({
+    page,
+  }) => {
+    await installVoiceHarness(page, "manual-result");
+    await mockRecall(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+
+    const desktopRing = page.getByTestId("assistant-ring-desktop");
+    await desktopRing.focus();
+    await desktopRing.press("Space");
+    await expect(desktopRing).toHaveAttribute("aria-pressed", "true");
+    await desktopRing.press("Enter");
+    await expect(desktopRing).toHaveAttribute("aria-pressed", "false");
+    const desktopBox = await desktopRing.boundingBox();
+    expect(desktopBox?.width).toBeGreaterThanOrEqual(140);
+    expect(desktopBox?.height).toBeGreaterThanOrEqual(140);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    const mobileRing = page.getByTestId("assistant-ring-mobile");
+    const screenshotDir = process.env.TALK_RING_SCREENSHOT_DIR;
+    if (screenshotDir) {
+      await mkdir(screenshotDir, { recursive: true });
+      await page.screenshot({
+        path: `${screenshotDir}/talk_ring_mobile_ready_390x844.png`,
+        fullPage: true,
+      });
+    }
+    const mobileBox = await mobileRing.boundingBox();
+    expect(mobileBox?.width).toBeGreaterThanOrEqual(96);
+    expect(mobileBox?.height).toBeGreaterThanOrEqual(96);
+    await expect(mobileRing).toContainText("READY");
+    await mobileRing.click();
+    await expect(mobileRing).toHaveClass(/is-listening/);
+    if (screenshotDir) {
+      await page.screenshot({
+        path: `${screenshotDir}/talk_ring_mobile_listening_390x844.png`,
+        fullPage: true,
+      });
+    }
   });
 
   test("Talk falls back to free keyword search and browser speech when the master switch is off", async ({
@@ -927,12 +1005,12 @@ test.describe("Everything capture, graph, grid, and search", () => {
     const mock = await mockRecall(page, { voiceAiReason: "disabled" });
     await page.goto("/");
 
-    await page.getByTestId("ring-mic-desktop").click();
-    await page.getByTestId("ring-mic-desktop").click();
+    await page.getByTestId("assistant-ring-desktop").click();
+    await page.getByTestId("assistant-ring-desktop").click();
     await expect(page.getByTestId("talk-transcript")).toContainText(
       "The top match is Permit revision.",
     );
-    expect(mock.calls.voiceAsk).toBe(0);
+    expect(mock.calls.voiceAsk).toBe(1);
     expect(mock.calls.tts).toBe(0);
     expect(mock.calls.transcribe).toBe(0);
     await expect
@@ -946,7 +1024,7 @@ test.describe("Everything capture, graph, grid, and search", () => {
             ).__recallVoiceTest.speakCalls,
         ),
       )
-      .toBe(2);
+      .toBe(1);
   });
 
   test("Talk speaks the cap notice and the exact no-match reply", async ({
@@ -955,18 +1033,18 @@ test.describe("Everything capture, graph, grid, and search", () => {
     await installVoiceHarness(page, "manual-result");
     const capped = await mockRecall(page, { voiceAiReason: "daily_limit" });
     await page.goto("/");
-    await page.getByTestId("ring-mic-desktop").click();
-    await page.getByTestId("ring-mic-desktop").click();
+    await page.getByTestId("assistant-ring-desktop").click();
+    await page.getByTestId("assistant-ring-desktop").click();
     await expect(page.getByTestId("talk-transcript")).toContainText(
       "Daily voice limit reached. Free search still works.",
     );
-    expect(capped.calls.voiceAsk).toBe(0);
+    expect(capped.calls.voiceAsk).toBe(1);
 
     await page.unrouteAll({ behavior: "wait" });
     const noMatch = await mockRecall(page, { voiceNoMatch: true });
-    await page.getByTestId("ring-mic-desktop").click();
-    await page.getByTestId("ring-mic-desktop").click();
-    await page.getByTestId("ring-mic-desktop").click();
+    await page.getByTestId("assistant-ring-desktop").click();
+    await page.getByTestId("assistant-ring-desktop").click();
+    await page.getByTestId("assistant-ring-desktop").click();
     await expect(page.getByTestId("talk-transcript")).toContainText(
       "I couldn't find that in your notes.",
     );

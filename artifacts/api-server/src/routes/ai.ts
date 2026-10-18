@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { once } from "node:events";
 import {
   AiChatBody,
   AiChatResponse,
@@ -38,7 +39,10 @@ import {
   confirmProposedAction,
   type ProposedActionType,
 } from "../services/action-orchestrator";
-import { assertServerTtsEnabled, synthesizeSpeech } from "../services/tts";
+import {
+  assertServerTtsEnabled,
+  streamSynthesizeSpeech,
+} from "../services/tts";
 import {
   createAskThreadForUser,
   getAskThreadForUser,
@@ -222,15 +226,52 @@ router.post("/ai/tts", async (req, res, next) => {
   try {
     assertServerTtsEnabled();
     const body = AiTtsBody.parse(req.body);
-    const { buffer, contentType } = await synthesizeSpeech(
+    await streamSynthesizeSpeech(
       body.text,
       req.user!.id,
+      async ({ stream, contentType }) => {
+        res.status(200);
+        res.setHeader("Content-Type", contentType);
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.flushHeaders();
+
+        const reader = stream.getReader();
+        try {
+          while (!res.destroyed) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value.byteLength > 0 && !res.write(Buffer.from(value))) {
+              await Promise.race([once(res, "drain"), once(res, "close")]);
+            }
+          }
+          if (!res.destroyed) res.end();
+        } finally {
+          if (res.destroyed) await reader.cancel().catch(() => undefined);
+          reader.releaseLock();
+        }
+      },
     );
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Content-Length", String(buffer.length));
-    res.send(buffer);
   } catch (err) {
+    if (res.headersSent) {
+      res.destroy(err instanceof Error ? err : undefined);
+      return;
+    }
+    const reason =
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err.code === "disabled" || err.code === "daily_limit")
+        ? err.code
+        : null;
+    if (reason) {
+      res.status(reason === "daily_limit" ? 429 : 503).json({
+        error: "VOICE_TTS_BLOCKED",
+        reason,
+        message: err instanceof Error ? err.message : "Server TTS unavailable",
+      });
+      return;
+    }
     next(err);
   }
 });

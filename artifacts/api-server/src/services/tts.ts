@@ -36,7 +36,7 @@ export function getOpenAiTtsSettings(): {
   const configuredVoice =
     process.env.RECALL_TTS_VOICE?.trim() ||
     process.env.OPENAI_TTS_VOICE?.trim() ||
-    "nova";
+    "onyx";
   if (!isOpenAiTtsModel(configuredModel)) {
     throw Object.assign(new Error("Configured TTS model is not allowed"), {
       status: 503,
@@ -66,15 +66,17 @@ export function assertServerTtsEnabled(): void {
   ) {
     const err = new Error("Server TTS is disabled") as Error & {
       status?: number;
+      code?: string;
     };
     err.status = 503;
+    err.code = "disabled";
     throw err;
   }
 }
 
 /**
  * Synthesize speech with OpenAI TTS.
- * Defaults: model tts-1 (fast/cheap), voice nova.
+ * Defaults: model tts-1 (fast/cheap), voice onyx.
  * Override with RECALL_TTS_MODEL / RECALL_TTS_VOICE.
  * Disabled unless the master, server, and provider flags are explicitly enabled.
  */
@@ -82,6 +84,22 @@ export async function synthesizeSpeech(
   text: string,
   userId: string,
 ): Promise<{ buffer: Buffer; contentType: string }> {
+  return createSpeechForUser(text, userId, async (response) => ({
+    buffer: Buffer.from(await response.arrayBuffer()),
+    contentType: "audio/mpeg",
+  }));
+}
+
+type SpeechResponse = {
+  arrayBuffer(): Promise<ArrayBuffer>;
+  body: ReadableStream<Uint8Array> | null;
+};
+
+async function createSpeechForUser<T>(
+  text: string,
+  userId: string,
+  consume: (response: SpeechResponse) => Promise<T>,
+): Promise<T> {
   assertServerTtsEnabled();
 
   const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -119,15 +137,35 @@ export async function synthesizeSpeech(
 
     const settings = getOpenAiTtsSettings();
     const client = createOpenAiClient({ apiKey, feature: "voice_tts", userId });
-    const response = await client.audio.speech.create({
+    const response = (await client.audio.speech.create({
       model: settings.model,
       voice: settings.voice,
       input: cleaned,
       response_format: "mp3",
       ...(settings.instructions ? { instructions: settings.instructions } : {}),
-    });
+    })) as SpeechResponse;
+    return consume(response);
+  });
+}
 
-    const buffer = Buffer.from(await response.arrayBuffer());
-    return { buffer, contentType: "audio/mpeg" };
+/**
+ * Keep the paid-call lock and usage accounting active until the downstream
+ * response has consumed the OpenAI body. No transcript is added to usage logs.
+ */
+export async function streamSynthesizeSpeech(
+  text: string,
+  userId: string,
+  consume: (input: {
+    stream: ReadableStream<Uint8Array>;
+    contentType: string;
+  }) => Promise<void>,
+): Promise<void> {
+  return createSpeechForUser(text, userId, async (response) => {
+    if (!response.body) {
+      throw Object.assign(new Error("OpenAI TTS returned no audio stream"), {
+        status: 502,
+      });
+    }
+    await consume({ stream: response.body, contentType: "audio/mpeg" });
   });
 }

@@ -60,14 +60,14 @@ describe("paid /ai/tts flags", () => {
 });
 
 describe("server-side TTS settings", () => {
-  it("defaults to tts-1 and nova", () => {
+  it("defaults to tts-1 and the selected onyx voice", () => {
     delete process.env.RECALL_TTS_MODEL;
     delete process.env.RECALL_TTS_VOICE;
     delete process.env.OPENAI_TTS_MODEL;
     delete process.env.OPENAI_TTS_VOICE;
     expect(getOpenAiTtsSettings()).toEqual({
       model: "tts-1",
-      voice: "nova",
+      voice: "onyx",
     });
   });
 

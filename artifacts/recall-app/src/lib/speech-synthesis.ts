@@ -26,9 +26,12 @@ const API_BASE = "/api";
 
 let currentAudio: HTMLAudioElement | null = null;
 let currentObjectUrl: string | null = null;
+let currentAbortController: AbortController | null = null;
 let speakGeneration = 0;
 
 function cleanupAudio(): void {
+  currentAbortController?.abort();
+  currentAbortController = null;
   if (currentAudio) {
     currentAudio.onended = null;
     currentAudio.onerror = null;
@@ -53,13 +56,22 @@ export function stopSpeaking(): void {
 export type SpeakOptions = {
   rate?: number;
   pitch?: number;
-  /** Explicitly opt this call into paid OpenAI TTS. No UI passes this. */
+  /** Talk to Recall explicitly opts into paid OpenAI TTS. */
   premium?: boolean;
   onEnd?: () => void;
   onError?: () => void;
 };
 
-async function fetchOpenAiTts(text: string): Promise<Blob> {
+class ServerTtsBlockedError extends Error {
+  constructor(readonly reason: "disabled" | "daily_limit") {
+    super(`Server TTS blocked: ${reason}`);
+  }
+}
+
+async function fetchOpenAiTts(
+  text: string,
+  signal: AbortSignal,
+): Promise<Response> {
   const headers: Record<string, string> = {
     Accept: "audio/mpeg",
     "Content-Type": "application/json",
@@ -70,12 +82,128 @@ async function fetchOpenAiTts(text: string): Promise<Blob> {
     headers,
     credentials: "include",
     body: JSON.stringify({ text }),
+    signal,
   });
   if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { message?: string };
+    const err = (await res.json().catch(() => ({}))) as {
+      message?: string;
+      reason?: string;
+    };
+    if (err.reason === "disabled" || err.reason === "daily_limit") {
+      throw new ServerTtsBlockedError(err.reason);
+    }
     throw new Error(err.message ?? `TTS failed (${res.status})`);
   }
-  return res.blob();
+  return res;
+}
+
+function configurePremiumAudio(
+  audio: HTMLAudioElement,
+  options: SpeakOptions,
+  generation: number,
+): void {
+  currentAudio = audio;
+  audio.onended = () => {
+    if (generation !== speakGeneration) return;
+    cleanupAudio();
+    options.onEnd?.();
+  };
+  audio.onerror = () => {
+    if (generation !== speakGeneration) return;
+    cleanupAudio();
+    options.onError?.();
+  };
+}
+
+async function appendSourceBuffer(
+  sourceBuffer: SourceBuffer,
+  chunk: Uint8Array,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onEnd = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("Could not append streamed TTS audio"));
+    };
+    const cleanup = () => {
+      sourceBuffer.removeEventListener("updateend", onEnd);
+      sourceBuffer.removeEventListener("error", onError);
+    };
+    sourceBuffer.addEventListener("updateend", onEnd, { once: true });
+    sourceBuffer.addEventListener("error", onError, { once: true });
+    sourceBuffer.appendBuffer(new Uint8Array(chunk));
+  });
+}
+
+async function playMediaSourceResponse(
+  response: Response,
+  options: SpeakOptions,
+  generation: number,
+): Promise<boolean> {
+  if (!response.body) throw new Error("TTS returned no audio stream");
+  const mediaSource = new MediaSource();
+  const url = URL.createObjectURL(mediaSource);
+  currentObjectUrl = url;
+  const audio = new Audio(url);
+  configurePremiumAudio(audio, options, generation);
+
+  const opened = new Promise<void>((resolve, reject) => {
+    mediaSource.addEventListener("sourceopen", () => resolve(), { once: true });
+    mediaSource.addEventListener(
+      "error",
+      () => reject(new Error("Could not open streamed TTS audio")),
+      { once: true },
+    );
+  });
+  await opened;
+  if (generation !== speakGeneration) return false;
+
+  const sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
+  const reader = response.body.getReader();
+  let playing: Promise<void> | null = null;
+  try {
+    while (generation === speakGeneration) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > 0) {
+        await appendSourceBuffer(sourceBuffer, value);
+        playing ??= audio.play();
+      }
+    }
+    if (
+      generation === speakGeneration &&
+      mediaSource.readyState === "open" &&
+      !sourceBuffer.updating
+    ) {
+      mediaSource.endOfStream();
+    }
+  } finally {
+    if (generation !== speakGeneration) {
+      await reader.cancel().catch(() => undefined);
+    }
+    reader.releaseLock();
+  }
+  if (!playing) throw new Error("TTS returned an empty audio stream");
+  await playing;
+  return generation === speakGeneration;
+}
+
+async function playBlobResponse(
+  response: Response,
+  options: SpeakOptions,
+  generation: number,
+): Promise<boolean> {
+  const blob = await response.blob();
+  if (generation !== speakGeneration) return false;
+  const url = URL.createObjectURL(blob);
+  currentObjectUrl = url;
+  const audio = new Audio(url);
+  configurePremiumAudio(audio, options, generation);
+  await audio.play();
+  return true;
 }
 
 function speakBrowser(
@@ -128,8 +256,9 @@ function speakBrowser(
 }
 
 /**
- * Speak an Ask answer. Browser speech is always the default (free). The paid
- * endpoint is reachable only when a caller explicitly passes premium: true.
+ * Speak an answer. Standard Ask uses free browser speech; Talk explicitly uses
+ * server TTS and falls back to the browser only for a server-reported cap or
+ * kill switch.
  */
 export async function speakText(
   text: string,
@@ -147,29 +276,24 @@ export async function speakText(
   }
 
   try {
-    const blob = await fetchOpenAiTts(cleaned);
+    const controller = new AbortController();
+    currentAbortController = controller;
+    const response = await fetchOpenAiTts(cleaned, controller.signal);
     if (generation !== speakGeneration) return false;
-
-    const url = URL.createObjectURL(blob);
-    currentObjectUrl = url;
-    const audio = new Audio(url);
-    currentAudio = audio;
-
-    audio.onended = () => {
-      if (generation !== speakGeneration) return;
-      cleanupAudio();
-      options.onEnd?.();
-    };
-    audio.onerror = () => {
-      if (generation !== speakGeneration) return;
-      cleanupAudio();
-      speakBrowser(cleaned, options, generation);
-    };
-
-    await audio.play();
-    return true;
-  } catch {
+    const canStream =
+      typeof MediaSource !== "undefined" &&
+      MediaSource.isTypeSupported("audio/mpeg") &&
+      Boolean(response.body);
+    return canStream
+      ? await playMediaSourceResponse(response, options, generation)
+      : await playBlobResponse(response, options, generation);
+  } catch (error) {
     if (generation !== speakGeneration) return false;
-    return speakBrowser(cleaned, options, generation);
+    if (error instanceof ServerTtsBlockedError) {
+      return speakBrowser(cleaned, options, generation);
+    }
+    cleanupAudio();
+    options.onError?.();
+    return false;
   }
 }
