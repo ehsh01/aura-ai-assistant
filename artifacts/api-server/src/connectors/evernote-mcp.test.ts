@@ -10,6 +10,7 @@ import {
   EVERNOTE_MAX_NOTE_CONTENT_CHARS,
   EvernoteReadOnlyViolation,
   createEvernoteReadOnlyCaller,
+  discoverEvernoteNotebooks,
   enumerateEvernoteTaxonomy,
   evernoteMcpFetch,
   evernoteRateLimitBackoffMs,
@@ -17,7 +18,9 @@ import {
   fetchEvernoteViaMcp,
   mcpOAuthStateFromSettings,
   mcpSettingsFromOAuthState,
+  parseEvernoteNotebookListingPage,
   parseEvernoteNoteListingPage,
+  planEvernoteNotebookRanges,
   streamEvernoteViaMcp,
   testEvernoteMcpConnection,
   type EvernoteTaxonomyCheckpoint,
@@ -41,6 +44,16 @@ const noteListingFixture = JSON.parse(
   readFileSync(
     new URL(
       "./fixtures/evernote-search-notes-listing.sanitized.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+) as Record<string, unknown>;
+
+const notebookListingFixture = JSON.parse(
+  readFileSync(
+    new URL(
+      "./fixtures/evernote-search-notebooks-listing.sanitized.json",
       import.meta.url,
     ),
     "utf8",
@@ -161,18 +174,22 @@ describe("Evernote MCP read-only boundary", () => {
     ).toHaveLength(1);
   });
 
-  it("keeps the listing dry-run read-only and output metadata-only", () => {
+  it("keeps the dry-run data path read-only with only explicit OAuth-state persistence", () => {
     const source = readFileSync(
       new URL("../evernote-dry-run-list-cli.ts", import.meta.url),
       "utf8",
     );
-    expect(source).not.toMatch(/\.(?:insert|update|delete)\s*\(/);
+    expect(source).not.toMatch(/\.(?:insert|delete)\s*\(/);
+    expect(source.match(/\.update\(connectors\)/g)).toHaveLength(1);
+    expect(source).not.toContain(".update(sourceRecords)");
     expect(source).toContain("fetchEvernoteNoteListingPage");
+    expect(source).toContain("discoverEvernoteNotebooks");
     expect(source).toContain("planEvernoteNotebookRanges");
     expect(source).toContain("rowsBeyondFirst2000");
+    expect(source).toContain("--full-discovery");
+    expect(source).toContain("--persist-token-refresh");
     expect(source).toContain("--notebook-guid");
     expect(source).toContain("startIndex");
-    expect(source).not.toContain("onStateChanged");
   });
 });
 
@@ -413,6 +430,192 @@ describe("Evernote search_notes page parsing", () => {
   });
 });
 
+describe("Evernote search_notebooks discovery", () => {
+  it("parses the sanitized production text rows and footer", () => {
+    const page = parseEvernoteNotebookListingPage(
+      notebookListingFixture.textContentForm,
+      0,
+    );
+    expect(page.rows.map((row) => ({ id: row.id, name: row.name }))).toEqual([
+      {
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        name: "[REDACTED_NOTEBOOK_1]",
+      },
+      {
+        id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        name: "[REDACTED_NOTEBOOK_2]",
+      },
+      {
+        id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        name: "[REDACTED_NOTEBOOK_3]",
+      },
+    ]);
+    expect(page).toMatchObject({
+      totalResultCount: 284,
+      startIndex: 0,
+      hasMore: true,
+      recognized: true,
+    });
+    expect(page.shape.textRows[0]).toEqual({
+      guid: "aaaaaaaa…aaaa",
+      name: "[REDACTED_NOTEBOOK_1]",
+    });
+  });
+
+  it("partitions all 284 text notebooks without unsupported offsets", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const calls: Array<Record<string, unknown>> = [];
+    const guid = (index: number) =>
+      `10000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
+    const notebooks = Array.from({ length: 284 }, (_, index) => ({
+      id: guid(index),
+      name: `${String.fromCharCode(97 + (index % 26))}-${index
+        .toString()
+        .padStart(3, "0")}`,
+    }));
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        expect(input.name).toBe("search_notebooks");
+        calls.push(input.arguments ?? {});
+        expect(input.arguments).not.toHaveProperty("startIndex");
+        const query = String(input.arguments?.query ?? "").toLowerCase();
+        const max = Number(input.arguments?.maxResults ?? 100);
+        const matches = (
+          query
+            ? notebooks.filter((item) => item.name.includes(query))
+            : notebooks
+        ).sort(
+          (left, right) =>
+            Number(right.name.startsWith(query)) -
+              Number(left.name.startsWith(query)) ||
+            left.name.localeCompare(right.name),
+        );
+        const page = matches.slice(0, max);
+        const lines = page.map(
+          (item, offset) => `${offset + 1}. ${item.id} — ${item.name}`,
+        );
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${lines.join("\n")}\n\nShowing ${page.length} of ${matches.length} (startIndex=0${page.length < matches.length ? ", more available" : ""}).`,
+            },
+          ],
+          structuredContent: { totalResultCount: matches.length },
+        };
+      },
+    };
+
+    const result = await discoverEvernoteNotebooks(client);
+
+    expect(calls[0]).toEqual({
+      query: "",
+      maxResults: 100,
+      sortBy: "name",
+    });
+    expect(result.totalResultCount).toBe(284);
+    expect(result.notebooks).toHaveLength(284);
+    expect(new Set(result.notebooks.map((item) => item.id)).size).toBe(284);
+    expect(result.pages).toBeGreaterThan(3);
+  });
+
+  it("fails clearly when a positive-total response shape is unrecognized", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const client = {
+      async callTool(): Promise<unknown> {
+        return notebookListingFixture.unrecognizedForm;
+      },
+    };
+    await expect(discoverEvernoteNotebooks(client)).rejects.toThrow(
+      "search_notebooks returned an unrecognized listing format",
+    );
+  });
+
+  it("seeds non-ASCII query partitions from cached notebook names", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const hidden = {
+      id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      name: "🛰 archive",
+    };
+    const visible = Array.from({ length: 100 }, (_, index) => ({
+      id: `20000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`,
+      name: `a-${index.toString().padStart(3, "0")}`,
+    }));
+    const client = {
+      async callTool(input: {
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        const query = String(input.arguments?.query ?? "");
+        const matches = query === "🛰" ? [hidden] : visible;
+        const total = query ? matches.length : 101;
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${matches
+                .map(
+                  (item, index) => `${index + 1}. ${item.id} — ${item.name}`,
+                )
+                .join("\n")}\n\nShowing ${matches.length} of ${total} (startIndex=0${matches.length < total ? ", more available" : ""}).`,
+            },
+          ],
+          structuredContent: { totalResultCount: total },
+        };
+      },
+    };
+
+    const result = await discoverEvernoteNotebooks(client, [
+      {
+        ...hidden,
+        parentId: null,
+        stack: null,
+        spaceId: null,
+        access: null,
+        metadata: {},
+      },
+    ]);
+
+    expect(result.notebooks).toHaveLength(101);
+    expect(result.notebooks).toContainEqual(
+      expect.objectContaining({ id: hidden.id, name: hidden.name }),
+    );
+  });
+
+  it("splits a range reporting exactly 2,000 notes", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    const client = {
+      async callTool(input: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }): Promise<unknown> {
+        expect(input.name).toBe("search_notes");
+        const query = String(input.arguments?.query ?? "");
+        const total = query.includes("created:") ? 1_000 : 2_000;
+        return {
+          structuredContent: {
+            totalResultCount: total,
+            notes: [{ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }],
+          },
+        };
+      },
+    };
+
+    const ranges = await planEvernoteNotebookRanges(client, {
+      notebookGuid: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      notebookName: "Sanitized large notebook",
+    });
+
+    expect(ranges).toHaveLength(2);
+    expect(ranges.every((range) => range.expectedTotal < 2_000)).toBe(true);
+    expect(ranges.reduce((sum, range) => sum + range.expectedTotal, 0)).toBe(
+      2_000,
+    );
+  });
+});
+
 describe("Evernote MCP HTTP pacing", () => {
   it("uses exponential jitter while honoring longer Retry-After values", () => {
     expect(evernoteRateLimitBackoffMs(0, null, 0.5)).toBe(1_125);
@@ -542,6 +745,57 @@ describe("Evernote MCP HTTP pacing", () => {
 });
 
 describe("Evernote MCP read sync", () => {
+  it("persists discovered notebook names once and resumes from the v2 cursor", async () => {
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    let notebookCalls = 0;
+    const client = {
+      async callTool(input: { name: string }): Promise<unknown> {
+        if (input.name === "search_notebooks") {
+          notebookCalls += 1;
+          return {
+            structuredContent: {
+              totalResultCount: 1,
+              notebooks: [{ id: "nb-once", name: "Resolved once" }],
+            },
+          };
+        }
+        if (input.name === "search_notes") {
+          return { structuredContent: { totalResultCount: 0, notes: [] } };
+        }
+        throw new Error(`Unexpected tool ${input.name}`);
+      },
+    };
+    const persisted = vi.fn(async () => undefined);
+    let checkpoint: Record<string, unknown> | undefined;
+    const first = await streamEvernoteViaMcp(client, {
+      syncRunId: "discover-once",
+      partitionByNotebook: true,
+      taxonomy: { notebooks: [], tags: [], spaces: [] },
+      loadKnownNotes: async () => new Map(),
+      onTaxonomyEntities: persisted,
+      processBatch: async (batch) => {
+        checkpoint = structuredClone(batch.checkpoint);
+      },
+      maxBatchesPerInvocation: 1,
+    });
+    expect(first.listingComplete).toBe(false);
+    expect(checkpoint).toBeDefined();
+
+    const second = await streamEvernoteViaMcp(client, {
+      syncRunId: "discover-once",
+      partitionByNotebook: true,
+      checkpoint,
+      taxonomy: { notebooks: [], tags: [], spaces: [] },
+      loadKnownNotes: async () => new Map(),
+      onTaxonomyEntities: persisted,
+      processBatch: async () => undefined,
+    });
+
+    expect(second.listingComplete).toBe(true);
+    expect(notebookCalls).toBe(1);
+    expect(persisted).toHaveBeenCalledTimes(1);
+  });
+
   it("migrates a 2,000-row checkpoint, retries the named failure, and never requests the capped offset", async () => {
     process.env.EVERNOTE_MCP_PACE_MS = "0";
     process.env.EVERNOTE_MCP_BACKFILL_CHUNK_SIZE = "25";
@@ -650,6 +904,7 @@ describe("Evernote MCP read sync", () => {
         throw new Error(`Unexpected tool ${input.name}`);
       },
     };
+    const onTaxonomyEntities = vi.fn(async () => undefined);
 
     const result = await streamEvernoteViaMcp(client, {
       syncRunId: "resume-capped",
@@ -664,6 +919,7 @@ describe("Evernote MCP read sync", () => {
         listingAuthoritative: true,
       },
       taxonomy: { notebooks: [], tags: [], spaces: [] },
+      onTaxonomyEntities,
       loadKnownNotes: async (ids) =>
         new Map(
           ids.filter((id) => known.has(id)).map((id) => [id, known.get(id)!]),
@@ -690,6 +946,14 @@ describe("Evernote MCP read sync", () => {
       ),
     ).toBe(false);
     expect(bodyCalls).toEqual([guid(failedIndex), guid(2_000)]);
+    expect(onTaxonomyEntities).toHaveBeenCalledTimes(1);
+    expect(onTaxonomyEntities).toHaveBeenCalledWith({
+      notebooks: [
+        expect.objectContaining({ id: "nb-big", name: "Sanitized archive" }),
+      ],
+      tags: [],
+      spaces: [],
+    });
     expect(result).toMatchObject({
       startIndex: total,
       recordsFailed: 0,

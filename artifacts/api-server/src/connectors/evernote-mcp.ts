@@ -1917,40 +1917,271 @@ function dateRangeMidpoint(range: EvernoteDateRange): string | null {
   return new Date(midpoint).toISOString();
 }
 
-async function discoverEvernoteNotebooks(
-  client: EvernoteReadOnlyToolCaller,
-  cached: EvernoteTaxonomyEntity[],
-): Promise<EvernoteTaxonomyEntity[]> {
-  const result = await callPacedReadTool(client, "search_notebooks", {
-    query: "",
-    maxResults: 100,
-    sortBy: "name",
-  });
-  const discovered = firstArray(result, ["notebooks", "results", "items"])
-    .map(taxonomyEntity)
-    .filter((entity): entity is EvernoteTaxonomyEntity => Boolean(entity));
-  const totalValue = nestedScalar(result, [
+export type EvernoteNotebookListingPage = {
+  rows: EvernoteTaxonomyEntity[];
+  totalResultCount: number | null;
+  startIndex: number;
+  hasMore: boolean | null;
+  recognized: boolean;
+  shape: {
+    topLevelKeys: string[];
+    dataKeys: string[];
+    contentTypes: string[];
+    textRows: Array<{ guid: string; name: string }>;
+  };
+};
+
+export type EvernoteNotebookDiscoveryResult = {
+  notebooks: EvernoteTaxonomyEntity[];
+  totalResultCount: number;
+  totalWasReported: boolean;
+  pages: number;
+  pageShapes: Array<
+    EvernoteNotebookListingPage["shape"] & { query: string }
+  >;
+};
+
+function notebookRowsFromText(value: string): EvernoteTaxonomyEntity[] {
+  const guidPattern =
+    "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+  const guidRegex = new RegExp(guidPattern, "i");
+  const rows: EvernoteTaxonomyEntity[] = [];
+  for (const line of value.split(/\r?\n/)) {
+    const numbered = line.match(/^\s*\d+\.\s+(.+?)\s*$/);
+    if (!numbered) continue;
+    const guidMatch = numbered[1]!.match(guidRegex);
+    if (!guidMatch) continue;
+    const id = guidMatch[0];
+    const name =
+      numbered[1]!
+        .replace(id, "")
+        .replace(/^[\s—–|:-]+|[\s—–|:-]+$/g, "")
+        .trim() || id;
+    rows.push({
+      id,
+      name: name.slice(0, 1_000),
+      parentId: null,
+      stack: null,
+      spaceId: null,
+      access: null,
+      metadata: { listingShape: "text" },
+    });
+  }
+  return rows;
+}
+
+export function parseEvernoteNotebookListingPage(
+  value: unknown,
+  fallbackStartIndex = 0,
+): EvernoteNotebookListingPage {
+  const root = asRecord(value);
+  const records = recordGraph(root);
+  const notebookKeys = ["notebooks", "results", "items", "notebookList"];
+  let structuredArrayFound = false;
+  let rows: EvernoteTaxonomyEntity[] = [];
+  for (const record of records) {
+    for (const key of notebookKeys) {
+      if (!Array.isArray(record[key])) continue;
+      structuredArrayFound = true;
+      const parsed = asArray(record[key])
+        .map(taxonomyEntity)
+        .filter(
+          (entity): entity is EvernoteTaxonomyEntity => Boolean(entity),
+        );
+      if (parsed.length > 0) {
+        rows = parsed;
+        break;
+      }
+    }
+    if (rows.length > 0) break;
+  }
+  const textParts = mcpTextParts(root);
+  if (rows.length === 0) {
+    for (const part of textParts) {
+      const parsed = notebookRowsFromText(part);
+      if (parsed.length > 0) {
+        rows = parsed;
+        break;
+      }
+    }
+  }
+  const footerPattern =
+    /Showing\s+(\d+)\s+of\s+(\d+)\s+\(startIndex=(\d+)(?:,\s*([^)]+))?\)\.?/i;
+  const footer = textParts
+    .map((part) => part.match(footerPattern))
+    .find((match): match is RegExpMatchArray => Boolean(match));
+  const totalValue = nestedScalar(root, [
     "totalResultCount",
-    "total",
+    "totalResults",
+    "totalNotebooks",
     "totalCount",
+    "total",
   ]);
-  const reportedTotal = totalValue == null ? null : asNumber(totalValue);
-  if (
-    (reportedTotal != null && discovered.length !== reportedTotal) ||
-    (reportedTotal == null && discovered.length >= 100)
-  ) {
+  const nestedTotal = totalValue == null ? null : asNumber(totalValue);
+  const totalResultCount =
+    nestedTotal ?? (footer ? Number(footer[2]) : null);
+  const startValue = nestedScalar(root, ["startIndex", "start", "offset"]);
+  const nestedStart = startValue == null ? null : asNumber(startValue);
+  const startIndex = Math.max(
+    0,
+    Math.floor(nestedStart ?? (footer ? Number(footer[3]) : fallbackStartIndex)),
+  );
+  const explicitHasMore = nestedScalar(root, ["hasMore", "moreAvailable"]);
+  const isLastPage = nestedScalar(root, ["isLastPage"]);
+  const footerStatus = footer?.[4]?.toLowerCase() ?? "";
+  const hasMore =
+    typeof explicitHasMore === "boolean"
+      ? explicitHasMore
+      : typeof isLastPage === "boolean"
+        ? !isLastPage
+        : footer
+          ? /more available/.test(footerStatus) ||
+            startIndex + Number(footer[1]) < Number(footer[2])
+          : totalResultCount != null
+            ? startIndex + rows.length < totalResultCount
+            : null;
+  const safeKeys = (record: JsonRecord): string[] =>
+    Object.keys(record)
+      .filter(
+        (key) =>
+          key !== MCP_TEXT_FIELD &&
+          key !== MCP_CONTENT_TYPES_FIELD,
+      )
+      .sort();
+  return {
+    rows,
+    totalResultCount,
+    startIndex,
+    hasMore,
+    recognized: structuredArrayFound || Boolean(footer) || rows.length > 0,
+    shape: {
+      topLevelKeys: safeKeys(root),
+      dataKeys: safeKeys(asRecord(root.data)),
+      contentTypes: [
+        ...new Set(
+          asArray(root[MCP_CONTENT_TYPES_FIELD])
+            .map(asString)
+            .filter((type): type is string => Boolean(type)),
+        ),
+      ],
+      textRows: rows.slice(0, 3).map((entity) => ({
+        guid: `${entity.id.slice(0, 8)}…${entity.id.slice(-4)}`,
+        name: entity.name.slice(0, 80),
+      })),
+    },
+  };
+}
+
+export async function discoverEvernoteNotebooks(
+  client: EvernoteReadOnlyToolCaller,
+  cached: EvernoteTaxonomyEntity[] = [],
+): Promise<EvernoteNotebookDiscoveryResult> {
+  const discovered = new Map<string, EvernoteTaxonomyEntity>();
+  const pageShapes: EvernoteNotebookDiscoveryResult["pageShapes"] = [];
+  let pages = 0;
+  const search = async (query: string): Promise<EvernoteNotebookListingPage> => {
+    const result = await callPacedReadTool(client, "search_notebooks", {
+      query,
+      maxResults: 100,
+      sortBy: "name",
+    });
+    const page = parseEvernoteNotebookListingPage(result, 0);
+    pageShapes.push({ query, ...page.shape });
+    pages += 1;
+    if (!page.recognized) {
+      throw new Error(
+        `Evernote MCP search_notebooks returned an unrecognized listing format for query ${JSON.stringify(query)}; keys=${page.shape.topLevelKeys.join(",") || "(none)"} dataKeys=${page.shape.dataKeys.join(",") || "(none)"} contentTypes=${page.shape.contentTypes.join(",") || "(none)"}`,
+      );
+    }
+    for (const entity of page.rows) discovered.set(entity.id, entity);
+    return page;
+  };
+
+  // search_notebooks has no offset/cursor. Its documented ranking puts exact
+  // and prefix matches before substring matches, so saturated prefixes can be
+  // subdivided without relying on unsupported arguments.
+  const root = await search("");
+  const totalWasReported = root.totalResultCount != null;
+  const expectedTotal = Math.max(
+    0,
+    Math.floor(root.totalResultCount ?? root.rows.length),
+  );
+  if (discovered.size < expectedTotal) {
+    const commonChars =
+      "abcdefghijklmnopqrstuvwxyz0123456789-_.'()[]&/".split("");
+    const observedInitials = root.rows
+      .concat(cached)
+      .map(
+        (entity) =>
+          [...entity.name.trim().toLocaleLowerCase()][0] ?? "",
+      )
+      .filter(Boolean);
+    const alphabet = [...new Set([...commonChars, ...observedInitials])];
+    const frontier = [...alphabet];
+    const visited = new Set<string>();
+    const maxQueries = 4_096;
+    while (
+      frontier.length > 0 &&
+      discovered.size < expectedTotal &&
+      visited.size < maxQueries
+    ) {
+      const query = frontier.shift()!;
+      if (!query || visited.has(query)) continue;
+      visited.add(query);
+      const page = await search(query);
+      const prefixMatches = page.rows.filter((entity) =>
+        entity.name.toLocaleLowerCase().startsWith(query),
+      );
+      if (prefixMatches.length < 100) continue;
+      if (query.length >= 24) {
+        throw new Error(
+          `Evernote notebook prefix ${JSON.stringify(query)} remains capped at 100 results`,
+        );
+      }
+      const nextChars = new Set(alphabet);
+      for (const entity of prefixMatches) {
+        const next = entity.name
+          .toLocaleLowerCase()
+          .slice(query.length);
+        const nextCharacter = [...next][0];
+        if (nextCharacter) nextChars.add(nextCharacter);
+      }
+      for (const char of nextChars) frontier.push(`${query}${char}`);
+    }
+  }
+  if (discovered.size !== expectedTotal) {
     throw new Error(
-      `Evernote notebook listing is incomplete: received ${discovered.length} of ${reportedTotal ?? "at least 100"}`,
+      `Evernote notebook listing is incomplete: received ${discovered.size} of ${expectedTotal} after ${pages} query partition(s); search_notebooks exposes no offset cursor`,
     );
   }
-  return [
-    ...new Map(
-      [...cached, ...discovered].map((entity) => [entity.id, entity] as const),
-    ).values(),
-  ].sort(
+  const cachedById = new Map(cached.map((entity) => [entity.id, entity]));
+  const notebooks = [...discovered.values()].map((entity) => {
+    const cachedEntity = cachedById.get(entity.id);
+    if (!cachedEntity) return entity;
+    return {
+      ...cachedEntity,
+      ...entity,
+      name:
+        entity.name === entity.id && cachedEntity.name !== cachedEntity.id
+          ? cachedEntity.name
+          : entity.name,
+      parentId: entity.parentId ?? cachedEntity.parentId,
+      stack: entity.stack ?? cachedEntity.stack,
+      spaceId: entity.spaceId ?? cachedEntity.spaceId,
+      access: entity.access ?? cachedEntity.access,
+      metadata: { ...cachedEntity.metadata, ...entity.metadata },
+    };
+  }).sort(
     (left, right) =>
       left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
   );
+  return {
+    notebooks,
+    totalResultCount: expectedTotal,
+    totalWasReported,
+    pages,
+    pageShapes,
+  };
 }
 
 function initialCheckpoint(
@@ -2151,14 +2382,14 @@ export async function planEvernoteNotebookRanges(
   const planned: EvernoteDateRange[] = [];
   while (pending.length > 0) {
     const candidate = pending.shift()!;
-    if (candidate.expectedTotal <= EVERNOTE_SEARCH_RESULT_CAP) {
+    if (candidate.expectedTotal < EVERNOTE_SEARCH_RESULT_CAP) {
       planned.push(candidate);
       continue;
     }
     const midpoint = dateRangeMidpoint(candidate);
     if (!midpoint) {
       throw new Error(
-        `Evernote notebook ${scope.notebookName} (${scope.notebookGuid ?? "none"}) has more than ${EVERNOTE_SEARCH_RESULT_CAP} notes at one ${candidate.field} timestamp`,
+        `Evernote notebook ${scope.notebookName} (${scope.notebookGuid ?? "none"}) has ${EVERNOTE_SEARCH_RESULT_CAP} or more notes at one ${candidate.field} timestamp`,
       );
     }
     const left: EvernoteDateRange = {
@@ -2203,11 +2434,26 @@ async function streamEvernoteByNotebook(
     tags: [],
     spaces: [],
   };
-  const discoveredNotebooks = await discoverEvernoteNotebooks(
-    client,
-    taxonomy.notebooks,
-  );
-  if (discoveredNotebooks.length > 0) {
+  let checkpoint = initialCheckpoint(options.checkpoint);
+  const legacyCheckpoint = checkpoint.version !== 2;
+  const resumedScopes = checkpoint.notebookCursor?.scopes ?? [];
+  const discoveredNotebooks = legacyCheckpoint
+    ? (await discoverEvernoteNotebooks(client, taxonomy.notebooks)).notebooks
+    : resumedScopes
+        .filter(
+          (scope): scope is EvernoteNotebookScope & { notebookGuid: string } =>
+            Boolean(scope.notebookGuid),
+        )
+        .map((scope) => ({
+          id: scope.notebookGuid,
+          name: scope.notebookName,
+          parentId: null,
+          stack: null,
+          spaceId: null,
+          access: null,
+          metadata: { restoredFromCheckpoint: true },
+        }));
+  if (legacyCheckpoint && discoveredNotebooks.length > 0) {
     await options.onTaxonomyEntities?.({
       notebooks: discoveredNotebooks,
       tags: [],
@@ -2228,8 +2474,6 @@ async function streamEvernoteByNotebook(
       Math.floor(options.taxonomyLookupProgress?.fetched ?? 0),
     ),
   };
-  let checkpoint = initialCheckpoint(options.checkpoint);
-  const legacyCheckpoint = checkpoint.version !== 2;
   const maxBatches = options.stopAfterOneBatch
     ? 1
     : Math.max(1, Math.floor(options.maxBatchesPerInvocation ?? Infinity));
@@ -2498,11 +2742,11 @@ async function streamEvernoteByNotebook(
     }
     if (!cursor.activeRange) {
       const candidate = cursor.pendingRanges.shift()!;
-      if (candidate.expectedTotal > EVERNOTE_SEARCH_RESULT_CAP) {
+      if (candidate.expectedTotal >= EVERNOTE_SEARCH_RESULT_CAP) {
         const midpoint = dateRangeMidpoint(candidate);
         if (!midpoint) {
           throw new Error(
-            `Evernote notebook ${scope.notebookName} (${scope.notebookGuid ?? "none"}) has more than ${EVERNOTE_SEARCH_RESULT_CAP} notes at one ${candidate.field} timestamp`,
+            `Evernote notebook ${scope.notebookName} (${scope.notebookGuid ?? "none"}) has ${EVERNOTE_SEARCH_RESULT_CAP} or more notes at one ${candidate.field} timestamp`,
           );
         }
         const left: EvernoteDateRange = {
@@ -3171,10 +3415,8 @@ export async function testEvernoteMcpConnection(
         ),
         "search_notebooks",
       );
-      const notebookCount = firstArray(
-        probe,
-        ["notebooks", "results", "items"],
-      ).length;
+      const notebookCount = parseEvernoteNotebookListingPage(probe, 0).rows
+        .length;
       return { notebookCount, tagCount: null };
     }, onStateChanged, {
       signal: controller.signal,
