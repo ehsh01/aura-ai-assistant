@@ -1,15 +1,10 @@
 const mocks = vi.hoisted(() => ({
-  getItem: vi.fn(),
   retrieve: vi.fn(),
   completion: vi.fn(),
   ensureThread: vi.fn(),
   recentTurns: vi.fn(),
   appendMessage: vi.fn(),
   audit: vi.fn(),
-}));
-
-vi.mock("./items", () => ({
-  getItemForUser: mocks.getItem,
 }));
 
 vi.mock("./retrieval", () => ({
@@ -48,6 +43,8 @@ const NOTE_RECORD = {
   score: 0.92,
   method: "keyword",
   recordType: "evernote_note",
+  updatedAt: "2024-03-12T12:00:00.000Z",
+  sourceMetadata: { notebookName: "Home" },
 } as const;
 
 beforeEach(() => {
@@ -107,30 +104,6 @@ describe("spoken grounded answers", () => {
       namedPeople: [],
       tasks: [],
     });
-    mocks.getItem.mockResolvedValue({
-      id: "evernote:note-1",
-      title: "Dell warranty",
-      notebook: "Home",
-      bumpedAt: "2024-03-12T12:00:00.000Z",
-      updatedAt: "2024-03-12T12:00:00.000Z",
-      createdAt: "2024-03-01T12:00:00.000Z",
-    });
-    mocks.getItem.mockResolvedValueOnce({
-      id: "evernote:note-1",
-      title: "Dell warranty",
-      notebook: "Home",
-      bumpedAt: "2024-03-12T12:00:00.000Z",
-      updatedAt: "2024-03-12T12:00:00.000Z",
-      createdAt: "2024-03-01T12:00:00.000Z",
-    });
-    mocks.getItem.mockResolvedValueOnce({
-      id: "evernote:note-2",
-      title: "Uncited note",
-      notebook: "Archive",
-      bumpedAt: "2024-01-01T12:00:00.000Z",
-      updatedAt: "2024-01-01T12:00:00.000Z",
-      createdAt: "2024-01-01T12:00:00.000Z",
-    });
     mocks.completion.mockResolvedValue({
       choices: [
         {
@@ -148,6 +121,16 @@ describe("spoken grounded answers", () => {
     const voice = await queryVoiceNotesForUser("u1", "warranty?", null);
     expect(mocks.completion).toHaveBeenCalledWith(
       expect.objectContaining({ model: "gpt-4.1-mini" }),
+    );
+    expect(mocks.retrieve).toHaveBeenCalledWith(
+      "u1",
+      "warranty?",
+      8,
+      expect.objectContaining({
+        noteSearchQuery: "warranty?",
+        semantic: false,
+        sourceScope: "notes",
+      }),
     );
     expect(voice.answer).toBe(
       "The warranty runs through March 2027. Coverage includes parts and labor. From your note Dell warranty, March 2024.",
@@ -174,14 +157,6 @@ describe("spoken grounded answers", () => {
       namedPeople: [],
       tasks: [],
     });
-    mocks.getItem.mockResolvedValue({
-      id: "evernote:note-1",
-      title: "Dell warranty",
-      notebook: "Home",
-      bumpedAt: "2024-03-12T12:00:00.000Z",
-      updatedAt: "2024-03-12T12:00:00.000Z",
-      createdAt: "2024-03-01T12:00:00.000Z",
-    });
     mocks.completion.mockResolvedValue({
       choices: [
         {
@@ -200,18 +175,28 @@ describe("spoken grounded answers", () => {
     expect(voice.sources).toEqual([]);
   });
 
-  it("reports source loading failures instead of claiming no note matched", async () => {
+  it("does not let prior unrelated turns dilute a current title query", async () => {
+    mocks.recentTurns.mockResolvedValue([
+      { role: "user", content: "Show my old Gmail receipts" },
+      { role: "assistant", content: "I found several receipts." },
+    ]);
     mocks.retrieve.mockResolvedValue({
-      records: [NOTE_RECORD],
+      records: [],
       usedSemantic: false,
       namedPeople: [],
       tasks: [],
     });
-    mocks.getItem.mockRejectedValue(new Error("db down"));
 
-    await expect(
-      queryVoiceNotesForUser("u1", "warranty?", null),
-    ).rejects.toThrow("db down");
-    expect(mocks.appendMessage).not.toHaveBeenCalled();
+    await queryVoiceNotesForUser(
+      "u1",
+      'What does my note "Adding and editing a web link on the Psychiatry website" say?',
+      null,
+    );
+    expect(mocks.retrieve).toHaveBeenCalledWith(
+      "u1",
+      'What does my note "Adding and editing a web link on the Psychiatry website" say?',
+      8,
+      expect.objectContaining({ sourceScope: "notes" }),
+    );
   });
 });

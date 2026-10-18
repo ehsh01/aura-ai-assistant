@@ -6,8 +6,8 @@ import {
   listRecentTurnsForThread,
   retrievalQueryFromHistory,
 } from "./ask-threads";
-import { getItemForUser } from "./items";
 import { retrieveRelevantRecords, type RetrievedRecord } from "./retrieval";
+import { freeRetrievalTerms } from "./keyword-match";
 import { withAiFeature } from "./ai-usage";
 import { writeAuditLog } from "./audit";
 
@@ -111,37 +111,27 @@ function isNoteRecord(record: RetrievedRecord): boolean {
   );
 }
 
-async function loadCandidates(
-  userId: string,
-  records: RetrievedRecord[],
-): Promise<LoadedCandidate[]> {
-  const loaded = await Promise.all(
-    records.slice(0, 8).map(async (record, index) => {
-      const itemId = itemIdFor(record.entityType, record.entityId);
-      if (!itemId) return null;
-      const item = await getItemForUser(userId, itemId);
-      if (!item) return null;
-      return {
+function loadCandidates(records: RetrievedRecord[]): LoadedCandidate[] {
+  return records.slice(0, 5).flatMap((record, index) => {
+    const itemId = itemIdFor(record.entityType, record.entityId);
+    if (!itemId) return [];
+    const notebook =
+      typeof record.sourceMetadata?.notebookName === "string"
+        ? record.sourceMetadata.notebookName
+        : null;
+    return [
+      {
         key: `n${index + 1}`,
         record,
         source: {
-          itemId: item.id,
-          title: item.title,
-          notebook: item.notebook,
-          date: item.bumpedAt || item.updatedAt || item.createdAt || null,
+          itemId,
+          title: record.title,
+          notebook,
+          date: record.updatedAt ?? null,
         },
-      };
-    }),
-  );
-  const candidates = loaded.filter((candidate): candidate is LoadedCandidate =>
-    Boolean(candidate),
-  );
-  if (records.length > 0 && candidates.length === 0) {
-    throw Object.assign(new Error("Voice note sources are unavailable"), {
-      status: 503,
-    });
-  }
-  return candidates;
+      },
+    ];
+  });
 }
 
 function resultFromAnswer(input: {
@@ -197,22 +187,26 @@ export async function queryVoiceNotesForUser(
 ): Promise<VoiceQueryAnswer> {
   const thread = await ensureAskThreadForUser(userId, threadId, question);
   const history = await listRecentTurnsForThread(userId, thread.id);
-  const retrievalQuestion = retrievalQueryFromHistory(question, history);
-  const retrieval = await retrieveRelevantRecords(
-    userId,
-    retrievalQuestion,
-    16,
-    { noteSearchQuery: question, semantic: false },
-  );
+  const historyQuery = retrievalQueryFromHistory(question, history);
+  // Use the current turn whenever it contains useful terms. History remains a
+  // fallback for pronoun-only follow-ups such as "what does it say?"
+  const retrievalQuestion =
+    freeRetrievalTerms(question).length > 0 ? question : historyQuery;
+  const [retrieval] = await Promise.all([
+    retrieveRelevantRecords(userId, retrievalQuestion, 8, {
+      noteSearchQuery: retrievalQuestion,
+      semantic: false,
+      sourceScope: "notes",
+    }),
+    appendAskMessage({
+      userId,
+      threadId: thread.id,
+      role: "user",
+      content: question,
+    }),
+  ]);
   const noteRecords = retrieval.records.filter(isNoteRecord);
-  const candidates = await loadCandidates(userId, noteRecords);
-
-  await appendAskMessage({
-    userId,
-    threadId: thread.id,
-    role: "user",
-    content: question,
-  });
+  const candidates = loadCandidates(noteRecords);
 
   if (candidates.length === 0) {
     const assistant = await appendAskMessage({
@@ -234,7 +228,7 @@ export async function queryVoiceNotesForUser(
   const context = candidates
     .map(
       ({ key, record, source }) =>
-        `[${key}]\nTitle: ${source.title}\nNotebook: ${source.notebook ?? "None"}\nDate: ${source.date ?? "Unknown"}\nContent: ${record.text.slice(0, 2400)}`,
+        `[${key}]\nTitle: ${source.title}\nNotebook: ${source.notebook ?? "None"}\nDate: ${source.date ?? "Unknown"}\nContent: ${record.text.slice(0, 1200)}`,
     )
     .join("\n\n");
   const conversation = history
