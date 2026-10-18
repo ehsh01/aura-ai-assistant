@@ -3,7 +3,6 @@ import { connectors, sourceRecords } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { listTasksForUser } from "./tasks";
 import {
-  buildSplitTokenRegexes,
   listNotesForUser,
   searchNoteRecordsForUser,
   shouldExpandUrlTokens,
@@ -905,17 +904,6 @@ function sourceRecordTsQueries(
   };
 }
 
-function sourceRecordSplitTokenMatch(terms: string[]) {
-  const patterns = buildSplitTokenRegexes(terms);
-  if (patterns.length === 0) return sql`false`;
-  return sql`(${sql.join(
-    patterns.map(
-      (pattern) => sql`${sourceRecords.searchDocument} ~* ${pattern}`,
-    ),
-    sql` OR `,
-  )})`;
-}
-
 /** Match-centered evidence so full-library FTS hits remain grounded. */
 export function evernoteMatchExcerpt(
   text: string,
@@ -972,9 +960,6 @@ export async function searchEvernoteSourceRecordsForUser(
   const terms = sourceRecordSearchTerms(query);
   const tsQueries = sourceRecordTsQueries(terms);
   if (!tsQueries) return [];
-  const splitTokenMatch = sourceRecordSplitTokenMatch(
-    shouldExpandUrlTokens(query) ? terms : [],
-  );
   const rows = await getDb()
     .select({
       id: sourceRecords.id,
@@ -1041,7 +1026,6 @@ export async function searchEvernoteSourceRecordsForUser(
         sql`coalesce((${sourceRecords.recordMetadata}->>'trashed')::boolean, false) = false`,
         sql`(
           ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.any})
-          OR ${splitTokenMatch}
           OR exists (
             select 1
             from evernote_attachments ea
@@ -1064,7 +1048,6 @@ export async function searchEvernoteSourceRecordsForUser(
             and ea.search_tsv @@ to_tsquery('simple', ${tsQueries.all})
         )
       ) THEN 1 ELSE 0 END DESC`,
-      sql`CASE WHEN ${splitTokenMatch} THEN 1 ELSE 0 END DESC`,
       sql`(
         ts_rank_cd(to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')), to_tsquery('simple', ${tsQueries.any})) * 4
         + ts_rank_cd(coalesce(${sourceRecords.searchTsv}, ''::tsvector), to_tsquery('simple', ${tsQueries.any}))
@@ -1111,9 +1094,6 @@ export async function searchSourceRecordsForUser(
   const terms = sourceRecordSearchTerms(query);
   const tsQueries = sourceRecordTsQueries(terms);
   if (!tsQueries) return [];
-  const splitTokenMatch = sourceRecordSplitTokenMatch(
-    shouldExpandUrlTokens(query) ? terms : [],
-  );
   const rows = await getDb()
     .select({
       id: sourceRecords.id,
@@ -1147,16 +1127,12 @@ export async function searchSourceRecordsForUser(
       and(
         eq(sourceRecords.userId, userId),
         ne(sourceRecords.recordType, "evernote_note"),
-        sql`(
-          ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.any})
-          OR ${splitTokenMatch}
-        )`,
+        sql`${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.any})`,
       ),
     )
     .orderBy(
       sql`CASE WHEN to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')) @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
       sql`CASE WHEN ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
-      sql`CASE WHEN ${splitTokenMatch} THEN 1 ELSE 0 END DESC`,
       sql`(
         ts_rank_cd(to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')), to_tsquery('simple', ${tsQueries.any})) * 4
         + ts_rank_cd(coalesce(${sourceRecords.searchTsv}, ''::tsvector), to_tsquery('simple', ${tsQueries.any}))

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildSplitTokenRegexes } from "./notes";
+import { hostnameIlikePatterns } from "./notes";
 
 const migrationUrl = new URL("../../../../lib/db/migrations/0016_notes_fts.sql", import.meta.url);
 
@@ -90,18 +90,60 @@ describe("notes FTS migration", () => {
           '',
           '[]'::jsonb
         );
+
+      INSERT INTO "notes" (
+        "id",
+        "user_id",
+        "title",
+        "content",
+        "preview",
+        "tags"
+      )
+      SELECT
+        'psychiatry-decoy-' || g,
+        '11111111-1111-4111-8111-111111111111',
+        'Psychiatry titled note ' || g,
+        'No website hostname here',
+        '',
+        '[]'::jsonb
+      FROM generate_series(1, 60) g;
     `);
 
     for (const [term, expectedId] of [
       ["psychiatry", "note-en-xfbhdx"],
       ["khaila", "note-khaila"],
     ] as const) {
-      const [pattern] = buildSplitTokenRegexes([term]);
+      const patterns = hostnameIlikePatterns(term);
       const expandedHit = await db.query<{ id: string }>(
-        `SELECT id FROM notes WHERE search_document ~* $1`,
-        [pattern],
+        `SELECT id
+         FROM notes
+         WHERE search_document ILIKE $1
+            OR search_document ILIKE $2
+            OR search_document ILIKE $3
+            OR search_document ILIKE $4`,
+        patterns,
       );
       expect(expandedHit.rows.map((row) => row.id)).toContain(expectedId);
     }
+
+    const patterns = hostnameIlikePatterns("psychiatry");
+    const pinned = await db.query<{ id: string }>(
+      `SELECT id
+       FROM notes
+       WHERE search_tsv @@ to_tsquery('simple', 'psychiatry:*')
+          OR search_document ILIKE $1
+          OR search_document ILIKE $2
+          OR search_document ILIKE $3
+          OR search_document ILIKE $4
+       ORDER BY CASE
+         WHEN search_document ILIKE $1
+           OR search_document ILIKE $2
+           OR search_document ILIKE $3
+           OR search_document ILIKE $4
+         THEN 1 ELSE 0 END DESC
+       LIMIT 50`,
+      patterns,
+    );
+    expect(pinned.rows[0]?.id).toBe("note-en-xfbhdx");
   });
 });
