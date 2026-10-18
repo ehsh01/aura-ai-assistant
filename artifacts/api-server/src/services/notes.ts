@@ -430,6 +430,28 @@ export function buildNotesTsQuery(terms: string[]): string | null {
   return prefixes.join(" | ");
 }
 
+export function buildSplitTokenRegexes(terms: string[]): string[] {
+  return terms
+    .filter((term) => /^[a-z0-9]+$/i.test(term))
+    .map(
+      (term) =>
+        `((^|[^a-z0-9])${term.toLowerCase()}[.-]|[.-]${term.toLowerCase()}([^a-z0-9]|$))`,
+    );
+}
+
+export function shouldExpandUrlTokens(query: string): boolean {
+  return /\b(?:link|url|website|web\s*(?:site|page)|portal)\b/i.test(query);
+}
+
+function noteSearchDocumentTokenMatch(terms: string[]) {
+  const patterns = buildSplitTokenRegexes(terms);
+  if (patterns.length === 0) return sql`false`;
+  return sql`(${sql.join(
+    patterns.map((pattern) => sql`${notes.searchDocument} ~* ${pattern}`),
+    sql` OR `,
+  )})`;
+}
+
 export type NoteRetrievalHit = {
   entityType: "note";
   entityId: string;
@@ -455,9 +477,13 @@ export async function searchNoteRecordsForUser(
   const anyTsQuery = prefixes.join(" | ");
   const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 50);
   const anyMatch = sql`${notes.searchTsv} @@ to_tsquery('simple', ${anyTsQuery})`;
+  const splitTokenMatch = noteSearchDocumentTokenMatch(
+    shouldExpandUrlTokens(query) ? terms : [],
+  );
+  const textMatch = or(anyMatch, splitTokenMatch);
   const whereMatch = terms.includes("vin")
-    ? or(anyMatch, vinHeuristicMatch())
-    : anyMatch;
+    ? or(textMatch, vinHeuristicMatch())
+    : textMatch;
   const rows = await getDb()
     .select({
       id: notes.id,
@@ -483,6 +509,7 @@ export async function searchNoteRecordsForUser(
     .orderBy(
       sql`CASE WHEN to_tsvector('simple', coalesce(${notes.title}, '')) @@ to_tsquery('simple', ${allTsQuery}) THEN 1 ELSE 0 END DESC`,
       sql`CASE WHEN ${notes.searchTsv} @@ to_tsquery('simple', ${allTsQuery}) THEN 1 ELSE 0 END DESC`,
+      sql`CASE WHEN ${splitTokenMatch} THEN 1 ELSE 0 END DESC`,
       sql`(
         ts_rank_cd(to_tsvector('simple', coalesce(${notes.title}, '')), to_tsquery('simple', ${anyTsQuery})) * 4
         + ts_rank_cd(coalesce(${notes.searchTsv}, ''::tsvector), to_tsquery('simple', ${anyTsQuery}))

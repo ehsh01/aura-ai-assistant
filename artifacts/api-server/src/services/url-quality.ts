@@ -54,6 +54,62 @@ export const URL_REJECTION_RULES = {
     "/optout",
   ],
   mapHosts: ["maps.google.com", "maps.app.goo.gl", "goo.gl"],
+  allowedTlds: [
+    "com",
+    "org",
+    "net",
+    "edu",
+    "gov",
+    "io",
+    "co",
+    "us",
+    "app",
+    "info",
+    "biz",
+    "me",
+    "ai",
+    "dev",
+    "health",
+    "uk",
+    "ca",
+    "au",
+    "nz",
+    "de",
+    "fr",
+    "es",
+    "it",
+    "nl",
+    "ch",
+    "se",
+    "no",
+    "dk",
+    "fi",
+    "ie",
+    "jp",
+    "cn",
+    "in",
+    "br",
+    "mx",
+    "za",
+    "sg",
+    "ae",
+  ],
+  fileExtensionTlds: [
+    "pdf",
+    "doc",
+    "docx",
+    "png",
+    "jpg",
+    "jpeg",
+    "gif",
+    "svg",
+    "html",
+    "htm",
+    "txt",
+    "rtf",
+    "xls",
+    "xlsx",
+  ],
 } as const;
 
 const HTTP_URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+/gi;
@@ -68,6 +124,18 @@ export type ExtractedLink = {
 
 function cleanLink(value: string): string {
   return value.replace(/[),.;!?]+$/, "");
+}
+
+function hasAllowedTld(hostname: string): boolean {
+  const tld = hostname.toLowerCase().replace(/\.$/, "").split(".").pop() ?? "";
+  return (
+    URL_REJECTION_RULES.allowedTlds.includes(
+      tld as (typeof URL_REJECTION_RULES.allowedTlds)[number],
+    ) &&
+    !URL_REJECTION_RULES.fileExtensionTlds.includes(
+      tld as (typeof URL_REJECTION_RULES.fileExtensionTlds)[number],
+    )
+  );
 }
 
 export function extractHttpUrls(text: string): string[] {
@@ -89,8 +157,15 @@ export function extractLinkCandidates(text: string): ExtractedLink[] {
     const raw = cleanLink(match[0]);
     const index = match.index ?? 0;
     if (occupied.some(([start, end]) => index >= start && index < end)) continue;
-    if (text[index - 1] === "@") continue;
-    found.push({ raw, url: `https://${raw}`, index });
+    const before = text[index - 1] ?? "";
+    const after = text[index + match[0].length] ?? "";
+    const prefix = text.slice(Math.max(0, index - 7), index).toLowerCase();
+    if (before === "@" || before === "/" || after === "@" || prefix === "mailto:") {
+      continue;
+    }
+    const normalized = `https://${raw}`;
+    if (!hasAllowedTld(new URL(normalized).hostname)) continue;
+    found.push({ raw, url: normalized, index });
   }
   const seen = new Set<string>();
   return found
@@ -113,6 +188,7 @@ export function isPlaceholderUrl(value: string): boolean {
   if (url.protocol !== "http:" && url.protocol !== "https:") return true;
 
   const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (!hasAllowedTld(host)) return true;
   const normalized = url.href.toLowerCase();
   if (
     URL_REJECTION_RULES.exactHosts.some(
