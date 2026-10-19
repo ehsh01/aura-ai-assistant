@@ -40,7 +40,7 @@ import {
   createOpenAiClient,
   resetCredentialMemoryForTests,
 } from "./openai-client";
-import { HIDDEN_CREDENTIAL } from "./secret-redaction";
+import { HIDDEN_ADDRESS, HIDDEN_CREDENTIAL } from "./secret-redaction";
 
 beforeEach(() => {
   resetCredentialMemoryForTests();
@@ -54,8 +54,7 @@ describe("instrumented OpenAI client", () => {
   it("redacts chat and TTS request bodies before the provider call", async () => {
     const password = "FakePsychiatryPassword!42";
     const spacesKey = "DO00FAKEACCESSKEY123";
-    const bareSpacesKey =
-      "QWxhZGRpbjpPcGVuU2VzYW1lMTIzNDU2Nzg5MDEAB12";
+    const bareSpacesKey = "QWxhZGRpbjpPcGVuU2VzYW1lMTIzNDU2Nzg5MDEAB12";
     const spacesSecret = "FAKESECRETKEY1234567890123456789012345678";
     const sshBare = "Abc123xyzAbc123xyz@Q@Wordtail9";
     const commandToken = "Abc123xyzAbc123xyz@Q@Wordtail9";
@@ -68,7 +67,7 @@ Spaces access key: ${spacesKey}
 Spaces Key: ${bareSpacesKey}
 Spaces secret key: ${spacesSecret}
 API Key: ${apiKey}
-ssh root@1.2.3.4
+ssh root@10.20.30.40
 ${sshBare}
 deploy user:${commandToken}/var/www/x`;
     mocks.chat.mockResolvedValue({
@@ -132,6 +131,118 @@ deploy user:${commandToken}/var/www/x`;
     }
     expect(chatBody).not.toContain("credential]credential]");
     expect(speechBody).not.toContain("credential]credential]");
+  });
+
+  it("redacts addresses before answer synthesis, output, and TTS", async () => {
+    const fixture = `Server Inventory
+IP: 10.20.30.40
+server: 10. 20.
+Host: inventory-node.example
+DB: db-node.fake.internal:5432
+Runbook: https://dadeschools.net/server-guide
+SSH: deploy@inventory-node.fake.internal`;
+    mocks.chat.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: "Connect to 10.20.30.40 or INVENTORY-NODE.EXAMPLE.",
+          },
+        },
+      ],
+      usage: { prompt_tokens: 12, completion_tokens: 3 },
+    });
+    mocks.speech.mockResolvedValue({
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+    const client = createOpenAiClient({
+      apiKey: "test",
+      feature: "voice_ask",
+      userId: "address-redaction-user",
+    });
+
+    const chat = await client.chat.completions.create({
+      model: "gpt-test",
+      messages: [{ role: "user", content: fixture }],
+    });
+    await client.audio.speech.create({
+      model: "tts-1",
+      voice: "onyx",
+      input: "Connect to 10.20.30.40 or INVENTORY-NODE.EXAMPLE.",
+    });
+
+    const chatBody = JSON.stringify(mocks.chat.mock.calls[0]?.[0]);
+    const outputBody = JSON.stringify(chat);
+    const speechBody = JSON.stringify(mocks.speech.mock.calls[0]?.[0]);
+    for (const sensitive of [
+      "10.20.30.40",
+      "10. 20.",
+      "inventory-node.fake.internal",
+      "inventory-node.example",
+      "INVENTORY-NODE.EXAMPLE",
+      "db-node.fake.internal",
+    ]) {
+      expect(chatBody).not.toContain(sensitive);
+      expect(outputBody).not.toContain(sensitive);
+      expect(speechBody).not.toContain(sensitive);
+    }
+    expect(chatBody).toContain(HIDDEN_ADDRESS);
+    expect(outputBody).toContain(HIDDEN_ADDRESS);
+    expect(speechBody).toContain(HIDDEN_ADDRESS);
+    expect(chatBody).toContain("https://dadeschools.net/server-guide");
+    expect(mocks.chat).toHaveBeenCalledOnce();
+    expect(mocks.speech).toHaveBeenCalledOnce();
+  });
+
+  it("carries remembered IPv4 fragments into later chat and TTS calls", async () => {
+    mocks.chat.mockResolvedValue({
+      choices: [{ message: { content: "Safe response" } }],
+      usage: { prompt_tokens: 4, completion_tokens: 2 },
+    });
+    mocks.speech.mockResolvedValue({
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+    const options = {
+      apiKey: "test",
+      feature: "voice_ask" as const,
+      userId: "remembered-ip-user",
+    };
+
+    await createOpenAiClient(options).chat.completions.create({
+      model: "gpt-test",
+      messages: [{ role: "user", content: "ssh root@10.20.30.40" }],
+    });
+    await createOpenAiClient(options).chat.completions.create({
+      model: "gpt-test",
+      messages: [{ role: "user", content: "It was on 10. 20. last week." }],
+    });
+    const price = "Total $1,234.56 and EUR 12.50, was $10.20.";
+    await createOpenAiClient(options).chat.completions.create({
+      model: "gpt-test",
+      messages: [{ role: "user", content: price }],
+    });
+    await createOpenAiClient(options).audio.speech.create({
+      model: "tts-1",
+      voice: "onyx",
+      input: "It was on 10. 20. last week.",
+    });
+    await createOpenAiClient(options).audio.speech.create({
+      model: "tts-1",
+      voice: "onyx",
+      input: price,
+    });
+
+    const laterChatBody = JSON.stringify(mocks.chat.mock.calls[1]?.[0]);
+    const priceChatBody = JSON.stringify(mocks.chat.mock.calls[2]?.[0]);
+    const laterSpeechBody = JSON.stringify(mocks.speech.mock.calls[0]?.[0]);
+    const priceSpeechBody = JSON.stringify(mocks.speech.mock.calls[1]?.[0]);
+    expect(laterChatBody).not.toContain("10. 20.");
+    expect(laterSpeechBody).not.toContain("10. 20.");
+    expect(laterChatBody).toContain(HIDDEN_ADDRESS);
+    expect(laterSpeechBody).toContain(HIDDEN_ADDRESS);
+    expect(priceChatBody).toContain(price);
+    expect(priceSpeechBody).toContain(price);
+    expect(priceChatBody).not.toContain(HIDDEN_ADDRESS);
+    expect(priceSpeechBody).not.toContain(HIDDEN_ADDRESS);
   });
 
   it("redacts markup-glued TTS values and learned secret tails", async () => {

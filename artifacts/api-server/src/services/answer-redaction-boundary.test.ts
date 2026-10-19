@@ -108,7 +108,7 @@ describe("answer persistence and citation redaction", () => {
     withCredentialRedactionScope(() => {
       const secret = "Abc123xyzAbc123xyz@Q@Wordtail9";
       redactCredentials(
-        `ssh root@1.2.3.4\n${secret}\ndeploy user:${secret}/var/www/x`,
+        `ssh root@10.20.30.40\n${secret}\ndeploy user:${secret}/var/www/x`,
       );
       const stored = sanitizeAskMessageForStorage({
         content: "Model echoed tail Wordtail9",

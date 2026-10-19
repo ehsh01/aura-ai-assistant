@@ -1,28 +1,51 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isIP } from "node:net";
 
 export const HIDDEN_CREDENTIAL = "[hidden credential]";
+export const HIDDEN_ADDRESS = "[hidden address]";
 
-const credentialScope = new AsyncLocalStorage<Set<string>>();
+type RedactionMemory = {
+  credentials: Set<string>;
+  addresses: Set<string>;
+};
+
+const credentialScope = new AsyncLocalStorage<RedactionMemory>();
 
 export function withCredentialRedactionScope<T>(
   operation: () => T,
   seed: Iterable<string> = [],
+  addressSeed: Iterable<string> = [],
 ): T {
   const existing = credentialScope.getStore();
   if (existing) {
     for (const value of seed) rememberCredential(value);
+    for (const value of addressSeed) rememberAddress(value);
     return operation();
   }
-  return credentialScope.run(new Set<string>(seed), operation);
+  return credentialScope.run(
+    {
+      credentials: new Set<string>(),
+      addresses: new Set<string>(),
+    },
+    () => {
+      for (const value of seed) rememberCredential(value);
+      for (const value of addressSeed) rememberAddress(value);
+      return operation();
+    },
+  );
 }
 
 export function learnedCredentialValues(): string[] {
-  return [...(credentialScope.getStore() ?? [])];
+  return [...(credentialScope.getStore()?.credentials ?? [])];
+}
+
+export function learnedAddressValues(): string[] {
+  return [...(credentialScope.getStore()?.addresses ?? [])];
 }
 
 function rememberCredential(value: string): void {
-  const bracket = value.indexOf("[");
-  const normalized = (bracket >= 0 ? value.slice(0, bracket) : value)
+  if (value.includes("[")) return;
+  const normalized = value
     .replace(/^["']|["']$/g, "")
     .replace(/^[<>"']+|[<>"']+$/g, "")
     .trim();
@@ -37,7 +60,19 @@ function rememberCredential(value: string): void {
     !normalized.includes("\uE000") &&
     !/hidden|credential\]/i.test(normalized)
   ) {
-    credentialScope.getStore()?.add(normalized);
+    credentialScope.getStore()?.credentials.add(normalized);
+  }
+}
+
+function rememberAddress(value: string): void {
+  const normalized = value.trim().replace(/^\[|\]$/g, "");
+  if (
+    normalized.length > 0 &&
+    !normalized.includes("[") &&
+    !normalized.includes("\uE000") &&
+    !/hidden|address\]/i.test(normalized)
+  ) {
+    credentialScope.getStore()?.addresses.add(normalized);
   }
 }
 
@@ -47,8 +82,7 @@ const INLINE_PASSWORD =
   /\b((?:(?:ssh|database|db)\s+)?(?:password|passwd|pass|pwd|pin)\s*(?:is|[:=])\s*)([^\s,;]+)/gi;
 const USERINFO_TOKEN =
   /\b((?:[a-z][a-z0-9+.-]*:\/\/[A-Za-z0-9._-]+:)|(?:[A-Za-z0-9._-]+:(?!\/\/)))([^\s]+)/gi;
-const SSHPASS_PASSWORD =
-  /\b(sshpass\s+-p\s+)("[^"]*"|'[^']*'|\S+)/gi;
+const SSHPASS_PASSWORD = /\b(sshpass\s+-p\s+)("[^"]*"|'[^']*'|\S+)/gi;
 const UPPER_SNAKE_CREDENTIAL =
   /\b([A-Z][A-Z0-9_]*(?:_KEY|_SECRET|_TOKEN|_PASSWORD)\s*[:=]\s*)([^\s]+)/g;
 const LABELED_CREDENTIAL =
@@ -58,8 +92,7 @@ const OPENAI_KEY = /\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\b/g;
 const GITHUB_TOKEN = /\bgh[pousr]_[A-Za-z0-9]{16,}\b/g;
 const SLACK_TOKEN = /\bxox[a-z]-[A-Za-z0-9-]{10,}\b/gi;
 const ACCESS_KEY = /\b(?:AKIA|DO00)[A-Z0-9]{16}\b/g;
-const JWT =
-  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
+const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
 const HIGH_ENTROPY_TOKEN = /[A-Za-z0-9/+=_-]{32,}/g;
 
 function splitTrailingSentencePunctuation(value: string): {
@@ -68,9 +101,7 @@ function splitTrailingSentencePunctuation(value: string): {
 } {
   const punctuation = value.match(/[.,;:!?)]*$/)?.[0] ?? "";
   return {
-    credential: punctuation
-      ? value.slice(0, -punctuation.length)
-      : value,
+    credential: punctuation ? value.slice(0, -punctuation.length) : value,
     punctuation,
   };
 }
@@ -125,6 +156,11 @@ function isCommandOrPath(value: string): boolean {
   );
 }
 
+function isLikelySshPassword(value: string): boolean {
+  const normalized = value.replace(/[.,;:)]*$/, "");
+  return normalized.length >= 6 && /\d|[!@#$%^&*+_=<>{}|~]/.test(normalized);
+}
+
 function redactSshFollowingPasswords(text: string): string {
   const newline = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text.split(/\r?\n/);
@@ -137,7 +173,11 @@ function redactSshFollowingPasswords(text: string): string {
     const end = ssh.index + ssh[0].length;
     const remainder = line.slice(end);
     const sameLineToken = remainder.trim().split(/\s+/)[0] ?? "";
-    if (sameLineToken && !isCommandOrPath(sameLineToken)) {
+    if (
+      sameLineToken &&
+      !isCommandOrPath(sameLineToken) &&
+      isLikelySshPassword(sameLineToken)
+    ) {
       rememberCredential(sameLineToken);
       lines[index] =
         line.slice(0, end) +
@@ -148,12 +188,9 @@ function redactSshFollowingPasswords(text: string): string {
       const candidate = (lines[next] ?? "").trim();
       if (!candidate) continue;
       const token = candidate.split(/\s+/)[0] ?? "";
-      if (token && !isCommandOrPath(token)) {
+      if (token && !isCommandOrPath(token) && isLikelySshPassword(token)) {
         rememberCredential(token);
-        lines[next] = (lines[next] ?? "").replace(
-          token,
-          HIDDEN_CREDENTIAL,
-        );
+        lines[next] = (lines[next] ?? "").replace(token, HIDDEN_CREDENTIAL);
       }
       break;
     }
@@ -175,14 +212,19 @@ function redactUserInfoCredentials(text: string): string {
   return text.replace(
     USERINFO_TOKEN,
     (match, prefix: string, token: string) => {
-      if (!token.includes("@") || token.startsWith("//")) return match;
+      if (
+        !token.includes("@") ||
+        token.startsWith("//") ||
+        token.includes("\uE000")
+      ) {
+        return match;
+      }
       const punctuation = token.match(/[.,;:!?")']+$/)?.[0] ?? "";
       const coreToken = punctuation
         ? token.slice(0, -punctuation.length)
         : token;
       const slash = coreToken.indexOf("/");
-      const authority =
-        slash >= 0 ? coreToken.slice(0, slash) : coreToken;
+      const authority = slash >= 0 ? coreToken.slice(0, slash) : coreToken;
       const path = slash >= 0 ? coreToken.slice(slash) : "";
       const separators = [...authority.matchAll(/@/g)]
         .map((entry) => entry.index ?? -1)
@@ -195,8 +237,7 @@ function redactUserInfoCredentials(text: string): string {
           break;
         }
       }
-      const credential =
-        hostAt >= 0 ? authority.slice(0, hostAt) : authority;
+      const credential = hostAt >= 0 ? authority.slice(0, hostAt) : authority;
       const host = hostAt >= 0 ? authority.slice(hostAt) : "";
       rememberCredential(credential);
       return `${prefix}${HIDDEN_CREDENTIAL}${host}${path}${punctuation}`;
@@ -205,16 +246,11 @@ function redactUserInfoCredentials(text: string): string {
 }
 
 function redactHighEntropyTokens(text: string): string {
-  const urlRanges = [
-    ...text.matchAll(/\b(?:https?|ftp):\/\/[^\s<>"']+/gi),
-  ].map((match) => [
-    match.index ?? 0,
-    (match.index ?? 0) + match[0].length,
-  ]);
+  const urlRanges = [...text.matchAll(/\b(?:https?|ftp):\/\/[^\s<>"']+/gi)].map(
+    (match) => [match.index ?? 0, (match.index ?? 0) + match[0].length],
+  );
   return text.replace(HIGH_ENTROPY_TOKEN, (token, offset: number) => {
-    if (
-      urlRanges.some(([start, end]) => offset >= start && offset < end)
-    ) {
+    if (urlRanges.some(([start, end]) => offset >= start && offset < end)) {
       return token;
     }
     if (
@@ -236,7 +272,7 @@ function redactHighEntropyTokens(text: string): string {
 }
 
 function learnedCredentialPatterns(): string[] {
-  const known = [...(credentialScope.getStore() ?? [])].sort(
+  const known = [...(credentialScope.getStore()?.credentials ?? [])].sort(
     (a, b) => b.length - a.length,
   );
   const values = new Set<string>();
@@ -266,6 +302,391 @@ function redactKnownCredentialValues(text: string): string {
   return redacted;
 }
 
+const IPV4_CANDIDATE =
+  /(?<![A-Za-z0-9_.])(?:\d{1,3}\.){3}\d{1,3}(?![A-Za-z0-9_]|\.\d)/g;
+const IPV6_CANDIDATE =
+  /(?<![A-Za-z0-9_:.])(?:\[[0-9A-Fa-f:.]+(?:%[A-Za-z0-9_~-](?:[A-Za-z0-9._~-]*[A-Za-z0-9_~-])?)?\]|[0-9A-Fa-f:][0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*(?:%[A-Za-z0-9_~-](?:[A-Za-z0-9._~-]*[A-Za-z0-9_~-])?)?)(?![A-Za-z0-9_:]|\.\d)/g;
+const SPLIT_IP_CANDIDATE =
+  /(?<![A-Za-z0-9_.])\d{1,3}\.\s+\d{1,3}\.(?:\s+\d{1,3}\.){0,2}(?!\d)/g;
+const HOST_LABEL = /\b(?:ip|host(?:name)?|server|ssh|db|database|port)\b/i;
+const HOSTNAME_PATTERN =
+  "(?:localhost|[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+)";
+const HOST_VALUE_PATTERN = `(?:${HOSTNAME_PATTERN}|[A-Za-z](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)`;
+const SAFE_LINK_HOSTS = new Set([
+  "psychiatry.med.miami.edu",
+  "smartersoftware.io",
+  "secure.touchnet.net",
+  "dadeschools.net",
+  "eappraisal.miami.edu",
+]);
+const NON_HOST_LABEL_VALUES = new Set([
+  "a",
+  "an",
+  "available",
+  "down",
+  "here",
+  "next",
+  "none",
+  "offline",
+  "online",
+  "ready",
+  "there",
+  "the",
+  "unknown",
+  "up",
+]);
+
+function validIpv4(value: string): boolean {
+  const octets = value.split(".");
+  return (
+    octets.length === 4 &&
+    octets.every((octet) => {
+      if (!/^\d{1,3}$/.test(octet)) return false;
+      const number = Number(octet);
+      return number >= 0 && number <= 255;
+    })
+  );
+}
+
+function isProtectedAddressContext(text: string, offset: number): boolean {
+  const prefix = text.slice(Math.max(0, offset - 64), offset);
+  return /\b(?:v|ver(?:sion)?|release|build|date|time|phone|tel(?:ephone)?|price|cost|amount|total|masked\s*(?:id|identifier))\s*(?:[:=#-]\s*)?$/i.test(
+    prefix,
+  );
+}
+
+function ipv6Value(candidate: string): {
+  value: string;
+  punctuation: string;
+} | null {
+  const punctuation = candidate.startsWith("[")
+    ? ""
+    : (candidate.match(/\.+$/)?.[0] ?? "");
+  const core = punctuation
+    ? candidate.slice(0, -punctuation.length)
+    : candidate;
+  const unwrapped =
+    core.startsWith("[") && core.endsWith("]") ? core.slice(1, -1) : core;
+  const withoutZone = unwrapped.replace(/%[A-Za-z0-9._~-]+$/, "");
+  return isIP(withoutZone) === 6 ? { value: unwrapped, punctuation } : null;
+}
+
+function splitIpIsValid(value: string): boolean {
+  const octets = value.match(/\d{1,3}/g) ?? [];
+  return (
+    octets.length >= 2 &&
+    octets.every((octet) => Number(octet) >= 0 && Number(octet) <= 255)
+  );
+}
+
+function nearHostLabel(text: string, offset: number, length: number): boolean {
+  const lineStart = text.lastIndexOf("\n", offset - 1) + 1;
+  const nextNewline = text.indexOf("\n", offset + length);
+  const lineEnd = nextNewline < 0 ? text.length : nextNewline;
+  const before = text.slice(Math.max(lineStart, offset - 64), offset);
+  const after = text.slice(
+    offset + length,
+    Math.min(lineEnd, offset + length + 32),
+  );
+  return HOST_LABEL.test(before) || HOST_LABEL.test(after);
+}
+
+function isLocalHostname(host: string): boolean {
+  return /^localhost$/i.test(host) || /\.(?:internal|local)$/i.test(host);
+}
+
+function isSafeLinkHost(host: string): boolean {
+  return SAFE_LINK_HOSTS.has(host.toLowerCase());
+}
+
+function isHostname(host: string): boolean {
+  if (host.includes("[") || host.includes("\uE000")) return false;
+  if (isIP(host)) return false;
+  if (/^\d+(?:\.\d+)+$/.test(host)) return false;
+  return new RegExp(`^${HOST_VALUE_PATTERN}$`, "i").test(host);
+}
+
+function redactCredentialAtHosts(text: string): string {
+  const credentialAtHost = new RegExp(
+    `((?:\\[hidden credential\\]|\uE000RX+\uE001)@)(${HOST_VALUE_PATTERN})`,
+    "gi",
+  );
+  return text.replace(
+    credentialAtHost,
+    (match: string, prefix: string, host: string) => {
+      if (!isHostname(host) || isSafeLinkHost(host)) return match;
+      rememberAddress(host);
+      return `${prefix}${HIDDEN_ADDRESS}`;
+    },
+  );
+}
+
+function webUrlRanges(text: string): Array<[number, number]> {
+  return [...text.matchAll(/\b(?:https?|ftp):\/\/[^\s<>"']+/gi)].map(
+    (match) => [match.index ?? 0, (match.index ?? 0) + match[0].length],
+  );
+}
+
+function inRanges(offset: number, ranges: Array<[number, number]>): boolean {
+  return ranges.some(([start, end]) => offset >= start && offset < end);
+}
+
+function redactFullIpAddresses(text: string): {
+  text: string;
+  found: boolean;
+} {
+  let found = false;
+  let redacted = text.replace(
+    IPV6_CANDIDATE,
+    (candidate: string, offset: number, source: string) => {
+      const parsed = ipv6Value(candidate);
+      if (!parsed || isProtectedAddressContext(source, offset)) {
+        return candidate;
+      }
+      found = true;
+      rememberAddress(parsed.value);
+      return `${HIDDEN_ADDRESS}${parsed.punctuation}`;
+    },
+  );
+  redacted = redacted.replace(
+    IPV4_CANDIDATE,
+    (value: string, offset: number, source: string) => {
+      if (!validIpv4(value) || isProtectedAddressContext(source, offset)) {
+        return value;
+      }
+      found = true;
+      rememberAddress(value);
+      return HIDDEN_ADDRESS;
+    },
+  );
+  return { text: redacted, found };
+}
+
+function redactSplitIpAddresses(text: string, hasFullIp: boolean): string {
+  return text.replace(
+    SPLIT_IP_CANDIDATE,
+    (value: string, offset: number, source: string) => {
+      if (
+        !splitIpIsValid(value) ||
+        (!hasFullIp && !nearHostLabel(source, offset, value.length)) ||
+        isProtectedAddressContext(source, offset)
+      ) {
+        return value;
+      }
+      rememberAddress(value);
+      return HIDDEN_ADDRESS;
+    },
+  );
+}
+
+function redactConnectionStringHosts(text: string): string {
+  const connectionHost = new RegExp(
+    `\\b([A-Za-z][A-Za-z0-9+.-]*:\\/\\/(?:[^@\\s/?#]*@)?)(${HOST_VALUE_PATTERN})(?=:\\d+\\b|[/?#\\s]|$)`,
+    "gi",
+  );
+  return text.replace(
+    connectionHost,
+    (match: string, prefix: string, host: string) => {
+      const scheme = prefix.slice(0, prefix.indexOf(":")).toLowerCase();
+      if (["http", "https", "ftp"].includes(scheme) && !isLocalHostname(host)) {
+        return match;
+      }
+      if (!isHostname(host) || isSafeLinkHost(host)) return match;
+      rememberAddress(host);
+      return `${prefix}${HIDDEN_ADDRESS}`;
+    },
+  );
+}
+
+function isEmailContext(text: string, atOffset: number): boolean {
+  const prefix = text.slice(Math.max(0, atOffset - 40), atOffset);
+  return /\b(?:contact|email|e-mail|mailto|from|to|cc|reply(?:-to)?)\s*(?::\s*|\s+)[A-Za-z0-9._-]*$/i.test(
+    prefix,
+  );
+}
+
+function redactUserAtHosts(text: string): string {
+  const userAtHost = new RegExp(
+    `\\b([A-Za-z0-9._-]+@)(${HOST_VALUE_PATTERN})`,
+    "gi",
+  );
+  const urlRanges = webUrlRanges(text);
+  return text.replace(
+    userAtHost,
+    (
+      match: string,
+      user: string,
+      host: string,
+      offset: number,
+      source: string,
+    ) => {
+      const atOffset = offset + user.length - 1;
+      if (
+        !isHostname(host) ||
+        isSafeLinkHost(host) ||
+        (inRanges(offset, urlRanges) && !isLocalHostname(host)) ||
+        (isEmailContext(source, atOffset) && !isLocalHostname(host))
+      ) {
+        return match;
+      }
+      rememberAddress(host);
+      return `${user}${HIDDEN_ADDRESS}`;
+    },
+  );
+}
+
+function redactHostPorts(text: string): string {
+  const hostPort = new RegExp(`\\b(${HOST_VALUE_PATTERN}):(\\d{1,5})\\b`, "gi");
+  const urlRanges = webUrlRanges(text);
+  return text.replace(
+    hostPort,
+    (match: string, host: string, port: string, offset: number) => {
+      const previous = text[offset - 1] ?? "";
+      const sourceFilePath =
+        (previous === "/" || previous === "\\") &&
+        /\.(?:[cm]?[jt]sx?|json|map|md)$/i.test(host);
+      if (
+        !isHostname(host) ||
+        Number(port) > 65_535 ||
+        isSafeLinkHost(host) ||
+        sourceFilePath ||
+        (inRanges(offset, urlRanges) && !isLocalHostname(host))
+      ) {
+        return match;
+      }
+      rememberAddress(host);
+      return `${HIDDEN_ADDRESS}:${port}`;
+    },
+  );
+}
+
+function redactLabeledHosts(text: string): string {
+  const labeledHost = new RegExp(
+    `\\b((?:(?:ssh|db|database)\\s+)?(?:ip|host(?:name)?|server|ssh|db|database|port)\\s*(?:(?:host|server|address)\\s*)?(?:is|[:=])\\s*)(${HOST_VALUE_PATTERN})`,
+    "gi",
+  );
+  const urlRanges = webUrlRanges(text);
+  return text.replace(
+    labeledHost,
+    (
+      match: string,
+      label: string,
+      host: string,
+      offset: number,
+      source: string,
+    ) => {
+      const hostOffset = offset + label.length;
+      const following = source.slice(
+        hostOffset + host.length,
+        hostOffset + host.length + 3,
+      );
+      if (
+        !isHostname(host) ||
+        isSafeLinkHost(host) ||
+        NON_HOST_LABEL_VALUES.has(host.toLowerCase()) ||
+        following.startsWith("@") ||
+        following.startsWith("://") ||
+        (inRanges(hostOffset, urlRanges) && !isLocalHostname(host))
+      ) {
+        return match;
+      }
+      rememberAddress(host);
+      return `${label}${HIDDEN_ADDRESS}`;
+    },
+  );
+}
+
+function redactLocalHosts(text: string): string {
+  const localHost = new RegExp(
+    `\\b(${HOSTNAME_PATTERN})(?=:\\d+\\b|[/?#\\s.,;:!?)]|$)`,
+    "gi",
+  );
+  return text.replace(localHost, (host: string) => {
+    if (!isLocalHostname(host) || isSafeLinkHost(host)) return host;
+    rememberAddress(host);
+    return HIDDEN_ADDRESS;
+  });
+}
+
+function redactRememberedIpFragments(text: string): string {
+  const prefixes = new Set<string>();
+  for (const value of credentialScope.getStore()?.addresses ?? []) {
+    if (!validIpv4(value)) continue;
+    const [first, second, third] = value.split(".");
+    prefixes.add(
+      `${first}[ \\t]*\\.[ \\t]*${second}[ \\t]*\\.[ \\t]*${third}[ \\t]*\\.`,
+    );
+    prefixes.add(`${first}[ \\t]*\\.[ \\t]+${second}[ \\t]*\\.`);
+  }
+  let redacted = text;
+  for (const prefix of prefixes) {
+    const urlRanges = webUrlRanges(redacted);
+    redacted = redacted.replace(
+      new RegExp(`(?<![A-Za-z0-9_.])${prefix}(?![ \\t]*\\d|[A-Za-z])`, "g"),
+      (match: string, offset: number, source: string) => {
+        const before = source.slice(Math.max(0, offset - 8), offset);
+        if (
+          isProtectedAddressContext(source, offset) ||
+          /(?:[$€£]|\b(?:EUR|USD))\s*$/i.test(before) ||
+          inRanges(offset, urlRanges)
+        ) {
+          return match;
+        }
+        return HIDDEN_ADDRESS;
+      },
+    );
+  }
+  return redacted;
+}
+
+function redactKnownAddressValues(text: string): string {
+  const known = [...(credentialScope.getStore()?.addresses ?? [])].sort(
+    (a, b) => b.length - a.length,
+  );
+  let redacted = text;
+  for (const value of known) {
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const hostname = isHostname(value);
+    const urlRanges = webUrlRanges(redacted);
+    redacted = redacted.replace(
+      new RegExp(
+        `(?<![A-Za-z0-9_.:%-])${escaped}(?![A-Za-z0-9_:%-]|\\.[A-Za-z0-9])`,
+        "gi",
+      ),
+      (match: string, offset: number, source: string) => {
+        if (
+          isProtectedAddressContext(source, offset) ||
+          isSafeLinkHost(value) ||
+          (hostname && inRanges(offset, urlRanges) && !isLocalHostname(value))
+        ) {
+          return match;
+        }
+        return HIDDEN_ADDRESS;
+      },
+    );
+  }
+  return redacted;
+}
+
+function redactNetworkAddresses(text: string): string {
+  const known = redactRememberedIpFragments(redactKnownAddressValues(text));
+  const full = redactFullIpAddresses(known);
+  const split = redactSplitIpAddresses(full.text, full.found);
+  return redactRememberedIpFragments(
+    redactKnownAddressValues(
+      redactLocalHosts(
+        redactLabeledHosts(
+          redactHostPorts(
+            redactUserAtHosts(
+              redactConnectionStringHosts(redactCredentialAtHosts(split)),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 function collapseCredentialPlaceholders(text: string): string {
   return text
     .replace(/\[+\s*hidden credential\s*\]+/gi, HIDDEN_CREDENTIAL)
@@ -273,22 +694,30 @@ function collapseCredentialPlaceholders(text: string): string {
       /\[hidden credential\](?:\s*\[hidden credential\])+/g,
       HIDDEN_CREDENTIAL,
     )
-    .replace(
-      /\[hidden credential\](?:\s*credential\])+/g,
-      HIDDEN_CREDENTIAL,
-    );
+    .replace(/\[hidden credential\](?:\s*credential\])+/g, HIDDEN_CREDENTIAL);
 }
 
-function protectCredentialPlaceholders(text: string): {
+function collapseAddressPlaceholders(text: string): string {
+  return text
+    .replace(/\[+\s*hidden address\s*\]+/gi, HIDDEN_ADDRESS)
+    .replace(/\[hidden address\](?:\s*\[hidden address\])+/g, HIDDEN_ADDRESS)
+    .replace(/\[hidden address\](?:\s*address\])+/g, HIDDEN_ADDRESS);
+}
+
+function collapseSensitivePlaceholders(text: string): string {
+  return collapseAddressPlaceholders(collapseCredentialPlaceholders(text));
+}
+
+function protectSensitivePlaceholders(text: string): {
   protectedText: string;
   restore: (value: string) => string;
 } {
-  const placeholders: string[] = [];
-  const protectedText = collapseCredentialPlaceholders(text).replace(
-    /\[hidden credential\]/g,
-    () => {
+  const placeholders: Array<{ token: string; value: string }> = [];
+  const protectedText = collapseSensitivePlaceholders(text).replace(
+    /\[hidden (?:credential|address)\]/g,
+    (value) => {
       const token = `\uE000R${"X".repeat(placeholders.length + 1)}\uE001`;
-      placeholders.push(token);
+      placeholders.push({ token, value });
       return token;
     },
   );
@@ -296,10 +725,10 @@ function protectCredentialPlaceholders(text: string): {
     protectedText,
     restore: (value) => {
       let restored = value;
-      for (const token of placeholders) {
-        restored = restored.split(token).join(HIDDEN_CREDENTIAL);
+      for (const placeholder of placeholders) {
+        restored = restored.split(placeholder.token).join(placeholder.value);
       }
-      return collapseCredentialPlaceholders(restored);
+      return collapseSensitivePlaceholders(restored);
     },
   };
 }
@@ -308,32 +737,22 @@ export function redactTtsCredentials(text: string): string {
   const redacted = redactCredentials(text);
   const urlRanges = [
     ...redacted.matchAll(/\b(?:https?|ftp):\/\/[^\s<>"']+/gi),
-  ].map((match) => [
-    match.index ?? 0,
-    (match.index ?? 0) + match[0].length,
-  ]);
-  return collapseCredentialPlaceholders(
-    redacted.replace(
-      /[A-Za-z0-9/+=_-]{12,}/g,
-      (token, offset: number) => {
-        if (
-          urlRanges.some(([start, end]) => offset >= start && offset < end)
-        ) {
-          return token;
-        }
-        return /[a-z]/.test(token) &&
-          /[A-Z]/.test(token) &&
-          /\d/.test(token)
-          ? HIDDEN_CREDENTIAL
-          : token;
-      },
-    ),
+  ].map((match) => [match.index ?? 0, (match.index ?? 0) + match[0].length]);
+  return collapseSensitivePlaceholders(
+    redacted.replace(/[A-Za-z0-9/+=_-]{12,}/g, (token, offset: number) => {
+      if (urlRanges.some(([start, end]) => offset >= start && offset < end)) {
+        return token;
+      }
+      return /[a-z]/.test(token) && /[A-Z]/.test(token) && /\d/.test(token)
+        ? HIDDEN_CREDENTIAL
+        : token;
+    }),
   );
 }
 
 export function redactCredentials(text: string): string {
   if (!text) return text;
-  const { protectedText, restore } = protectCredentialPlaceholders(text);
+  const { protectedText, restore } = protectSensitivePlaceholders(text);
   const scoped = redactKnownCredentialValues(protectedText);
   const known = scoped
     .replace(PRIVATE_KEY_BLOCK, (value) => {
@@ -386,7 +805,9 @@ export function redactCredentials(text: string): string {
       redactLabeledCredentials(redactUserInfoCredentials(known)),
     ),
   );
-  return restore(redactKnownCredentialValues(firstPass));
+  return restore(
+    redactNetworkAddresses(redactKnownCredentialValues(firstPass)),
+  );
 }
 
 function redactError(error: Error): Error {
