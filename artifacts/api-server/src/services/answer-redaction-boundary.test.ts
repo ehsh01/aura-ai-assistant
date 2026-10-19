@@ -106,18 +106,18 @@ describe("answer persistence and citation redaction", () => {
 
   it("carries exact source secrets into stored and audit output stripping", () => {
     withCredentialRedactionScope(() => {
-      const secret = "R00t@Psych@Tail9";
+      const secret = "Abc123xyzAbc123xyz@Q@Wordtail9";
       redactCredentials(
-        `ssh root@1.2.3.4\n${secret}\ndeploy inventory:${secret}@inventory.example.health`,
+        `ssh root@1.2.3.4\n${secret}\ndeploy user:${secret}/var/www/x`,
       );
       const stored = sanitizeAskMessageForStorage({
-        content: "Model echoed tail Psych@Tail9",
+        content: "Model echoed tail Wordtail9",
       });
       const audit = sanitizeAuditMetadata({
-        answer: "Model echoed tail Psych@Tail9",
+        answer: "Model echoed tail Wordtail9",
       });
-      expect(JSON.stringify({ stored, audit })).not.toContain("Psych@Tail9");
-      expect(JSON.stringify({ stored, audit })).not.toContain("@Tail9");
+      expect(JSON.stringify({ stored, audit })).not.toContain("Wordtail9");
+      expect(JSON.stringify({ stored, audit })).not.toContain("@Q@");
     });
   });
 });

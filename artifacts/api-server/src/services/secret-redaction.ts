@@ -18,8 +18,8 @@ const PRIVATE_KEY_BLOCK =
   /-----BEGIN (?:OPENSSH |RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----[\s\S]*?-----END (?:OPENSSH |RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----/gi;
 const INLINE_PASSWORD =
   /\b((?:(?:ssh|database|db)\s+)?(?:password|passwd|pass|pwd|pin)\s*(?:is|[:=])\s*)([^\s,;]+)/gi;
-const GENERIC_USERINFO =
-  /\b((?:[a-z][a-z0-9+.-]*:\/\/)?[A-Za-z0-9._-]+:)(\S+)(@[A-Za-z0-9.[\]_-]+(?::\d+)?(?:[/?#][^\s]*)?)/gi;
+const USERINFO_TOKEN =
+  /\b((?:[a-z][a-z0-9+.-]*:\/\/[A-Za-z0-9._-]+:)|(?:[A-Za-z0-9._-]+:(?!\/\/)))([^\s]+)/gi;
 const SSHPASS_PASSWORD =
   /\b(sshpass\s+-p\s+)("[^"]*"|'[^']*'|\S+)/gi;
 const UPPER_SNAKE_CREDENTIAL =
@@ -104,6 +104,44 @@ function redactSshFollowingPasswords(text: string): string {
   return lines.join(newline);
 }
 
+function plausibleHost(value: string): boolean {
+  const host = value.replace(/:\d+$/, "");
+  return (
+    /^localhost$/i.test(host) ||
+    /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) ||
+    /^\[[0-9a-f:]+\]$/i.test(host) ||
+    host.includes(".")
+  );
+}
+
+function redactUserInfoCredentials(text: string): string {
+  return text.replace(
+    USERINFO_TOKEN,
+    (match, prefix: string, token: string) => {
+      if (!token.includes("@") || token.startsWith("//")) return match;
+      const slash = token.indexOf("/");
+      const authority = slash >= 0 ? token.slice(0, slash) : token;
+      const path = slash >= 0 ? token.slice(slash) : "";
+      const separators = [...authority.matchAll(/@/g)]
+        .map((entry) => entry.index ?? -1)
+        .filter((index) => index >= 0);
+      let hostAt = -1;
+      for (let index = separators.length - 1; index >= 0; index -= 1) {
+        const separator = separators[index]!;
+        if (plausibleHost(authority.slice(separator + 1))) {
+          hostAt = separator;
+          break;
+        }
+      }
+      const credential =
+        hostAt >= 0 ? authority.slice(0, hostAt) : authority;
+      const host = hostAt >= 0 ? authority.slice(hostAt) : "";
+      rememberCredential(credential);
+      return `${prefix}${HIDDEN_CREDENTIAL}${host}${path}`;
+    },
+  );
+}
+
 function redactHighEntropyTokens(text: string): string {
   const urlRanges = [
     ...text.matchAll(/\b(?:https?|ftp):\/\/[^\s<>"']+/gi),
@@ -145,11 +183,35 @@ function redactKnownCredentialValues(text: string): string {
   }
   return redacted.replace(
     /[A-Za-z0-9@:/+_=.-]{6,}/g,
-    (token) =>
-      known.some((value) => value.length >= token.length && value.includes(token))
-        ? HIDDEN_CREDENTIAL
-        : token,
+    (token) => {
+      for (const value of known) {
+        const maxLength = Math.min(token.length, value.length);
+        for (let length = maxLength; length >= 6; length -= 1) {
+          let shared = false;
+          for (let start = 0; start + length <= value.length; start += 1) {
+            if (token.includes(value.slice(start, start + length))) {
+              shared = true;
+              break;
+            }
+          }
+          if (shared) return HIDDEN_CREDENTIAL;
+        }
+      }
+      return token;
+    },
   );
+}
+
+function collapseCredentialPlaceholders(text: string): string {
+  return text
+    .replace(
+      /\[hidden credential\](?:\s*\[hidden credential\])+/g,
+      HIDDEN_CREDENTIAL,
+    )
+    .replace(
+      /\[hidden credential\](?:\s*credential\])+/g,
+      HIDDEN_CREDENTIAL,
+    );
 }
 
 export function redactCredentials(text: string): string {
@@ -159,10 +221,6 @@ export function redactCredentials(text: string): string {
     .replace(PRIVATE_KEY_BLOCK, (value) => {
       rememberCredential(value);
       return HIDDEN_CREDENTIAL;
-    })
-    .replace(GENERIC_USERINFO, (_match, prefix: string, value: string, host: string) => {
-      rememberCredential(value);
-      return `${prefix}${HIDDEN_CREDENTIAL}${host}`;
     })
     .replace(SSHPASS_PASSWORD, (_match, prefix: string, value: string) => {
       rememberCredential(value);
@@ -196,8 +254,13 @@ export function redactCredentials(text: string): string {
       rememberCredential(value);
       return HIDDEN_CREDENTIAL;
     });
-  return redactHighEntropyTokens(
-    redactSshFollowingPasswords(redactLabeledCredentials(known)),
+  const firstPass = redactHighEntropyTokens(
+    redactSshFollowingPasswords(
+      redactLabeledCredentials(redactUserInfoCredentials(known)),
+    ),
+  );
+  return collapseCredentialPlaceholders(
+    redactKnownCredentialValues(firstPass),
   );
 }
 
