@@ -168,6 +168,29 @@ export function hasAcceptableSubjectLink(
   });
 }
 
+/**
+ * The fast path is intentionally stricter than final link ranking. A result
+ * may contain an acceptable URL yet match only a generic or numeric fragment
+ * of a multi-term subject; in that case the full corpus must arbitrate.
+ */
+export function hasStrongFastPathSubjectLink(
+  question: string,
+  record: { title: string; text: string },
+): boolean {
+  if (!hasAcceptableSubjectLink(question, record)) return false;
+  const subjectTerms = freeRetrievalTerms(question);
+  if (
+    subjectTerms.length === 0 ||
+    subjectTerms.every((term) => /^\d+$/.test(term))
+  ) {
+    return false;
+  }
+  const recordTerms = new Set(
+    freeRetrievalTerms(`${record.title}\n${record.text}`, 200),
+  );
+  return subjectTerms.every((term) => recordTerms.has(term));
+}
+
 export function shouldRunHostnameFallback(
   question: string,
   records: Array<{ title: string; text: string }>,
@@ -187,7 +210,9 @@ export async function loadLinkAskFallback<T>(
   if (
     isLinkAskFastPathEnabled() &&
     shouldExpandUrlTokens(question) &&
-    searchRecords.some((record) => hasAcceptableSubjectLink(question, record))
+    searchRecords.some((record) =>
+      hasStrongFastPathSubjectLink(question, record),
+    )
   ) {
     return null;
   }
