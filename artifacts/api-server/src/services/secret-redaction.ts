@@ -24,6 +24,7 @@ function rememberCredential(value: string): void {
   const bracket = value.indexOf("[");
   const normalized = (bracket >= 0 ? value.slice(0, bracket) : value)
     .replace(/^["']|["']$/g, "")
+    .replace(/^[<>"']+|[<>"']+$/g, "")
     .trim();
   const credentialLike =
     /\d|[@:/+_=<>-]/.test(normalized) ||
@@ -61,16 +62,35 @@ const JWT =
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
 const HIGH_ENTROPY_TOKEN = /[A-Za-z0-9/+=_-]{32,}/g;
 
+function splitTrailingSentencePunctuation(value: string): {
+  credential: string;
+  punctuation: string;
+} {
+  const punctuation = value.match(/[.,;:!?)]*$/)?.[0] ?? "";
+  return {
+    credential: punctuation
+      ? value.slice(0, -punctuation.length)
+      : value,
+    punctuation,
+  };
+}
+
 function redactLabeledCredentials(text: string): string {
   return text.replace(/^.*$/gm, (line) => {
     let redacted = line.replace(
       UPPER_SNAKE_CREDENTIAL,
       (match, label: string, value: string) => {
-        if (value.startsWith("[") || value.includes(HIDDEN_CREDENTIAL)) {
+        if (
+          value.startsWith("[") ||
+          value.includes(HIDDEN_CREDENTIAL) ||
+          value.includes("\uE000")
+        ) {
           return match;
         }
-        rememberCredential(value);
-        return `${label}${HIDDEN_CREDENTIAL}`;
+        const { credential, punctuation } =
+          splitTrailingSentencePunctuation(value);
+        rememberCredential(credential);
+        return `${label}${HIDDEN_CREDENTIAL}${punctuation}`;
       },
     );
     redacted = redacted.replace(
@@ -82,11 +102,17 @@ function redactLabeledCredentials(text: string): string {
         _name: string,
         value: string,
       ) => {
-        if (value.startsWith("[") || value.includes(HIDDEN_CREDENTIAL)) {
+        if (
+          value.startsWith("[") ||
+          value.includes(HIDDEN_CREDENTIAL) ||
+          value.includes("\uE000")
+        ) {
           return _match;
         }
-        rememberCredential(value);
-        return `${label}${HIDDEN_CREDENTIAL}`;
+        const { credential, punctuation } =
+          splitTrailingSentencePunctuation(value);
+        rememberCredential(credential);
+        return `${label}${HIDDEN_CREDENTIAL}${punctuation}`;
       },
     );
     return redacted;
@@ -141,7 +167,7 @@ function plausibleHost(value: string): boolean {
     /^localhost$/i.test(host) ||
     /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) ||
     /^\[[0-9a-f:]+\]$/i.test(host) ||
-    host.includes(".")
+    /^(?:[a-z0-9-]+\.)+[a-z]{2,}$/i.test(host)
   );
 }
 
@@ -150,9 +176,14 @@ function redactUserInfoCredentials(text: string): string {
     USERINFO_TOKEN,
     (match, prefix: string, token: string) => {
       if (!token.includes("@") || token.startsWith("//")) return match;
-      const slash = token.indexOf("/");
-      const authority = slash >= 0 ? token.slice(0, slash) : token;
-      const path = slash >= 0 ? token.slice(slash) : "";
+      const punctuation = token.match(/[.,;:!?")']+$/)?.[0] ?? "";
+      const coreToken = punctuation
+        ? token.slice(0, -punctuation.length)
+        : token;
+      const slash = coreToken.indexOf("/");
+      const authority =
+        slash >= 0 ? coreToken.slice(0, slash) : coreToken;
+      const path = slash >= 0 ? coreToken.slice(slash) : "";
       const separators = [...authority.matchAll(/@/g)]
         .map((entry) => entry.index ?? -1)
         .filter((index) => index >= 0);
@@ -168,7 +199,7 @@ function redactUserInfoCredentials(text: string): string {
         hostAt >= 0 ? authority.slice(0, hostAt) : authority;
       const host = hostAt >= 0 ? authority.slice(hostAt) : "";
       rememberCredential(credential);
-      return `${prefix}${HIDDEN_CREDENTIAL}${host}${path}`;
+      return `${prefix}${HIDDEN_CREDENTIAL}${host}${path}${punctuation}`;
     },
   );
 }
@@ -310,10 +341,19 @@ export function redactCredentials(text: string): string {
       return HIDDEN_CREDENTIAL;
     })
     .replace(SSHPASS_PASSWORD, (_match, prefix: string, value: string) => {
-      rememberCredential(value);
-      return `${prefix}${HIDDEN_CREDENTIAL}`;
+      const { credential, punctuation } =
+        splitTrailingSentencePunctuation(value);
+      rememberCredential(credential);
+      return `${prefix}${HIDDEN_CREDENTIAL}${punctuation}`;
     })
-    .replace(INLINE_PASSWORD, (_match, prefix: string, value: string) => {
+    .replace(INLINE_PASSWORD, (match, prefix: string, value: string) => {
+      if (
+        value.startsWith("[") ||
+        value.includes(HIDDEN_CREDENTIAL) ||
+        value.includes("\uE000")
+      ) {
+        return match;
+      }
       rememberCredential(value);
       return `${prefix}${HIDDEN_CREDENTIAL}`;
     })
