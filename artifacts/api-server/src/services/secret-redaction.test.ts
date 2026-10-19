@@ -111,6 +111,14 @@ describe("credential redaction", () => {
     ).toBe(HIDDEN_CREDENTIAL);
   });
 
+  it("consumes markup-glued labelled values through end of token", () => {
+    const value = 'Ab1cD2e"><Fg3Hi4Jk5Lm6No7Pq';
+    const redacted = redactCredentials(`key: ${value}`);
+    expect(redacted).toBe(`key: ${HIDDEN_CREDENTIAL}`);
+    expect(redacted).not.toContain("Fg3Hi4Jk5Lm6No7Pq");
+    expect(redacted).not.toContain("[[hidden credential]");
+  });
+
   it("redacts nested answer metadata without mutating raw input", () => {
     const raw = {
       answer: `Password: ${FAKE_CREDENTIALS.password}`,
