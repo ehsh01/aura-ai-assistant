@@ -1,16 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { items, type ItemMedia } from "@workspace/db/schema";
+import { captures, items, type ItemMedia } from "@workspace/db/schema";
 import { config } from "../lib/config";
 import { getDb } from "../lib/db";
 import { createCaptureForUser, updateCaptureStatusForUser } from "./captures";
 import { canonicalizeUrl, fetchLinkMetadata } from "./link-metadata";
 import { evernoteDisplayTags, heuristicItemTags } from "./item-tags";
+import { extractTextFromAttachmentFile } from "./attachment-text-extract";
 
 export const ITEM_KINDS = ["note", "link", "image", "pdf", "file"] as const;
 export const ITEM_SOURCES = ["recall", "evernote"] as const;
@@ -344,6 +345,112 @@ async function getProjectedItem(
   id: string,
 ): Promise<SavedItemDto | null> {
   const rawId = id.slice(id.indexOf(":") + 1);
+  if (id.startsWith("source-record:")) {
+    const result = await getDb().execute(sql`
+      SELECT
+        concat('source-record:', sr.id) AS id,
+        sr.record_type AS kind,
+        'ready' AS state,
+        CASE sr.record_type
+          WHEN 'evernote_note' THEN 'evernote'
+          WHEN 'gmail_message' THEN 'gmail'
+          WHEN 'drive_file' THEN 'drive'
+          WHEN 'calendar_event' THEN 'calendar'
+          WHEN 'finance_transaction' THEN 'finance'
+          WHEN 'flipperforce_project' THEN 'flipperforce'
+          WHEN 'homey_device' THEN 'homey'
+          WHEN 'homey_flow' THEN 'homey'
+          WHEN 'homey_alert' THEN 'homey'
+          WHEN 'google_contact' THEN 'contact'
+          ELSE 'connector'
+        END AS source,
+        coalesce(sr.record_title, 'Untitled') AS title,
+        null::text AS description,
+        null::text AS domain,
+        sr.source_url,
+        left(coalesce(sr.record_text, ''), ${ITEM_DETAIL_BODY_MAX_CHARS}) AS body_text,
+        '{}'::jsonb AS media,
+        CASE
+          WHEN sr.record_type = 'evernote_note'
+            AND jsonb_typeof(sr.record_metadata->'tagNames') = 'array'
+            THEN sr.record_metadata->'tagNames'
+          WHEN sr.record_type = 'evernote_note'
+            AND jsonb_typeof(sr.record_metadata->'tags') = 'array'
+            THEN sr.record_metadata->'tags'
+          ELSE '[]'::jsonb
+        END AS tags,
+        CASE
+          WHEN sr.record_type = 'evernote_note'
+            THEN sr.record_metadata->>'notebookName'
+          ELSE null
+        END AS notebook,
+        null::timestamptz AS deleted_at,
+        coalesce(sr.source_updated_at, sr.updated_at) AS bumped_at,
+        coalesce(sr.source_created_at, sr.created_at) AS created_at,
+        coalesce(sr.source_updated_at, sr.updated_at) AS updated_at
+      FROM source_records sr
+      JOIN connectors c ON c.id = sr.connector_id AND c.enabled = true
+      WHERE sr.user_id = ${userId}::uuid AND sr.id = ${rawId}
+      LIMIT 1
+    `);
+    const row = rowsFrom(result)[0];
+    if (!row) return null;
+    const dto = toDto(row);
+    if (dto.source === "evernote") dto.tags = evernoteDisplayTags(dto.tags);
+    return dto;
+  }
+  if (id.startsWith("memory:")) {
+    const result = await getDb().execute(sql`
+      SELECT
+        concat('memory:', m.id) AS id,
+        'memory' AS kind,
+        'ready' AS state,
+        'memory' AS source,
+        m.title,
+        m.summary AS description,
+        null::text AS domain,
+        null::text AS source_url,
+        left(m.content, ${ITEM_DETAIL_BODY_MAX_CHARS}) AS body_text,
+        '{}'::jsonb AS media,
+        m.tags,
+        null::text AS notebook,
+        null::timestamptz AS deleted_at,
+        m.updated_at AS bumped_at,
+        m.created_at,
+        m.updated_at
+      FROM life_memories m
+      WHERE m.user_id = ${userId}::uuid AND m.id = ${rawId}
+      LIMIT 1
+    `);
+    const row = rowsFrom(result)[0];
+    return row ? toDto(row) : null;
+  }
+  if (id.startsWith("task:")) {
+    const result = await getDb().execute(sql`
+      SELECT
+        concat('task:', t.id) AS id,
+        'task' AS kind,
+        'ready' AS state,
+        'task' AS source,
+        t.title,
+        concat_ws(' · ', nullif(t.priority, 'none'), t.time) AS description,
+        null::text AS domain,
+        null::text AS source_url,
+        ''::text AS body_text,
+        '{}'::jsonb AS media,
+        t.tags,
+        null::text AS notebook,
+        null::timestamptz AS deleted_at,
+        t.updated_at AS bumped_at,
+        t.created_at,
+        t.updated_at
+      FROM tasks t
+      WHERE t.user_id = ${userId}::uuid AND t.id = ${rawId}
+      LIMIT 1
+    `);
+    const row = rowsFrom(result)[0];
+    return row ? toDto(row) : null;
+  }
   if (id.startsWith("note:")) {
     const result = await getDb().execute(sql`
       SELECT
@@ -419,7 +526,13 @@ async function getProjectedItem(
 }
 
 export async function getItemForUser(userId: string, id: string): Promise<SavedItemDto | null> {
-  if (id.startsWith("note:") || id.startsWith("evernote:")) {
+  if (
+    id.startsWith("note:") ||
+    id.startsWith("evernote:") ||
+    id.startsWith("source-record:") ||
+    id.startsWith("memory:") ||
+    id.startsWith("task:")
+  ) {
     return getProjectedItem(userId, id);
   }
   const rows = await getDb()
@@ -581,19 +694,18 @@ function imageKind(mimeType: string): "image" | "pdf" | "file" {
 export async function saveFileItemForUser(
   userId: string,
   file: { originalname: string; mimetype: string; size: number; buffer: Buffer },
+  caption = "",
 ): Promise<SavedItemDto> {
-  if (!file.buffer.length) throw Object.assign(new Error("Image file is empty"), { status: 400 });
-  if (!file.mimetype.startsWith("image/")) {
-    throw Object.assign(new Error("The save box currently accepts image uploads"), { status: 415 });
-  }
+  if (!file.buffer.length) throw Object.assign(new Error("File is empty"), { status: 400 });
   if (file.size > config.attachmentMaxBytes) {
-    throw Object.assign(new Error("Image exceeds the upload size cap"), { status: 413 });
+    throw Object.assign(new Error("File exceeds the upload size cap"), { status: 413 });
   }
 
   const fileName = safeFileName(file.originalname);
+  const cleanCaption = caption.trim().slice(0, 20_000);
   const capture = await createCaptureForUser(userId, {
-    rawText: `[image] ${fileName}`,
-    sourceType: "item_image",
+    rawText: `${cleanCaption ? `${cleanCaption}\n` : ""}[file] ${fileName}`,
+    sourceType: file.mimetype.startsWith("image/") ? "item_image" : "item_file",
     title: fileName,
     rawMetadata: { fileName, mimeType: file.mimetype, sizeBytes: file.size },
   });
@@ -602,31 +714,77 @@ export async function saveFileItemForUser(
   const absoluteDir = path.join(config.attachmentsDir, relativeDir);
   await mkdir(absoluteDir, { recursive: true });
   const storagePath = path.join(relativeDir, fileName);
-  await pipeline(Readable.from(file.buffer), createWriteStream(path.join(config.attachmentsDir, storagePath)));
+  const absolutePath = path.join(config.attachmentsDir, storagePath);
+  try {
+    await pipeline(Readable.from(file.buffer), createWriteStream(absolutePath));
+    const extractedText = file.mimetype.startsWith("image/")
+      ? ""
+      : await extractTextFromAttachmentFile({
+          absPath: absolutePath,
+          mimeType: file.mimetype,
+          fileName,
+          sizeBytes: file.size,
+        });
 
-  const now = new Date();
-  await getDb().insert(items).values({
-    id,
-    userId,
-    captureId: capture.id,
-    kind: imageKind(file.mimetype),
-    state: "ready",
-    source: "recall",
-    title: fileName.replace(/\.[^.]+$/, "") || fileName,
-    bodyText: "",
-    media: {
-      storagePath,
-      fileName,
-      mimeType: file.mimetype,
-      sizeBytes: file.size,
-    },
-    tags: heuristicItemTags({ mimeType: file.mimetype, date: now }),
-    bumpedAt: now,
-    createdAt: now,
-    updatedAt: now,
-  });
+    const now = new Date();
+    await getDb().insert(items).values({
+      id,
+      userId,
+      captureId: capture.id,
+      kind: imageKind(file.mimetype),
+      state: "ready",
+      source: "recall",
+      title: fileName.replace(/\.[^.]+$/, "") || fileName,
+      description: cleanCaption || null,
+      bodyText: [cleanCaption, extractedText].filter(Boolean).join("\n\n"),
+      media: {
+        storagePath,
+        fileName,
+        mimeType: file.mimetype,
+        sizeBytes: file.size,
+      },
+      tags: heuristicItemTags({ mimeType: file.mimetype, date: now }),
+      bumpedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+  } catch (error) {
+    await rm(absoluteDir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
   await finishRawCapture(userId, capture.id);
   return (await getItemForUser(userId, id))!;
+}
+
+export async function deleteItemForUser(
+  userId: string,
+  id: string,
+): Promise<boolean> {
+  if (id.startsWith("note:") || id.startsWith("evernote:")) return false;
+  const item = await getItemForUser(userId, id);
+  if (!item) return false;
+  const storagePath = item.media.storagePath;
+  if (storagePath) {
+    const absolute = path.resolve(config.attachmentsDir, storagePath);
+    const root = `${path.resolve(config.attachmentsDir)}${path.sep}`;
+    if (!absolute.startsWith(root)) {
+      throw Object.assign(new Error("Item media path is invalid"), {
+        status: 409,
+      });
+    }
+    await rm(path.dirname(absolute), { recursive: true, force: true });
+  }
+  const deleted = await getDb()
+    .delete(items)
+    .where(and(eq(items.id, id), eq(items.userId, userId)))
+    .returning({ captureId: items.captureId });
+  const captureId = deleted[0]?.captureId;
+  if (captureId) {
+    await getDb()
+      .delete(captures)
+      .where(and(eq(captures.id, captureId), eq(captures.userId, userId)));
+  }
+  return deleted.length > 0;
 }
 
 export async function getItemMediaForUser(

@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  gmailCorpusRowsPerMailbox,
   keywordScore,
   mentionedPeople,
   namesFuzzyMatch,
@@ -9,6 +10,15 @@ import {
   textFuzzyHasName,
   extractMailboxHint,
   evernoteMatchExcerpt,
+  evernoteMatchedText,
+  hasSubjectMatchingUrlHostname,
+  loadLinkAskFallback,
+  noteSearchCandidateLimit,
+  pinSubjectHostnameMatchesBeforeCut,
+  rankFreeTextMatches,
+  reserveSubjectUrlCandidates,
+  shouldRunHostnameFallback,
+  type RetrievedRecord,
 } from "./retrieval";
 import { FAMILY_RELATION_INTENT, PERSON_INTENT, WAITING_INTENT } from "./query-utils";
 
@@ -19,6 +29,198 @@ describe("evernoteMatchExcerpt", () => {
     expect(excerpt).toContain("inspector approved");
     expect(excerpt.length).toBeLessThanOrEqual(602);
     expect(excerpt.startsWith("…")).toBe(true);
+  });
+
+  it("keeps attachment-only FTS evidence eligible for free ranking", () => {
+    const record = {
+      id: "attachment-note",
+      title: "Imported document",
+      text: evernoteMatchedText({
+        recordType: "evernote_note",
+        title: "Imported document",
+        excerpt: "",
+        attachmentText:
+          "Psychiatry website instructions for adding and editing a web link",
+      }),
+    };
+
+    expect(
+      rankFreeTextMatches("what's my psychiatry link", [record], 1)[0]?.id,
+    ).toBe(record.id);
+  });
+});
+
+describe("link candidate slot reservation", () => {
+  const psychiatryTitleDecoys: RetrievedRecord[] = Array.from(
+    { length: 70 },
+    (_, index) => ({
+      entityType: index % 2 === 0 ? "note" : "source_record",
+      entityId: `psychiatry-title-${index}`,
+      title:
+        index === 0
+          ? "Psychiatry Inventory App"
+          : `Psychiatry reference ${index + 1}`,
+      text:
+        index === 0
+          ? "https://cloud.digitalocean.com/spaces/psychiatry-inventory?i=abc"
+          : `Reference note ${index + 1}`,
+      score: 10 - index,
+      method: "keyword",
+      recordType: index % 2 === 0 ? undefined : "evernote_note",
+    }),
+  );
+  const hostnameMatch: RetrievedRecord = {
+    entityType: "note",
+    entityId: "note-en-xfbhdx",
+    title: "Turn an image into a link",
+    text: "Use psychiatry.med.miami.edu when linking the image.",
+    score: 1,
+    method: "keyword",
+  };
+
+  it.each([
+    "what is the Psychiatry website link",
+    "[AppSmith test] what is the Psychiatry website link",
+  ])("reserves a top-eight slot for the subject-matching hostname in %s", (query) => {
+    const mergedRaw = rankFreeTextMatches(
+      query,
+      [...psychiatryTitleDecoys, hostnameMatch],
+      psychiatryTitleDecoys.length + 1,
+    );
+    expect(
+      mergedRaw.findIndex(
+        (record) => record.entityId === "note-en-xfbhdx",
+      ),
+    ).toBeGreaterThanOrEqual(50);
+    const mergedTop50 = pinSubjectHostnameMatchesBeforeCut(
+      query,
+      mergedRaw,
+      50,
+      2,
+    );
+    expect(mergedTop50.map((record) => record.entityId)).toContain(
+      "note-en-xfbhdx",
+    );
+    const ranked = reserveSubjectUrlCandidates(
+      query,
+      mergedTop50.slice(0, 8),
+      mergedTop50,
+      8,
+      2,
+    );
+    expect(ranked.slice(0, 8).map((record) => record.entityId)).toContain(
+      "note-en-xfbhdx",
+    );
+    expect(hasSubjectMatchingUrlHostname(query, hostnameMatch)).toBe(true);
+    expect(
+      hasSubjectMatchingUrlHostname(query, psychiatryTitleDecoys[0]!),
+    ).toBe(false);
+    expect(noteSearchCandidateLimit(query)).toBe(50);
+  });
+
+  it("skips fallback when a normal Halogen-like hit has an acceptable link", () => {
+    expect(
+      shouldRunHostnameFallback("what is the Halogen portal link", [
+        {
+          title: "Halogen Portals",
+          text: "Portal: eappraisal.miami.edu",
+        },
+      ]),
+    ).toBe(false);
+    expect(
+      shouldRunHostnameFallback("what is the UM Marketplace link", [
+        {
+          title: "UM Marketplace link",
+          text: "https://secure.touchnet.net/central",
+        },
+      ]),
+    ).toBe(false);
+  });
+
+  it("runs fallback when normal website hits only contain rejected links", () => {
+    expect(
+      shouldRunHostnameFallback("what is the Psychiatry website link", [
+        {
+          title: "Psychiatry Inventory App",
+          text: "https://cloud.digitalocean.com/spaces/psychiatry-inventory?i=abc",
+        },
+        {
+          title: "Uhealth Psychiatry - Business Card",
+          text: "https://maps.google.com/?q=UHealth+Psychiatry",
+        },
+      ]),
+    ).toBe(true);
+  });
+
+  it("loads the full corpus when Gmail holds the only matching link", async () => {
+    const question = "what is the vendor portal link";
+    const gmailOnly = {
+      title: "Vendor portal access",
+      text: "From: Support <support@example.com>\nOpen https://vendorportal.com/portal",
+    };
+    const loadFullPath = vi.fn(async () => [gmailOnly]);
+
+    await expect(
+      loadLinkAskFallback(
+        question,
+        [{ title: "Vendor account", text: "No URL in the indexed excerpt." }],
+        loadFullPath,
+      ),
+    ).resolves.toEqual([gmailOnly]);
+    expect(loadFullPath).toHaveBeenCalledOnce();
+  });
+
+  it("skips the full corpus when indexed text already has the link", async () => {
+    const loadFullPath = vi.fn(async () => ["wide corpus"]);
+    await expect(
+      loadLinkAskFallback(
+        "what is the vendor portal link",
+        [
+          {
+            title: "Vendor portal",
+            text: "Open https://vendorportal.com/portal",
+          },
+        ],
+        loadFullPath,
+      ),
+    ).resolves.toBeNull();
+    expect(loadFullPath).not.toHaveBeenCalled();
+  });
+
+  it("loads the full corpus when the fast-path kill switch is off", async () => {
+    vi.stubEnv("RECALL_LINK_ASK_FAST_PATH_ENABLED", "false");
+    try {
+      const loadFullPath = vi.fn(async () => ["wide corpus"]);
+      await expect(
+        loadLinkAskFallback(
+          "what is the vendor portal link",
+          [
+            {
+              title: "Vendor portal",
+              text: "Open https://vendorportal.com/portal",
+            },
+          ],
+          loadFullPath,
+        ),
+      ).resolves.toEqual(["wide corpus"]);
+      expect(loadFullPath).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("Gmail corpus caps", () => {
+  it("uses 50 rows only for non-email link asks", () => {
+    expect(gmailCorpusRowsPerMailbox("what is the Khaila portal link")).toBe(50);
+    expect(
+      gmailCorpusRowsPerMailbox("the link from the email about Khaila"),
+    ).toBe(150);
+  });
+
+  it("keeps 150 rows for every general non-link ask", () => {
+    expect(gmailCorpusRowsPerMailbox("what do I know about Khaila")).toBe(150);
+    expect(gmailCorpusRowsPerMailbox("summarize recent activity")).toBe(150);
   });
 });
 

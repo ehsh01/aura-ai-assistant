@@ -44,7 +44,12 @@ function poolSsl(url: string): pg.PoolConfig["ssl"] {
   return undefined;
 }
 
-function envInt(name: string, fallback: number, min: number, max: number): number {
+function envInt(
+  name: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
   const raw = Number.parseInt(process.env[name]?.trim() ?? "", 10);
   if (!Number.isFinite(raw)) return fallback;
   return Math.min(max, Math.max(min, raw));
@@ -59,7 +64,8 @@ export function getDb(): Db {
   }
   if (!db) {
     const connectionString = normalizeDatabaseUrl(url);
-    const workerProcess = process.env.RECALL_ROLE?.trim().toLowerCase() === "worker";
+    const workerProcess =
+      process.env.RECALL_ROLE?.trim().toLowerCase() === "worker";
     pool = new pg.Pool({
       connectionString,
       // The DO managed cluster is shared with sibling apps (~25 conn cap total).
@@ -69,7 +75,12 @@ export function getDb(): Db {
         ? envInt("PG_WORKER_POOL_MAX", 3, 1, 3)
         : envInt("PG_POOL_MAX", 3, 1, 3),
       idleTimeoutMillis: envInt("PG_IDLE_TIMEOUT_MS", 10_000, 1_000, 300_000),
-      connectionTimeoutMillis: envInt("PG_CONNECT_TIMEOUT_MS", 15_000, 1_000, 60_000),
+      connectionTimeoutMillis: envInt(
+        "PG_CONNECT_TIMEOUT_MS",
+        15_000,
+        1_000,
+        60_000,
+      ),
       // Identifiable in pg_stat_activity when auditing shared-cluster usage.
       application_name: workerProcess ? "recall-worker" : "recall-api",
       ssl: poolSsl(url),
@@ -98,6 +109,45 @@ export async function withDbAdvisoryLock<T>(
     );
     locked = result.rows[0]?.locked === true;
     if (!locked) throw new DatabaseAdvisoryLockBusyError(key);
+    const lockedDb = drizzle(client as never, { schema }) as Db;
+    return await scopedDb.run(lockedDb, callback);
+  } finally {
+    if (locked) {
+      try {
+        await client.query(
+          "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
+          [key],
+        );
+      } catch (error) {
+        client.release(
+          error instanceof Error
+            ? error
+            : new Error("Could not release database advisory lock"),
+        );
+        throw error;
+      }
+    }
+    client.release();
+  }
+}
+
+/**
+ * Blocking advisory lock for correctness-critical accounting sections. Unlike
+ * the connector lock above, callers queue instead of failing while it is held.
+ */
+export async function withDbAdvisoryLockWait<T>(
+  key: string,
+  callback: () => Promise<T>,
+): Promise<T> {
+  getDb();
+  if (!pool) throw new Error("Database pool is not initialized");
+  const client = await pool.connect();
+  let locked = false;
+  try {
+    await client.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [
+      key,
+    ]);
+    locked = true;
     const lockedDb = drizzle(client as never, { schema }) as Db;
     return await scopedDb.run(lockedDb, callback);
   } finally {

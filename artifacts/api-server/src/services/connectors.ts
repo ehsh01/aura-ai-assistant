@@ -15,7 +15,12 @@ import {
   withDbAdvisoryLock,
 } from "../lib/db";
 import { logger } from "../lib/logger";
-import { newConnectorId, newSourceRecordId, newSyncRunId } from "../lib/recall-format";
+import {
+  newConnectorId,
+  newEvidenceId,
+  newSourceRecordId,
+  newSyncRunId,
+} from "../lib/recall-format";
 import { csvImportConnector, parseCsvText } from "../connectors/csv-import";
 import {
   fetchFinanceTransactions,
@@ -26,10 +31,15 @@ import {
 import {
   createGoogleCalendarEvent,
   fetchGoogleBundle,
+  GoogleNeedsReauthError,
   googleConnector,
+  isGoogleNeedsReauthError,
   refreshGoogleAccessToken,
   searchDriveFiles,
   searchGmailMessages,
+  type GoogleBundleResult,
+  type GoogleSourceResult,
+  type GoogleSyncCursor,
 } from "../connectors/google";
 import {
   fetchHomeyBundle,
@@ -55,6 +65,7 @@ import {
   ticketEmailConnector,
 } from "../connectors/ticket-email";
 import type { RecallConnector } from "../connectors/types";
+import { sanitizeNormalizedSourceRecord } from "../connectors/text-sanitize";
 import { upsertEvidenceForSourceRecord } from "./evidence";
 import { writeAuditLog } from "./audit";
 import {
@@ -62,6 +73,7 @@ import {
   warmEntityEmbedding,
 } from "./embedding-cache";
 import { heuristicDigest, withSourceDigest } from "./digests";
+import { invalidateRetrievalCorpusCache } from "./retrieval-corpus-cache";
 import { openConnectorSettings, sealConnectorSettings } from "../lib/secret-box";
 import { matchHomeyName, type HomeyAskPlan } from "./nl-homey-query";
 import type { FlipperForceAskPlan } from "./nl-flipperforce-query";
@@ -106,6 +118,12 @@ import {
   verifyOneEvernoteNotebook,
 } from "./evernote-full-sync";
 import { isEvernoteNightWindow } from "./evernote-runtime-policy";
+import {
+  databaseErrorCode,
+  isSkippableConnectorRecordError,
+  safeConnectorErrorMessage,
+} from "./connector-record-errors";
+import { GOOGLE_SYNC_MAX_CURSOR_RETRIES } from "./job-queue";
 
 const CONNECTOR_IMPLS: Record<string, RecallConnector> = {
   manual: manualConnector,
@@ -257,6 +275,7 @@ export type SyncRunDto = {
   recordsSkipped: number;
   recordsFailed: number;
   errorMessage: string | null;
+  sourceErrors: Record<string, string>;
   metadata: Record<string, unknown>;
 };
 
@@ -287,6 +306,7 @@ export async function listConnectorSyncRunsForUser(
     recordsSkipped: row.recordsSkipped,
     recordsFailed: row.recordsFailed,
     errorMessage: row.errorMessage ?? null,
+    sourceErrors: row.sourceErrors ?? {},
     metadata: row.metadata ?? {},
   }));
 }
@@ -356,6 +376,7 @@ export async function deleteConnectorForUser(
     .delete(connectors)
     .where(and(eq(connectors.id, connectorId), eq(connectors.userId, userId)))
     .returning({ id: connectors.id });
+  if (deleted[0]) invalidateRetrievalCorpusCache(userId);
   return Boolean(deleted[0]);
 }
 
@@ -395,14 +416,48 @@ export async function testFlipperForceConnectorForUser(
   };
 }
 
+async function markGoogleNeedsReauth(
+  conn: Connector,
+  error: unknown,
+): Promise<void> {
+  const message =
+    error instanceof Error
+      ? error.message
+      : "Google authorization was revoked — reconnect Google";
+  const settings = openConnectorSettings(
+    (conn.settings ?? {}) as Record<string, unknown>,
+  );
+  await getDb()
+    .update(connectors)
+    .set({
+      syncStatus: "needs_reauth",
+      settings: sealConnectorSettings({
+        ...settings,
+        googleAuthError: message.slice(0, 500),
+      }),
+      updatedAt: new Date(),
+    })
+    .where(eq(connectors.id, conn.id));
+}
+
 /** Resolve a fresh Google access token for a connector row. */
-async function ensureGoogleAccessToken(conn: Connector): Promise<{
+export async function ensureGoogleAccessToken(
+  conn: Connector,
+  options?: { forceRefresh?: boolean },
+): Promise<{
   accessToken: string;
   mailbox: string | null;
 }> {
   const settings = openConnectorSettings(
     (conn.settings ?? {}) as Record<string, unknown>,
   );
+  if (conn.syncStatus === "needs_reauth") {
+    throw new GoogleNeedsReauthError(
+      typeof settings.googleAuthError === "string"
+        ? settings.googleAuthError
+        : "Google authorization was revoked — reconnect Google",
+    );
+  }
   const refreshToken =
     typeof settings.refreshToken === "string" ? settings.refreshToken : null;
   let accessToken =
@@ -417,23 +472,50 @@ async function ensureGoogleAccessToken(conn: Connector): Promise<{
       : null;
 
   if (!refreshToken && !accessToken) {
-    throw new Error("Google connector is missing OAuth tokens — reconnect Google");
+    const error = new GoogleNeedsReauthError(
+      "Google connector is missing OAuth tokens — reconnect Google",
+    );
+    await markGoogleNeedsReauth(conn, error);
+    throw error;
   }
 
-  const needsRefresh = !accessToken || !expiresAt || expiresAt < Date.now() + 60_000;
+  const needsRefresh =
+    options?.forceRefresh === true ||
+    !accessToken ||
+    !expiresAt ||
+    expiresAt < Date.now() + 60_000;
   if (needsRefresh) {
     if (!refreshToken) {
-      throw new Error(
+      const error = new GoogleNeedsReauthError(
         "Google access token expired and no refresh token is stored — reconnect Google",
       );
+      await markGoogleNeedsReauth(conn, error);
+      throw error;
     }
-    const refreshed = await refreshGoogleAccessToken(refreshToken);
+    let refreshed: Awaited<ReturnType<typeof refreshGoogleAccessToken>>;
+    try {
+      refreshed = await refreshGoogleAccessToken(refreshToken);
+    } catch (error) {
+      if (isGoogleNeedsReauthError(error)) {
+        await markGoogleNeedsReauth(conn, error);
+      }
+      throw error;
+    }
     accessToken = refreshed.accessToken;
     const nextSettings = sealConnectorSettings({
       ...settings,
       accessToken,
-      accessTokenExpiresAt: new Date(Date.now() + refreshed.expiresIn * 1000).toISOString(),
+      accessTokenExpiresAt: new Date(
+        Date.now() + refreshed.expiresIn * 1000,
+      ).toISOString(),
       refreshToken,
+      grantedScopes:
+        refreshed.scopes.length > 0
+          ? refreshed.scopes
+          : Array.isArray(settings.grantedScopes)
+            ? settings.grantedScopes
+            : [],
+      googleAuthError: null,
     });
     await getDb()
       .update(connectors)
@@ -445,9 +527,15 @@ async function ensureGoogleAccessToken(conn: Connector): Promise<{
 }
 
 /** Resolve a fresh Google access token and fetch the sync bundle. */
-async function fetchGoogleRecordsForConnector(conn: Connector): Promise<unknown[]> {
+async function fetchGoogleRecordsForConnector(
+  conn: Connector,
+): Promise<unknown[]> {
   const { accessToken, mailbox } = await ensureGoogleAccessToken(conn);
-  return fetchGoogleBundle(accessToken, mailbox);
+  return (
+    await fetchGoogleBundle(accessToken, mailbox, {
+      since: conn.lastSyncAt?.toISOString() ?? null,
+    })
+  ).records;
 }
 
 async function ensureMicrosoftAccessToken(conn: Connector): Promise<{
@@ -1299,7 +1387,8 @@ export async function liveSearchGmailForUser(
             sourceUrl: gmailOpenUrl(r.sourceUrl, mailbox),
             sourceCreatedAt: r.sourceCreatedAt ?? null,
           }));
-        } catch {
+        } catch (error) {
+          if (isGoogleNeedsReauthError(error)) throw error;
           // Skip mailboxes that fail auth/search; others may still succeed.
           return [];
         }
@@ -1361,7 +1450,8 @@ export async function liveSearchDriveForUser(
           mimeType:
             typeof r.metadata?.mimeType === "string" ? r.metadata.mimeType : null,
         }));
-      } catch {
+      } catch (error) {
+        if (isGoogleNeedsReauthError(error)) throw error;
         return [];
       }
     }),
@@ -1523,9 +1613,13 @@ export async function findGoogleConnectorByEmail(
     .where(and(eq(connectors.userId, userId), eq(connectors.type, "google")));
   const needle = email.trim().toLowerCase();
   for (const row of rows) {
-    const settings = (row.settings ?? {}) as Record<string, unknown>;
+    const settings = openConnectorSettings(
+      (row.settings ?? {}) as Record<string, unknown>,
+    );
     const stored =
-      typeof settings.googleEmail === "string" ? settings.googleEmail.toLowerCase() : "";
+      typeof settings.googleEmail === "string"
+        ? settings.googleEmail.toLowerCase()
+        : "";
     if (stored === needle) return toDto(row);
   }
   return null;
@@ -1539,18 +1633,58 @@ export async function createGoogleConnectorForUser(
     accessToken: string;
     refreshToken: string | null;
     expiresIn: number;
+    scopes: string[];
   },
 ): Promise<ConnectorDto> {
-  const existing = await findGoogleConnectorByEmail(userId, input.email);
+  const now = new Date();
+  const existingRows = await getDb()
+    .select()
+    .from(connectors)
+    .where(and(eq(connectors.userId, userId), eq(connectors.type, "google")));
+  const needle = input.email.trim().toLowerCase();
+  const existing = existingRows.find((connector) => {
+    const settings = openConnectorSettings(
+      (connector.settings ?? {}) as Record<string, unknown>,
+    );
+    return (
+      typeof settings.googleEmail === "string" &&
+      settings.googleEmail.trim().toLowerCase() === needle
+    );
+  });
   if (existing) {
-    const err = new Error(`Google account ${input.email} is already connected`) as Error & {
-      status?: number;
-    };
-    err.status = 409;
-    throw err;
+    const currentSettings = openConnectorSettings(
+      (existing.settings ?? {}) as Record<string, unknown>,
+    );
+    const [row] = await getDb()
+      .update(connectors)
+      .set({
+        enabled: true,
+        syncStatus: "connected",
+        settings: sealConnectorSettings({
+          ...currentSettings,
+          googleEmail: input.email,
+          googleName: input.displayName ?? null,
+          accessToken: input.accessToken,
+          refreshToken:
+            input.refreshToken ?? currentSettings.refreshToken ?? null,
+          accessTokenExpiresAt: new Date(
+            now.getTime() + input.expiresIn * 1000,
+          ).toISOString(),
+          grantedScopes:
+            input.scopes.length > 0
+              ? input.scopes
+              : Array.isArray(currentSettings.grantedScopes)
+                ? currentSettings.grantedScopes
+                : [],
+          googleAuthError: null,
+        }),
+        updatedAt: now,
+      })
+      .where(eq(connectors.id, existing.id))
+      .returning();
+    return toDto(row!);
   }
 
-  const now = new Date();
   const [row] = await getDb()
     .insert(connectors)
     .values({
@@ -1568,7 +1702,10 @@ export async function createGoogleConnectorForUser(
         googleName: input.displayName ?? null,
         accessToken: input.accessToken,
         refreshToken: input.refreshToken,
-        accessTokenExpiresAt: new Date(now.getTime() + input.expiresIn * 1000).toISOString(),
+        accessTokenExpiresAt: new Date(
+          now.getTime() + input.expiresIn * 1000,
+        ).toISOString(),
+        grantedScopes: input.scopes,
       }),
       createdAt: now,
       updatedAt: now,
@@ -1596,7 +1733,9 @@ export async function upsertSourceRecord(
   userId: string,
   connectorId: string,
   record: Awaited<ReturnType<RecallConnector["normalize"]>>[number],
+  options?: { sanitized?: boolean },
 ): Promise<{ id: string; action: "created" | "updated" | "skipped" }> {
+  if (!options?.sanitized) record = sanitizeNormalizedSourceRecord(record);
   const existing = await getDb()
     .select({
       id: sourceRecords.id,
@@ -1637,6 +1776,7 @@ export async function upsertSourceRecord(
           lastSyncedAt: now,
         })
         .where(eq(sourceRecords.id, existing[0].id));
+      invalidateRetrievalCorpusCache(userId);
       return { id: existing[0].id, action: "skipped" };
     }
     const meta = withSourceDigest(
@@ -1676,6 +1816,7 @@ export async function upsertSourceRecord(
         );
     });
     evictEntityEmbedding(userId, "source_record", existing[0].id);
+    invalidateRetrievalCorpusCache(userId);
     return { id: existing[0].id, action: "updated" };
   }
 
@@ -1700,6 +1841,7 @@ export async function upsertSourceRecord(
     createdAt: now,
     updatedAt: now,
   });
+  invalidateRetrievalCorpusCache(userId);
   return { id, action: "created" };
 }
 
@@ -1921,6 +2063,622 @@ async function removeUnseenEvernoteRecords(
       rows.map((row) => row.externalId),
     );
   }
+}
+
+export function googleSyncMaxRowsPerTick(): number {
+  const parsed = Number.parseInt(
+    process.env.RECALL_GOOGLE_SYNC_MAX_ROWS_PER_TICK?.trim() ?? "",
+    10,
+  );
+  if (!Number.isFinite(parsed)) return 500;
+  return Math.min(5_000, Math.max(1, parsed));
+}
+
+type GoogleRunMetadata = {
+  googleSync?: {
+    since?: string | null;
+    cursor?: GoogleSyncCursor | null;
+    sources?: Record<
+      string,
+      {
+        ok: boolean;
+        count: number;
+        consumedRows: number;
+        error: string | null;
+        errorStatus: number | null;
+      }
+    >;
+    rowsProcessed?: number;
+    calendarTimeMin?: string;
+    calendarTimeMax?: string;
+    scheduled?: boolean;
+  };
+};
+
+function googleCursorFromMetadata(
+  metadata: Record<string, unknown>,
+): GoogleSyncCursor | null {
+  const sync = (metadata as GoogleRunMetadata).googleSync;
+  const cursor = sync?.cursor;
+  if (
+    !cursor ||
+    !["gmail", "calendar", "contacts", "drive"].includes(cursor.source)
+  ) {
+    return null;
+  }
+  return {
+    source: cursor.source,
+    pageToken: typeof cursor.pageToken === "string" ? cursor.pageToken : null,
+  };
+}
+
+function mergeGoogleSourceResults(
+  metadata: Record<string, unknown>,
+  results: GoogleSourceResult[],
+): {
+  sources: NonNullable<NonNullable<GoogleRunMetadata["googleSync"]>["sources"]>;
+  sourceErrors: Record<string, string>;
+} {
+  const current = (metadata as GoogleRunMetadata).googleSync?.sources ?? {};
+  const sources = { ...current };
+  for (const result of results) {
+    const prior = sources[result.source];
+    sources[result.source] = {
+      ok: (prior?.ok ?? true) && result.ok,
+      count: (prior?.count ?? 0) + result.count,
+      consumedRows: (prior?.consumedRows ?? 0) + result.consumedRows,
+      error: result.error ?? prior?.error ?? null,
+      errorStatus: result.errorStatus ?? prior?.errorStatus ?? null,
+    };
+  }
+  const sourceErrors = Object.fromEntries(
+    Object.entries(sources)
+      .filter(([, result]) => Boolean(result.error))
+      .map(([source, result]) => [source, result.error!]),
+  );
+  return { sources, sourceErrors };
+}
+
+type NormalizedConnectorRecord = Awaited<
+  ReturnType<RecallConnector["normalize"]>
+>[number];
+
+async function persistGoogleNormalizedRecordsBatch(
+  userId: string,
+  connectorId: string,
+  normalized: NormalizedConnectorRecord[],
+): Promise<{ created: number; updated: number }> {
+  if (normalized.length === 0) return { created: 0, updated: 0 };
+
+  return getDb().transaction(async (tx) => {
+    const externalIds = normalized.map((record) => record.externalId);
+    const existing = await tx
+      .select({
+        id: sourceRecords.id,
+        externalId: sourceRecords.externalId,
+      })
+      .from(sourceRecords)
+      .where(
+        and(
+          eq(sourceRecords.connectorId, connectorId),
+          inArray(sourceRecords.externalId, externalIds),
+        ),
+      );
+    const existingByExternalId = new Map(
+      existing.map((record) => [record.externalId, record.id]),
+    );
+    const now = new Date();
+    const rows = normalized.map((record) => ({
+      id: existingByExternalId.get(record.externalId) ?? newSourceRecordId(),
+      userId,
+      connectorId,
+      externalId: record.externalId,
+      recordType: record.recordType,
+      recordTitle: record.recordTitle ?? null,
+      recordText: record.recordText ?? null,
+      recordMetadata: withSourceDigest(
+        (record.recordMetadata ?? {}) as Record<string, unknown>,
+        heuristicDigest(record.recordTitle ?? "", record.recordText ?? "", 400),
+      ),
+      sourceUrl: record.sourceUrl ?? null,
+      sourceCreatedAt: record.sourceCreatedAt
+        ? new Date(record.sourceCreatedAt)
+        : null,
+      sourceUpdatedAt: record.sourceUpdatedAt
+        ? new Date(record.sourceUpdatedAt)
+        : null,
+      lastSyncedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    }));
+
+    await tx
+      .insert(sourceRecords)
+      .values(rows)
+      .onConflictDoUpdate({
+        target: [sourceRecords.connectorId, sourceRecords.externalId],
+        set: {
+          recordType: sql`excluded.record_type`,
+          recordTitle: sql`excluded.record_title`,
+          recordText: sql`excluded.record_text`,
+          recordMetadata: sql`excluded.record_metadata`,
+          sourceUrl: sql`excluded.source_url`,
+          sourceCreatedAt: sql`excluded.source_created_at`,
+          sourceUpdatedAt: sql`excluded.source_updated_at`,
+          lastSyncedAt: now,
+          updatedAt: now,
+        },
+      });
+
+    const changedExistingIds = existing.map((record) => record.id);
+    if (changedExistingIds.length > 0) {
+      await tx
+        .delete(entityEmbeddings)
+        .where(
+          and(
+            eq(entityEmbeddings.userId, userId),
+            eq(entityEmbeddings.entityType, "source_record"),
+            inArray(entityEmbeddings.entityId, changedExistingIds),
+          ),
+        );
+    }
+
+    const sourceRecordIds = rows.map((row) => row.id);
+    await tx
+      .delete(evidence)
+      .where(
+        and(
+          eq(evidence.userId, userId),
+          inArray(evidence.sourceRecordId, sourceRecordIds),
+        ),
+      );
+    const evidenceRows = normalized.flatMap((record, index) =>
+      googleConnector.mapEvidence(record).map((item) => ({
+        id: newEvidenceId(),
+        userId,
+        entityType: "source_record",
+        entityId: rows[index]!.id,
+        claimType: item.claimType,
+        sourceRecordId: rows[index]!.id,
+        evidenceText: item.evidenceText ?? null,
+        url: item.url ?? null,
+        rowNumber: item.rowNumber ?? null,
+        createdAt: now,
+        updatedAt: now,
+      })),
+    );
+    if (evidenceRows.length > 0) {
+      await tx.insert(evidence).values(evidenceRows);
+    }
+
+    return {
+      created: normalized.length - existing.length,
+      updated: existing.length,
+    };
+  });
+}
+
+async function persistGoogleRecordsBatch(
+  userId: string,
+  connectorId: string,
+  records: GoogleBundleResult["records"],
+): Promise<{
+  created: number;
+  updated: number;
+  failed: number;
+  errors: string[];
+}> {
+  const normalized = await googleConnector.normalize(records);
+  try {
+    const persisted = await persistGoogleNormalizedRecordsBatch(
+      userId,
+      connectorId,
+      normalized,
+    );
+    invalidateRetrievalCorpusCache(userId);
+    return {
+      ...persisted,
+      failed: 0,
+      errors: [],
+    };
+  } catch (error) {
+    if (!isSkippableConnectorRecordError(error)) throw error;
+    logger.warn(
+      {
+        connectorId,
+        batchSize: normalized.length,
+        code: databaseErrorCode(error),
+      },
+      "Google record batch rejected; isolating invalid record",
+    );
+  }
+
+  let created = 0;
+  let updated = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  for (const record of normalized) {
+    try {
+      const result = await persistGoogleNormalizedRecordsBatch(
+        userId,
+        connectorId,
+        [record],
+      );
+      invalidateRetrievalCorpusCache(userId);
+      created += result.created;
+      updated += result.updated;
+    } catch (error) {
+      if (!isSkippableConnectorRecordError(error)) throw error;
+      failed += 1;
+      const code = databaseErrorCode(error) ?? "database_error";
+      errors.push(`${record.externalId} skipped (${code})`);
+      logger.warn(
+        {
+          connectorId,
+          externalId: record.externalId,
+          code,
+        },
+        "Skipped invalid Google connector record",
+      );
+    }
+  }
+  return { created, updated, failed, errors };
+}
+
+export async function enqueueGoogleSyncForUser(
+  userId: string,
+  connectorId: string,
+  options?: { scheduled?: boolean },
+): Promise<{
+  syncRunId: string;
+  jobId: string;
+  status: string;
+  deduped: boolean;
+}> {
+  return getDb().transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`google-sync:${connectorId}`}, 0))`,
+    );
+    const connectorRows = await tx
+      .select()
+      .from(connectors)
+      .where(
+        and(
+          eq(connectors.id, connectorId),
+          eq(connectors.userId, userId),
+          eq(connectors.type, "google"),
+        ),
+      )
+      .limit(1);
+    const connector = connectorRows[0];
+    if (!connector) throw new Error("Google connector not found");
+    if (!connector.enabled) {
+      const error = new Error(
+        `${connector.name} is paused; enable it before syncing`,
+      ) as Error & { status?: number };
+      error.status = 409;
+      throw error;
+    }
+
+    const active = await tx
+      .select({ id: syncRuns.id, status: syncRuns.status })
+      .from(syncRuns)
+      .innerJoin(jobs, eq(jobs.id, syncRuns.id))
+      .where(
+        and(
+          eq(syncRuns.userId, userId),
+          eq(syncRuns.connectorId, connectorId),
+          inArray(syncRuns.status, ["queued", "running"]),
+          inArray(jobs.status, ["queued", "processing"]),
+        ),
+      )
+      .orderBy(desc(syncRuns.startedAt))
+      .limit(1);
+    if (active[0]) {
+      return {
+        syncRunId: active[0].id,
+        jobId: active[0].id,
+        status: active[0].status,
+        deduped: true,
+      };
+    }
+
+    const syncRunId = newSyncRunId();
+    const now = new Date();
+    const calendarTimeMin = new Date(
+      now.getTime() - 30 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const calendarTimeMax = new Date(
+      now.getTime() + 90 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    await tx.insert(syncRuns).values({
+      id: syncRunId,
+      userId,
+      connectorId,
+      status: "queued",
+      startedAt: now,
+      sourceErrors: {},
+      metadata: {
+        googleSync: {
+          since: connector.lastSyncAt?.toISOString() ?? null,
+          cursor: null,
+          sources: {},
+          rowsProcessed: 0,
+          calendarTimeMin,
+          calendarTimeMax,
+          scheduled: options?.scheduled === true,
+        },
+      },
+    });
+    await tx.insert(jobs).values({
+      id: syncRunId,
+      userId,
+      type: "connector_sync",
+      payload: { connectorId, syncRunId, connectorType: "google" },
+      status: "queued",
+      attempts: 0,
+      maxAttempts: GOOGLE_SYNC_MAX_CURSOR_RETRIES,
+      availableAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await tx
+      .update(connectors)
+      .set({ syncStatus: "syncing", updatedAt: now })
+      .where(eq(connectors.id, connectorId));
+    return {
+      syncRunId,
+      jobId: syncRunId,
+      status: "queued",
+      deduped: false,
+    };
+  });
+}
+
+async function processGoogleSyncJobLocked(
+  userId: string,
+  connectorId: string,
+  syncRunId: string,
+): Promise<boolean> {
+  const connectorRows = await getDb()
+    .select()
+    .from(connectors)
+    .where(
+      and(
+        eq(connectors.id, connectorId),
+        eq(connectors.userId, userId),
+        eq(connectors.type, "google"),
+      ),
+    )
+    .limit(1);
+  const conn = connectorRows[0];
+  if (!conn) throw new Error("Google connector not found");
+  const runRows = await getDb()
+    .select()
+    .from(syncRuns)
+    .where(
+      and(
+        eq(syncRuns.id, syncRunId),
+        eq(syncRuns.userId, userId),
+        eq(syncRuns.connectorId, connectorId),
+      ),
+    )
+    .limit(1);
+  const run = runRows[0];
+  if (!run) throw new Error("Google sync run not found");
+  if (
+    run.status === "complete" ||
+    run.status === "partial_success" ||
+    run.status === "failed"
+  )
+    return true;
+  if (!conn.enabled) throw new Error("Google connector is paused");
+
+  const metadata = run.metadata ?? {};
+  const googleState = (metadata as GoogleRunMetadata).googleSync ?? {};
+  const cursor = googleCursorFromMetadata(metadata);
+  const maxRows = googleSyncMaxRowsPerTick();
+
+  try {
+    let token = await ensureGoogleAccessToken(conn);
+    let bundle = await fetchGoogleBundle(token.accessToken, token.mailbox, {
+      since: typeof googleState.since === "string" ? googleState.since : null,
+      cursor,
+      maxRows,
+      calendarTimeMin:
+        typeof googleState.calendarTimeMin === "string"
+          ? googleState.calendarTimeMin
+          : undefined,
+      calendarTimeMax:
+        typeof googleState.calendarTimeMax === "string"
+          ? googleState.calendarTimeMax
+          : undefined,
+    });
+    if (
+      bundle.sources.some((source) => source.errorStatus === 401)
+    ) {
+      token = await ensureGoogleAccessToken(conn, { forceRefresh: true });
+      bundle = await fetchGoogleBundle(token.accessToken, token.mailbox, {
+        since: typeof googleState.since === "string" ? googleState.since : null,
+        cursor,
+        maxRows,
+        calendarTimeMin:
+          typeof googleState.calendarTimeMin === "string"
+            ? googleState.calendarTimeMin
+            : undefined,
+        calendarTimeMax:
+          typeof googleState.calendarTimeMax === "string"
+            ? googleState.calendarTimeMax
+            : undefined,
+      });
+    }
+
+    const persisted = await persistGoogleRecordsBatch(
+      userId,
+      connectorId,
+      bundle.records,
+    );
+    const merged = mergeGoogleSourceResults(metadata, bundle.sources);
+    const rowsProcessed =
+      (Number(googleState.rowsProcessed) || 0) + bundle.rowsConsumed;
+    const recordsFetched = run.recordsFetched + bundle.records.length;
+    const recordsCreated = run.recordsCreated + persisted.created;
+    const recordsUpdated = run.recordsUpdated + persisted.updated;
+    const recordsFailed = Math.max(
+      run.recordsFailed + persisted.failed,
+      Object.keys(merged.sourceErrors).length,
+    );
+    const complete = bundle.complete;
+    const partial =
+      Object.keys(merged.sourceErrors).length > 0 || recordsFailed > 0;
+    const incrementalSourceFailed = Boolean(
+      merged.sourceErrors.gmail ||
+        merged.sourceErrors.drive ||
+        persisted.failed > 0,
+    );
+    const sourceErrorMessage = Object.entries(merged.sourceErrors)
+      .map(([source, error]) => `${source}: ${error}`)
+      .join("; ")
+      .slice(0, 2_000);
+    const errorMessage = sourceErrorMessage
+      ? sourceErrorMessage
+      : recordsFailed > 0
+        ? `Google sync skipped ${recordsFailed} invalid record(s); see run metadata`
+        : null;
+    const priorErrors = Array.isArray(metadata.errors)
+      ? metadata.errors.filter(
+          (entry): entry is string => typeof entry === "string",
+        )
+      : [];
+    const nextMetadata = {
+      ...metadata,
+      errors: [...priorErrors, ...persisted.errors].slice(-100),
+      googleSync: {
+        ...googleState,
+        cursor: bundle.nextCursor,
+        sources: merged.sources,
+        rowsProcessed,
+      },
+    };
+    const memory = process.memoryUsage();
+
+    await getDb()
+      .update(syncRuns)
+      .set({
+        status: complete
+          ? partial
+            ? "partial_success"
+            : "complete"
+          : "running",
+        completedAt: complete ? new Date() : null,
+        recordsFetched,
+        recordsCreated,
+        recordsUpdated,
+        recordsFailed,
+        errorMessage,
+        sourceErrors: merged.sourceErrors,
+        metadata: nextMetadata,
+      })
+      .where(eq(syncRuns.id, syncRunId));
+
+    if (complete) {
+      await getDb()
+        .update(connectors)
+        .set({
+          syncStatus: partial ? "partial_success" : "connected",
+          // Use the run start as the incremental high-water mark. This
+          // intentionally overlaps the next query so records arriving while
+          // this run was paging cannot fall into a completion-time gap.
+          ...(incrementalSourceFailed ? {} : { lastSyncAt: run.startedAt }),
+          updatedAt: new Date(),
+        })
+        .where(eq(connectors.id, connectorId));
+      await writeAuditLog({
+        userId,
+        action: "connector_sync",
+        entityType: "connector",
+        entityId: connectorId,
+        metadata: {
+          syncRunId,
+          recordsFetched,
+          recordsCreated,
+          recordsUpdated,
+          recordsFailed,
+          sourceErrors: merged.sourceErrors,
+        },
+      });
+    }
+
+    logger.info(
+      {
+        connectorId,
+        syncRunId,
+        rowsThisTick: bundle.rowsConsumed,
+        rowsProcessed,
+        maxRows,
+        rss: memory.rss,
+        heapUsed: memory.heapUsed,
+        complete,
+      },
+      "Google sync job tick complete",
+    );
+    return complete;
+  } catch (error) {
+    const memory = process.memoryUsage();
+    logger.warn(
+      {
+        error: safeConnectorErrorMessage(error),
+        connectorId,
+        syncRunId,
+        rowsProcessed: run.recordsFetched,
+        rss: memory.rss,
+        heapUsed: memory.heapUsed,
+      },
+      "Google sync job tick failed",
+    );
+    if (isGoogleNeedsReauthError(error)) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Google authorization was revoked — reconnect Google";
+      await getDb()
+        .update(syncRuns)
+        .set({
+          status: "failed",
+          completedAt: new Date(),
+          errorMessage: message,
+          sourceErrors: { auth: message },
+          metadata: {
+            ...metadata,
+            errors: [message],
+          },
+        })
+        .where(eq(syncRuns.id, syncRunId));
+    }
+    throw error;
+  }
+}
+
+export async function processGoogleSyncJob(
+  userId: string,
+  connectorId: string,
+  syncRunId: string,
+  heartbeat?: () => Promise<void>,
+): Promise<boolean> {
+  return withDbAdvisoryLock(`google-sync:${connectorId}`, async () => {
+    // Created inside the advisory-lock AsyncLocalStorage scope so heartbeats
+    // share this job's single checked-out PG connection.
+    const lease = heartbeat
+      ? setInterval(() => void heartbeat().catch(() => undefined), 60_000)
+      : null;
+    lease?.unref?.();
+    try {
+      return await processGoogleSyncJobLocked(userId, connectorId, syncRunId);
+    } finally {
+      if (lease) clearInterval(lease);
+    }
+  },
+  );
 }
 
 export async function enqueueEvernoteSyncForUser(
@@ -2617,12 +3375,14 @@ async function processEvernoteSyncJobLocked(
 
           const normalized = await evernoteConnector.normalize(batch.records);
           let batchProcessingError: Error | null = null;
-          for (const record of normalized) {
+          for (const normalizedRecord of normalized) {
+            const record = sanitizeNormalizedSourceRecord(normalizedRecord);
             try {
               const upsert = await upsertSourceRecord(
                 userId,
                 connectorId,
                 record,
+                { sanitized: true },
               );
               if (upsert.action === "created") {
                 recordsCreated += 1;
@@ -2846,7 +3606,7 @@ async function processEvernoteSyncJobLocked(
   return false;
 }
 
-export async function failEvernoteSyncRun(
+export async function failConnectorSyncRun(
   userId: string,
   syncRunId: string,
   errorMessage: string,
@@ -2878,9 +3638,90 @@ export async function failEvernoteSyncRun(
     .where(eq(syncRuns.id, syncRunId));
   await getDb()
     .update(connectors)
-    .set({ syncStatus: "sync_failed", updatedAt: new Date() })
+    .set({
+      syncStatus: sql`case
+        when ${connectors.syncStatus} = 'needs_reauth' then 'needs_reauth'
+        else 'sync_failed'
+      end`,
+      updatedAt: new Date(),
+    })
     .where(eq(connectors.id, rows[0].connectorId));
 }
+
+export async function failConnectorJobAndRun(
+  userId: string,
+  jobId: string,
+  syncRunId: string,
+  errorMessage: string,
+): Promise<void> {
+  const now = new Date();
+  const message = errorMessage.slice(0, 1_000);
+  await getDb().transaction(async (tx) => {
+    const rows = await tx
+      .select({
+        connectorId: syncRuns.connectorId,
+        metadata: syncRuns.metadata,
+      })
+      .from(syncRuns)
+      .where(and(eq(syncRuns.id, syncRunId), eq(syncRuns.userId, userId)))
+      .limit(1);
+    const run = rows[0];
+    if (!run) throw new Error("Connector sync run not found during terminal failure");
+
+    await tx
+      .update(syncRuns)
+      .set({
+        status: "failed",
+        completedAt: now,
+        errorMessage: message,
+        metadata: {
+          ...(run.metadata ?? {}),
+          errors: [
+            ...(Array.isArray(run.metadata?.errors)
+              ? run.metadata.errors.filter(
+                  (error): error is string => typeof error === "string",
+                )
+              : []),
+            message.slice(0, 300),
+          ].slice(-100),
+        },
+      })
+      .where(eq(syncRuns.id, syncRunId));
+    await tx
+      .update(connectors)
+      .set({
+        syncStatus: sql`case
+          when ${connectors.syncStatus} = 'needs_reauth' then 'needs_reauth'
+          else 'sync_failed'
+        end`,
+        updatedAt: now,
+      })
+      .where(eq(connectors.id, run.connectorId));
+    const failedJobs = await tx
+      .update(jobs)
+      .set({
+        status: "failed",
+        lastError: message,
+        completedAt: now,
+        lockedAt: null,
+        lockedBy: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(jobs.id, jobId),
+          eq(jobs.userId, userId),
+          eq(jobs.status, "processing"),
+        ),
+      )
+      .returning({ id: jobs.id });
+    if (failedJobs.length !== 1) {
+      throw new Error("Connector job was not processing during terminal failure");
+    }
+  });
+}
+
+export const failEvernoteSyncRun = failConnectorSyncRun;
 
 export async function syncConnectorForUser(
   userId: string,
@@ -2993,9 +3834,15 @@ export async function syncConnectorForUser(
     recordsFailed = evernoteFetch?.recordsFailed ?? 0;
     syncErrors.push(...(evernoteFetch?.errors ?? []));
 
-    for (const record of normalized) {
+    for (const normalizedRecord of normalized) {
+      const record = sanitizeNormalizedSourceRecord(normalizedRecord);
       try {
-        const upsert = await upsertSourceRecord(userId, connectorId, record);
+        const upsert = await upsertSourceRecord(
+          userId,
+          connectorId,
+          record,
+          { sanitized: true },
+        );
         const sourceRecordId = upsert.id;
         if (upsert.action === "created") {
           recordsCreated++;
@@ -3164,6 +4011,7 @@ export async function syncConnectorForUser(
       recordsFailed,
     },
   });
+  invalidateRetrievalCorpusCache(userId);
 
   return {
     syncRunId,

@@ -1,6 +1,7 @@
 import type { EvidenceDto } from "./evidence";
 import type { AskAnswerImage } from "./ask-images";
 import type { SourceConsulted } from "./ask-accuracy-policy";
+import { redactSensitiveValue } from "./secret-redaction";
 
 export type PersistedAskAnswerMetadata = {
   confidence: number;
@@ -25,7 +26,7 @@ export type PersistedAskAnswerMetadata = {
 export function buildAskAnswerMetadata(
   answer: PersistedAskAnswerMetadata,
 ): PersistedAskAnswerMetadata {
-  return {
+  return redactSensitiveValue({
     confidence: answer.confidence,
     caveats: answer.caveats,
     relatedRecords: answer.relatedRecords.slice(0, 8),
@@ -37,5 +38,5 @@ export function buildAskAnswerMetadata(
     degraded: answer.degraded,
     sourcesConsulted: (answer.sourcesConsulted ?? []).slice(0, 8),
     presentation: answer.presentation ?? "full",
-  };
+  });
 }

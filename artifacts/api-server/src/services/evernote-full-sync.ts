@@ -29,6 +29,7 @@ import {
   callEvernoteReadTool,
   fetchEvernoteNoteListingPageWithRetry,
 } from "../connectors/evernote-mcp";
+import { sanitizeConnectorJson } from "../connectors/text-sanitize";
 import { getDb } from "../lib/db";
 import {
   EvernoteAttachmentTooLargeError,
@@ -85,18 +86,19 @@ function taxonomyValues(
   kind: "notebook" | "space",
   entity: EvernoteTaxonomyEntity,
 ) {
+  const safeEntity = sanitizeConnectorJson(entity);
   return {
-    id: stableId("evernote-container", connectorId, kind, entity.id),
+    id: stableId("evernote-container", connectorId, kind, safeEntity.id),
     userId,
     connectorId,
-    externalId: entity.id,
+    externalId: safeEntity.id,
     kind,
-    name: entity.name,
-    parentExternalId: entity.parentId,
-    stackName: entity.stack,
-    spaceExternalId: entity.spaceId,
-    access: entity.access,
-    metadata: entity.metadata,
+    name: safeEntity.name,
+    parentExternalId: safeEntity.parentId,
+    stackName: safeEntity.stack,
+    spaceExternalId: safeEntity.spaceId,
+    access: safeEntity.access,
+    metadata: safeEntity.metadata,
     updatedAt: new Date(),
   };
 }
@@ -131,14 +133,14 @@ export async function persistEvernoteTaxonomy(
             updatedAt: values.updatedAt,
           },
         });
-      if (kind === "notebook" && entity.name !== entity.id) {
+      if (kind === "notebook" && values.name !== values.externalId) {
         const backfilled = await getDb()
           .update(sourceRecords)
           .set({
             recordMetadata: sql`jsonb_set(
               coalesce(${sourceRecords.recordMetadata}, '{}'::jsonb),
               '{notebookName}',
-              to_jsonb(${entity.name}::text),
+              to_jsonb(${values.name}::text),
               true
             )`,
             updatedAt: new Date(),
@@ -147,10 +149,10 @@ export async function persistEvernoteTaxonomy(
             and(
               eq(sourceRecords.connectorId, connectorId),
               eq(sourceRecords.recordType, "evernote_note"),
-              sql`${sourceRecords.recordMetadata}->>'notebookGuid' = ${entity.id}`,
+              sql`${sourceRecords.recordMetadata}->>'notebookGuid' = ${values.externalId}`,
               sql`(
                 nullif(${sourceRecords.recordMetadata}->>'notebookName', '') is null
-                or ${sourceRecords.recordMetadata}->>'notebookName' = ${entity.id}
+                or ${sourceRecords.recordMetadata}->>'notebookName' = ${values.externalId}
               )`,
             ),
           )
@@ -196,14 +198,15 @@ export async function persistEvernoteTaxonomy(
     }
   }
   for (const entity of taxonomy.tags) {
+    const safeEntity = sanitizeConnectorJson(entity);
     const values = {
-      id: stableId("evernote-tag", connectorId, entity.id),
+      id: stableId("evernote-tag", connectorId, safeEntity.id),
       userId,
       connectorId,
-      externalId: entity.id,
-      name: entity.name,
-      parentExternalId: entity.parentId,
-      metadata: entity.metadata,
+      externalId: safeEntity.id,
+      name: safeEntity.name,
+      parentExternalId: safeEntity.parentId,
+      metadata: safeEntity.metadata,
       updatedAt: new Date(),
     };
     await getDb()
@@ -284,7 +287,8 @@ export async function persistEvernoteRecordChildren(input: {
   sourceUrl: string | null;
   metadata: JsonRecord;
 }): Promise<void> {
-  const { userId, connectorId, sourceRecordId, sourceUrl, metadata } = input;
+  const { userId, connectorId, sourceRecordId, sourceUrl } = input;
+  const metadata = sanitizeConnectorJson(input.metadata);
   const now = new Date();
   const notebookId = text(metadata.notebookGuid);
   if (notebookId) {
@@ -432,7 +436,8 @@ export async function persistEvernoteRecordChildren(input: {
 
   const tasks = metadataArray(metadata, "tasks");
   const taskIds: string[] = [];
-  for (const task of tasks) {
+  for (const rawTask of tasks) {
+    const task = sanitizeConnectorJson(rawTask);
     const taskId = text(task.id) ?? text(task.taskId);
     if (taskId) taskIds.push(taskId);
     await upsertEvernoteTask({
@@ -462,26 +467,27 @@ async function upsertEvernoteTask(input: {
   defaultNoteExternalId: string | null;
   task: JsonRecord;
 }): Promise<void> {
-  const externalId = text(input.task.id) ?? text(input.task.taskId);
+  const task = sanitizeConnectorJson(input.task);
+  const externalId = text(task.id) ?? text(task.taskId);
   if (!externalId) return;
   const values = {
     id: stableId("evernote-task", input.connectorId, externalId),
     userId: input.userId,
     connectorId: input.connectorId,
     sourceRecordId: input.sourceRecordId,
-    noteExternalId: text(input.task.noteId) ?? input.defaultNoteExternalId,
+    noteExternalId: text(task.noteId) ?? input.defaultNoteExternalId,
     externalId,
-    label: text(input.task.label) ?? "",
-    description: text(input.task.description),
-    status: text(input.task.status),
-    dueAt: date(input.task.dueDate ?? input.task.dueAt),
-    completedAt: date(input.task.completedAt),
-    sourceUpdatedAt: date(input.task.updatedAt ?? input.task.updated),
-    priority: text(input.task.priority),
-    flagged: bool(input.task.flagged),
-    recurring: bool(input.task.recurring),
-    assignee: text(input.task.assignee),
-    metadata: input.task,
+    label: text(task.label) ?? "",
+    description: text(task.description),
+    status: text(task.status),
+    dueAt: date(task.dueDate ?? task.dueAt),
+    completedAt: date(task.completedAt),
+    sourceUpdatedAt: date(task.updatedAt ?? task.updated),
+    priority: text(task.priority),
+    flagged: bool(task.flagged),
+    recurring: bool(task.recurring),
+    assignee: text(task.assignee),
+    metadata: task,
     updatedAt: new Date(),
   };
   await getDb()
@@ -913,7 +919,8 @@ export async function processEvernoteTaskPage(input: {
     completedAfter: "2000-01-01T00:00:00.000Z",
   });
   const tasks = firstArray(result, ["tasks", "results", "items"]).map(row);
-  for (const task of tasks) {
+  for (const rawTask of tasks) {
+    const task = sanitizeConnectorJson(rawTask);
     const noteExternalId = text(task.noteId);
     let sourceRecordId: string | null = null;
     if (noteExternalId) {
@@ -937,10 +944,11 @@ export async function processEvernoteTaskPage(input: {
       task,
     });
   }
-  const nextCursor =
+  const nextCursor = sanitizeConnectorJson(
     text(result.nextCursor) ??
     text(result.cursor) ??
-    text(row(result.pageInfo).nextCursor);
+    text(row(result.pageInfo).nextCursor),
+  );
   return {
     complete: !nextCursor || nextCursor === input.cursor || tasks.length === 0,
     nextCursor,

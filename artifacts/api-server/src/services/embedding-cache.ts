@@ -10,6 +10,7 @@ import {
   dailyFeatureUsageForUser,
   withAiFeature,
 } from "./ai-usage";
+import { invalidateRetrievalCorpusCache } from "./retrieval-corpus-cache";
 
 type CacheEntry = {
   hash: string;
@@ -564,6 +565,9 @@ export function warmEntityEmbedding(
   userId: string,
   item: EmbeddableItem,
 ): void {
+  // Save paths call this after their DB write. Corpus invalidation must not
+  // depend on optional embedding warming being enabled.
+  invalidateRetrievalCorpusCache(userId);
   if (!isEnabled("RECALL_EMBEDDING_WARM_ENABLED")) return;
   const previous = warmQueues.get(userId) ?? Promise.resolve();
   const next = previous

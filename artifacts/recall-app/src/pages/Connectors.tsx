@@ -50,6 +50,7 @@ const STATUS_STYLES: Record<string, string> = {
   partial_success: "text-amber-300 bg-amber-500/10",
   sync_failed: "text-red-300 bg-red-500/10",
   authentication_failed: "text-red-300 bg-red-500/10",
+  needs_reauth: "text-red-300 bg-red-500/10",
   paused: "text-slate-300 bg-slate-500/10",
 };
 
@@ -97,6 +98,7 @@ function evernoteImportProgressLine(
 export function Connectors() {
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
   const [googleOAuthConfigured, setGoogleOAuthConfigured] = useState(false);
+  const [googleAutoSyncEnabled, setGoogleAutoSyncEnabled] = useState(false);
   const [microsoftOAuthConfigured, setMicrosoftOAuthConfigured] = useState(false);
   const [homeyOAuthConfigured, setHomeyOAuthConfigured] = useState(false);
   const [evernoteOAuthConfigured, setEvernoteOAuthConfigured] = useState(false);
@@ -149,6 +151,7 @@ export function Connectors() {
       const res = await listConnectors();
       setConnectors(res.connectors);
       setGoogleOAuthConfigured(Boolean(res.googleOAuthConfigured));
+      setGoogleAutoSyncEnabled(Boolean(res.googleAutoSyncEnabled));
       setMicrosoftOAuthConfigured(Boolean(res.microsoftOAuthConfigured));
       setHomeyOAuthConfigured(Boolean(res.homeyOAuthConfigured));
       setEvernoteOAuthConfigured(Boolean(res.evernoteOAuthConfigured));
@@ -185,10 +188,14 @@ export function Connectors() {
     const status = readSearchParam("google");
     if (!status) return;
     const reason = readSearchParam("reason");
+    const initialSync = readSearchParam("initialSync");
     if (status === "connected") {
       toast({
         title: "Google connected",
-        description: "Click Sync on the Google connector to pull mail, calendar, contacts, and Drive.",
+        description:
+          initialSync === "queued"
+            ? "The first sync is queued."
+            : "Sync Now to start.",
       });
     } else if (status === "error") {
       const detail =
@@ -197,13 +204,22 @@ export function Connectors() {
           : reason === "not_configured"
             ? "Google OAuth is not configured on the server yet."
             : "Could not complete Google sign-in. Try again.";
-      toast({ title: "Google connect failed", description: detail, variant: "destructive" });
+      toast({
+        title: "Google connect failed",
+        description: detail,
+        variant: "destructive",
+      });
     }
     const url = new URL(window.location.href);
     url.searchParams.delete("google");
     url.searchParams.delete("reason");
     url.searchParams.delete("connectorId");
-    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    url.searchParams.delete("initialSync");
+    window.history.replaceState(
+      {},
+      "",
+      `${url.pathname}${url.search}${url.hash}`,
+    );
     void load();
   }, []);
 
@@ -534,6 +550,11 @@ export function Connectors() {
             {!googleOAuthConfigured && (
               <p className="mt-3 text-xs text-amber-200/80">
                 Google OAuth is not configured on the server yet (needs GOOGLE_CLIENT_ID / SECRET).
+              </p>
+            )}
+            {googleOAuthConfigured && !googleAutoSyncEnabled && (
+              <p className="mt-3 text-xs text-amber-200/80">
+                Automatic Google sync is off. Sync Now to start.
               </p>
             )}
           </div>
@@ -1020,6 +1041,16 @@ export function Connectors() {
                   </div>
                 </div>
                 <div className="flex gap-2">
+                  {c.type === "google" && c.syncStatus === "needs_reauth" && (
+                    <button
+                      type="button"
+                      onClick={() => startGoogleOAuth()}
+                      disabled={!googleOAuthConfigured}
+                      className="rounded-xl border border-red-400/25 px-3 py-2 text-sm text-red-200 hover:bg-red-500/10 disabled:opacity-50"
+                    >
+                      Reconnect
+                    </button>
+                  )}
                   {c.type === "finance_api" && (
                     <button
                       type="button"
