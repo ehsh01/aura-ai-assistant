@@ -2,6 +2,8 @@ const DEFAULT_TTL_MS = 45_000;
 const MAX_ENTRIES = 24;
 const MAX_BYTES = 3 * 1024 * 1024;
 
+// Process-local by design: writes in another PM2 process cannot evict this map,
+// so cross-process staleness is bounded by DEFAULT_TTL_MS.
 export type RetrievalCorpusCacheMode = "slim-link" | "full";
 
 type CacheEntry = {
@@ -46,6 +48,29 @@ function estimatedBytes(value: unknown): number {
   }
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function cloneForCacheBoundary<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((entry) =>
+      isPlainRecord(entry) ? { ...entry } : entry,
+    ) as T;
+  }
+  if (!isPlainRecord(value)) return value;
+  const clone: Record<string, unknown> = { ...value };
+  for (const [field, entry] of Object.entries(clone)) {
+    if (!Array.isArray(entry)) continue;
+    clone[field] = entry.map((item) =>
+      isPlainRecord(item) ? { ...item } : item,
+    );
+  }
+  return clone as T;
+}
+
 export function getRetrievalCorpusCache<T>(
   userId: string,
   mode: RetrievalCorpusCacheMode,
@@ -59,7 +84,7 @@ export function getRetrievalCorpusCache<T>(
   // Refresh insertion order so eviction is least-recently-used.
   entries.delete(cacheKey);
   entries.set(cacheKey, entry);
-  return entry.value as T;
+  return cloneForCacheBoundary(entry.value as T);
 }
 
 export function setRetrievalCorpusCache<T>(
@@ -69,7 +94,8 @@ export function setRetrievalCorpusCache<T>(
 ): void {
   if (!enabled()) return;
   pruneExpired();
-  const bytes = estimatedBytes(value);
+  const storedValue = cloneForCacheBoundary(value);
+  const bytes = estimatedBytes(storedValue);
   const cacheKey = key(userId, mode);
   remove(cacheKey);
   if (bytes > MAX_BYTES) return;
@@ -80,7 +106,7 @@ export function setRetrievalCorpusCache<T>(
     bytes,
     // Retrieval inputs remain pre-redaction. Provider/TTS input and answer
     // output boundaries must redact afresh on every request, including hits.
-    value,
+    value: storedValue,
   });
   totalBytes += bytes;
 

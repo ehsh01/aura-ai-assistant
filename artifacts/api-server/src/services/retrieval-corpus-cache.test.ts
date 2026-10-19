@@ -34,7 +34,7 @@ describe("retrieval corpus cache", () => {
     };
     setRetrievalCorpusCache("u1", "full", corpus);
 
-    expect(getRetrievalCorpusCache("u1", "full")).toBe(corpus);
+    expect(getRetrievalCorpusCache("u1", "full")).toEqual(corpus);
     const hit = getRetrievalCorpusCache<typeof corpus>("u1", "full");
     expect(hit?.records[0]?.text).toContain(secret);
 
@@ -43,6 +43,39 @@ describe("retrieval corpus cache", () => {
     });
     expect(output.answer).toBe("SSH password: [hidden credential]");
     expect(output.answer).not.toContain(secret);
+  });
+
+  it("returns independent shallow record copies on every hit", () => {
+    const corpus = {
+      records: [
+        {
+          entityType: "note",
+          entityId: "n1",
+          title: "Original title",
+          text: "Original text",
+        },
+      ],
+      people: [{ id: "p1", displayName: "Person One" }],
+      tasks: [{ id: "t1", title: "Original task" }],
+    };
+    setRetrievalCorpusCache("u1", "full", corpus);
+
+    const first = getRetrievalCorpusCache<typeof corpus>("u1", "full")!;
+    first.records[0]!.title = "Mutated title";
+    first.records.push({
+      entityType: "note",
+      entityId: "n2",
+      title: "Injected",
+      text: "Injected",
+    });
+    first.people[0]!.displayName = "Mutated person";
+    first.tasks[0]!.title = "Mutated task";
+
+    const second = getRetrievalCorpusCache<typeof corpus>("u1", "full")!;
+    expect(second).toEqual(corpus);
+    expect(second).not.toBe(first);
+    expect(second.records).not.toBe(first.records);
+    expect(second.records[0]).not.toBe(first.records[0]);
   });
 
   it("isolates entries by user", () => {
