@@ -106,6 +106,7 @@ describe("credential redaction", () => {
       "Primary: 10.20.30.40",
       "IPv6: 2001:db8::42.",
       "Mapped IPv6: ::ffff:192.0.2.128",
+      "Scoped IPv6: 2001:db8::7%eth0.",
       "Invalid: 999.20.30.40",
     ].join("\n");
     expect(redactCredentials(input)).toBe(
@@ -113,6 +114,7 @@ describe("credential redaction", () => {
         `Primary: ${HIDDEN_ADDRESS}`,
         `IPv6: ${HIDDEN_ADDRESS}.`,
         `Mapped IPv6: ${HIDDEN_ADDRESS}`,
+        `Scoped IPv6: ${HIDDEN_ADDRESS}.`,
         "Invalid: 999.20.30.40",
       ].join("\n"),
     );
@@ -138,6 +140,8 @@ describe("credential redaction", () => {
       "database: postgres://dbuser@db-node.fake.internal:5432/app",
       "cache-node.fake.local:6379",
       "localhost",
+      "https://reader@docs.example/guide",
+      "https://docs.example/guide?owner=user@example.com",
       "https://psychiatry.med.miami.edu",
       "smartersoftware.io",
       "secure.touchnet.net/central",
@@ -165,20 +169,50 @@ describe("credential redaction", () => {
     ]) {
       expect(redacted).toContain(link);
     }
+    expect(redacted).toContain("https://reader@docs.example/guide");
+    expect(redacted).toContain(
+      "https://docs.example/guide?owner=user@example.com",
+    );
   });
 
   it("preserves versions, dates, times, phones, prices, and masked IDs", () => {
     const safe = [
       "Release v1.2.3.4",
       "Version: 10.20.30.40",
+      "Date: 10.20.30.40",
       "Date: 2026-10-19",
+      "Time: 1:2:3:4:5:6:7:8",
       "Time: 10:20:30",
+      "Phone: 123.45.67.89",
       "Phone: 305-555-0199",
+      "Price: 10.20.30.40",
       "Price: $1,234.56",
+      "Masked ID: 123.45.67.89",
       "Masked ID: ***-**-6789",
       "Stack: /workspace/src/redaction.test.ts:42:7",
     ].join("\n");
     expect(redactCredentials(safe)).toBe(safe);
+  });
+
+  it("does not apply learned addresses inside exceptions or web links", () => {
+    const input = [
+      "IP: 10.20.30.40",
+      "Version: 10.20.30.40",
+      "server: inventory-node.example",
+      "https://inventory-node.example/docs",
+    ].join("\n");
+    withCredentialRedactionScope(() => {
+      const once = redactCredentials(input);
+      expect(once).toBe(
+        [
+          `IP: ${HIDDEN_ADDRESS}`,
+          "Version: 10.20.30.40",
+          `server: ${HIDDEN_ADDRESS}`,
+          "https://inventory-node.example/docs",
+        ].join("\n"),
+      );
+      expect(redactCredentials(once)).toBe(once);
+    });
   });
 
   it("keeps address placeholders safe and never learns bracketed values", () => {

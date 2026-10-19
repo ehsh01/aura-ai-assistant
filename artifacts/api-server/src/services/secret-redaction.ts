@@ -296,7 +296,7 @@ function redactKnownCredentialValues(text: string): string {
 const IPV4_CANDIDATE =
   /(?<![A-Za-z0-9_.])(?:\d{1,3}\.){3}\d{1,3}(?![A-Za-z0-9_]|\.\d)/g;
 const IPV6_CANDIDATE =
-  /(?<![A-Za-z0-9_:.])(?:\[[0-9A-Fa-f:.%_-]+\]|[0-9A-Fa-f:][0-9A-Fa-f:.%_-]*:[0-9A-Fa-f:.%_-]*)(?![A-Za-z0-9_:]|\.\d)/g;
+  /(?<![A-Za-z0-9_:.])(?:\[[0-9A-Fa-f:.]+(?:%[A-Za-z0-9_~-](?:[A-Za-z0-9._~-]*[A-Za-z0-9_~-])?)?\]|[0-9A-Fa-f:][0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*(?:%[A-Za-z0-9_~-](?:[A-Za-z0-9._~-]*[A-Za-z0-9_~-])?)?)(?![A-Za-z0-9_:]|\.\d)/g;
 const SPLIT_IP_CANDIDATE =
   /(?<![A-Za-z0-9_.])\d{1,3}\.\s+\d{1,3}\.(?:\s+\d{1,3}\.){0,2}(?!\d)/g;
 const HOST_LABEL = /\b(?:ip|host(?:name)?|server|ssh|db|database|port)\b/i;
@@ -323,9 +323,9 @@ function validIpv4(value: string): boolean {
   );
 }
 
-function isVersionOrNumberContext(text: string, offset: number): boolean {
-  const prefix = text.slice(Math.max(0, offset - 40), offset);
-  return /\b(?:v|ver(?:sion)?|release|build|date)\s*(?:[:=#-]\s*)?$/i.test(
+function isProtectedAddressContext(text: string, offset: number): boolean {
+  const prefix = text.slice(Math.max(0, offset - 64), offset);
+  return /\b(?:v|ver(?:sion)?|release|build|date|time|phone|tel(?:ephone)?|price|cost|amount|total|masked\s*(?:id|identifier))\s*(?:[:=#-]\s*)?$/i.test(
     prefix,
   );
 }
@@ -396,17 +396,22 @@ function redactFullIpAddresses(text: string): {
   found: boolean;
 } {
   let found = false;
-  let redacted = text.replace(IPV6_CANDIDATE, (candidate: string) => {
-    const parsed = ipv6Value(candidate);
-    if (!parsed) return candidate;
-    found = true;
-    rememberAddress(parsed.value);
-    return `${HIDDEN_ADDRESS}${parsed.punctuation}`;
-  });
+  let redacted = text.replace(
+    IPV6_CANDIDATE,
+    (candidate: string, offset: number, source: string) => {
+      const parsed = ipv6Value(candidate);
+      if (!parsed || isProtectedAddressContext(source, offset)) {
+        return candidate;
+      }
+      found = true;
+      rememberAddress(parsed.value);
+      return `${HIDDEN_ADDRESS}${parsed.punctuation}`;
+    },
+  );
   redacted = redacted.replace(
     IPV4_CANDIDATE,
     (value: string, offset: number, source: string) => {
-      if (!validIpv4(value) || isVersionOrNumberContext(source, offset)) {
+      if (!validIpv4(value) || isProtectedAddressContext(source, offset)) {
         return value;
       }
       found = true;
@@ -424,7 +429,7 @@ function redactSplitIpAddresses(text: string, hasFullIp: boolean): string {
       if (
         !splitIpIsValid(value) ||
         (!hasFullIp && !nearHostLabel(source, offset, value.length)) ||
-        isVersionOrNumberContext(source, offset)
+        isProtectedAddressContext(source, offset)
       ) {
         return value;
       }
@@ -465,6 +470,7 @@ function redactUserAtHosts(text: string): string {
     `\\b([A-Za-z0-9._-]+@)(${HOST_VALUE_PATTERN})`,
     "gi",
   );
+  const urlRanges = webUrlRanges(text);
   return text.replace(
     userAtHost,
     (
@@ -478,6 +484,7 @@ function redactUserAtHosts(text: string): string {
       if (
         !isHostname(host) ||
         isSafeLinkHost(host) ||
+        (inRanges(offset, urlRanges) && !isLocalHostname(host)) ||
         (isEmailContext(source, atOffset) && !isLocalHostname(host))
       ) {
         return match;
@@ -567,12 +574,23 @@ function redactKnownAddressValues(text: string): string {
   let redacted = text;
   for (const value of known) {
     const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const hostname = isHostname(value);
+    const urlRanges = webUrlRanges(redacted);
     redacted = redacted.replace(
       new RegExp(
         `(?<![A-Za-z0-9_.:%-])${escaped}(?![A-Za-z0-9_:%-]|\\.[A-Za-z0-9])`,
         "gi",
       ),
-      HIDDEN_ADDRESS,
+      (match: string, offset: number, source: string) => {
+        if (
+          isProtectedAddressContext(source, offset) ||
+          isSafeLinkHost(value) ||
+          (hostname && inRanges(offset, urlRanges) && !isLocalHostname(value))
+        ) {
+          return match;
+        }
+        return HIDDEN_ADDRESS;
+      },
     );
   }
   return redacted;
