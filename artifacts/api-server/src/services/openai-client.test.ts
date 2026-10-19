@@ -213,20 +213,36 @@ SSH: deploy@inventory-node.fake.internal`;
     });
     await createOpenAiClient(options).chat.completions.create({
       model: "gpt-test",
-      messages: [{ role: "user", content: "It was on 10.20. last week." }],
+      messages: [{ role: "user", content: "It was on 10. 20. last week." }],
+    });
+    const price = "Total $1,234.56 and EUR 12.50, was $10.20.";
+    await createOpenAiClient(options).chat.completions.create({
+      model: "gpt-test",
+      messages: [{ role: "user", content: price }],
     });
     await createOpenAiClient(options).audio.speech.create({
       model: "tts-1",
       voice: "onyx",
       input: "It was on 10. 20. last week.",
     });
+    await createOpenAiClient(options).audio.speech.create({
+      model: "tts-1",
+      voice: "onyx",
+      input: price,
+    });
 
     const laterChatBody = JSON.stringify(mocks.chat.mock.calls[1]?.[0]);
+    const priceChatBody = JSON.stringify(mocks.chat.mock.calls[2]?.[0]);
     const laterSpeechBody = JSON.stringify(mocks.speech.mock.calls[0]?.[0]);
-    expect(laterChatBody).not.toContain("10.20.");
+    const priceSpeechBody = JSON.stringify(mocks.speech.mock.calls[1]?.[0]);
+    expect(laterChatBody).not.toContain("10. 20.");
     expect(laterSpeechBody).not.toContain("10. 20.");
     expect(laterChatBody).toContain(HIDDEN_ADDRESS);
     expect(laterSpeechBody).toContain(HIDDEN_ADDRESS);
+    expect(priceChatBody).toContain(price);
+    expect(priceSpeechBody).toContain(price);
+    expect(priceChatBody).not.toContain(HIDDEN_ADDRESS);
+    expect(priceSpeechBody).not.toContain(HIDDEN_ADDRESS);
   });
 
   it("redacts markup-glued TTS values and learned secret tails", async () => {

@@ -319,6 +319,22 @@ const SAFE_LINK_HOSTS = new Set([
   "dadeschools.net",
   "eappraisal.miami.edu",
 ]);
+const NON_HOST_LABEL_VALUES = new Set([
+  "a",
+  "an",
+  "available",
+  "down",
+  "here",
+  "next",
+  "none",
+  "offline",
+  "online",
+  "ready",
+  "there",
+  "the",
+  "unknown",
+  "up",
+]);
 
 function validIpv4(value: string): boolean {
   const octets = value.split(".");
@@ -567,6 +583,7 @@ function redactLabeledHosts(text: string): string {
       if (
         !isHostname(host) ||
         isSafeLinkHost(host) ||
+        NON_HOST_LABEL_VALUES.has(host.toLowerCase()) ||
         following.startsWith("@") ||
         following.startsWith("://") ||
         (inRanges(hostOffset, urlRanges) && !isLocalHostname(host))
@@ -597,17 +614,20 @@ function redactRememberedIpFragments(text: string): string {
     if (!validIpv4(value)) continue;
     const [first, second, third] = value.split(".");
     prefixes.add(
-      `${first}[ \\t]*\\.[ \\t]*${second}[ \\t]*\\.(?:[ \\t]*${third}[ \\t]*\\.)?`,
+      `${first}[ \\t]*\\.[ \\t]*${second}[ \\t]*\\.[ \\t]*${third}[ \\t]*\\.`,
     );
+    prefixes.add(`${first}[ \\t]*\\.[ \\t]+${second}[ \\t]*\\.`);
   }
   let redacted = text;
   for (const prefix of prefixes) {
     const urlRanges = webUrlRanges(redacted);
     redacted = redacted.replace(
-      new RegExp(`(?<![A-Za-z0-9_.])${prefix}(?![A-Za-z0-9])`, "g"),
+      new RegExp(`(?<![A-Za-z0-9_.])${prefix}(?![ \\t]*\\d|[A-Za-z])`, "g"),
       (match: string, offset: number, source: string) => {
+        const before = source.slice(Math.max(0, offset - 8), offset);
         if (
           isProtectedAddressContext(source, offset) ||
+          /(?:[$€£]|\b(?:EUR|USD))\s*$/i.test(before) ||
           inRanges(offset, urlRanges)
         ) {
           return match;

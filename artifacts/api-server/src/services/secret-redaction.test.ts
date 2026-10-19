@@ -142,6 +142,7 @@ describe("credential redaction", () => {
     for (const suffix of [
       "and restart the fake service",
       "while Deployment continues",
+      "and DB host is next",
     ]) {
       expect(redactCredentials(`ssh root@10.20.30.40 ${suffix}`)).toBe(
         `ssh root@${HIDDEN_ADDRESS} ${suffix}`,
@@ -185,9 +186,9 @@ describe("credential redaction", () => {
       redactCredentials("ssh root@10.20.30.40");
       for (const fragment of [
         "10. 20.",
-        "10.20.",
         "10 . 20 .",
         "10. 20. 30.",
+        "10.20.30.",
       ]) {
         const input = `It was on ${fragment} last week.`;
         const once = redactCredentials(input);
@@ -195,6 +196,11 @@ describe("credential redaction", () => {
         expect(redactCredentials(once)).toBe(once);
       }
       const safe = [
+        "Total $1,234.56 and EUR 12.50, was $10.20.",
+        "Total was $10.20 today.",
+        "Paid 10.20 dollars.",
+        "Version 10.20 shipped.",
+        "Room 10.20.30 is free.",
         "Version: 10.20.",
         "Date: 10.20.",
         "Time: 10.20.",
@@ -203,7 +209,10 @@ describe("credential redaction", () => {
         "Masked ID: 10.20.",
         "https://10.20.example/guide",
       ].join("\n");
-      expect(redactCredentials(safe)).toBe(safe);
+      const once = redactCredentials(safe);
+      expect(once).toBe(safe);
+      expect(redactCredentials(once)).toBe(once);
+      expect(once).not.toContain("[[");
     });
   });
 
