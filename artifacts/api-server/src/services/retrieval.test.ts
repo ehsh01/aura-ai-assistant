@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  gmailCorpusRowsPerMailbox,
   keywordScore,
   mentionedPeople,
   namesFuzzyMatch,
@@ -11,6 +12,7 @@ import {
   evernoteMatchExcerpt,
   evernoteMatchedText,
   hasSubjectMatchingUrlHostname,
+  loadLinkAskFallback,
   noteSearchCandidateLimit,
   pinSubjectHostnameMatchesBeforeCut,
   rankFreeTextMatches,
@@ -148,6 +150,77 @@ describe("link candidate slot reservation", () => {
         },
       ]),
     ).toBe(true);
+  });
+
+  it("loads the full corpus when Gmail holds the only matching link", async () => {
+    const question = "what is the vendor portal link";
+    const gmailOnly = {
+      title: "Vendor portal access",
+      text: "From: Support <support@example.com>\nOpen https://vendorportal.com/portal",
+    };
+    const loadFullPath = vi.fn(async () => [gmailOnly]);
+
+    await expect(
+      loadLinkAskFallback(
+        question,
+        [{ title: "Vendor account", text: "No URL in the indexed excerpt." }],
+        loadFullPath,
+      ),
+    ).resolves.toEqual([gmailOnly]);
+    expect(loadFullPath).toHaveBeenCalledOnce();
+  });
+
+  it("skips the full corpus when indexed text already has the link", async () => {
+    const loadFullPath = vi.fn(async () => ["wide corpus"]);
+    await expect(
+      loadLinkAskFallback(
+        "what is the vendor portal link",
+        [
+          {
+            title: "Vendor portal",
+            text: "Open https://vendorportal.com/portal",
+          },
+        ],
+        loadFullPath,
+      ),
+    ).resolves.toBeNull();
+    expect(loadFullPath).not.toHaveBeenCalled();
+  });
+
+  it("loads the full corpus when the fast-path kill switch is off", async () => {
+    vi.stubEnv("RECALL_LINK_ASK_FAST_PATH_ENABLED", "false");
+    try {
+      const loadFullPath = vi.fn(async () => ["wide corpus"]);
+      await expect(
+        loadLinkAskFallback(
+          "what is the vendor portal link",
+          [
+            {
+              title: "Vendor portal",
+              text: "Open https://vendorportal.com/portal",
+            },
+          ],
+          loadFullPath,
+        ),
+      ).resolves.toEqual(["wide corpus"]);
+      expect(loadFullPath).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("Gmail corpus caps", () => {
+  it("uses 50 rows only for non-email link asks", () => {
+    expect(gmailCorpusRowsPerMailbox("what is the Khaila portal link")).toBe(50);
+    expect(
+      gmailCorpusRowsPerMailbox("the link from the email about Khaila"),
+    ).toBe(150);
+  });
+
+  it("keeps 150 rows for every general non-link ask", () => {
+    expect(gmailCorpusRowsPerMailbox("what do I know about Khaila")).toBe(150);
+    expect(gmailCorpusRowsPerMailbox("summarize recent activity")).toBe(150);
   });
 });
 

@@ -16,6 +16,7 @@ import { warmEntityEmbedding } from "./embedding-cache";
 import { memoryEmbeddingText } from "./embedding-text";
 import { scheduleDigestRegen } from "./digests";
 import { syncPrimaryPersonLink } from "./entity-links";
+import { invalidateRetrievalCorpusCache } from "./retrieval-corpus-cache";
 
 export type LifeMemoryDto = {
   id: string;
@@ -304,6 +305,7 @@ export async function createMemoryForUser(
     .returning();
 
   const dto = toDto(row!);
+  invalidateRetrievalCorpusCache(userId);
   await writeAuditLog({
     userId,
     action: "memory_created",
@@ -387,6 +389,7 @@ export async function updateMemoryForUser(
 
   if (!row) return null;
   const dto = toDto(row);
+  invalidateRetrievalCorpusCache(userId);
   warmMemory(userId, dto);
   if (input.content !== undefined && dto.content.length > 800) {
     scheduleDigestRegen({ userId, entityType: "memory", entityId: dto.id });
@@ -433,6 +436,7 @@ export async function supersedeMemoryForUser(
     })
     .where(and(eq(lifeMemories.id, previousMemoryId), eq(lifeMemories.userId, userId)))
     .returning();
+  invalidateRetrievalCorpusCache(userId);
 
   await writeAuditLog({
     userId,
@@ -464,6 +468,7 @@ export async function deleteMemoryForUser(
     .where(and(eq(lifeMemories.id, memoryId), eq(lifeMemories.userId, userId)))
     .returning({ id: lifeMemories.id });
   if (deleted.length > 0) {
+    invalidateRetrievalCorpusCache(userId);
     await writeAuditLog({
       userId,
       action: "memory_deleted",

@@ -27,6 +27,7 @@ import {
   freeRetrievalTerms,
   normalizeKeywordToken,
 } from "./keyword-match";
+import { invalidateRetrievalCorpusCache } from "./retrieval-corpus-cache";
 
 export type RecallNoteDto = {
   id: string;
@@ -462,12 +463,19 @@ export async function runHostnameFallbackSafely<T>(
   try {
     return await operation();
   } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      error.code === "57014"
-    ) {
+    const code =
+      error && typeof error === "object"
+        ? "code" in error && typeof error.code === "string"
+          ? error.code
+          : "cause" in error &&
+              error.cause &&
+              typeof error.cause === "object" &&
+              "code" in error.cause &&
+              typeof error.cause.code === "string"
+            ? error.cause.code
+            : null
+        : null;
+    if (code === "57014") {
       hostnameFallbackTimeouts += 1;
       logger.info(
         { hostname_fallback_timeouts: hostnameFallbackTimeouts },
@@ -507,38 +515,41 @@ export async function searchNoteRecordsForUser(
   const whereMatch = terms.includes("vin")
     ? or(anyMatch, vinHeuristicMatch())
     : anyMatch;
-  const rows = await getDb()
-    .select({
-      id: notes.id,
-      title: notes.title,
-      content: sql<string>`left(${notes.content}, ${NOTE_SEARCH_CONTENT_CHARS})`,
-      preview: notes.preview,
-      summary: notes.summary,
-      factBullets: notes.factBullets,
-      tags: notes.tags,
-      matchText: sql<string>`left(
+  const rows = await getDb().transaction(async (tx) => {
+    await tx.execute(sql`set local jit = off`);
+    return tx
+      .select({
+        id: notes.id,
+        title: notes.title,
+        content: sql<string>`left(${notes.content}, ${NOTE_SEARCH_CONTENT_CHARS})`,
+        preview: notes.preview,
+        summary: notes.summary,
+        factBullets: notes.factBullets,
+        tags: notes.tags,
+        matchText: sql<string>`left(
         ts_headline(
           'simple',
-          ${notes.searchDocument},
+          left(${notes.searchDocument}, 20000),
           to_tsquery('simple', ${anyTsQuery}),
           'MaxWords=80, MinWords=20, ShortWord=2, HighlightAll=false'
         ),
         ${NOTE_SEARCH_MATCH_CHARS}
       )`,
-      updatedAt: notes.updatedAt,
-    })
-    .from(notes)
-    .where(and(eq(notes.userId, userId), whereMatch))
-    .orderBy(
-      sql`CASE WHEN to_tsvector('simple', coalesce(${notes.title}, '')) @@ to_tsquery('simple', ${allTsQuery}) THEN 1 ELSE 0 END DESC`,
-      sql`CASE WHEN ${notes.searchTsv} @@ to_tsquery('simple', ${allTsQuery}) THEN 1 ELSE 0 END DESC`,
-      sql`(
+        updatedAt: notes.updatedAt,
+      })
+      .from(notes)
+      .where(and(eq(notes.userId, userId), whereMatch))
+      .orderBy(
+        sql`CASE WHEN to_tsvector('simple', coalesce(${notes.title}, '')) @@ to_tsquery('simple', ${allTsQuery}) THEN 1 ELSE 0 END DESC`,
+        sql`CASE WHEN ${notes.searchTsv} @@ to_tsquery('simple', ${allTsQuery}) THEN 1 ELSE 0 END DESC`,
+        sql`(
         ts_rank_cd(to_tsvector('simple', coalesce(${notes.title}, '')), to_tsquery('simple', ${anyTsQuery})) * 4
         + ts_rank_cd(coalesce(${notes.searchTsv}, ''::tsvector), to_tsquery('simple', ${anyTsQuery}))
       ) DESC`,
-      desc(notes.updatedAt),
-    )
-    .limit(safeLimit);
+        desc(notes.updatedAt),
+      )
+      .limit(safeLimit);
+  });
 
   return rows.map((row) => ({
     entityType: "note",
@@ -572,6 +583,7 @@ export async function searchNoteHostnameFallbackForUser(
     () =>
       getDb().transaction(async (tx) => {
         await tx.execute(sql`set local statement_timeout = '400ms'`);
+        await tx.execute(sql`set local jit = off`);
         const rows = await tx
           .select({
             id: notes.id,
@@ -764,6 +776,7 @@ export async function createNoteForUser(
     .returning();
 
   invalidateNoteMetadataCache(userId);
+  invalidateRetrievalCorpusCache(userId);
   const dto = toDto(row!, 0, personName);
   await writeAuditLog({
     userId,
@@ -832,7 +845,10 @@ export async function bulkInsertNotesForUser(
     .values(values)
     .onConflictDoNothing()
     .returning();
-  if (inserted.length > 0) invalidateNoteMetadataCache(userId);
+  if (inserted.length > 0) {
+    invalidateNoteMetadataCache(userId);
+    invalidateRetrievalCorpusCache(userId);
+  }
   return inserted.map((row) => toDto(row, 0));
 }
 
@@ -989,6 +1005,7 @@ export async function updateNoteForUser(
 
   if (!row) return null;
   invalidateNoteMetadataCache(userId);
+  invalidateRetrievalCorpusCache(userId);
   const counts = await attachmentCountsForNotes([row.id]);
   let personName: string | null = null;
   if (row.primaryPersonId) {
@@ -1045,6 +1062,9 @@ export async function deleteNoteForUser(
     .delete(notes)
     .where(and(eq(notes.id, noteId), eq(notes.userId, userId)))
     .returning({ id: notes.id });
-  if (deleted.length > 0) invalidateNoteMetadataCache(userId);
+  if (deleted.length > 0) {
+    invalidateNoteMetadataCache(userId);
+    invalidateRetrievalCorpusCache(userId);
+  }
   return deleted.length > 0;
 }

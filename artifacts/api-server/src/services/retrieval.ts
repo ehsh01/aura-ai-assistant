@@ -54,6 +54,11 @@ import {
   isPlaceholderUrl,
   isTrackingOrUtilityUrl,
 } from "./url-quality";
+import {
+  getRetrievalCorpusCache,
+  setRetrievalCorpusCache,
+  type RetrievalCorpusCacheMode,
+} from "./retrieval-corpus-cache";
 
 export {
   extractVinCandidates,
@@ -158,9 +163,7 @@ export function hasAcceptableSubjectLink(
     );
     return subjectTerms.some(
       (term) =>
-        titleTokens.has(term) ||
-        nearTokens.has(term) ||
-        linkTokens.has(term),
+        titleTokens.has(term) || nearTokens.has(term) || linkTokens.has(term),
     );
   });
 }
@@ -175,14 +178,31 @@ export function shouldRunHostnameFallback(
   );
 }
 
+/** @internal exported for fast-path fallthrough regression tests. */
+export async function loadLinkAskFallback<T>(
+  question: string,
+  searchRecords: Array<{ title: string; text: string }>,
+  loadFullPath: () => Promise<T>,
+): Promise<T | null> {
+  if (
+    isLinkAskFastPathEnabled() &&
+    shouldExpandUrlTokens(question) &&
+    searchRecords.some((record) => hasAcceptableSubjectLink(question, record))
+  ) {
+    return null;
+  }
+  return loadFullPath();
+}
+
+export function isLinkAskFastPathEnabled(): boolean {
+  return !/^(?:false|0|off)$/i.test(
+    process.env.RECALL_LINK_ASK_FAST_PATH_ENABLED?.trim() ?? "",
+  );
+}
+
 export function pinSubjectHostnameMatchesBeforeCut<
   T extends { entityType: string; entityId: string; text: string },
->(
-  question: string,
-  rankedRawHits: T[],
-  limit: number,
-  reserveSlots = 2,
-): T[] {
+>(question: string, rankedRawHits: T[], limit: number, reserveSlots = 2): T[] {
   if (!shouldExpandUrlTokens(question) || limit <= 0 || reserveSlots <= 0) {
     return rankedRawHits.slice(0, Math.max(0, limit));
   }
@@ -219,14 +239,11 @@ export function reserveSubjectUrlCandidates(
     (record) => !reservedKeys.has(retrievalRecordKey(record)),
   );
   const beforeReserved = Math.max(0, limit - reserved.length);
-  const firstWindow = [
-    ...remaining.slice(0, beforeReserved),
-    ...reserved,
-  ];
-  return [
-    ...firstWindow,
-    ...remaining.slice(beforeReserved),
-  ].slice(0, Math.max(ranked.length, limit));
+  const firstWindow = [...remaining.slice(0, beforeReserved), ...reserved];
+  return [...firstWindow, ...remaining.slice(beforeReserved)].slice(
+    0,
+    Math.max(ranked.length, limit),
+  );
 }
 
 export function noteSearchCandidateLimit(question: string): number {
@@ -292,6 +309,15 @@ function googleIntent(question: string): {
       ),
     contacts: /\b(contact|contacts|phone\s*number|address\s*book)\b/.test(q),
   };
+}
+
+export function gmailCorpusRowsPerMailbox(
+  question: string,
+  linkAsk = shouldExpandUrlTokens(question),
+): number {
+  return linkAsk && !googleIntent(question).email
+    ? CORPUS.gmailPerMailbox
+    : CORPUS.gmailPerMailboxFull;
 }
 
 function sourceRecordMatchesIntent(
@@ -711,7 +737,8 @@ const CORPUS = {
   invoices: 40,
   projects: 40,
   /** Per connected Google mailbox — keeps ehernandez2 + REI + others searchable. */
-  gmailPerMailbox: 150,
+  gmailPerMailbox: 50,
+  gmailPerMailboxFull: 150,
   contactsTotal: 40,
   driveTotal: 40,
   calendarTotal: 40,
@@ -798,6 +825,7 @@ function sourceRowToContext(s: SourceRow): ContextRecord {
  */
 async function loadSourceRecordsBalanced(
   userId: string,
+  options: { gmailPerMailbox: number },
 ): Promise<ContextRecord[]> {
   const googleConns = await getDb()
     .select({
@@ -833,11 +861,18 @@ async function loadSourceRecordsBalanced(
         externalId: sourceRecords.externalId,
         recordType: sourceRecords.recordType,
         recordTitle: sourceRecords.recordTitle,
-        recordText: sql<string>`left(${sourceRecords.recordText}, 4000)`,
+        recordText: sql<string>`left(${sourceRecords.recordText}, 1500)`,
         updatedAt: sourceRecords.updatedAt,
         sourceCreatedAt: sourceRecords.sourceCreatedAt,
         sourceUrl: sourceRecords.sourceUrl,
-        metadata: sourceRecords.recordMetadata,
+        metadata: sql<
+          Record<string, unknown>
+        >`jsonb_strip_nulls(jsonb_build_object(
+          'digest', ${sourceRecords.recordMetadata}->'digest',
+          'attachments', ${sourceRecords.recordMetadata}->'attachments',
+          'from', ${sourceRecords.recordMetadata}->'from',
+          'mailbox', ${sourceRecords.recordMetadata}->'mailbox'
+        ))`,
       })
       .from(sourceRecords)
       .where(
@@ -852,7 +887,7 @@ async function loadSourceRecordsBalanced(
           sql`coalesce(${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`,
         ),
       )
-      .limit(CORPUS.gmailPerMailbox);
+      .limit(options.gmailPerMailbox);
 
     pushRows(rows.map((r) => ({ ...r, mailbox })));
   }
@@ -869,12 +904,18 @@ async function loadSourceRecordsBalanced(
         externalId: sourceRecords.externalId,
         recordType: sourceRecords.recordType,
         recordTitle: sourceRecords.recordTitle,
-        recordText: sql<string>`left(${sourceRecords.recordText}, 4000)`,
+        recordText: sql<string>`left(${sourceRecords.recordText}, 1500)`,
         updatedAt: sourceRecords.updatedAt,
         sourceCreatedAt: sourceRecords.sourceCreatedAt,
         sourceUrl: sourceRecords.sourceUrl,
         connectorId: sourceRecords.connectorId,
-        metadata: sourceRecords.recordMetadata,
+        metadata: sql<
+          Record<string, unknown>
+        >`jsonb_strip_nulls(jsonb_build_object(
+          'digest', ${sourceRecords.recordMetadata}->'digest',
+          'mimeType', ${sourceRecords.recordMetadata}->'mimeType',
+          'isFolder', ${sourceRecords.recordMetadata}->'isFolder'
+        ))`,
       })
       .from(sourceRecords)
       .where(
@@ -919,12 +960,21 @@ async function loadSourceRecordsBalanced(
           externalId: sourceRecords.externalId,
           recordType: sourceRecords.recordType,
           recordTitle: sourceRecords.recordTitle,
-          recordText: sql<string>`left(${sourceRecords.recordText}, 4000)`,
+          recordText: sql<string>`left(${sourceRecords.recordText}, 1500)`,
           updatedAt: sourceRecords.updatedAt,
           sourceCreatedAt: sourceRecords.sourceCreatedAt,
           sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
           sourceUrl: sourceRecords.sourceUrl,
-          metadata: sourceRecords.recordMetadata,
+          metadata: sql<
+            Record<string, unknown>
+          >`jsonb_strip_nulls(jsonb_build_object(
+            'digest', ${sourceRecords.recordMetadata}->'digest',
+            'notebookName', ${sourceRecords.recordMetadata}->'notebookName',
+            'tagNames', ${sourceRecords.recordMetadata}->'tagNames',
+            'tags', ${sourceRecords.recordMetadata}->'tags',
+            'trashed', ${sourceRecords.recordMetadata}->'trashed',
+            'attachments', ${sourceRecords.recordMetadata}->'attachments'
+          ))`,
         })
         .from(sourceRecords)
         .innerJoin(
@@ -1023,29 +1073,31 @@ export async function searchEvernoteSourceRecordsForUser(
   const terms = sourceRecordSearchTerms(query);
   const tsQueries = sourceRecordTsQueries(terms);
   if (!tsQueries) return [];
-  const rows = await getDb()
-    .select({
-      id: sourceRecords.id,
-      externalId: sourceRecords.externalId,
-      recordType: sourceRecords.recordType,
-      recordTitle: sourceRecords.recordTitle,
-      recordText: sql<string>`left(
+  const rows = await getDb().transaction(async (tx) => {
+    await tx.execute(sql`set local jit = off`);
+    return tx
+      .select({
+        id: sourceRecords.id,
+        externalId: sourceRecords.externalId,
+        recordType: sourceRecords.recordType,
+        recordTitle: sourceRecords.recordTitle,
+        recordText: sql<string>`left(
         ts_headline(
           'simple',
-          ${sourceRecords.searchDocument},
+          left(${sourceRecords.searchDocument}, 20000),
           to_tsquery('simple', ${tsQueries.any}),
           'MaxWords=80, MinWords=20, ShortWord=2, HighlightAll=false'
         ),
         1200
       )`,
-      attachmentText: sql<string>`coalesce((
+        attachmentText: sql<string>`coalesce((
         select left(
           concat_ws(
             E'\n',
             coalesce(ea.file_name, ''),
             ts_headline(
               'simple',
-              coalesce(ea.extracted_text, ''),
+              left(coalesce(ea.extracted_text, ''), 20000),
               to_tsquery('simple', ${tsQueries.any}),
               'MaxWords=80, MinWords=20, ShortWord=2, HighlightAll=false'
             )
@@ -1059,7 +1111,7 @@ export async function searchEvernoteSourceRecordsForUser(
         order by ts_rank_cd(ea.search_tsv, to_tsquery('simple', ${tsQueries.any})) desc
         limit 1
       ), '')`,
-      attachmentId: sql<string | null>`(
+        attachmentId: sql<string | null>`(
         select ea.id
         from evernote_attachments ea
         where ea.source_record_id = ${sourceRecords.id}
@@ -1068,26 +1120,35 @@ export async function searchEvernoteSourceRecordsForUser(
         order by ts_rank_cd(ea.search_tsv, to_tsquery('simple', ${tsQueries.any})) desc
         limit 1
       )`,
-      updatedAt: sourceRecords.updatedAt,
-      sourceCreatedAt: sourceRecords.sourceCreatedAt,
-      sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
-      sourceUrl: sourceRecords.sourceUrl,
-      metadata: sourceRecords.recordMetadata,
-    })
-    .from(sourceRecords)
-    .innerJoin(
-      connectors,
-      and(
-        eq(connectors.id, sourceRecords.connectorId),
-        eq(connectors.enabled, true),
-      ),
-    )
-    .where(
-      and(
-        eq(sourceRecords.userId, userId),
-        eq(sourceRecords.recordType, "evernote_note"),
-        sql`coalesce((${sourceRecords.recordMetadata}->>'trashed')::boolean, false) = false`,
-        sql`(
+        updatedAt: sourceRecords.updatedAt,
+        sourceCreatedAt: sourceRecords.sourceCreatedAt,
+        sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
+        sourceUrl: sourceRecords.sourceUrl,
+        metadata: sql<
+          Record<string, unknown>
+        >`jsonb_strip_nulls(jsonb_build_object(
+        'digest', ${sourceRecords.recordMetadata}->'digest',
+        'notebookName', ${sourceRecords.recordMetadata}->'notebookName',
+        'tagNames', ${sourceRecords.recordMetadata}->'tagNames',
+        'tags', ${sourceRecords.recordMetadata}->'tags',
+        'trashed', ${sourceRecords.recordMetadata}->'trashed',
+        'attachments', ${sourceRecords.recordMetadata}->'attachments'
+      ))`,
+      })
+      .from(sourceRecords)
+      .innerJoin(
+        connectors,
+        and(
+          eq(connectors.id, sourceRecords.connectorId),
+          eq(connectors.enabled, true),
+        ),
+      )
+      .where(
+        and(
+          eq(sourceRecords.userId, userId),
+          eq(sourceRecords.recordType, "evernote_note"),
+          sql`coalesce((${sourceRecords.recordMetadata}->>'trashed')::boolean, false) = false`,
+          sql`(
           ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.any})
           OR exists (
             select 1
@@ -1097,11 +1158,11 @@ export async function searchEvernoteSourceRecordsForUser(
               and ea.search_tsv @@ to_tsquery('simple', ${tsQueries.any})
           )
         )`,
-      ),
-    )
-    .orderBy(
-      sql`CASE WHEN to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')) @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
-      sql`CASE WHEN (
+        ),
+      )
+      .orderBy(
+        sql`CASE WHEN to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')) @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
+        sql`CASE WHEN (
         ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.all})
         OR exists (
           select 1
@@ -1111,7 +1172,7 @@ export async function searchEvernoteSourceRecordsForUser(
             and ea.search_tsv @@ to_tsquery('simple', ${tsQueries.all})
         )
       ) THEN 1 ELSE 0 END DESC`,
-      sql`(
+        sql`(
         ts_rank_cd(to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')), to_tsquery('simple', ${tsQueries.any})) * 4
         + ts_rank_cd(coalesce(${sourceRecords.searchTsv}, ''::tsvector), to_tsquery('simple', ${tsQueries.any}))
         + coalesce((
@@ -1122,9 +1183,10 @@ export async function searchEvernoteSourceRecordsForUser(
             and ea.search_tsv @@ to_tsquery('simple', ${tsQueries.any})
         ), 0)
       ) DESC`,
-      desc(sourceRecords.sourceUpdatedAt),
-    )
-    .limit(Math.min(Math.max(limit, 1), 50));
+        desc(sourceRecords.sourceUpdatedAt),
+      )
+      .limit(Math.min(Math.max(limit, 1), 50));
+  });
   return rows.map((row) => {
     const context = sourceRowToContext({ ...row, mailbox: null });
     const excerpt = evernoteMatchExcerpt(row.recordText ?? "", terms);
@@ -1157,52 +1219,64 @@ export async function searchSourceRecordsForUser(
   const terms = sourceRecordSearchTerms(query);
   const tsQueries = sourceRecordTsQueries(terms);
   if (!tsQueries) return [];
-  const rows = await getDb()
-    .select({
-      id: sourceRecords.id,
-      externalId: sourceRecords.externalId,
-      recordType: sourceRecords.recordType,
-      recordTitle: sourceRecords.recordTitle,
-      recordText: sql<string>`left(
+  const rows = await getDb().transaction(async (tx) => {
+    await tx.execute(sql`set local jit = off`);
+    return tx
+      .select({
+        id: sourceRecords.id,
+        externalId: sourceRecords.externalId,
+        recordType: sourceRecords.recordType,
+        recordTitle: sourceRecords.recordTitle,
+        recordText: sql<string>`left(
         ts_headline(
           'simple',
-          ${sourceRecords.searchDocument},
+          left(${sourceRecords.searchDocument}, 20000),
           to_tsquery('simple', ${tsQueries.any}),
           'MaxWords=80, MinWords=20, ShortWord=2, HighlightAll=false'
         ),
         1200
       )`,
-      updatedAt: sourceRecords.updatedAt,
-      sourceCreatedAt: sourceRecords.sourceCreatedAt,
-      sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
-      sourceUrl: sourceRecords.sourceUrl,
-      metadata: sourceRecords.recordMetadata,
-    })
-    .from(sourceRecords)
-    .innerJoin(
-      connectors,
-      and(
-        eq(connectors.id, sourceRecords.connectorId),
-        eq(connectors.enabled, true),
-      ),
-    )
-    .where(
-      and(
-        eq(sourceRecords.userId, userId),
-        ne(sourceRecords.recordType, "evernote_note"),
-        sql`${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.any})`,
-      ),
-    )
-    .orderBy(
-      sql`CASE WHEN to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')) @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
-      sql`CASE WHEN ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
-      sql`(
+        updatedAt: sourceRecords.updatedAt,
+        sourceCreatedAt: sourceRecords.sourceCreatedAt,
+        sourceUpdatedAt: sourceRecords.sourceUpdatedAt,
+        sourceUrl: sourceRecords.sourceUrl,
+        metadata: sql<
+          Record<string, unknown>
+        >`jsonb_strip_nulls(jsonb_build_object(
+        'digest', ${sourceRecords.recordMetadata}->'digest',
+        'attachments', ${sourceRecords.recordMetadata}->'attachments',
+        'from', ${sourceRecords.recordMetadata}->'from',
+        'mailbox', ${sourceRecords.recordMetadata}->'mailbox',
+        'mimeType', ${sourceRecords.recordMetadata}->'mimeType',
+        'isFolder', ${sourceRecords.recordMetadata}->'isFolder'
+      ))`,
+      })
+      .from(sourceRecords)
+      .innerJoin(
+        connectors,
+        and(
+          eq(connectors.id, sourceRecords.connectorId),
+          eq(connectors.enabled, true),
+        ),
+      )
+      .where(
+        and(
+          eq(sourceRecords.userId, userId),
+          ne(sourceRecords.recordType, "evernote_note"),
+          sql`${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.any})`,
+        ),
+      )
+      .orderBy(
+        sql`CASE WHEN to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')) @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
+        sql`CASE WHEN ${sourceRecords.searchTsv} @@ to_tsquery('simple', ${tsQueries.all}) THEN 1 ELSE 0 END DESC`,
+        sql`(
         ts_rank_cd(to_tsvector('simple', coalesce(${sourceRecords.recordTitle}, '')), to_tsquery('simple', ${tsQueries.any})) * 4
         + ts_rank_cd(coalesce(${sourceRecords.searchTsv}, ''::tsvector), to_tsquery('simple', ${tsQueries.any}))
       ) DESC`,
-      desc(sourceRecords.sourceUpdatedAt),
-    )
-    .limit(Math.min(Math.max(limit, 1), 60));
+        desc(sourceRecords.sourceUpdatedAt),
+      )
+      .limit(Math.min(Math.max(limit, 1), 60));
+  });
   return rows.map((row) => sourceRowToContext({ ...row, mailbox: null }));
 }
 
@@ -1211,17 +1285,8 @@ function rankFreeNoteRecords(
   records: ContextRecord[],
   limit: number,
 ): ContextRecord[] {
-  const rankedRawHits = rankFreeTextMatches(
-    query,
-    records,
-    records.length,
-  );
-  return pinSubjectHostnameMatchesBeforeCut(
-    query,
-    rankedRawHits,
-    limit,
-    2,
-  ).map(
+  const rankedRawHits = rankFreeTextMatches(query, records, records.length);
+  return pinSubjectHostnameMatchesBeforeCut(query, rankedRawHits, limit, 2).map(
     ({
       score: _score,
       matchedTerms: _matched,
@@ -1257,11 +1322,16 @@ export async function retrieveFreeNoteRecordsForUser(
   return rankFreeNoteRecords(query, records, limit);
 }
 
-async function collectCorpus(userId: string): Promise<{
+type CollectedCorpus = {
   records: ContextRecord[];
   people: PersonRef[];
   tasks: Awaited<ReturnType<typeof listTasksForUser>>;
-}> {
+};
+
+async function collectCorpusUncached(
+  userId: string,
+  options: { gmailPerMailbox: number },
+): Promise<CollectedCorpus> {
   const [
     tasks,
     notes,
@@ -1294,7 +1364,7 @@ async function collectCorpus(userId: string): Promise<{
     listOrganizationsForUser(userId, { limit: CORPUS.organizations }),
     listInvoicesForUser(userId, { limit: CORPUS.invoices }),
     listProjectsForRetrieval(userId, CORPUS.projects),
-    loadSourceRecordsBalanced(userId),
+    loadSourceRecordsBalanced(userId, options),
     listPersonNameAliases(userId),
   ]);
 
@@ -1544,6 +1614,21 @@ async function collectCorpus(userId: string): Promise<{
   };
 }
 
+async function collectCorpus(
+  userId: string,
+  options: { gmailPerMailbox: number },
+): Promise<CollectedCorpus> {
+  const mode: RetrievalCorpusCacheMode =
+    options.gmailPerMailbox === CORPUS.gmailPerMailbox
+      ? "slim-link"
+      : "full";
+  const cached = getRetrievalCorpusCache<CollectedCorpus>(userId, mode);
+  if (cached) return cached;
+  const collected = await collectCorpusUncached(userId, options);
+  setRetrievalCorpusCache(userId, mode, collected);
+  return collected;
+}
+
 /**
  * Hybrid retrieval: keyword + semantic embeddings (when available).
  * Vectors are L1 (memory) + L2 (entity_embeddings) cached by content hash.
@@ -1599,30 +1684,78 @@ export async function retrieveRelevantRecords(
       tasks: [],
     };
   }
-  // Embed the query in parallel with the corpus load — it doesn't depend on the
-  // corpus, so this removes a sequential OpenAI round-trip from the critical path.
-  const [
-    { records: baseCorpus, people, tasks },
-    initialNoteSearchHits,
-    sourceSearchHits,
-    queryVec,
-  ] = await Promise.all([
-    collectCorpus(userId),
-    retrieveFreeNoteRecordsForUser(
-      userId,
+  const intent = googleIntent(question);
+  const linkAsk = shouldExpandUrlTokens(noteQuery);
+  const gmailPerMailbox = gmailCorpusRowsPerMailbox(
+    `${question}\n${noteQuery}`,
+    linkAsk,
+  );
+  const loadFullPath = () =>
+    Promise.all([
+      collectCorpus(userId, { gmailPerMailbox }),
+      options?.semantic === false
+        ? Promise.resolve(null)
+        : embedQuery(question).catch(() => null),
+    ] as const);
+
+  let baseCorpus: ContextRecord[];
+  let people: PersonRef[];
+  let tasks: Awaited<ReturnType<typeof listTasksForUser>>;
+  let initialNoteSearchHits: ContextRecord[];
+  let sourceSearchHits: ContextRecord[];
+  let queryVec: number[] | null;
+
+  if (linkAsk) {
+    // Link asks first pay only for the three indexed text searches: native
+    // notes, Evernote, and other source records. The wide recent corpus stays
+    // lazy unless those searches fail to surface an acceptable subject link.
+    [initialNoteSearchHits, sourceSearchHits] = await Promise.all([
+      retrieveFreeNoteRecordsForUser(
+        userId,
+        noteQuery,
+        noteSearchCandidateLimit(noteQuery),
+      ),
+      searchSourceRecordsForUser(userId, question, 30).catch(() => []),
+    ]);
+    const fullPath = await loadLinkAskFallback(
       noteQuery,
-      noteSearchCandidateLimit(noteQuery),
-    ),
-    searchSourceRecordsForUser(userId, question, 30).catch(() => []),
-    options?.semantic === false
-      ? Promise.resolve(null)
-      : embedQuery(question).catch(() => null),
-  ]);
+      [...initialNoteSearchHits, ...sourceSearchHits],
+      loadFullPath,
+    );
+    if (fullPath) {
+      [{ records: baseCorpus, people, tasks }, queryVec] = fullPath;
+    } else {
+      baseCorpus = [];
+      people = [];
+      tasks = [];
+      queryVec = null;
+    }
+  } else {
+    // For normal asks, preserve corpus/search/query embedding concurrency.
+    [
+      { records: baseCorpus, people, tasks },
+      initialNoteSearchHits,
+      sourceSearchHits,
+      queryVec,
+    ] = await Promise.all([
+      collectCorpus(userId, { gmailPerMailbox }),
+      retrieveFreeNoteRecordsForUser(
+        userId,
+        noteQuery,
+        noteSearchCandidateLimit(noteQuery),
+      ),
+      searchSourceRecordsForUser(userId, question, 30).catch(() => []),
+      options?.semantic === false
+        ? Promise.resolve(null)
+        : embedQuery(question).catch(() => null),
+    ]);
+  }
   let noteSearchHits = initialNoteSearchHits;
   if (
     shouldRunHostnameFallback(noteQuery, [
       ...noteSearchHits,
       ...sourceSearchHits,
+      ...baseCorpus,
     ])
   ) {
     const fallbackNotes = await searchNoteHostnameFallbackForUser(
@@ -1680,7 +1813,6 @@ export async function retrieveRelevantRecords(
     return { records: [], usedSemantic: false, namedPeople: [], tasks };
   }
 
-  const intent = googleIntent(question);
   const wantsFamily = FAMILY_RELATION_INTENT.test(question);
   const relations = relationTermsInQuestion(question);
   const nameTokens = questionNameTokens(question);
@@ -2165,30 +2297,20 @@ export async function retrieveRelevantRecords(
     const titleMatches = noteSearchHits
       .map((record) => ({
         record,
-        relevance: freeTextRelevance(
-          noteQuery,
-          record.title,
-          record.text,
-        ),
+        relevance: freeTextRelevance(noteQuery, record.title, record.text),
       }))
-      .filter(
-        ({ relevance }) =>
-          relevance.titleMatches === titleTerms.length,
-      )
+      .filter(({ relevance }) => relevance.titleMatches === titleTerms.length)
       .map(({ record, relevance }) =>
         toRetrieved(record, relevance.score, "keyword"),
       );
     if (titleMatches.length > 0) {
       const titleKeys = new Set(
-        titleMatches.map(
-          (record) => `${record.entityType}:${record.entityId}`,
-        ),
+        titleMatches.map((record) => `${record.entityType}:${record.entityId}`),
       );
       top = [
         ...titleMatches,
         ...top.filter(
-          (record) =>
-            !titleKeys.has(`${record.entityType}:${record.entityId}`),
+          (record) => !titleKeys.has(`${record.entityType}:${record.entityId}`),
         ),
       ].slice(0, Math.max(limit, Math.min(16, titleMatches.length + 6)));
     }
@@ -2202,13 +2324,7 @@ export async function retrieveRelevantRecords(
         "keyword",
       ),
     );
-    top = reserveSubjectUrlCandidates(
-      noteQuery,
-      top,
-      noteCandidates,
-      limit,
-      2,
-    );
+    top = reserveSubjectUrlCandidates(noteQuery, top, noteCandidates, limit, 2);
   }
 
   // If semantic threshold filtered everything, fall back to keyword hits.
