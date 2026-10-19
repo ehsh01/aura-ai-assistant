@@ -187,27 +187,30 @@ describe("link candidate slot reservation", () => {
     expect(loadFullPath).not.toHaveBeenCalled();
   });
 
-  it("loads the full corpus when the fast-path kill switch is off", async () => {
-    vi.stubEnv("RECALL_LINK_ASK_FAST_PATH_ENABLED", "false");
-    try {
-      const loadFullPath = vi.fn(async () => ["wide corpus"]);
-      await expect(
-        loadLinkAskFallback(
-          "what is the vendor portal link",
-          [
-            {
-              title: "Vendor portal",
-              text: "Open https://vendorportal.com/portal",
-            },
-          ],
-          loadFullPath,
-        ),
-      ).resolves.toEqual(["wide corpus"]);
-      expect(loadFullPath).toHaveBeenCalledOnce();
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
+  it.each(["false", " FALSE ", "0", " Off ", "NO"])(
+    "loads the full corpus when the fast-path kill switch is %j",
+    async (value) => {
+      vi.stubEnv("RECALL_LINK_ASK_FAST_PATH_ENABLED", value);
+      try {
+        const loadFullPath = vi.fn(async () => ["wide corpus"]);
+        await expect(
+          loadLinkAskFallback(
+            "what is the vendor portal link",
+            [
+              {
+                title: "Vendor portal",
+                text: "Open https://vendorportal.com/portal",
+              },
+            ],
+            loadFullPath,
+          ),
+        ).resolves.toEqual(["wide corpus"]);
+        expect(loadFullPath).toHaveBeenCalledOnce();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 });
 
 describe("Gmail corpus caps", () => {

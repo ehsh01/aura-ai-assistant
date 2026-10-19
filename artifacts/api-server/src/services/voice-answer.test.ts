@@ -174,7 +174,7 @@ const KHAILA_RECORD = {
   ...NOTE_RECORD,
   entityId: "khaila-school-portal",
   title: "Khaila school portal",
-  text: "Khaila's school access: https://www.dadeschools.net/",
+  text: "Khaila's school access: http://www.dadeschools.net/",
   score: 9,
 } as const;
 
@@ -567,7 +567,7 @@ describe("spoken grounded answers", () => {
       null,
     );
 
-    expect(result.answer).toContain("https://www.dadeschools.net/");
+    expect(result.answer).toContain("http://www.dadeschools.net/");
     expect(result.sources[0]?.title).toBe("Khaila school portal");
     expect(mocks.completion).not.toHaveBeenCalled();
   });
@@ -613,7 +613,7 @@ describe("spoken grounded answers", () => {
       name: "Khaila",
       question: "what is the khaila school portal link",
       records: [KHAILA_RECORD, PSYCHIATRY_RECEIPT_DECOY],
-      expected: "https://www.dadeschools.net/",
+      expected: "http://www.dadeschools.net/",
     },
   ])(
     "returns an identical $name answer with the fast path on and off",

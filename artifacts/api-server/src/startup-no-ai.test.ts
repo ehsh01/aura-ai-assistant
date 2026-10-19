@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({
   completionCreate: vi.fn(),
   embeddingCreate: vi.fn(),
   claimNextJobOfTypes: vi.fn().mockResolvedValue(null),
+  expireDueMemories: vi.fn().mockResolvedValue(0),
+  listQueuedJobsOfType: vi.fn().mockResolvedValue([]),
 }));
 
 vi.hoisted(() => {
@@ -32,12 +34,22 @@ vi.mock("./services/job-queue", () => ({
   claimJobById: vi.fn().mockResolvedValue(null),
   claimNextJobOfTypes: mocks.claimNextJobOfTypes,
   completeJob: vi.fn(),
+  connectorTransientDeferral: vi.fn(),
   connectorSyncFromPayload: vi.fn(),
   continueJob: vi.fn(),
+  deferJob: vi.fn(),
   enexImportFromPayload: vi.fn(),
   failJob: vi.fn(),
+  getJobForUser: vi.fn(),
   heartbeatJob: vi.fn(),
+  isNonRetryableCodeError: vi.fn().mockReturnValue(false),
+  listQueuedJobsOfType: mocks.listQueuedJobsOfType,
   recoverStaleProcessingJobs: vi.fn().mockResolvedValue(0),
+}));
+
+vi.mock("./services/life-memory", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./services/life-memory")>()),
+  expireDueMemories: mocks.expireDueMemories,
 }));
 
 import app from "./app";
@@ -54,6 +66,8 @@ describe("server and worker startup", () => {
     startJobWorker();
     await vi.waitFor(() => {
       expect(mocks.claimNextJobOfTypes).toHaveBeenCalled();
+      expect(mocks.expireDueMemories).toHaveBeenCalled();
+      expect(mocks.listQueuedJobsOfType).toHaveBeenCalled();
     });
 
     expect(mocks.completionCreate).not.toHaveBeenCalled();

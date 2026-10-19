@@ -1,3 +1,5 @@
+import { parseEnvBoolean } from "../lib/feature-flags";
+
 const DEFAULT_TTL_MS = 45_000;
 const MAX_ENTRIES = 24;
 const MAX_BYTES = 3 * 1024 * 1024;
@@ -18,8 +20,7 @@ let totalBytes = 0;
 
 function enabled(): boolean {
   return (
-    process.env.RECALL_RETRIEVAL_CORPUS_CACHE_ENABLED?.trim().toLowerCase() !==
-    "false"
+    parseEnvBoolean(process.env.RECALL_RETRIEVAL_CORPUS_CACHE_ENABLED) ?? true
   );
 }
 

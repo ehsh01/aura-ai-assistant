@@ -117,9 +117,19 @@ describe("retrieval corpus cache", () => {
     );
   });
 
-  it("can be disabled without retaining inputs", () => {
-    vi.stubEnv("RECALL_RETRIEVAL_CORPUS_CACHE_ENABLED", "false");
-    setRetrievalCorpusCache("u1", "full", { records: ["ignored"] });
-    expect(getRetrievalCorpusCache("u1", "full")).toBeNull();
+  it.each(["false", " FALSE ", "0", " Off ", "NO"])(
+    "does not retain inputs when disabled with %j",
+    (value) => {
+      vi.stubEnv("RECALL_RETRIEVAL_CORPUS_CACHE_ENABLED", value);
+      setRetrievalCorpusCache("u1", "full", { records: ["ignored"] });
+      expect(getRetrievalCorpusCache("u1", "full")).toBeNull();
+    },
+  );
+
+  it("remains enabled by default", () => {
+    setRetrievalCorpusCache("u1", "full", { records: ["cached"] });
+    expect(getRetrievalCorpusCache("u1", "full")).toEqual({
+      records: ["cached"],
+    });
   });
 });
