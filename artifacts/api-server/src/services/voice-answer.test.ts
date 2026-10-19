@@ -204,8 +204,8 @@ Spaces access key: DO00FAKEACCESSKEY123
 Spaces Key: QWxhZGRpbjpPcGVuU2VzYW1lMTIzNDU2Nzg5MDEAB12
 Spaces secret key: FAKESECRETKEY1234567890123456789012345678
 ssh root@1.2.3.4
-R00t@Psych@Tail9
-deploy inventory:R00t@Psych@Tail9@inventory.example.health`,
+Abc123xyzAbc123xyz@Q@Wordtail9
+deploy user:Abc123xyzAbc123xyz@Q@Wordtail9/var/www/x`,
   score: 10,
 } as const;
 

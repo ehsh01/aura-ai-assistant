@@ -17,8 +17,8 @@ export const FAKE_CREDENTIALS = {
   github: "ghp_FakeGithubToken1234567890",
   slack: "xoxb-fake-slack-token-123456",
   jwt: "eyJhbGciOiJIUzI1NiJ9.ZmFrZXBheWxvYWQ.ZmFrZXNpZ25hdHVyZQ",
-  sshBare: "R00t@Psych@Tail9",
-  commandToken: "R00t@Psych@Tail9",
+  sshBare: "Abc123xyzAbc123xyz@Q@Wordtail9",
+  commandToken: "Abc123xyzAbc123xyz@Q@Wordtail9",
 };
 
 export const PSYCHIATRY_SECRET_FIXTURE = `Psychiatry Inventory App
@@ -36,7 +36,7 @@ JWT: ${FAKE_CREDENTIALS.jwt}
 Database: postgres://inventory:${FAKE_CREDENTIALS.password}@db.example.health:5432/psychiatry
 ssh root@1.2.3.4
 ${FAKE_CREDENTIALS.sshBare}
-deploy ${`inventory:${FAKE_CREDENTIALS.commandToken}@inventory.example.health`}
+deploy user:${FAKE_CREDENTIALS.commandToken}/var/www/x
 -----BEGIN OPENSSH PRIVATE KEY-----
 ZmFrZS1wcml2YXRlLWtleQ==
 -----END OPENSSH PRIVATE KEY-----`;
@@ -48,8 +48,11 @@ describe("credential redaction", () => {
       expect(redacted).not.toContain(secret);
     }
     expect(redacted).not.toContain("ZmFrZS1wcml2YXRlLWtleQ");
-    expect(redacted).not.toContain("Psych@Tail9");
-    expect(redacted).not.toContain("@Tail9");
+    expect(redacted).not.toContain("Wordtail9");
+    expect(redacted).not.toContain("@Q@");
+    expect(redacted).toContain(
+      `deploy user:${HIDDEN_CREDENTIAL}/var/www/x`,
+    );
     expect(redacted).toContain(`SSH password: ${HIDDEN_CREDENTIAL}`);
     expect(redacted).toContain(
       `postgres://inventory:${HIDDEN_CREDENTIAL}@db.example.health`,
@@ -81,11 +84,31 @@ describe("credential redaction", () => {
     expect(redacted).not.toContain("SameLineFake!");
   });
 
+  it("redacts a no-host user credential greedily to the path separator", () => {
+    const secret = "Abc123xyzAbc123xyz@Q@Wordtail9";
+    expect(
+      redactCredentials(`deploy user:${secret}/var/www/x`),
+    ).toContain(`user:${HIDDEN_CREDENTIAL}/var/www/x`);
+    expect(
+      redactCredentials(
+        `ssh root@1.2.3.4\n${secret}\ndeploy user:${secret}/var/www/x`,
+      ),
+    ).not.toContain("Wordtail9");
+  });
+
   it("uses the previous line as context for a bare Key label", () => {
     const secret = "QWxhZGRpbjpPcGVuU2VzYW1lMTIzNDU2Nzg5MDEAB12";
     expect(redactCredentials(`DigitalOcean Spaces\nKey: ${secret}`)).toBe(
       `DigitalOcean Spaces\nKey: ${HIDDEN_CREDENTIAL}`,
     );
+  });
+
+  it("collapses adjacent and partial credential placeholders", () => {
+    expect(
+      redactCredentials(
+        "[hidden credential][hidden credential] credential]",
+      ),
+    ).toBe(HIDDEN_CREDENTIAL);
   });
 
   it("redacts nested answer metadata without mutating raw input", () => {

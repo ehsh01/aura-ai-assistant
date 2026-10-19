@@ -53,8 +53,8 @@ describe("instrumented OpenAI client", () => {
     const bareSpacesKey =
       "QWxhZGRpbjpPcGVuU2VzYW1lMTIzNDU2Nzg5MDEAB12";
     const spacesSecret = "FAKESECRETKEY1234567890123456789012345678";
-    const sshBare = "R00t@Psych@Tail9";
-    const commandToken = "R00t@Psych@Tail9";
+    const sshBare = "Abc123xyzAbc123xyz@Q@Wordtail9";
+    const commandToken = "Abc123xyzAbc123xyz@Q@Wordtail9";
     const apiKey = "sk-proj-FakeOpenAiKey1234567890";
     const fixture = `Psychiatry Inventory App
 SSH host: inventory.example.health
@@ -66,7 +66,7 @@ Spaces secret key: ${spacesSecret}
 API Key: ${apiKey}
 ssh root@1.2.3.4
 ${sshBare}
-deploy inventory:${commandToken}@inventory.example.health`;
+deploy user:${commandToken}/var/www/x`;
     mocks.chat.mockResolvedValue({
       choices: [
         {
@@ -74,7 +74,7 @@ deploy inventory:${commandToken}@inventory.example.health`;
             content:
               `Password: ${sshBare}\n` +
               `Spaces Key: ${bareSpacesKey}\n` +
-              "Echoed tail: Psych@Tail9",
+              "Echoed tail: Wordtail9",
           },
         },
       ],
@@ -116,7 +116,18 @@ deploy inventory:${commandToken}@inventory.example.health`;
     }
     expect(chatBody).toContain(HIDDEN_CREDENTIAL);
     expect(speechBody).toContain(HIDDEN_CREDENTIAL);
-    expect(JSON.stringify(chat)).not.toContain("Psych@Tail9");
+    for (const fragment of [
+      "Abc123xyzAbc123xyz",
+      "Wordtail9",
+      "Q@Word",
+      "NDU2Nzg5MDEAB12",
+    ]) {
+      expect(chatBody).not.toContain(fragment);
+      expect(speechBody).not.toContain(fragment);
+      expect(JSON.stringify(chat)).not.toContain(fragment);
+    }
+    expect(chatBody).not.toContain("credential]credential]");
+    expect(speechBody).not.toContain("credential]credential]");
   });
 
   it("records chat and embedding tokens before returning", async () => {
