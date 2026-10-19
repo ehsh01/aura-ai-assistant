@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  gmailCorpusRowsPerMailbox,
   keywordScore,
   mentionedPeople,
   namesFuzzyMatch,
@@ -184,6 +185,42 @@ describe("link candidate slot reservation", () => {
       ),
     ).resolves.toBeNull();
     expect(loadFullPath).not.toHaveBeenCalled();
+  });
+
+  it("loads the full corpus when the fast-path kill switch is off", async () => {
+    vi.stubEnv("RECALL_LINK_ASK_FAST_PATH_ENABLED", "false");
+    try {
+      const loadFullPath = vi.fn(async () => ["wide corpus"]);
+      await expect(
+        loadLinkAskFallback(
+          "what is the vendor portal link",
+          [
+            {
+              title: "Vendor portal",
+              text: "Open https://vendorportal.com/portal",
+            },
+          ],
+          loadFullPath,
+        ),
+      ).resolves.toEqual(["wide corpus"]);
+      expect(loadFullPath).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("Gmail corpus caps", () => {
+  it("uses 50 rows only for non-email link asks", () => {
+    expect(gmailCorpusRowsPerMailbox("what is the Khaila portal link")).toBe(50);
+    expect(
+      gmailCorpusRowsPerMailbox("the link from the email about Khaila"),
+    ).toBe(150);
+  });
+
+  it("keeps 150 rows for every general non-link ask", () => {
+    expect(gmailCorpusRowsPerMailbox("what do I know about Khaila")).toBe(150);
+    expect(gmailCorpusRowsPerMailbox("summarize recent activity")).toBe(150);
   });
 });
 

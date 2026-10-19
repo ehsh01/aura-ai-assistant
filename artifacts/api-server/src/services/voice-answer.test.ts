@@ -7,9 +7,13 @@ const mocks = vi.hoisted(() => ({
   audit: vi.fn(),
 }));
 
-vi.mock("./retrieval", () => ({
-  retrieveRelevantRecords: mocks.retrieve,
-}));
+vi.mock("./retrieval", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./retrieval")>();
+  return {
+    ...actual,
+    retrieveRelevantRecords: mocks.retrieve,
+  };
+});
 
 vi.mock("./openai-client", () => ({
   createOpenAiClient: () => ({
@@ -43,6 +47,12 @@ vi.mock("./audit", () => ({
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { queryVoiceNotesForUser, VOICE_NO_MATCH_REPLY } from "./voice-answer";
+import {
+  hasAcceptableSubjectLink,
+  loadLinkAskFallback,
+  type RetrievedRecord,
+} from "./retrieval";
+import { runHostnameFallbackSafely } from "./notes";
 
 const NOTE_RECORD = {
   entityType: "source_record",
@@ -223,6 +233,40 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
 });
+
+async function answerWithFastPathMode(input: {
+  enabled: boolean;
+  question: string;
+  searchRecords: readonly RetrievedRecord[];
+  fullRecords: readonly RetrievedRecord[];
+}): Promise<{ answer: string; fellThrough: boolean }> {
+  vi.stubEnv(
+    "RECALL_LINK_ASK_FAST_PATH_ENABLED",
+    input.enabled ? "true" : "false",
+  );
+  const loadFullPath = vi.fn(async () => [...input.fullRecords]);
+  const fullPath = await loadLinkAskFallback(
+    input.question,
+    [...input.searchRecords],
+    loadFullPath,
+  );
+  mocks.retrieve.mockResolvedValue({
+    records: fullPath ?? [...input.searchRecords],
+    usedSemantic: false,
+    namedPeople: [],
+    tasks: [],
+  });
+  mocks.appendMessage.mockResolvedValue({ id: "message" });
+  const result = await queryVoiceNotesForUser(
+    "u1",
+    input.question,
+    null,
+  );
+  return {
+    answer: result.answer,
+    fellThrough: loadFullPath.mock.calls.length > 0,
+  };
+}
 
 describe("spoken grounded answers", () => {
   it("uses the exact honest reply without a model call when no note matched", async () => {
@@ -525,6 +569,218 @@ describe("spoken grounded answers", () => {
     expect(result.answer).toContain("https://khaila.schoolportal.com");
     expect(result.sources[0]?.title).toBe("Khaila school portal");
     expect(mocks.completion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "Psychiatry website",
+      question: "what is the Psychiatry website link?",
+      records: PSYCHIATRY_CASE_RECORDS,
+      expected: "https://psychiatry.med.miami.edu",
+    },
+    {
+      name: "Psychiatry website with AppSmith tag",
+      question: "[AppSmith test] what is the Psychiatry website link?",
+      records: PSYCHIATRY_CASE_RECORDS,
+      expected: "https://psychiatry.med.miami.edu",
+    },
+    {
+      name: "Psychiatry short link ask",
+      question: "What's my Psychiatry link?",
+      records: PSYCHIATRY_CASE_RECORDS,
+      expected: "https://psychiatry.med.miami.edu",
+    },
+    {
+      name: "UM Marketplace",
+      question: "what is the UM Marketplace link",
+      records: UM_MARKETPLACE_RECORDS,
+      expected: "https://secure.touchnet.net/central",
+    },
+    {
+      name: "Halogen",
+      question: "what is the Halogen portal link",
+      records: [HALOGEN_RECORD],
+      expected: "https://eappraisal.miami.edu",
+    },
+    {
+      name: "Kenny",
+      question: "what is Kenny's company website link",
+      records: KENNY_RECORDS,
+      expected: "http://smartersoftware.io/",
+    },
+    {
+      name: "Khaila",
+      question: "what is the khaila school portal link",
+      records: [KHAILA_RECORD, PSYCHIATRY_RECEIPT_DECOY],
+      expected: "https://khaila.schoolportal.com",
+    },
+  ])(
+    "returns an identical $name answer with the fast path on and off",
+    async ({ question, records, expected }) => {
+      const on = await answerWithFastPathMode({
+        enabled: true,
+        question,
+        searchRecords: records,
+        fullRecords: records,
+      });
+      const off = await answerWithFastPathMode({
+        enabled: false,
+        question,
+        searchRecords: records,
+        fullRecords: records,
+      });
+
+      expect(on.answer).toBe(off.answer);
+      expect(on.answer).toContain(expected);
+      expect(on.fellThrough).toBe(false);
+      expect(off.fellThrough).toBe(true);
+    },
+  );
+
+  it("falls through when Gmail has the only subject-relevant link", async () => {
+    const question = "what is the Acme enrollment portal link";
+    const irrelevantFtsLink = {
+      ...NOTE_RECORD,
+      entityId: "unrelated-portal",
+      title: "Useful portal directory",
+      text: "A different service: https://unrelatedvendor.com/help",
+      score: 10,
+    } as const;
+    const gmailOnlyLink = {
+      ...NOTE_RECORD,
+      entityId: "acme-email",
+      title: "Email about Acme enrollment",
+      text: "From: Acme Support <support@acmehealth.com>\nEnrollment portal: https://enroll.acmehealth.com",
+      recordType: "gmail_message",
+      score: 8,
+    } as const;
+    expect(
+      hasAcceptableSubjectLink(question, irrelevantFtsLink),
+    ).toBe(false);
+
+    const on = await answerWithFastPathMode({
+      enabled: true,
+      question,
+      searchRecords: [irrelevantFtsLink],
+      fullRecords: [irrelevantFtsLink, gmailOnlyLink],
+    });
+    const off = await answerWithFastPathMode({
+      enabled: false,
+      question,
+      searchRecords: [irrelevantFtsLink],
+      fullRecords: [irrelevantFtsLink, gmailOnlyLink],
+    });
+
+    expect(on.fellThrough).toBe(true);
+    expect(off.fellThrough).toBe(true);
+    expect(on.answer).toBe(off.answer);
+    expect(on.answer).toContain("https://enroll.acmehealth.com");
+    expect(on.answer).not.toContain("unrelatedvendor.com");
+  });
+
+  it("keeps explicit email-link answers identical on the 150-row path", async () => {
+    const question = "what is the link from the email about Acme enrollment";
+    const gmailOnlyLink = {
+      ...NOTE_RECORD,
+      entityId: "acme-email-explicit",
+      title: "Email about Acme enrollment",
+      text: "From: Acme Support <support@acmehealth.com>\nUse https://enroll.acmehealth.com",
+      recordType: "gmail_message",
+      score: 8,
+    } as const;
+    const on = await answerWithFastPathMode({
+      enabled: true,
+      question,
+      searchRecords: [],
+      fullRecords: [gmailOnlyLink],
+    });
+    const off = await answerWithFastPathMode({
+      enabled: false,
+      question,
+      searchRecords: [],
+      fullRecords: [gmailOnlyLink],
+    });
+
+    expect(on.fellThrough).toBe(true);
+    expect(on.answer).toBe(off.answer);
+    expect(on.answer).toContain("https://enroll.acmehealth.com");
+  });
+
+  it("returns the same honest no-link answer after a wrapped fallback timeout", async () => {
+    const question = "what is the Acme enrollment portal link";
+    const closest = {
+      ...NOTE_RECORD,
+      entityId: "acme-no-link",
+      title: "Acme enrollment",
+      text: "Enrollment instructions without a saved URL.",
+      score: 8,
+    } as const;
+    const wrappedTimeout = Object.assign(new Error("Failed query"), {
+      cause: Object.assign(new Error("statement timeout"), { code: "57014" }),
+    });
+    await expect(
+      runHostnameFallbackSafely(
+        async () => {
+          throw wrappedTimeout;
+        },
+        [] as RetrievedRecord[],
+      ),
+    ).resolves.toEqual([]);
+
+    const on = await answerWithFastPathMode({
+      enabled: true,
+      question,
+      searchRecords: [closest],
+      fullRecords: [closest],
+    });
+    const off = await answerWithFastPathMode({
+      enabled: false,
+      question,
+      searchRecords: [closest],
+      fullRecords: [closest],
+    });
+
+    expect(on.answer).toBe(off.answer);
+    expect(on.answer).toContain("I couldn't find a relevant Acme");
+    expect(on.answer).not.toMatch(/https?:\/\//);
+  });
+
+  it("keeps the inventory answer secret-free with the fast path on and off", async () => {
+    const question = "What's in my psychiatry inventory app note";
+    mocks.completion.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              answer:
+                "It describes the inventory app workflow and access details.",
+              sourceIds: ["n1"],
+            }),
+          },
+        },
+      ],
+    });
+    const records = [
+      PSYCHIATRY_INVENTORY_RECORD,
+      PSYCHIATRY_SECRET_RECORD,
+    ];
+    const on = await answerWithFastPathMode({
+      enabled: true,
+      question,
+      searchRecords: [],
+      fullRecords: records,
+    });
+    const off = await answerWithFastPathMode({
+      enabled: false,
+      question,
+      searchRecords: [],
+      fullRecords: records,
+    });
+
+    expect(on.answer).toBe(off.answer);
+    expect(on.answer).toContain("inventory app workflow");
+    expect(on.answer).not.toContain("FakePsychiatryPassword!42");
+    expect(on.answer).not.toContain("DO00FAKEACCESSKEY123");
   });
 
   it("treats the exact multi-word Psychiatry Inventory App title as relevant", async () => {

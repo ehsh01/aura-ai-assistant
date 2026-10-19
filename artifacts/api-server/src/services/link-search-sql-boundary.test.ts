@@ -69,7 +69,8 @@ describe("link search SQL boundary", () => {
     );
     expect(sourceCorpus).not.toContain("recordText}, 4000");
     expect(sourceCorpus).toContain("recordText}, 1500");
-    expect(sourceCorpus).toContain("gmailPerMailboxForEmailAsk");
+    expect(sourceCorpus).toContain(".limit(options.gmailPerMailbox)");
     expect(sourceCorpus).toContain("jsonb_build_object");
+    expect(retrieval).toContain("(s.recordText ?? \"\").slice(0, 800)");
   });
 });

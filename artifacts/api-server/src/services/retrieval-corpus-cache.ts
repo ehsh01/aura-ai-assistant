@@ -2,7 +2,7 @@ const DEFAULT_TTL_MS = 45_000;
 const MAX_ENTRIES = 24;
 const MAX_BYTES = 3 * 1024 * 1024;
 
-export type RetrievalCorpusCacheMode = "standard" | "email";
+export type RetrievalCorpusCacheMode = "slim-link" | "full";
 
 type CacheEntry = {
   userId: string;

@@ -32,10 +32,10 @@ describe("retrieval corpus cache", () => {
       people: [],
       tasks: [],
     };
-    setRetrievalCorpusCache("u1", "standard", corpus);
+    setRetrievalCorpusCache("u1", "full", corpus);
 
-    expect(getRetrievalCorpusCache("u1", "standard")).toBe(corpus);
-    const hit = getRetrievalCorpusCache<typeof corpus>("u1", "standard");
+    expect(getRetrievalCorpusCache("u1", "full")).toBe(corpus);
+    const hit = getRetrievalCorpusCache<typeof corpus>("u1", "full");
     expect(hit?.records[0]?.text).toContain(secret);
 
     const output = redactSensitiveValue({
@@ -45,16 +45,27 @@ describe("retrieval corpus cache", () => {
     expect(output.answer).not.toContain(secret);
   });
 
+  it("isolates entries by user", () => {
+    setRetrievalCorpusCache("user-a", "full", {
+      records: ["user-a-only"],
+    });
+
+    expect(getRetrievalCorpusCache("user-b", "full")).toBeNull();
+    expect(getRetrievalCorpusCache("user-a", "full")).toEqual({
+      records: ["user-a-only"],
+    });
+  });
+
   it("invalidates every corpus mode for a user", () => {
-    setRetrievalCorpusCache("u1", "standard", { records: ["standard"] });
-    setRetrievalCorpusCache("u1", "email", { records: ["email"] });
-    setRetrievalCorpusCache("u2", "standard", { records: ["other"] });
+    setRetrievalCorpusCache("u1", "slim-link", { records: ["link"] });
+    setRetrievalCorpusCache("u1", "full", { records: ["full"] });
+    setRetrievalCorpusCache("u2", "slim-link", { records: ["other"] });
 
     invalidateRetrievalCorpusCache("u1");
 
-    expect(getRetrievalCorpusCache("u1", "standard")).toBeNull();
-    expect(getRetrievalCorpusCache("u1", "email")).toBeNull();
-    expect(getRetrievalCorpusCache("u2", "standard")).not.toBeNull();
+    expect(getRetrievalCorpusCache("u1", "slim-link")).toBeNull();
+    expect(getRetrievalCorpusCache("u1", "full")).toBeNull();
+    expect(getRetrievalCorpusCache("u2", "slim-link")).not.toBeNull();
   });
 
   it("has a 45-second TTL and hard entry and byte caps", () => {
@@ -64,10 +75,10 @@ describe("retrieval corpus cache", () => {
     expect(stats.maxBytes).toBe(3 * 1024 * 1024);
     expect(stats.maxEntries).toBeGreaterThan(0);
 
-    setRetrievalCorpusCache("large", "standard", {
+    setRetrievalCorpusCache("large", "full", {
       text: "x".repeat(stats.maxBytes + 1),
     });
-    expect(getRetrievalCorpusCache("large", "standard")).toBeNull();
+    expect(getRetrievalCorpusCache("large", "full")).toBeNull();
     expect(retrievalCorpusCacheStatsForTests().bytes).toBeLessThanOrEqual(
       stats.maxBytes,
     );
@@ -75,7 +86,7 @@ describe("retrieval corpus cache", () => {
 
   it("can be disabled without retaining inputs", () => {
     vi.stubEnv("RECALL_RETRIEVAL_CORPUS_CACHE_ENABLED", "false");
-    setRetrievalCorpusCache("u1", "standard", { records: ["ignored"] });
-    expect(getRetrievalCorpusCache("u1", "standard")).toBeNull();
+    setRetrievalCorpusCache("u1", "full", { records: ["ignored"] });
+    expect(getRetrievalCorpusCache("u1", "full")).toBeNull();
   });
 });

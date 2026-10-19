@@ -185,12 +185,19 @@ export async function loadLinkAskFallback<T>(
   loadFullPath: () => Promise<T>,
 ): Promise<T | null> {
   if (
+    isLinkAskFastPathEnabled() &&
     shouldExpandUrlTokens(question) &&
     searchRecords.some((record) => hasAcceptableSubjectLink(question, record))
   ) {
     return null;
   }
   return loadFullPath();
+}
+
+export function isLinkAskFastPathEnabled(): boolean {
+  return !/^(?:false|0|off)$/i.test(
+    process.env.RECALL_LINK_ASK_FAST_PATH_ENABLED?.trim() ?? "",
+  );
 }
 
 export function pinSubjectHostnameMatchesBeforeCut<
@@ -302,6 +309,15 @@ function googleIntent(question: string): {
       ),
     contacts: /\b(contact|contacts|phone\s*number|address\s*book)\b/.test(q),
   };
+}
+
+export function gmailCorpusRowsPerMailbox(
+  question: string,
+  linkAsk = shouldExpandUrlTokens(question),
+): number {
+  return linkAsk && !googleIntent(question).email
+    ? CORPUS.gmailPerMailbox
+    : CORPUS.gmailPerMailboxFull;
 }
 
 function sourceRecordMatchesIntent(
@@ -722,7 +738,7 @@ const CORPUS = {
   projects: 40,
   /** Per connected Google mailbox — keeps ehernandez2 + REI + others searchable. */
   gmailPerMailbox: 50,
-  gmailPerMailboxForEmailAsk: 150,
+  gmailPerMailboxFull: 150,
   contactsTotal: 40,
   driveTotal: 40,
   calendarTotal: 40,
@@ -809,7 +825,7 @@ function sourceRowToContext(s: SourceRow): ContextRecord {
  */
 async function loadSourceRecordsBalanced(
   userId: string,
-  options: { emailIntent: boolean },
+  options: { gmailPerMailbox: number },
 ): Promise<ContextRecord[]> {
   const googleConns = await getDb()
     .select({
@@ -839,9 +855,6 @@ async function loadSourceRecordsBalanced(
   // Equal share of recent Gmail from each connected Google account.
   for (const conn of googleConns) {
     const mailbox = connectorGoogleEmail(conn.settings);
-    const gmailLimit = options.emailIntent
-      ? CORPUS.gmailPerMailboxForEmailAsk
-      : CORPUS.gmailPerMailbox;
     const rows = await getDb()
       .select({
         id: sourceRecords.id,
@@ -874,7 +887,7 @@ async function loadSourceRecordsBalanced(
           sql`coalesce(${sourceRecords.sourceCreatedAt}, ${sourceRecords.updatedAt})`,
         ),
       )
-      .limit(gmailLimit);
+      .limit(options.gmailPerMailbox);
 
     pushRows(rows.map((r) => ({ ...r, mailbox })));
   }
@@ -1317,7 +1330,7 @@ type CollectedCorpus = {
 
 async function collectCorpusUncached(
   userId: string,
-  options: { emailIntent: boolean },
+  options: { gmailPerMailbox: number },
 ): Promise<CollectedCorpus> {
   const [
     tasks,
@@ -1603,11 +1616,12 @@ async function collectCorpusUncached(
 
 async function collectCorpus(
   userId: string,
-  options: { emailIntent: boolean },
+  options: { gmailPerMailbox: number },
 ): Promise<CollectedCorpus> {
-  const mode: RetrievalCorpusCacheMode = options.emailIntent
-    ? "email"
-    : "standard";
+  const mode: RetrievalCorpusCacheMode =
+    options.gmailPerMailbox === CORPUS.gmailPerMailbox
+      ? "slim-link"
+      : "full";
   const cached = getRetrievalCorpusCache<CollectedCorpus>(userId, mode);
   if (cached) return cached;
   const collected = await collectCorpusUncached(userId, options);
@@ -1671,9 +1685,14 @@ export async function retrieveRelevantRecords(
     };
   }
   const intent = googleIntent(question);
+  const linkAsk = shouldExpandUrlTokens(noteQuery);
+  const gmailPerMailbox = gmailCorpusRowsPerMailbox(
+    `${question}\n${noteQuery}`,
+    linkAsk,
+  );
   const loadFullPath = () =>
     Promise.all([
-      collectCorpus(userId, { emailIntent: intent.email }),
+      collectCorpus(userId, { gmailPerMailbox }),
       options?.semantic === false
         ? Promise.resolve(null)
         : embedQuery(question).catch(() => null),
@@ -1686,7 +1705,7 @@ export async function retrieveRelevantRecords(
   let sourceSearchHits: ContextRecord[];
   let queryVec: number[] | null;
 
-  if (shouldExpandUrlTokens(noteQuery)) {
+  if (linkAsk) {
     // Link asks first pay only for the three indexed text searches: native
     // notes, Evernote, and other source records. The wide recent corpus stays
     // lazy unless those searches fail to surface an acceptable subject link.
@@ -1719,7 +1738,7 @@ export async function retrieveRelevantRecords(
       sourceSearchHits,
       queryVec,
     ] = await Promise.all([
-      collectCorpus(userId, { emailIntent: intent.email }),
+      collectCorpus(userId, { gmailPerMailbox }),
       retrieveFreeNoteRecordsForUser(
         userId,
         noteQuery,
