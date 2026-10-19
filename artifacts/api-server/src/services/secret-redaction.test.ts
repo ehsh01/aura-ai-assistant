@@ -97,6 +97,22 @@ describe("credential redaction", () => {
     ).not.toContain("Wordtail9");
   });
 
+  it.each([".", ",", ")"])(
+    "does not treat a sentence-tail %s as a dotted host",
+    (punctuation) => {
+      const secret = "Abc123xyzAbc123xyz@Q@Wordtail9";
+      const input = `key: user26:${secret}${punctuation}`;
+      const redacted = redactCredentials(input);
+      expect(redacted).toBe(`key: ${HIDDEN_CREDENTIAL}${punctuation}`);
+      expect(redacted).not.toContain("Wordtail9");
+    },
+  );
+
+  it("preserves non-secret email and SSH host forms byte-for-byte", () => {
+    const safe = "Contact user@example.com.\nssh root@1.2.3.4.";
+    expect(redactCredentials(safe)).toBe(safe);
+  });
+
   it("uses the previous line as context for a bare Key label", () => {
     const secret = "QWxhZGRpbjpPcGVuU2VzYW1lMTIzNDU2Nzg5MDEAB12";
     expect(redactCredentials(`DigitalOcean Spaces\nKey: ${secret}`)).toBe(
@@ -140,6 +156,25 @@ describe("credential redaction", () => {
         `Echo ${HIDDEN_CREDENTIAL}`,
       );
     });
+  });
+
+  it("is byte-idempotent across credential and placeholder fixtures", () => {
+    const fixtures = [
+      PSYCHIATRY_SECRET_FIXTURE,
+      'key: Ab1cD2e"><Fg3Hi4Jk5Lm6No7Pq',
+      "password is [hidden credential].",
+      "key: [hidden credential],",
+      "deploy user:Abc123xyzAbc123xyz@Q@Wordtail9/var/www/x",
+      "The hidden panel is closed.",
+    ];
+    for (const fixture of fixtures) {
+      withCredentialRedactionScope(() => {
+        const once = redactCredentials(fixture);
+        expect(redactCredentials(once)).toBe(once);
+        expect(once).not.toContain("[[");
+        expect(once).not.toContain("]]");
+      });
+    }
   });
 
   it("redacts nested answer metadata without mutating raw input", () => {
