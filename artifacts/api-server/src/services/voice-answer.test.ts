@@ -49,6 +49,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { queryVoiceNotesForUser, VOICE_NO_MATCH_REPLY } from "./voice-answer";
 import {
   hasAcceptableSubjectLink,
+  hasStrongFastPathSubjectLink,
   loadLinkAskFallback,
   type RetrievedRecord,
 } from "./retrieval";
@@ -676,6 +677,89 @@ describe("spoken grounded answers", () => {
     expect(on.answer).toBe(off.answer);
     expect(on.answer).toContain("https://enroll.acmehealth.com");
     expect(on.answer).not.toContain("unrelatedvendor.com");
+  });
+
+  it("falls through when a generic phrase hit omits the distinctive subject", async () => {
+    const question = "what is the Panopto Grand Rounds link";
+    const genericFtsHit = {
+      ...NOTE_RECORD,
+      entityId: "generic-grand-rounds",
+      title: "Grand Rounds formatting cleanup",
+      text: "Clean Grand Rounds HTML at https://word2cleanhtml.com/",
+      score: 10,
+    } as const;
+    const rightNoteWithoutLink = {
+      ...NOTE_RECORD,
+      entityId: "panopto-grand-rounds",
+      title: "Panopto Grand Rounds",
+      text: "Instructions for preparing the Panopto Grand Rounds recording.",
+      score: 9,
+    } as const;
+
+    expect(hasAcceptableSubjectLink(question, genericFtsHit)).toBe(true);
+    expect(hasStrongFastPathSubjectLink(question, genericFtsHit)).toBe(false);
+
+    const on = await answerWithFastPathMode({
+      enabled: true,
+      question,
+      searchRecords: [genericFtsHit],
+      fullRecords: [rightNoteWithoutLink],
+    });
+    const off = await answerWithFastPathMode({
+      enabled: false,
+      question,
+      searchRecords: [genericFtsHit],
+      fullRecords: [rightNoteWithoutLink],
+    });
+
+    expect(on.fellThrough).toBe(true);
+    expect(on.answer).toBe(off.answer);
+    expect(on.answer).toContain(
+      "The closest note is Panopto Grand Rounds",
+    );
+    expect(on.answer).not.toContain("word2cleanhtml.com");
+  });
+
+  it("falls through when a different product matches only the model tokens", async () => {
+    const question = "what is the Porsche 981 service manual link";
+    const partialProductHit = {
+      ...NOTE_RECORD,
+      entityId: "porsche-981-bumper",
+      title: "Porsche 981 GT4 bumper",
+      text: "Product page: https://darwinproaero.com/products/porsche-981-gt4-bumper",
+      score: 10,
+    } as const;
+    const serviceManual = {
+      ...NOTE_RECORD,
+      entityId: "porsche-981-service-manual",
+      title: "Porsche 981 service manual",
+      text: "Manual: https://www.porsche.com/usa/accessoriesandservices/porscheservice/vehicleinformation/imanuals/",
+      score: 9,
+    } as const;
+
+    expect(hasAcceptableSubjectLink(question, partialProductHit)).toBe(true);
+    expect(hasStrongFastPathSubjectLink(question, partialProductHit)).toBe(
+      false,
+    );
+
+    const on = await answerWithFastPathMode({
+      enabled: true,
+      question,
+      searchRecords: [partialProductHit],
+      fullRecords: [serviceManual],
+    });
+    const off = await answerWithFastPathMode({
+      enabled: false,
+      question,
+      searchRecords: [partialProductHit],
+      fullRecords: [serviceManual],
+    });
+
+    expect(on.fellThrough).toBe(true);
+    expect(on.answer).toBe(off.answer);
+    expect(on.answer).toContain("https://www.porsche.com/");
+    expect(on.answer).toContain("/imanuals/");
+    expect(on.answer).not.toContain("darwinproaero.com");
   });
 
   it("keeps explicit email-link answers identical on the 150-row path", async () => {
