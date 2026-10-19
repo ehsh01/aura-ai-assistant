@@ -156,6 +156,11 @@ function isCommandOrPath(value: string): boolean {
   );
 }
 
+function isLikelySshPassword(value: string): boolean {
+  const normalized = value.replace(/[.,;:)]*$/, "");
+  return normalized.length >= 6 && /\d|[!@#$%^&*+_=<>{}|~]/.test(normalized);
+}
+
 function redactSshFollowingPasswords(text: string): string {
   const newline = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text.split(/\r?\n/);
@@ -168,7 +173,11 @@ function redactSshFollowingPasswords(text: string): string {
     const end = ssh.index + ssh[0].length;
     const remainder = line.slice(end);
     const sameLineToken = remainder.trim().split(/\s+/)[0] ?? "";
-    if (sameLineToken && !isCommandOrPath(sameLineToken)) {
+    if (
+      sameLineToken &&
+      !isCommandOrPath(sameLineToken) &&
+      isLikelySshPassword(sameLineToken)
+    ) {
       rememberCredential(sameLineToken);
       lines[index] =
         line.slice(0, end) +
@@ -179,7 +188,7 @@ function redactSshFollowingPasswords(text: string): string {
       const candidate = (lines[next] ?? "").trim();
       if (!candidate) continue;
       const token = candidate.split(/\s+/)[0] ?? "";
-      if (token && !isCommandOrPath(token)) {
+      if (token && !isCommandOrPath(token) && isLikelySshPassword(token)) {
         rememberCredential(token);
         lines[next] = (lines[next] ?? "").replace(token, HIDDEN_CREDENTIAL);
       }
@@ -381,6 +390,21 @@ function isHostname(host: string): boolean {
   return new RegExp(`^${HOST_VALUE_PATTERN}$`, "i").test(host);
 }
 
+function redactCredentialAtHosts(text: string): string {
+  const credentialAtHost = new RegExp(
+    `((?:\\[hidden credential\\]|\uE000RX+\uE001)@)(${HOST_VALUE_PATTERN})`,
+    "gi",
+  );
+  return text.replace(
+    credentialAtHost,
+    (match: string, prefix: string, host: string) => {
+      if (!isHostname(host) || isSafeLinkHost(host)) return match;
+      rememberAddress(host);
+      return `${prefix}${HIDDEN_ADDRESS}`;
+    },
+  );
+}
+
 function webUrlRanges(text: string): Array<[number, number]> {
   return [...text.matchAll(/\b(?:https?|ftp):\/\/[^\s<>"']+/gi)].map(
     (match) => [match.index ?? 0, (match.index ?? 0) + match[0].length],
@@ -567,6 +591,34 @@ function redactLocalHosts(text: string): string {
   });
 }
 
+function redactRememberedIpFragments(text: string): string {
+  const prefixes = new Set<string>();
+  for (const value of credentialScope.getStore()?.addresses ?? []) {
+    if (!validIpv4(value)) continue;
+    const [first, second, third] = value.split(".");
+    prefixes.add(
+      `${first}[ \\t]*\\.[ \\t]*${second}[ \\t]*\\.(?:[ \\t]*${third}[ \\t]*\\.)?`,
+    );
+  }
+  let redacted = text;
+  for (const prefix of prefixes) {
+    const urlRanges = webUrlRanges(redacted);
+    redacted = redacted.replace(
+      new RegExp(`(?<![A-Za-z0-9_.])${prefix}(?![A-Za-z0-9])`, "g"),
+      (match: string, offset: number, source: string) => {
+        if (
+          isProtectedAddressContext(source, offset) ||
+          inRanges(offset, urlRanges)
+        ) {
+          return match;
+        }
+        return HIDDEN_ADDRESS;
+      },
+    );
+  }
+  return redacted;
+}
+
 function redactKnownAddressValues(text: string): string {
   const known = [...(credentialScope.getStore()?.addresses ?? [])].sort(
     (a, b) => b.length - a.length,
@@ -597,13 +649,19 @@ function redactKnownAddressValues(text: string): string {
 }
 
 function redactNetworkAddresses(text: string): string {
-  const known = redactKnownAddressValues(text);
+  const known = redactRememberedIpFragments(redactKnownAddressValues(text));
   const full = redactFullIpAddresses(known);
   const split = redactSplitIpAddresses(full.text, full.found);
-  return redactKnownAddressValues(
-    redactLocalHosts(
-      redactLabeledHosts(
-        redactHostPorts(redactUserAtHosts(redactConnectionStringHosts(split))),
+  return redactRememberedIpFragments(
+    redactKnownAddressValues(
+      redactLocalHosts(
+        redactLabeledHosts(
+          redactHostPorts(
+            redactUserAtHosts(
+              redactConnectionStringHosts(redactCredentialAtHosts(split)),
+            ),
+          ),
+        ),
       ),
     ),
   );

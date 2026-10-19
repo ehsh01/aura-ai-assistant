@@ -193,6 +193,42 @@ SSH: deploy@inventory-node.fake.internal`;
     expect(mocks.speech).toHaveBeenCalledOnce();
   });
 
+  it("carries remembered IPv4 fragments into later chat and TTS calls", async () => {
+    mocks.chat.mockResolvedValue({
+      choices: [{ message: { content: "Safe response" } }],
+      usage: { prompt_tokens: 4, completion_tokens: 2 },
+    });
+    mocks.speech.mockResolvedValue({
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+    const options = {
+      apiKey: "test",
+      feature: "voice_ask" as const,
+      userId: "remembered-ip-user",
+    };
+
+    await createOpenAiClient(options).chat.completions.create({
+      model: "gpt-test",
+      messages: [{ role: "user", content: "ssh root@10.20.30.40" }],
+    });
+    await createOpenAiClient(options).chat.completions.create({
+      model: "gpt-test",
+      messages: [{ role: "user", content: "It was on 10.20. last week." }],
+    });
+    await createOpenAiClient(options).audio.speech.create({
+      model: "tts-1",
+      voice: "onyx",
+      input: "It was on 10. 20. last week.",
+    });
+
+    const laterChatBody = JSON.stringify(mocks.chat.mock.calls[1]?.[0]);
+    const laterSpeechBody = JSON.stringify(mocks.speech.mock.calls[0]?.[0]);
+    expect(laterChatBody).not.toContain("10.20.");
+    expect(laterSpeechBody).not.toContain("10. 20.");
+    expect(laterChatBody).toContain(HIDDEN_ADDRESS);
+    expect(laterSpeechBody).toContain(HIDDEN_ADDRESS);
+  });
+
   it("redacts markup-glued TTS values and learned secret tails", async () => {
     const prefix = "Ab1cD2e";
     const tail = "Fg3Hi4Jk5Lm6No7Pq";

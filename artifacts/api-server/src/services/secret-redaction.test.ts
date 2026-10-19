@@ -101,6 +101,54 @@ describe("credential redaction", () => {
     expect(redacted).not.toContain("db-node.fake.internal");
   });
 
+  it.each(["", " /var/www"])(
+    "redacts a hostname after a bare user:password authority%s",
+    (suffix) => {
+      const password = "FakeDeployPassword!42";
+      expect(
+        redactCredentials(
+          `run deployuser:${password}@pg-main.example.net${suffix}`,
+        ),
+      ).toBe(`run deployuser:${HIDDEN_CREDENTIAL}@${HIDDEN_ADDRESS}${suffix}`);
+    },
+  );
+
+  it("keeps existing address-bearing login and connection forms redacted", () => {
+    const password = "FakeDatabasePassword!42";
+    const fixtures = [
+      {
+        input: `user:${password}@10.20.30.40`,
+        expected: `user:${HIDDEN_CREDENTIAL}@${HIDDEN_ADDRESS}`,
+      },
+      {
+        input: "login deploy@pg-main.example.net",
+        expected: `login deploy@${HIDDEN_ADDRESS}`,
+      },
+      {
+        input: "scp fake-file deploy@pg-main.example.net:/srv",
+        expected: `scp fake-file deploy@${HIDDEN_ADDRESS}:/srv`,
+      },
+      {
+        input: `mysql://appuser:${password}@pg-main.example.net:3306/app`,
+        expected: `mysql://appuser:${HIDDEN_CREDENTIAL}@${HIDDEN_ADDRESS}:3306/app`,
+      },
+    ];
+    for (const fixture of fixtures) {
+      expect(redactCredentials(fixture.input)).toBe(fixture.expected);
+    }
+  });
+
+  it("keeps ordinary trailing words after an SSH host", () => {
+    for (const suffix of [
+      "and restart the fake service",
+      "while Deployment continues",
+    ]) {
+      expect(redactCredentials(`ssh root@10.20.30.40 ${suffix}`)).toBe(
+        `ssh root@${HIDDEN_ADDRESS} ${suffix}`,
+      );
+    }
+  });
+
   it("redacts valid IPv4 and IPv6 but leaves invalid addresses alone", () => {
     const input = [
       "Primary: 10.20.30.40",
@@ -130,6 +178,33 @@ describe("credential redaction", () => {
     expect(redactCredentials("Address: 10.20.30.40\nSequence: 159. 223.")).toBe(
       `Address: ${HIDDEN_ADDRESS}\nSequence: ${HIDDEN_ADDRESS}`,
     );
+  });
+
+  it("redacts flexible split forms of an IP remembered in the scope", () => {
+    withCredentialRedactionScope(() => {
+      redactCredentials("ssh root@10.20.30.40");
+      for (const fragment of [
+        "10. 20.",
+        "10.20.",
+        "10 . 20 .",
+        "10. 20. 30.",
+      ]) {
+        const input = `It was on ${fragment} last week.`;
+        const once = redactCredentials(input);
+        expect(once).toBe(`It was on ${HIDDEN_ADDRESS} last week.`);
+        expect(redactCredentials(once)).toBe(once);
+      }
+      const safe = [
+        "Version: 10.20.",
+        "Date: 10.20.",
+        "Time: 10.20.",
+        "Phone: 10.20.",
+        "Price: 10.20.",
+        "Masked ID: 10.20.",
+        "https://10.20.example/guide",
+      ].join("\n");
+      expect(redactCredentials(safe)).toBe(safe);
+    });
   });
 
   it("redacts contextual server hostnames without changing normal links", () => {
