@@ -10,8 +10,10 @@ import {
   type AiFeature,
 } from "./ai-usage";
 import {
+  learnedCredentialValues,
   redactCredentials,
   redactSensitiveValue,
+  redactTtsCredentials,
   withCredentialRedactionScope,
 } from "./secret-redaction";
 
@@ -28,6 +30,60 @@ type UsageLike = {
   prompt_tokens?: number;
   completion_tokens?: number;
 };
+
+const USER_CREDENTIAL_MEMORY_TTL_MS = 5 * 60_000;
+const userCredentialMemory = new Map<
+  string,
+  { expiresAt: number; values: string[] }
+>();
+
+/** @internal test helper */
+export function resetCredentialMemoryForTests(): void {
+  userCredentialMemory.clear();
+}
+
+function rememberedCredentials(userId?: string | null): string[] {
+  if (!userId) return [];
+  const entry = userCredentialMemory.get(userId);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    userCredentialMemory.delete(userId);
+    return [];
+  }
+  return entry.values;
+}
+
+function storeRememberedCredentials(userId?: string | null): void {
+  if (!userId) return;
+  const values = learnedCredentialValues();
+  if (values.length === 0) return;
+  userCredentialMemory.set(userId, {
+    expiresAt: Date.now() + USER_CREDENTIAL_MEMORY_TTL_MS,
+    values: [...new Set(values)],
+  });
+  if (userCredentialMemory.size > 1_000) {
+    for (const [key, entry] of userCredentialMemory) {
+      if (entry.expiresAt <= Date.now() || userCredentialMemory.size > 1_000) {
+        userCredentialMemory.delete(key);
+      }
+    }
+  }
+}
+
+function withUserCredentialMemory<T>(
+  userId: string | null | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return withCredentialRedactionScope(
+    async () => {
+      try {
+        return await operation();
+      } finally {
+        storeRememberedCredentials(userId);
+      }
+    },
+    rememberedCredentials(userId),
+  );
+}
 
 class AsyncChunkQueue<T> implements AsyncIterable<T> {
   private readonly values: T[] = [];
@@ -180,10 +236,10 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
     ) => Promise<unknown>;
   };
   const createCompletion = completions.create.bind(completions);
-  completions.create = (params, requestOptions) =>
-    withCredentialRedactionScope(async () => {
-    const model = String(params.model ?? "unknown");
+  completions.create = (params, requestOptions) => {
     const callContext = context();
+    return withUserCredentialMemory(callContext.userId, async () => {
+    const model = String(params.model ?? "unknown");
     const sanitizedParams = redactSensitiveValue(params);
     const request = sanitizedParams.stream
       ? {
@@ -264,6 +320,7 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
     await ready.promise;
       return queue;
     });
+  };
 
   const embeddings = client.embeddings as unknown as {
     create: (
@@ -305,11 +362,17 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
     ) => Promise<unknown>;
   };
   const createSpeech = speech.create.bind(speech);
-  speech.create = async (params, requestOptions) => {
+  speech.create = (params, requestOptions) => {
     const model = String(params.model ?? "tts-1");
     const callContext = context();
-    const sanitizedParams = redactSensitiveValue(params);
-    return withAiSpendLock(async () => {
+    return withUserCredentialMemory(callContext.userId, async () => {
+      const sanitizedParams = redactSensitiveValue(params);
+      if (typeof sanitizedParams.input === "string") {
+        sanitizedParams.input = redactTtsCredentials(
+          sanitizedParams.input,
+        );
+      }
+      return withAiSpendLock(async () => {
       await assertAiSpendAllowed(callContext);
       let result: unknown;
       try {
@@ -329,6 +392,7 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
         callContext,
       );
       return result;
+      });
     });
   };
 

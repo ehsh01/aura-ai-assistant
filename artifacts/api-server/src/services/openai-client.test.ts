@@ -36,10 +36,14 @@ vi.mock("./ai-usage", () => ({
   }),
 }));
 
-import { createOpenAiClient } from "./openai-client";
+import {
+  createOpenAiClient,
+  resetCredentialMemoryForTests,
+} from "./openai-client";
 import { HIDDEN_CREDENTIAL } from "./secret-redaction";
 
 beforeEach(() => {
+  resetCredentialMemoryForTests();
   for (const mock of Object.values(mocks)) mock.mockReset();
   mocks.record.mockResolvedValue(undefined);
   mocks.spendGuard.mockResolvedValue(undefined);
@@ -128,6 +132,47 @@ deploy user:${commandToken}/var/www/x`;
     }
     expect(chatBody).not.toContain("credential]credential]");
     expect(speechBody).not.toContain("credential]credential]");
+  });
+
+  it("redacts markup-glued TTS values and learned secret tails", async () => {
+    const prefix = "Ab1cD2e";
+    const tail = "Fg3Hi4Jk5Lm6No7Pq";
+    const glued = `${prefix}\"><${tail}`;
+    mocks.chat.mockResolvedValue({
+      choices: [{ message: { content: "Safe response" } }],
+      usage: { prompt_tokens: 4, completion_tokens: 2 },
+    });
+    mocks.speech.mockResolvedValue({
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+    const client = createOpenAiClient({
+      apiKey: "test",
+      feature: "voice_ask",
+      userId: "tts-learned-secret-user",
+    });
+
+    await client.chat.completions.create({
+      model: "gpt-test",
+      messages: [{ role: "user", content: `Key: ${glued}` }],
+    });
+    await client.audio.speech.create({
+      model: "tts-1",
+      voice: "onyx",
+      input: `key: ${glued}`,
+    });
+    await client.audio.speech.create({
+      model: "tts-1",
+      voice: "onyx",
+      input: `Read this tail aloud: ${tail}`,
+    });
+
+    for (const call of mocks.speech.mock.calls) {
+      const body = JSON.stringify(call[0]);
+      expect(body).not.toContain(prefix);
+      expect(body).not.toContain(tail);
+      expect(body).not.toContain("credential]credential]");
+      expect(body).not.toContain("[[hidden credential]");
+    }
   });
 
   it("records chat and embedding tokens before returning", async () => {

@@ -4,14 +4,32 @@ export const HIDDEN_CREDENTIAL = "[hidden credential]";
 
 const credentialScope = new AsyncLocalStorage<Set<string>>();
 
-export function withCredentialRedactionScope<T>(operation: () => T): T {
-  if (credentialScope.getStore()) return operation();
-  return credentialScope.run(new Set<string>(), operation);
+export function withCredentialRedactionScope<T>(
+  operation: () => T,
+  seed: Iterable<string> = [],
+): T {
+  const existing = credentialScope.getStore();
+  if (existing) {
+    for (const value of seed) rememberCredential(value);
+    return operation();
+  }
+  return credentialScope.run(new Set<string>(seed), operation);
+}
+
+export function learnedCredentialValues(): string[] {
+  return [...(credentialScope.getStore() ?? [])];
 }
 
 function rememberCredential(value: string): void {
   const normalized = value.replace(/^["']|["']$/g, "");
-  if (normalized.length >= 6) credentialScope.getStore()?.add(normalized);
+  if (
+    normalized.length >= 6 &&
+    !normalized.startsWith("[") &&
+    !normalized.includes(HIDDEN_CREDENTIAL) &&
+    !normalized.includes("hidden credential")
+  ) {
+    credentialScope.getStore()?.add(normalized);
+  }
 }
 
 const PRIVATE_KEY_BLOCK =
@@ -23,9 +41,9 @@ const USERINFO_TOKEN =
 const SSHPASS_PASSWORD =
   /\b(sshpass\s+-p\s+)("[^"]*"|'[^']*'|\S+)/gi;
 const UPPER_SNAKE_CREDENTIAL =
-  /\b([A-Z][A-Z0-9_]*(?:_KEY|_SECRET|_TOKEN|_PASSWORD)\s*[:=]\s*)(["']?)([^\s"']+)(\2)/g;
+  /\b([A-Z][A-Z0-9_]*(?:_KEY|_SECRET|_TOKEN|_PASSWORD)\s*[:=]\s*)([^\s]+)/g;
 const LABELED_CREDENTIAL =
-  /\b((?:(spaces|digitalocean|aws|s3|access|secret|api|private|ssh|root|admin|db|database|do)\s+)?(key|secret|token|password|passwd|pwd|pass|pin)\s*[:=]\s*)(["']?)([^\s"']+)(\4)/gi;
+  /\b((?:(spaces|digitalocean|aws|s3|access|secret|api|private|ssh|root|admin|db|database|do)\s+)?(key|secret|token|password|passwd|pwd|pass|pin)\s*[:=]\s*)([^\s]+)/gi;
 const BEARER_TOKEN = /\bBearer\s+[A-Za-z0-9._~+/-]{8,}={0,2}/gi;
 const OPENAI_KEY = /\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\b/g;
 const GITHUB_TOKEN = /\bgh[pousr]_[A-Za-z0-9]{16,}\b/g;
@@ -39,7 +57,10 @@ function redactLabeledCredentials(text: string): string {
   return text.replace(/^.*$/gm, (line) => {
     let redacted = line.replace(
       UPPER_SNAKE_CREDENTIAL,
-      (_match, label: string, _quote: string, value: string) => {
+      (match, label: string, value: string) => {
+        if (value.startsWith("[") || value.includes(HIDDEN_CREDENTIAL)) {
+          return match;
+        }
         rememberCredential(value);
         return `${label}${HIDDEN_CREDENTIAL}`;
       },
@@ -51,9 +72,11 @@ function redactLabeledCredentials(text: string): string {
         label: string,
         _prefix: string | undefined,
         _name: string,
-        _quote: string,
         value: string,
       ) => {
+        if (value.startsWith("[") || value.includes(HIDDEN_CREDENTIAL)) {
+          return _match;
+        }
         rememberCredential(value);
         return `${label}${HIDDEN_CREDENTIAL}`;
       },
@@ -212,6 +235,33 @@ function collapseCredentialPlaceholders(text: string): string {
       /\[hidden credential\](?:\s*credential\])+/g,
       HIDDEN_CREDENTIAL,
     );
+}
+
+export function redactTtsCredentials(text: string): string {
+  const redacted = redactCredentials(text);
+  const urlRanges = [
+    ...redacted.matchAll(/\b(?:https?|ftp):\/\/[^\s<>"']+/gi),
+  ].map((match) => [
+    match.index ?? 0,
+    (match.index ?? 0) + match[0].length,
+  ]);
+  return collapseCredentialPlaceholders(
+    redacted.replace(
+      /[A-Za-z0-9/+=_-]{12,}/g,
+      (token, offset: number) => {
+        if (
+          urlRanges.some(([start, end]) => offset >= start && offset < end)
+        ) {
+          return token;
+        }
+        return /[a-z]/.test(token) &&
+          /[A-Z]/.test(token) &&
+          /\d/.test(token)
+          ? HIDDEN_CREDENTIAL
+          : token;
+      },
+    ),
+  );
 }
 
 export function redactCredentials(text: string): string {
