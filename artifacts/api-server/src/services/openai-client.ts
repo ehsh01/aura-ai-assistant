@@ -10,6 +10,7 @@ import {
   type AiFeature,
 } from "./ai-usage";
 import {
+  learnedAddressValues,
   learnedCredentialValues,
   redactCredentials,
   redactSensitiveValue,
@@ -34,7 +35,7 @@ type UsageLike = {
 const USER_CREDENTIAL_MEMORY_TTL_MS = 5 * 60_000;
 const userCredentialMemory = new Map<
   string,
-  { expiresAt: number; values: string[] }
+  { expiresAt: number; credentials: string[]; addresses: string[] }
 >();
 
 /** @internal test helper */
@@ -42,23 +43,28 @@ export function resetCredentialMemoryForTests(): void {
   userCredentialMemory.clear();
 }
 
-function rememberedCredentials(userId?: string | null): string[] {
-  if (!userId) return [];
+function rememberedSensitiveValues(userId?: string | null): {
+  credentials: string[];
+  addresses: string[];
+} {
+  if (!userId) return { credentials: [], addresses: [] };
   const entry = userCredentialMemory.get(userId);
   if (!entry || entry.expiresAt <= Date.now()) {
     userCredentialMemory.delete(userId);
-    return [];
+    return { credentials: [], addresses: [] };
   }
-  return entry.values;
+  return entry;
 }
 
 function storeRememberedCredentials(userId?: string | null): void {
   if (!userId) return;
-  const values = learnedCredentialValues();
-  if (values.length === 0) return;
+  const credentials = learnedCredentialValues();
+  const addresses = learnedAddressValues();
+  if (credentials.length === 0 && addresses.length === 0) return;
   userCredentialMemory.set(userId, {
     expiresAt: Date.now() + USER_CREDENTIAL_MEMORY_TTL_MS,
-    values: [...new Set(values)],
+    credentials: [...new Set(credentials)],
+    addresses: [...new Set(addresses)],
   });
   if (userCredentialMemory.size > 1_000) {
     for (const [key, entry] of userCredentialMemory) {
@@ -73,6 +79,7 @@ function withUserCredentialMemory<T>(
   userId: string | null | undefined,
   operation: () => Promise<T>,
 ): Promise<T> {
+  const remembered = rememberedSensitiveValues(userId);
   return withCredentialRedactionScope(
     async () => {
       try {
@@ -81,7 +88,8 @@ function withUserCredentialMemory<T>(
         storeRememberedCredentials(userId);
       }
     },
-    rememberedCredentials(userId),
+    remembered.credentials,
+    remembered.addresses,
   );
 }
 
@@ -239,85 +247,85 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
   completions.create = (params, requestOptions) => {
     const callContext = context();
     return withUserCredentialMemory(callContext.userId, async () => {
-    const model = String(params.model ?? "unknown");
-    const sanitizedParams = redactSensitiveValue(params);
-    const request = sanitizedParams.stream
-      ? {
-          ...sanitizedParams,
-          stream_options: {
-            ...((sanitizedParams.stream_options as
-              | Record<string, unknown>
-              | undefined) ?? {}),
-            include_usage: true,
-          },
-        }
-      : sanitizedParams;
-    if (!params.stream) {
-      return withAiSpendLock(async () => {
-        await assertAiSpendAllowed(callContext);
-        let result: unknown;
-        try {
-          result = await createCompletion(request, requestOptions);
-        } catch (err) {
-          await record(model, null, 0, undefined, callContext);
-          throw err;
-        }
-        await record(
-          model,
-          (result as { usage?: UsageLike }).usage,
-          undefined,
-          undefined,
-          callContext,
-        );
-        return options.redactOutput === false
-          ? result
-          : redactSensitiveValue(result);
-      });
-    }
-
-    const queue = new AsyncChunkQueue<{ usage?: UsageLike | null }>();
-    const ready = deferred();
-    let readySettled = false;
-    void withAiSpendLock(async () => {
-      let providerStarted = false;
-      try {
-        await assertAiSpendAllowed(callContext);
-        const result = await createCompletion(request, requestOptions);
-        providerStarted = true;
-        const stream = result as AsyncIterable<{
-          usage?: UsageLike | null;
-        }>;
-        readySettled = true;
-        ready.resolve();
-        let usage: UsageLike | null = null;
-        const chunks: Array<{ usage?: UsageLike | null }> = [];
-        try {
-          for await (const chunk of stream) {
-            if (chunk.usage) usage = chunk.usage;
-            chunks.push(chunk);
+      const model = String(params.model ?? "unknown");
+      const sanitizedParams = redactSensitiveValue(params);
+      const request = sanitizedParams.stream
+        ? {
+            ...sanitizedParams,
+            stream_options: {
+              ...((sanitizedParams.stream_options as
+                | Record<string, unknown>
+                | undefined) ?? {}),
+              include_usage: true,
+            },
           }
+        : sanitizedParams;
+      if (!params.stream) {
+        return withAiSpendLock(async () => {
+          await assertAiSpendAllowed(callContext);
+          let result: unknown;
+          try {
+            result = await createCompletion(request, requestOptions);
+          } catch (err) {
+            await record(model, null, 0, undefined, callContext);
+            throw err;
+          }
+          await record(
+            model,
+            (result as { usage?: UsageLike }).usage,
+            undefined,
+            undefined,
+            callContext,
+          );
+          return options.redactOutput === false
+            ? result
+            : redactSensitiveValue(result);
+        });
+      }
+
+      const queue = new AsyncChunkQueue<{ usage?: UsageLike | null }>();
+      const ready = deferred();
+      let readySettled = false;
+      void withAiSpendLock(async () => {
+        let providerStarted = false;
+        try {
+          await assertAiSpendAllowed(callContext);
+          const result = await createCompletion(request, requestOptions);
+          providerStarted = true;
+          const stream = result as AsyncIterable<{
+            usage?: UsageLike | null;
+          }>;
+          readySettled = true;
+          ready.resolve();
+          let usage: UsageLike | null = null;
+          const chunks: Array<{ usage?: UsageLike | null }> = [];
+          try {
+            for await (const chunk of stream) {
+              if (chunk.usage) usage = chunk.usage;
+              chunks.push(chunk);
+            }
+          } catch (err) {
+            await record(model, null, 0, undefined, callContext);
+            queue.fail(err);
+            return;
+          }
+          await record(model, usage, undefined, undefined, callContext);
+          for (const chunk of redactBufferedChatChunks(chunks)) {
+            queue.push(chunk);
+          }
+          queue.end();
         } catch (err) {
-          await record(model, null, 0, undefined, callContext);
-          queue.fail(err);
-          return;
+          if (!(err instanceof AiSpendBlockedError) && !providerStarted) {
+            await record(model, null, 0, undefined, callContext);
+          }
+          if (!readySettled) ready.reject(err);
+          else queue.fail(err);
         }
-        await record(model, usage, undefined, undefined, callContext);
-        for (const chunk of redactBufferedChatChunks(chunks)) {
-          queue.push(chunk);
-        }
-        queue.end();
-      } catch (err) {
-        if (!(err instanceof AiSpendBlockedError) && !providerStarted) {
-          await record(model, null, 0, undefined, callContext);
-        }
+      }).catch((err) => {
         if (!readySettled) ready.reject(err);
         else queue.fail(err);
-      }
-    }).catch((err) => {
-      if (!readySettled) ready.reject(err);
-      else queue.fail(err);
-    });
-    await ready.promise;
+      });
+      await ready.promise;
       return queue;
     });
   };
@@ -368,30 +376,28 @@ export function createOpenAiClient(options: ClientOptions): OpenAI {
     return withUserCredentialMemory(callContext.userId, async () => {
       const sanitizedParams = redactSensitiveValue(params);
       if (typeof sanitizedParams.input === "string") {
-        sanitizedParams.input = redactTtsCredentials(
-          sanitizedParams.input,
-        );
+        sanitizedParams.input = redactTtsCredentials(sanitizedParams.input);
       }
       return withAiSpendLock(async () => {
-      await assertAiSpendAllowed(callContext);
-      let result: unknown;
-      try {
-        result = await createSpeech(sanitizedParams, requestOptions);
-      } catch (err) {
-        await record(model, null, 0, undefined, callContext);
-        throw err;
-      }
-      await record(
-        model,
-        {
-          prompt_tokens: estimatedTextTokens(sanitizedParams.input),
-          completion_tokens: 0,
-        },
-        ttsCostMicros(model, sanitizedParams.input),
-        { characters: String(sanitizedParams.input ?? "").length },
-        callContext,
-      );
-      return result;
+        await assertAiSpendAllowed(callContext);
+        let result: unknown;
+        try {
+          result = await createSpeech(sanitizedParams, requestOptions);
+        } catch (err) {
+          await record(model, null, 0, undefined, callContext);
+          throw err;
+        }
+        await record(
+          model,
+          {
+            prompt_tokens: estimatedTextTokens(sanitizedParams.input),
+            completion_tokens: 0,
+          },
+          ttsCostMicros(model, sanitizedParams.input),
+          { characters: String(sanitizedParams.input ?? "").length },
+          callContext,
+        );
+        return result;
       });
     });
   };
