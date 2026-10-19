@@ -21,12 +21,20 @@ export function learnedCredentialValues(): string[] {
 }
 
 function rememberCredential(value: string): void {
-  const normalized = value.replace(/^["']|["']$/g, "");
+  const bracket = value.indexOf("[");
+  const normalized = (bracket >= 0 ? value.slice(0, bracket) : value)
+    .replace(/^["']|["']$/g, "")
+    .trim();
+  const credentialLike =
+    /\d|[@:/+_=<>-]/.test(normalized) ||
+    (/[a-z]/.test(normalized) && /[A-Z]/.test(normalized)) ||
+    normalized.length >= 12;
   if (
     normalized.length >= 6 &&
+    credentialLike &&
     !normalized.startsWith("[") &&
-    !normalized.includes(HIDDEN_CREDENTIAL) &&
-    !normalized.includes("hidden credential")
+    !normalized.includes("\uE000") &&
+    !/hidden|credential\]/i.test(normalized)
   ) {
     credentialScope.getStore()?.add(normalized);
   }
@@ -196,37 +204,40 @@ function redactHighEntropyTokens(text: string): string {
   });
 }
 
-function redactKnownCredentialValues(text: string): string {
+function learnedCredentialPatterns(): string[] {
   const known = [...(credentialScope.getStore() ?? [])].sort(
     (a, b) => b.length - a.length,
   );
+  const values = new Set<string>();
+  for (const value of known) {
+    if (value.length >= 6) values.add(value);
+    for (const piece of value.split(/[@<>"'=:;/\\\s]+/)) {
+      if (
+        piece.length >= 6 &&
+        (/\d|[+_=-]/.test(piece) ||
+          (/[a-z]/.test(piece) && /[A-Z]/.test(piece)) ||
+          piece.length >= 12) &&
+        !/^(?:hidden|credential)$/i.test(piece)
+      ) {
+        values.add(piece);
+      }
+    }
+  }
+  return [...values].sort((a, b) => b.length - a.length);
+}
+
+function redactKnownCredentialValues(text: string): string {
+  const known = learnedCredentialPatterns();
   let redacted = text;
   for (const value of known) {
-    if (value.length >= 6) redacted = redacted.split(value).join(HIDDEN_CREDENTIAL);
+    redacted = redacted.split(value).join(HIDDEN_CREDENTIAL);
   }
-  return redacted.replace(
-    /[A-Za-z0-9@:/+_=.-]{6,}/g,
-    (token) => {
-      for (const value of known) {
-        const maxLength = Math.min(token.length, value.length);
-        for (let length = maxLength; length >= 6; length -= 1) {
-          let shared = false;
-          for (let start = 0; start + length <= value.length; start += 1) {
-            if (token.includes(value.slice(start, start + length))) {
-              shared = true;
-              break;
-            }
-          }
-          if (shared) return HIDDEN_CREDENTIAL;
-        }
-      }
-      return token;
-    },
-  );
+  return redacted;
 }
 
 function collapseCredentialPlaceholders(text: string): string {
   return text
+    .replace(/\[+\s*hidden credential\s*\]+/gi, HIDDEN_CREDENTIAL)
     .replace(
       /\[hidden credential\](?:\s*\[hidden credential\])+/g,
       HIDDEN_CREDENTIAL,
@@ -235,6 +246,31 @@ function collapseCredentialPlaceholders(text: string): string {
       /\[hidden credential\](?:\s*credential\])+/g,
       HIDDEN_CREDENTIAL,
     );
+}
+
+function protectCredentialPlaceholders(text: string): {
+  protectedText: string;
+  restore: (value: string) => string;
+} {
+  const placeholders: string[] = [];
+  const protectedText = collapseCredentialPlaceholders(text).replace(
+    /\[hidden credential\]/g,
+    () => {
+      const token = `\uE000R${"X".repeat(placeholders.length + 1)}\uE001`;
+      placeholders.push(token);
+      return token;
+    },
+  );
+  return {
+    protectedText,
+    restore: (value) => {
+      let restored = value;
+      for (const token of placeholders) {
+        restored = restored.split(token).join(HIDDEN_CREDENTIAL);
+      }
+      return collapseCredentialPlaceholders(restored);
+    },
+  };
 }
 
 export function redactTtsCredentials(text: string): string {
@@ -266,7 +302,8 @@ export function redactTtsCredentials(text: string): string {
 
 export function redactCredentials(text: string): string {
   if (!text) return text;
-  const scoped = redactKnownCredentialValues(text);
+  const { protectedText, restore } = protectCredentialPlaceholders(text);
+  const scoped = redactKnownCredentialValues(protectedText);
   const known = scoped
     .replace(PRIVATE_KEY_BLOCK, (value) => {
       rememberCredential(value);
@@ -309,9 +346,7 @@ export function redactCredentials(text: string): string {
       redactLabeledCredentials(redactUserInfoCredentials(known)),
     ),
   );
-  return collapseCredentialPlaceholders(
-    redactKnownCredentialValues(firstPass),
-  );
+  return restore(redactKnownCredentialValues(firstPass));
 }
 
 function redactError(error: Error): Error {

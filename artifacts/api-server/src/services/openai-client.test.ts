@@ -172,6 +172,7 @@ deploy user:${commandToken}/var/www/x`;
       expect(body).not.toContain(tail);
       expect(body).not.toContain("credential]credential]");
       expect(body).not.toContain("[[hidden credential]");
+      expect(body).not.toContain("]]");
     }
   });
 

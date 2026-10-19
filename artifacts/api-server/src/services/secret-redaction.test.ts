@@ -5,6 +5,7 @@ import {
   isCredentialRequest,
   redactCredentials,
   redactSensitiveValue,
+  withCredentialRedactionScope,
 } from "./secret-redaction";
 
 export const FAKE_CREDENTIALS = {
@@ -109,6 +110,9 @@ describe("credential redaction", () => {
         "[hidden credential][hidden credential] credential]",
       ),
     ).toBe(HIDDEN_CREDENTIAL);
+    expect(redactCredentials("The hidden panel is closed.")).toBe(
+      "The hidden panel is closed.",
+    );
   });
 
   it("consumes markup-glued labelled values through end of token", () => {
@@ -117,6 +121,25 @@ describe("credential redaction", () => {
     expect(redacted).toBe(`key: ${HIDDEN_CREDENTIAL}`);
     expect(redacted).not.toContain("Fg3Hi4Jk5Lm6No7Pq");
     expect(redacted).not.toContain("[[hidden credential]");
+  });
+
+  it("is idempotent in one scope and across later scoped calls", () => {
+    const source =
+      'key: Ab1cD2e"><Fg3Hi4Jk5Lm6No7Pq\n' +
+      "ssh root@1.2.3.4\nAbc123xyzAbc123xyz@Q@Wordtail9";
+    withCredentialRedactionScope(() => {
+      const once = redactCredentials(source);
+      const twice = redactCredentials(once);
+      expect(twice).toBe(once);
+      expect(twice).not.toContain("[[");
+      expect(twice).not.toContain("]]");
+      expect(twice.split(HIDDEN_CREDENTIAL).join("")).not.toContain(
+        "credential]",
+      );
+      expect(redactCredentials("Echo Wordtail9")).toBe(
+        `Echo ${HIDDEN_CREDENTIAL}`,
+      );
+    });
   });
 
   it("redacts nested answer metadata without mutating raw input", () => {
