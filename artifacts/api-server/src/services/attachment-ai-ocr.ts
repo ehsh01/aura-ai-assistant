@@ -136,6 +136,7 @@ export async function extractAttachmentTextWithAi(
       feature: "attachment_ocr_ai",
       userId,
       background: false,
+      redactOutput: false,
     });
     const completion = await client.chat.completions.create({
       model: selectedModel,

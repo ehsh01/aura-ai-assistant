@@ -35,7 +35,6 @@ import {
   fetchKnowledgeGraph,
   getAskAiAvailability,
   getSavedItem,
-  getVoiceAiAvailability,
   listItemFacets,
   listSavedItems,
   queryRecallStream,
@@ -54,6 +53,7 @@ import {
   VoiceQueryError,
 } from "@/lib/recall-api";
 import { speakText, stopSpeaking } from "@/lib/speech-synthesis";
+import { RecallExplore } from "@/pages/RecallExplore";
 
 const GRAPH_TYPES: Array<{
   type: KnowledgeGraphNodeType;
@@ -372,6 +372,10 @@ function MarkdownAnswer({ value }: { value: string }) {
 }
 
 export function Everything() {
+  return <RecallExplore />;
+}
+
+function LegacyEverything() {
   const [location, navigate] = useLocation();
   const detailItemId = location.match(/^\/everything\/([^/?#]+)/)?.[1];
   const lowMotionFallback = useLowMotionFallback();
@@ -613,12 +617,12 @@ export function Everything() {
   );
 
   const runFreeTalkFallback = useCallback(
-    async (question: string) => {
+    async (question: string, speakBrowserFallback: boolean) => {
       let results: SavedItemRecord[] = [];
       try {
         results = (await listSavedItems({ q: question, limit: 6 })).items;
       } catch {
-        // Free browser speech still responds without surfacing an error.
+        // The free fallback still produces an honest empty result.
       }
       const reply =
         results.length > 0
@@ -634,7 +638,7 @@ export function Everything() {
       setOutputMode("talk");
       setAskStatus("results");
       addTalkTurn(question, reply, sources, false);
-      speakTalkReply(reply, false);
+      if (speakBrowserFallback) speakTalkReply(reply, false);
     },
     [addTalkTurn, speakTalkReply],
   );
@@ -650,22 +654,7 @@ export function Everything() {
       setAnswer("");
       setAiResult(null);
       setKeywordResults([]);
-      // Immediate local acknowledgement keeps first sound under the 2s target;
-      // the grounded answer replaces it with natural TTS when ready.
-      void speakText("Searching your notes.", { premium: false });
       try {
-        const availability = await getVoiceAiAvailability();
-        if (!availability.allowed) {
-          if (availability.reason === "daily_limit") {
-            addTalkTurn(question, VOICE_LIMIT_REPLY, [], false);
-            setAskStatus("ready");
-            speakTalkReply(VOICE_LIMIT_REPLY, false);
-          } else {
-            await runFreeTalkFallback(question);
-          }
-          return;
-        }
-
         const result = await queryVoiceRecall(question, {
           threadId: talkThreadId,
         });
@@ -683,8 +672,13 @@ export function Everything() {
           addTalkTurn(question, VOICE_LIMIT_REPLY, [], false);
           setAskStatus("ready");
           speakTalkReply(VOICE_LIMIT_REPLY, false);
+        } else if (
+          error instanceof VoiceQueryError &&
+          error.reason === "disabled"
+        ) {
+          await runFreeTalkFallback(question, true);
         } else {
-          await runFreeTalkFallback(question);
+          await runFreeTalkFallback(question, false);
         }
       } finally {
         setTalkThinking(false);
@@ -1070,30 +1064,22 @@ export function Everything() {
             <div
               className="assistant-ring-wrap absolute right-3 top-1/2 z-30 hidden -translate-y-1/2 sm:block"
               aria-live="polite"
-              aria-label={`R.E.C.A.L.L. ${ringLabel.toLowerCase()}`}
             >
-              <div
-                className={`assistant-ring is-${ringState}`}
-                data-testid="assistant-ring-desktop"
-                onClick={() => {
-                  if (talkSpeaking || voiceAnswer.speaking) beforeTalkToggle();
-                }}
-              >
+              <div className="assistant-ring-control">
                 <MicButton
                   onTranscript={submitTalkTranscript}
                   controller={talkSpeechInput}
-                  className="assistant-ring-mic"
-                  iconSize={18}
+                  className={`assistant-ring is-${ringState}`}
+                  iconSize={58}
                   title="Talk to Recall"
-                  testId="ring-mic-desktop"
+                  testId="assistant-ring-desktop"
                   holdToTalk
                   quiet
                   onBeforeToggle={beforeTalkToggle}
-                />
-                <div>
-                  <span>R.E.C.A.L.L.</span>
+                >
+                  <span className="assistant-ring-name">R.E.C.A.L.L.</span>
                   <small>{ringLabel}</small>
-                </div>
+                </MicButton>
                 <button
                   type="button"
                   className="assistant-speaker-toggle"
@@ -1128,26 +1114,21 @@ export function Everything() {
                 outputMode === "talk" ? "top-36" : "bottom-[104px]"
               }`}
               aria-live="polite"
-              aria-label={`R.E.C.A.L.L. ${ringLabel.toLowerCase()}`}
             >
-              <div
-                className={`assistant-ring-mobile is-${ringState}`}
-                data-testid="assistant-ring-mobile"
-                onClick={() => {
-                  if (talkSpeaking || voiceAnswer.speaking) beforeTalkToggle();
-                }}
-              >
+              <div className="assistant-ring-control">
                 <MicButton
                   onTranscript={submitTalkTranscript}
                   controller={talkSpeechInput}
-                  className="assistant-ring-mic assistant-ring-mic-mobile"
-                  iconSize={13}
+                  className={`assistant-ring-mobile is-${ringState}`}
+                  iconSize={42}
                   title="Talk to Recall"
-                  testId="ring-mic-mobile"
+                  testId="assistant-ring-mobile"
                   holdToTalk
                   quiet
                   onBeforeToggle={beforeTalkToggle}
-                />
+                >
+                  <small>{ringLabel}</small>
+                </MicButton>
                 <button
                   type="button"
                   className="assistant-speaker-toggle assistant-speaker-toggle-mobile"
@@ -1165,9 +1146,9 @@ export function Everything() {
                   data-testid="speaker-toggle-mobile"
                 >
                   {voiceAnswer.enabled ? (
-                    <Volume2 size={9} />
+                    <Volume2 size={11} />
                   ) : (
-                    <VolumeX size={9} />
+                    <VolumeX size={11} />
                   )}
                 </button>
               </div>

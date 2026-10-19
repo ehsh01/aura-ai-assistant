@@ -15,17 +15,23 @@
 | `RECALL_HOME_AI_DIGEST_ENABLED`           | off     | Enable hash-cached Home hero prose               |
 | `RECALL_EMBEDDING_WARM_ENABLED`           | off     | Enable hash-cached save/sync-time vectors        |
 | `RECALL_BACKGROUND_AI_ENABLED`            | off     | Parent switch for all background/save-time AI    |
+| `RECALL_VOICE_AI_ENABLED`                 | off     | Enable notes-grounded paid voice turns           |
+| `RECALL_VOICE_ASK_DAILY_LIMIT`            | 100     | Per-user voice turns per Eastern day             |
+| `RECALL_VOICE_TTS_DAILY_CHARS`            | 30000   | Per-user paid TTS characters per Eastern day     |
+| `RECALL_VOICE_SESSION_SILENCE_MS`         | 8000    | Silence before a conversation session closes     |
 | `RECALL_HOME_AI_DIGEST_DAILY_LIMIT`       | 3       | Per-user Home digest calls per UTC day           |
 | `RECALL_EMBEDDING_WARM_DAILY_LIMIT`       | 100     | Per-user embedding warm calls per UTC day        |
 | `RECALL_EMBEDDING_WARM_DAILY_TOKEN_LIMIT` | 100000  | Per-user embedding warm tokens per UTC day       |
-| `AI_DAILY_BUDGET_USD`                     | $0.50   | Install-wide background spend cap (UTC day)      |
-| `AI_BACKGROUND_DAILY_BUDGET_USD_PER_USER` | $0.50   | Per-user background spend cap                    |
-| `AI_DAILY_BUDGET_USD_PER_USER`            | $0.50   | Per-user Ask spend cap                           |
+| `AI_DAILY_BUDGET_USD`                     | $1.00   | Install-wide hard cap per Eastern day            |
+| `RECALL_AI_MONTHLY_BUDGET_USD`            | $15.00  | Install-wide hard cap per Eastern month          |
+| `AI_BACKGROUND_DAILY_BUDGET_USD_PER_USER` | $1.00   | Per-user background spend cap                    |
+| `AI_DAILY_BUDGET_USD_PER_USER`            | $1.00   | Per-user Ask spend cap                           |
 
-Unset, zero, or invalid budget values use the documented finite defaults.
-Spend-read errors fail closed. Cache hits do not write `ai_usage` rows because
-no provider call occurred; failed provider attempts write zero-token/zero-cost
-rows so attempted calls remain visible.
+Budget values are explicit configuration: missing, zero, or invalid values
+disable paid AI and log a warning. Spend-read errors fail closed. The shared
+provider gate covers Ask, voice, TTS, STT, and embeddings. Cache hits do not
+write `ai_usage` rows because no provider call occurred; failed provider
+attempts write zero-token/zero-cost rows so attempted calls remain visible.
 
 Client: `recall.premiumTts` localStorage (off by default).
 

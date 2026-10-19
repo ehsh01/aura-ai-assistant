@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { hostnameFallbackRegex } from "./notes";
 
 const migrationUrl = new URL("../../../../lib/db/migrations/0016_notes_fts.sql", import.meta.url);
 
@@ -64,5 +65,63 @@ describe("notes FTS migration", () => {
       WHERE search_tsv @@ to_tsquery('simple', 'bananas:*')
     `);
     expect(miss.rows).toEqual([]);
+  });
+
+  it("finds hostname tokens at query time without a reindex or migration", async () => {
+    await db.exec(`
+      INSERT INTO "users" ("id")
+      VALUES ('11111111-1111-4111-8111-111111111111');
+
+      INSERT INTO "notes" ("id", "user_id", "title", "content", "preview", "tags")
+      VALUES
+        (
+          'note-en-xfbhdx',
+          '11111111-1111-4111-8111-111111111111',
+          'Turn an image into a link',
+          'psychiatry.med.miami.edu',
+          '',
+          '[]'::jsonb
+        ),
+        (
+          'note-khaila',
+          '11111111-1111-4111-8111-111111111111',
+          'School portal',
+          'khaila.schoolportal.com',
+          '',
+          '[]'::jsonb
+        );
+
+      INSERT INTO "notes" (
+        "id",
+        "user_id",
+        "title",
+        "content",
+        "preview",
+        "tags"
+      )
+      SELECT
+        'psychiatry-decoy-' || g,
+        '11111111-1111-4111-8111-111111111111',
+        'Psychiatry titled note ' || g,
+        'No website hostname here',
+        '',
+        '[]'::jsonb
+      FROM generate_series(1, 60) g;
+    `);
+
+    for (const [term, expectedId] of [
+      ["psychiatry", "note-en-xfbhdx"],
+      ["khaila", "note-khaila"],
+    ] as const) {
+      const pattern = hostnameFallbackRegex(term);
+      const expandedHit = await db.query<{ id: string }>(
+        `SELECT id
+         FROM notes
+         WHERE search_document ~* $1
+         LIMIT 3`,
+        [pattern],
+      );
+      expect(expandedHit.rows.map((row) => row.id)).toContain(expectedId);
+    }
   });
 });

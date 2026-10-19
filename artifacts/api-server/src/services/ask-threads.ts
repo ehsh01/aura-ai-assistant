@@ -1,6 +1,7 @@
 import { and, asc, desc, eq } from "drizzle-orm";
 import { askMessages, askThreads, type AskMessage, type AskThread } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
+import { redactCredentials, redactSensitiveValue } from "./secret-redaction";
 import { newAskMessageId, newAskThreadId } from "../lib/recall-format";
 
 export type AskThreadDto = {
@@ -156,6 +157,7 @@ export async function appendAskMessage(input: {
   metadata?: Record<string, unknown>;
 }): Promise<AskMessageDto> {
   const now = new Date();
+  const { content, metadata } = sanitizeAskMessageForStorage(input);
   const [row] = await getDb()
     .insert(askMessages)
     .values({
@@ -163,8 +165,8 @@ export async function appendAskMessage(input: {
       threadId: input.threadId,
       userId: input.userId,
       role: input.role,
-      content: input.content,
-      metadata: input.metadata ?? {},
+      content,
+      metadata,
       createdAt: now,
     })
     .returning();
@@ -185,12 +187,22 @@ export async function appendAskMessage(input: {
     if (thread && (thread.title === "New chat" || !thread.title.trim())) {
       await getDb()
         .update(askThreads)
-        .set({ title: titleFromQuestion(input.content), updatedAt: now })
+        .set({ title: titleFromQuestion(content), updatedAt: now })
         .where(eq(askThreads.id, input.threadId));
     }
   }
 
   return toMessageDto(row!);
+}
+
+export function sanitizeAskMessageForStorage(input: {
+  content: string;
+  metadata?: Record<string, unknown>;
+}): { content: string; metadata: Record<string, unknown> } {
+  return {
+    content: redactCredentials(input.content),
+    metadata: redactSensitiveValue(input.metadata ?? {}),
+  };
 }
 
 /** Build a retrieval query that includes prior user turns for follow-ups. */

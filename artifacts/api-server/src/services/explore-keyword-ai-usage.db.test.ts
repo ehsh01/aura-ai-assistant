@@ -9,8 +9,21 @@ let db: PGlite;
 let pgliteDb: ReturnType<typeof drizzle<typeof schema>>;
 
 vi.mock("../lib/db", () => ({ getDb: () => pgliteDb }));
+vi.mock("./retrieval", () => ({
+  freeRetrievalTerms: (query: string) =>
+    query
+      .toLowerCase()
+      .split(/\W+/)
+      .filter((term) => term.length > 2),
+  retrieveRelevantRecords: vi.fn(async () => ({
+    records: [],
+    usedSemantic: false,
+    namedPeople: [],
+    tasks: [],
+  })),
+}));
 
-const { listItemsForUser, parseItemSearchFilters } = await import("./items");
+const { searchExploreForUser } = await import("./explore-search");
 const { currentAiFeature, recordAiUsage, withAiFeature } =
   await import("./ai-usage");
 
@@ -102,15 +115,12 @@ describe("Explore free search and explicit AI accounting", () => {
   });
 
   it("returns Enter keyword results without inserting ai_usage", async () => {
-    const results = await listItemsForUser(
-      USER_ID,
-      parseItemSearchFilters({ q: "permit", limit: 12 }),
-    );
+    const results = await searchExploreForUser(USER_ID, "permit", 12);
     const usage = await db.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM ai_usage",
     );
 
-    expect(results.map((item) => item.id)).toContain("item-permit");
+    expect(results.map((item) => item.itemId)).toContain("item-permit");
     expect(usage.rows[0]?.count).toBe("0");
   });
 

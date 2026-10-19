@@ -88,4 +88,46 @@ describe("Evernote source-record search migration", () => {
     `);
     expect(sync.rows[0]?.records_skipped).toBe(7);
   });
+
+  it("ranks an exact multi-word Evernote title above partial matches", async () => {
+    await db.exec(`
+      INSERT INTO "source_records" (
+        "id",
+        "record_title",
+        "record_text",
+        "record_metadata"
+      ) VALUES
+        (
+          'sr-inventory',
+          'Psychiatry Inventory App',
+          'Inventory workflow and access details',
+          '{}'::jsonb
+        ),
+        (
+          'sr-partial',
+          'General inventory',
+          'Unrelated application notes',
+          '{}'::jsonb
+        );
+    `);
+
+    const hits = await db.query<{ id: string }>(`
+      SELECT id
+      FROM source_records
+      WHERE search_tsv @@ to_tsquery(
+        'simple',
+        'psychiatry:* | inventory:* | app:*'
+      )
+      ORDER BY
+        CASE WHEN to_tsvector('simple', coalesce(record_title, ''))
+          @@ to_tsquery('simple', 'psychiatry:* & inventory:* & app:*')
+          THEN 1 ELSE 0 END DESC,
+        ts_rank_cd(
+          to_tsvector('simple', coalesce(record_title, '')),
+          to_tsquery('simple', 'psychiatry:* | inventory:* | app:*')
+        ) DESC
+    `);
+
+    expect(hits.rows[0]?.id).toBe("sr-inventory");
+  });
 });

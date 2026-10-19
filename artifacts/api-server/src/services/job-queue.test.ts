@@ -3,6 +3,7 @@ import {
   backoffMs,
   attemptsAfterDeferredClaim,
   captureIdFromPayload,
+  connectorTransientDeferral,
   connectorSyncFromPayload,
   evernoteTransientDeferral,
   isNonRetryableCodeError,
@@ -24,25 +25,51 @@ describe("job-queue helpers", () => {
     expect(attemptsAfterDeferredClaim(0)).toBe(0);
   });
 
-  it("detects rate limits, 503s, and HTML errors for attempt-free deferral", () => {
+  it("defers only marked Evernote or Google upstream responses", () => {
     expect(
       evernoteTransientDeferral({
         evernoteRateLimited: true,
         retryAfterMs: 12_000,
       }),
     ).toEqual({ retryAfterMs: 12_000 });
-    expect(evernoteTransientDeferral({ status: 429 })).toEqual({
+    expect(
+      evernoteTransientDeferral({
+        status: 429,
+        evernoteRateLimited: true,
+      }),
+    ).toEqual({
       retryAfterMs: 30_000,
     });
     expect(
-      evernoteTransientDeferral(new Error("MCP rate limit exceeded")),
+      evernoteTransientDeferral(
+        Object.assign(new Error("MCP rate limit exceeded"), {
+          evernoteRateLimited: true,
+        }),
+      ),
     ).toEqual({ retryAfterMs: 30_000 });
-    expect(evernoteTransientDeferral({ status: 503 })).toEqual({
+    expect(
+      evernoteTransientDeferral({
+        status: 503,
+        evernoteTransient: true,
+      }),
+    ).toEqual({
       retryAfterMs: 30_000,
     });
     expect(
-      evernoteTransientDeferral(new Error("<html>backend read error</html>")),
+      connectorTransientDeferral({ googleStatus: 503 }, "google"),
     ).toEqual({ retryAfterMs: 30_000 });
+    expect(
+      connectorTransientDeferral({ googleStatus: 429 }, "google"),
+    ).toEqual({ retryAfterMs: 30_000 });
+    expect(
+      connectorTransientDeferral(
+        Object.assign(new Error("row contained 503"), { code: "22P02" }),
+        "google",
+      ),
+    ).toBeNull();
+    expect(
+      connectorTransientDeferral({ code: "23505", status: 503 }, "google"),
+    ).toBeNull();
     expect(evernoteTransientDeferral({ status: 500 })).toBeNull();
     expect(evernoteTransientDeferral({ status: 501 })).toBeNull();
     expect(evernoteTransientDeferral(new Error("ordinary failure"))).toBeNull();

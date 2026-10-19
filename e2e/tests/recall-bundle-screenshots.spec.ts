@@ -167,15 +167,38 @@ async function mockRecall(page: Page) {
         500,
       );
       const itemCount = Math.floor(requestedLimit * 0.8);
-      const itemNodes = Array.from({ length: itemCount }, (_, index) => ({
-        id: `item-node-${index}`,
-        itemId: items[index % items.length]!.id,
-        type: index % 5 === 0 ? ("evernote" as const) : ("notes" as const),
-        label: `Imported note ${index + 1}`,
-        value: 4 + (index % 3),
-        hub: false,
-        href: `/everything/${items[index % items.length]!.id}`,
-      }));
+      const connectedSeeds = [
+        ["evernote", "Porsche oil-change log"],
+        ["gmail", "Home Depot order shipped"],
+        ["drive", "Roof inspection report"],
+        ["finance", "Porsche West Broward"],
+        ["memories", "My 2014 Porsche Cayman S"],
+        ["tasks", "Renew vehicle registration"],
+        ["calendar", "HOA inspection"],
+        ["flipperforce", "New House renovation"],
+        ["homey", "Garage door sensor"],
+        ["contacts", "European Auto Motors"],
+        ["notes", "Garage measurements"],
+      ] as const;
+      const itemNodes = Array.from({ length: itemCount }, (_, index) => {
+        const seed = connectedSeeds[index % connectedSeeds.length]!;
+        const before = captureState === "before";
+        return {
+          id: `item-node-${index}`,
+          itemId: items[index % items.length]!.id,
+          type: before
+            ? index % 5 === 0
+              ? ("evernote" as const)
+              : ("notes" as const)
+            : seed[0],
+          label: before
+            ? `Imported note copy ${index + 1}`
+            : `${seed[1]} ${Math.floor(index / connectedSeeds.length) + 1}`,
+          value: 4 + (index % 3),
+          hub: false,
+          href: `/everything/${items[index % items.length]!.id}`,
+        };
+      });
       const notebookHub = {
         id: "notebooks:everything",
         itemId: null,
@@ -195,7 +218,7 @@ async function mockRecall(page: Page) {
         href: "/everything",
       }));
       const notebookEdgeCount =
-        captureState === "before" ? 8 : Math.max(0, itemCount - 3);
+        captureState === "before" ? Math.max(0, itemCount - 3) : 0;
       const notebookEdges = itemNodes
         .slice(0, notebookEdgeCount)
         .map((node, index) => ({
@@ -212,8 +235,20 @@ async function mockRecall(page: Page) {
           target: tagHubs[index % tagHubs.length]!.id,
           signal: "tag" as const,
         }));
+      const usefulHubs =
+        captureState === "before"
+          ? [notebookHub, ...tagHubs]
+          : [
+              { ...tagHubs[0], label: "vehicles" },
+              { ...tagHubs[1], label: "new house" },
+              {
+                ...notebookHub,
+                id: "notebooks:porsche-maintenance",
+                label: "Porsche Maintenance",
+              },
+            ];
       return json(route, {
-        nodes: [...itemNodes, notebookHub, ...tagHubs],
+        nodes: [...itemNodes, ...usefulHubs],
         edges: [...notebookEdges, ...tagEdges],
         page: {
           offset: 0,
@@ -336,6 +371,7 @@ test("captures the requested Recall states", async ({ page }) => {
   await expect(page.getByTestId("knowledge-graph")).toBeVisible();
   await page.waitForTimeout(2_000);
   await screenshot(page, "graph_mobile");
+  if (process.env.RECALL_GRAPH_SCREENSHOTS_ONLY === "1") return;
 
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/notes");
