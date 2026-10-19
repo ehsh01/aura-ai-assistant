@@ -73,6 +73,7 @@ import {
   warmEntityEmbedding,
 } from "./embedding-cache";
 import { heuristicDigest, withSourceDigest } from "./digests";
+import { invalidateRetrievalCorpusCache } from "./retrieval-corpus-cache";
 import { openConnectorSettings, sealConnectorSettings } from "../lib/secret-box";
 import { matchHomeyName, type HomeyAskPlan } from "./nl-homey-query";
 import type { FlipperForceAskPlan } from "./nl-flipperforce-query";
@@ -375,6 +376,7 @@ export async function deleteConnectorForUser(
     .delete(connectors)
     .where(and(eq(connectors.id, connectorId), eq(connectors.userId, userId)))
     .returning({ id: connectors.id });
+  if (deleted[0]) invalidateRetrievalCorpusCache(userId);
   return Boolean(deleted[0]);
 }
 
@@ -1774,6 +1776,7 @@ export async function upsertSourceRecord(
           lastSyncedAt: now,
         })
         .where(eq(sourceRecords.id, existing[0].id));
+      invalidateRetrievalCorpusCache(userId);
       return { id: existing[0].id, action: "skipped" };
     }
     const meta = withSourceDigest(
@@ -1813,6 +1816,7 @@ export async function upsertSourceRecord(
         );
     });
     evictEntityEmbedding(userId, "source_record", existing[0].id);
+    invalidateRetrievalCorpusCache(userId);
     return { id: existing[0].id, action: "updated" };
   }
 
@@ -1837,6 +1841,7 @@ export async function upsertSourceRecord(
     createdAt: now,
     updatedAt: now,
   });
+  invalidateRetrievalCorpusCache(userId);
   return { id, action: "created" };
 }
 
@@ -2265,12 +2270,14 @@ async function persistGoogleRecordsBatch(
 }> {
   const normalized = await googleConnector.normalize(records);
   try {
+    const persisted = await persistGoogleNormalizedRecordsBatch(
+      userId,
+      connectorId,
+      normalized,
+    );
+    invalidateRetrievalCorpusCache(userId);
     return {
-      ...(await persistGoogleNormalizedRecordsBatch(
-        userId,
-        connectorId,
-        normalized,
-      )),
+      ...persisted,
       failed: 0,
       errors: [],
     };
@@ -2297,6 +2304,7 @@ async function persistGoogleRecordsBatch(
         connectorId,
         [record],
       );
+      invalidateRetrievalCorpusCache(userId);
       created += result.created;
       updated += result.updated;
     } catch (error) {
@@ -4003,6 +4011,7 @@ export async function syncConnectorForUser(
       recordsFailed,
     },
   });
+  invalidateRetrievalCorpusCache(userId);
 
   return {
     syncRunId,

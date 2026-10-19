@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   keywordScore,
   mentionedPeople,
@@ -11,6 +11,7 @@ import {
   evernoteMatchExcerpt,
   evernoteMatchedText,
   hasSubjectMatchingUrlHostname,
+  loadLinkAskFallback,
   noteSearchCandidateLimit,
   pinSubjectHostnameMatchesBeforeCut,
   rankFreeTextMatches,
@@ -148,6 +149,41 @@ describe("link candidate slot reservation", () => {
         },
       ]),
     ).toBe(true);
+  });
+
+  it("loads the full corpus when Gmail holds the only matching link", async () => {
+    const question = "what is the vendor portal link";
+    const gmailOnly = {
+      title: "Vendor portal access",
+      text: "From: Support <support@example.com>\nOpen https://vendorportal.com/portal",
+    };
+    const loadFullPath = vi.fn(async () => [gmailOnly]);
+
+    await expect(
+      loadLinkAskFallback(
+        question,
+        [{ title: "Vendor account", text: "No URL in the indexed excerpt." }],
+        loadFullPath,
+      ),
+    ).resolves.toEqual([gmailOnly]);
+    expect(loadFullPath).toHaveBeenCalledOnce();
+  });
+
+  it("skips the full corpus when indexed text already has the link", async () => {
+    const loadFullPath = vi.fn(async () => ["wide corpus"]);
+    await expect(
+      loadLinkAskFallback(
+        "what is the vendor portal link",
+        [
+          {
+            title: "Vendor portal",
+            text: "Open https://vendorportal.com/portal",
+          },
+        ],
+        loadFullPath,
+      ),
+    ).resolves.toBeNull();
+    expect(loadFullPath).not.toHaveBeenCalled();
   });
 });
 

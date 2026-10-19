@@ -55,4 +55,22 @@ describe("buildNotesTsQuery", () => {
     ).resolves.toEqual([]);
     expect(getHostnameFallbackTimeoutCount()).toBe(before + 1);
   });
+  it("degrades gracefully when Drizzle wraps the hostname timeout", async () => {
+    const before = getHostnameFallbackTimeoutCount();
+    const timeout = Object.assign(new Error("Failed query"), {
+      cause: Object.assign(new Error("canceling statement due to timeout"), {
+        code: "57014",
+      }),
+    });
+    await expect(
+      runHostnameFallbackSafely(
+        async () => {
+          throw timeout;
+        },
+        [] as string[],
+      ),
+    ).resolves.toEqual([]);
+    expect(getHostnameFallbackTimeoutCount()).toBe(before + 1);
+  });
+
 });
