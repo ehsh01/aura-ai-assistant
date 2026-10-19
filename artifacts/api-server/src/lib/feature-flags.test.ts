@@ -10,13 +10,28 @@ afterEach(() => {
 });
 
 describe("isEnabled", () => {
-  it("defaults on and only disables explicit false", () => {
+  it("defaults on and accepts trimmed, case-insensitive boolean values", () => {
     delete process.env[KEY];
     expect(isEnabled(KEY)).toBe(true);
-    process.env[KEY] = " FALSE ";
+    for (const value of ["false", " FALSE ", "0", " Off ", "NO"]) {
+      process.env[KEY] = value;
+      expect(isEnabled(KEY)).toBe(false);
+    }
+    for (const value of ["true", " TRUE ", "1", " On ", "YES"]) {
+      process.env[KEY] = value;
+      expect(isEnabled(KEY)).toBe(true);
+    }
+  });
+
+  it("uses the default for empty values and rejects unrecognized values", () => {
+    for (const value of ["", "  "]) {
+      process.env[KEY] = value;
+      expect(isEnabled(KEY)).toBe(true);
+      expect(isEnabled(KEY, false)).toBe(false);
+    }
+    process.env[KEY] = "invalid";
     expect(isEnabled(KEY)).toBe(false);
-    process.env[KEY] = "true";
-    expect(isEnabled(KEY)).toBe(true);
+    expect(isEnabled(KEY, false)).toBe(false);
   });
 
   it("supports flags that default off", () => {

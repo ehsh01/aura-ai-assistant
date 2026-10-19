@@ -1,6 +1,7 @@
 import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { connectors, sourceRecords } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
+import { parseEnvBoolean } from "../lib/feature-flags";
 import { listTasksForUser } from "./tasks";
 import {
   listNotesForUser,
@@ -220,8 +221,8 @@ export async function loadLinkAskFallback<T>(
 }
 
 export function isLinkAskFastPathEnabled(): boolean {
-  return !/^(?:false|0|off)$/i.test(
-    process.env.RECALL_LINK_ASK_FAST_PATH_ENABLED?.trim() ?? "",
+  return (
+    parseEnvBoolean(process.env.RECALL_LINK_ASK_FAST_PATH_ENABLED) ?? true
   );
 }
 
