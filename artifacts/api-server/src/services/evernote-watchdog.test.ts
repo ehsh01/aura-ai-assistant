@@ -160,6 +160,36 @@ describe("Evernote import watchdog", () => {
     expect(status.safe).toBe(true);
   });
 
+  it("pauses only after three consecutive database probe errors", async () => {
+    const state = { consecutiveErrors: 0 };
+    const check = () =>
+      checkEvernoteImportWatchdog({
+        dbConnections: async () => null,
+        selectOneLatencyMs: async () => null,
+        recallActiveDbSessions: async () => null,
+        availableMemoryMb: async () => 1_000,
+        healthUrls: [],
+        probeErrorState: state,
+      });
+
+    await expect(check()).resolves.toMatchObject({ safe: true });
+    await expect(check()).resolves.toMatchObject({ safe: true });
+    await expect(check()).resolves.toMatchObject({
+      safe: false,
+      reasons: ["database load probes failed 3 consecutive times"],
+    });
+
+    await checkEvernoteImportWatchdog({
+      dbConnections: async () => 1,
+      selectOneLatencyMs: async () => 1,
+      recallActiveDbSessions: async () => 0,
+      availableMemoryMb: async () => 1_000,
+      healthUrls: [],
+      probeErrorState: state,
+    });
+    expect(state.consecutiveErrors).toBe(0);
+  });
+
   it("requires max(200MB, 2.5x file size) for attachment work", async () => {
     expect(requiredMemoryMbForBytes(20 * 1024 * 1024)).toBe(200);
     expect(requiredMemoryMbForBytes(100 * 1024 * 1024)).toBe(250);

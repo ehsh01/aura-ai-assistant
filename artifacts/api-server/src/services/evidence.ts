@@ -159,7 +159,15 @@ export async function upsertEvidenceForSourceRecordsBatch(
   if (inputs.length === 0) return;
   const sourceRecordIds = [...new Set(inputs.map((input) => input.sourceRecordId))];
   const existingRows = await getDb()
-    .select()
+    .selectDistinctOn(
+      [evidence.sourceRecordId, evidence.claimType],
+      {
+        id: evidence.id,
+        sourceRecordId: evidence.sourceRecordId,
+        claimType: evidence.claimType,
+        updatedAt: evidence.updatedAt,
+      },
+    )
     .from(evidence)
     .where(
       and(
@@ -167,9 +175,16 @@ export async function upsertEvidenceForSourceRecordsBatch(
         inArray(evidence.sourceRecordId, sourceRecordIds),
       ),
     )
-    .orderBy(desc(evidence.updatedAt));
+    .orderBy(
+      evidence.sourceRecordId,
+      evidence.claimType,
+      desc(evidence.updatedAt),
+    );
 
-  const newestBySourceClaim = new Map<string, Evidence>();
+  const newestBySourceClaim = new Map<
+    string,
+    (typeof existingRows)[number]
+  >();
   for (const row of existingRows) {
     if (!row.sourceRecordId) continue;
     const key = `${row.sourceRecordId}\0${row.claimType}`;

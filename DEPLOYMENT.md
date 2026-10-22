@@ -329,6 +329,21 @@ excludes that connector from Ask.
 must have an eligible paid Evernote plan and complete the accounts.evernote.com
 browser consent before the live Connect → Sync Now → Ask flow can be verified.
 
+## Nightly finance sync
+
+The supported cron entry point is the bundled CLI below. It uses the same
+`finance-sync:<connectorId>` PostgreSQL advisory lock, content hash, evidence
+batching, watchdog, and 15-minute running-row backstop as worker-triggered
+finance syncs. Repoint any older out-of-repo 02:00 script to this command:
+
+```bash
+0 2 * * * cd /var/www/recall-app && pnpm --filter @workspace/api-server finance:nightly-sync >> /var/log/recall-finance-sync.log 2>&1
+```
+
+By default it syncs every enabled finance connector sequentially. Set
+`FINANCE_CONNECTOR_ID` or append `-- --connector-id <id>` to target one.
+`pnpm run build:api` must have completed before the cron runs.
+
 ## Database backups
 
 `scripts/backup-recall-db.sh` writes a compressed, timestamped `pg_dump` to `/var/backups/recall/` and keeps the newest 14. It prefers `docker run postgres:18 pg_dump` so the client major matches DigitalOcean managed Postgres 18 (host `postgresql-client-17` is too old).

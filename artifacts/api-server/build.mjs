@@ -17,6 +17,7 @@ async function buildAll() {
   await esbuild({
     entryPoints: [
       path.resolve(artifactDir, "src/index.ts"),
+      path.resolve(artifactDir, "src/finance-nightly-sync-cli.ts"),
       path.resolve(artifactDir, "src/reimport-enex-cli.ts"),
       path.resolve(artifactDir, "src/evernote-dry-run-list-cli.ts"),
     ],

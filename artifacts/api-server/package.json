@@ -7,6 +7,7 @@
     "dev": "export NODE_ENV=development && pnpm run build && node --enable-source-maps ./dist/index.mjs",
     "build": "node ./build.mjs",
     "start": "node ./dist/index.mjs",
+    "finance:nightly-sync": "node --enable-source-maps ./dist/finance-nightly-sync-cli.mjs",
     "evernote:dry-run-list": "pnpm run build && node --enable-source-maps ./dist/evernote-dry-run-list-cli.mjs",
     "test": "vitest run",
     "test:watch": "vitest",

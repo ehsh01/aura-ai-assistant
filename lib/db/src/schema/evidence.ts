@@ -37,7 +37,7 @@ export const evidence = pgTable(
       table.userId,
       table.sourceRecordId,
       table.claimType,
-      table.updatedAt.desc(),
+      table.updatedAt.desc().nullsFirst(),
     ),
   ],
 );

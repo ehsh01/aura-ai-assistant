@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, ne, or, sql } from "drizzle-orm";
 import {
   connectors,
   entityEmbeddings,
@@ -127,7 +127,10 @@ import {
   isSkippableConnectorRecordError,
   safeConnectorErrorMessage,
 } from "./connector-record-errors";
-import { GOOGLE_SYNC_MAX_CURSOR_RETRIES } from "./job-queue";
+import {
+  GOOGLE_SYNC_MAX_CURSOR_RETRIES,
+  MAX_QUEUED_FINANCE_JOB_AGE_MS,
+} from "./job-queue";
 
 const CONNECTOR_IMPLS: Record<string, RecallConnector> = {
   manual: manualConnector,
@@ -2379,7 +2382,8 @@ export async function enqueueFinanceSyncForUser(
           eq(connectors.type, "finance_api"),
         ),
       )
-      .limit(1);
+      .limit(1)
+      .for("update");
     const connector = connectorRows[0];
     if (!connector) throw new Error("Finance connector not found");
     if (!connector.enabled) {
@@ -2398,6 +2402,13 @@ export async function enqueueFinanceSyncForUser(
         and(
           eq(syncRuns.connectorId, connectorId),
           inArray(jobs.status, ["queued", "processing"]),
+          or(
+            ne(jobs.status, "queued"),
+            gte(
+              jobs.createdAt,
+              new Date(Date.now() - MAX_QUEUED_FINANCE_JOB_AGE_MS),
+            ),
+          ),
         ),
       )
       .orderBy(desc(syncRuns.startedAt))
@@ -4124,6 +4135,11 @@ async function syncConnectorForUserImpl(
     syncErrors.push(...(evernoteFetch?.errors ?? []));
 
     if (conn.type === "finance_api") {
+      let committedCreated = 0;
+      let committedUpdated = 0;
+      let committedSkipped = 0;
+      let committedFailed = 0;
+      const committedErrors: string[] = [];
       await withDbTransaction(async () => {
         const pageSize = 500;
         for (
@@ -4141,19 +4157,24 @@ async function syncConnectorForUserImpl(
           )) {
             const record = sanitizeNormalizedSourceRecord(normalizedRecord);
             try {
-              const upsert = await upsertSourceRecord(
-                userId,
-                connectorId,
-                record,
-                { sanitized: true, touchSkipped: false },
+              // Nested Drizzle transactions use SAVEPOINTs. A malformed row
+              // rolls back only its own work, leaving the page transaction
+              // usable for the remaining records.
+              const upsert = await withDbTransaction(() =>
+                upsertSourceRecord(
+                  userId,
+                  connectorId,
+                  record,
+                  { sanitized: true, touchSkipped: false },
+                ),
               );
               const sourceRecordId = upsert.id;
               if (upsert.action === "created") {
-                recordsCreated++;
+                committedCreated++;
               } else if (upsert.action === "updated") {
-                recordsUpdated++;
+                committedUpdated++;
               } else {
-                recordsSkipped++;
+                committedSkipped++;
               }
               for (const ev of impl.mapEvidence(record)) {
                 evidencePage.push({
@@ -4168,8 +4189,8 @@ async function syncConnectorForUserImpl(
                 });
               }
             } catch (error) {
-              recordsFailed++;
-              syncErrors.push(
+              committedFailed++;
+              committedErrors.push(
                 error instanceof Error
                   ? error.message.slice(0, 300)
                   : "Finance source record upsert failed",
@@ -4179,6 +4200,14 @@ async function syncConnectorForUserImpl(
           await upsertEvidenceForSourceRecordsBatch(userId, evidencePage);
         }
       });
+      // Publish counters only after the outer transaction commits. A page
+      // evidence/watchdog failure rolls back every row and must not be reported
+      // as created or updated.
+      recordsCreated += committedCreated;
+      recordsUpdated += committedUpdated;
+      recordsSkipped += committedSkipped;
+      recordsFailed += committedFailed;
+      syncErrors.push(...committedErrors);
     } else {
       for (const normalizedRecord of normalized) {
         const record = sanitizeNormalizedSourceRecord(normalizedRecord);

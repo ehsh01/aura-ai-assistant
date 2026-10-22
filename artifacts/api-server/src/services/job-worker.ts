@@ -18,6 +18,7 @@ import {
   connectorSyncFromPayload,
   continueJob,
   deferJob,
+  dropStaleQueuedFinanceJobs,
   enexImportFromPayload,
   failJob,
   getJobForUser,
@@ -61,6 +62,10 @@ function scheduleExplicitJobResume(job: Pick<Job, "id" | "availableAt">): void {
 }
 
 async function resumeQueuedConnectorJobs(): Promise<void> {
+  const dropped = await dropStaleQueuedFinanceJobs();
+  if (dropped > 0) {
+    logger.warn({ dropped }, "Dropped stale queued finance sync jobs");
+  }
   const queued = await listQueuedJobsOfType(JOB_TYPE_CONNECTOR_SYNC);
   for (const job of queued) scheduleExplicitJobResume(job);
 }
@@ -317,6 +322,10 @@ async function pollOnce(): Promise<void> {
   try {
     ticks += 1;
     if (ticks % STALE_RECOVERY_EVERY_TICKS === 1) {
+      const dropped = await dropStaleQueuedFinanceJobs();
+      if (dropped > 0) {
+        logger.warn({ dropped }, "Dropped stale queued finance sync jobs");
+      }
       const recovered = await recoverStaleProcessingJobs();
       if (recovered > 0) {
         logger.info({ recovered }, "Re-queued stale processing jobs");

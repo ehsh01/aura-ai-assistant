@@ -55,6 +55,8 @@ type ActiveSessionPressureState = { sinceMs: number | null };
 const activeSessionPressureState: ActiveSessionPressureState = {
   sinceMs: null,
 };
+type ProbeErrorState = { consecutiveErrors: number };
+const probeErrorState: ProbeErrorState = { consecutiveErrors: 0 };
 
 export function recallActiveSessionPressureUnsafe(
   activeSessions: number | null,
@@ -70,6 +72,16 @@ export function recallActiveSessionPressureUnsafe(
   }
   state.sinceMs ??= nowMs;
   return nowMs - state.sinceMs >= watchdogActiveSessionSustainedMs();
+}
+
+export function watchdogProbeErrorsUnsafe(
+  probeErrored: boolean,
+  state: ProbeErrorState = probeErrorState,
+): boolean {
+  state.consecutiveErrors = probeErrored
+    ? state.consecutiveErrors + 1
+    : 0;
+  return state.consecutiveErrors >= 3;
 }
 
 export function watchdogMinMemoryMb(): number {
@@ -191,6 +203,7 @@ export async function checkEvernoteImportWatchdog(deps?: {
   requireMemoryMeasurement?: boolean;
   nowMs?: () => number;
   activeSessionPressureState?: ActiveSessionPressureState;
+  probeErrorState?: ProbeErrorState;
 }): Promise<EvernoteWatchdogStatus> {
   // Keep DB probes sequential. Parallel probes would create their own active
   // sessions and could trip the very pressure signal they are measuring.
@@ -242,6 +255,18 @@ export async function checkEvernoteImportWatchdog(deps?: {
     reasons.push(
       `Recall active DB sessions for ${watchdogActiveSessionSustainedMs()} ms: ${recallActiveDbSessions} >= ${watchdogActiveSessionLimit()}`,
     );
+  }
+  const dbProbeErrored =
+    selectOneLatencyMs == null ||
+    dbConnections == null ||
+    recallActiveDbSessions == null;
+  if (
+    watchdogProbeErrorsUnsafe(
+      dbProbeErrored,
+      deps?.probeErrorState ?? probeErrorState,
+    )
+  ) {
+    reasons.push("database load probes failed 3 consecutive times");
   }
   if (availableMemoryMb == null && deps?.requireMemoryMeasurement) {
     reasons.push("available memory could not be measured");

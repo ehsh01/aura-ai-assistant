@@ -38,6 +38,7 @@ vi.mock("./services/job-queue", () => ({
   connectorSyncFromPayload: vi.fn(),
   continueJob: vi.fn(),
   deferJob: vi.fn(),
+  dropStaleQueuedFinanceJobs: vi.fn().mockResolvedValue(0),
   enexImportFromPayload: vi.fn(),
   failJob: vi.fn(),
   getJobForUser: vi.fn(),
