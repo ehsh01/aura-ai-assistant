@@ -7,10 +7,7 @@ import {
   loadSyncedFinanceAggregate,
   type SyncedFinanceResult,
 } from "./finance-sync";
-import {
-  ensureUserFinanceFresh,
-  ON_DEMAND_SYNC_TIMEOUT_MS,
-} from "./finance-auto-sync";
+import { ensureUserFinanceFresh } from "./finance-auto-sync";
 import { listSubscriptionHeuristicsForUser, type SubscriptionHeuristic } from "./subscriptions";
 import { listTasksForUser, type RecallTaskDto } from "./tasks";
 import {
@@ -651,10 +648,7 @@ export async function buildTodayDashboardForUser(
 ): Promise<TodayDashboardResponse> {
   const now = new Date();
   const today = todayIso();
-  const financePromise = ensureUserFinanceFresh(userId, {
-    awaitSync: true,
-    timeoutMs: ON_DEMAND_SYNC_TIMEOUT_MS,
-  }).then(() =>
+  const financePromise = ensureUserFinanceFresh(userId).then(() =>
     loadSyncedFinanceAggregate(userId, "this month", today, {
       skipPayeeHint: true,
     }),

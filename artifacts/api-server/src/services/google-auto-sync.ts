@@ -1,21 +1,26 @@
 import {
   and,
+  desc,
   eq,
+  inArray,
   isNull,
   lt,
   ne,
   or,
   sql,
 } from "drizzle-orm";
-import { connectors, jobs } from "@workspace/db/schema";
+import { connectors, jobs, syncRuns } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { isEnabled } from "../lib/feature-flags";
 import { logger } from "../lib/logger";
 import { enqueueGoogleSyncForUser } from "./connectors";
+import { checkEvernoteImportWatchdog } from "./evernote-watchdog";
 import { nudgeJobWorker } from "./job-worker";
 
 const GOOGLE_STALE_MS = 6 * 60 * 60 * 1000;
 const GOOGLE_TICK_MS = 30 * 60 * 1000;
+const GOOGLE_FAILURE_BACKOFF_BASE_MS = 30 * 60 * 1000;
+const GOOGLE_FAILURE_BACKOFF_MAX_MS = 6 * 60 * 60 * 1000;
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let initialTimer: ReturnType<typeof setTimeout> | null = null;
@@ -23,6 +28,15 @@ let running = false;
 
 export function isGoogleAutoSyncEnabled(): boolean {
   return isEnabled("RECALL_GOOGLE_AUTO_SYNC_ENABLED", false);
+}
+
+export function googleFailureBackoffMs(consecutiveFailures: number): number {
+  if (consecutiveFailures <= 0) return 0;
+  return Math.min(
+    GOOGLE_FAILURE_BACKOFF_MAX_MS,
+    GOOGLE_FAILURE_BACKOFF_BASE_MS *
+      2 ** Math.min(consecutiveFailures - 1, 10),
+  );
 }
 
 /** Select and durably enqueue at most one stale Google connector. */
@@ -57,9 +71,51 @@ export async function syncStaleGoogleConnectors(): Promise<number> {
       // updatedAt is advanced on queue/failure, rotating stale connectors
       // fairly instead of letting one broken account monopolize every tick.
       .orderBy(connectors.updatedAt)
-      .limit(1);
-    const connector = rows[0];
+      .limit(20);
+    if (rows.length === 0) return 0;
+
+    const recentRuns = await db
+      .select({
+        connectorId: syncRuns.connectorId,
+        status: syncRuns.status,
+        completedAt: syncRuns.completedAt,
+        startedAt: syncRuns.startedAt,
+      })
+      .from(syncRuns)
+      .where(inArray(syncRuns.connectorId, rows.map((row) => row.id)))
+      .orderBy(desc(syncRuns.startedAt))
+      .limit(200);
+    const runsByConnector = new Map<string, typeof recentRuns>();
+    for (const run of recentRuns) {
+      const runs = runsByConnector.get(run.connectorId) ?? [];
+      runs.push(run);
+      runsByConnector.set(run.connectorId, runs);
+    }
+    const now = Date.now();
+    const connector = rows.find((row) => {
+      const runs = runsByConnector.get(row.id) ?? [];
+      let consecutiveFailures = 0;
+      for (const run of runs) {
+        if (run.status !== "failed") break;
+        consecutiveFailures += 1;
+      }
+      if (consecutiveFailures === 0) return true;
+      const lastFailureAt =
+        runs[0]?.completedAt?.getTime() ?? runs[0]?.startedAt.getTime() ?? 0;
+      return (
+        now - lastFailureAt >= googleFailureBackoffMs(consecutiveFailures)
+      );
+    });
     if (!connector) return 0;
+
+    const watchdog = await checkEvernoteImportWatchdog();
+    if (!watchdog.safe) {
+      logger.info(
+        { connectorId: connector.id, reasons: watchdog.reasons },
+        "Google auto-sync deferred by load watchdog",
+      );
+      return 0;
+    }
 
     const queued = await enqueueGoogleSyncForUser(
       connector.userId,

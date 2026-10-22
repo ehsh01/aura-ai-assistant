@@ -681,13 +681,12 @@ async function runQueryForUser(
     FINANCE_INTENT.test(retrievalQuestion);
 
   if (wantsFinance) {
-    // Accuracy first, but never block Ask forever on a large MyFamilyBudget sync.
+    // Ask uses a shorter cooldown but always answers from the last completed
+    // snapshot while a durable worker refresh runs.
     const financeFresh = await ensureUserFinanceFresh(userId, {
-      awaitSync: true,
       maxAgeMs: 5 * 60_000,
-      timeoutMs: 8_000,
     });
-    financeSyncTimedOut = Boolean(financeFresh.timedOut);
+    financeSyncTimedOut = financeFresh.updating;
     try {
       const connectors = await listConnectorsForUser(userId);
       const financeConn = connectors.find(

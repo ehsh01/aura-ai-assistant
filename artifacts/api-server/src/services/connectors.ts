@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, ne, sql } from "drizzle-orm";
 import {
   connectors,
   entityEmbeddings,
@@ -13,6 +13,7 @@ import {
   DatabaseAdvisoryLockBusyError,
   getDb,
   withDbAdvisoryLock,
+  withDbTransaction,
 } from "../lib/db";
 import { logger } from "../lib/logger";
 import {
@@ -66,7 +67,10 @@ import {
 } from "../connectors/ticket-email";
 import type { RecallConnector } from "../connectors/types";
 import { sanitizeNormalizedSourceRecord } from "../connectors/text-sanitize";
-import { upsertEvidenceForSourceRecord } from "./evidence";
+import {
+  upsertEvidenceForSourceRecord,
+  upsertEvidenceForSourceRecordsBatch,
+} from "./evidence";
 import { writeAuditLog } from "./audit";
 import {
   evictEntityEmbedding,
@@ -1733,7 +1737,7 @@ export async function upsertSourceRecord(
   userId: string,
   connectorId: string,
   record: Awaited<ReturnType<RecallConnector["normalize"]>>[number],
-  options?: { sanitized?: boolean },
+  options?: { sanitized?: boolean; touchSkipped?: boolean },
 ): Promise<{ id: string; action: "created" | "updated" | "skipped" }> {
   if (!options?.sanitized) record = sanitizeNormalizedSourceRecord(record);
   const existing = await getDb()
@@ -1760,6 +1764,9 @@ export async function upsertSourceRecord(
         record.recordMetadata,
       )
     ) {
+      if (options?.touchSkipped === false) {
+        return { id: existing[0].id, action: "skipped" };
+      }
       // Advance Evernote's incremental checkpoint without rebuilding FTS or
       // embeddings. The DB trigger preserves its existing search vector when
       // contentHash/title/text are unchanged.
@@ -2071,7 +2078,7 @@ export function googleSyncMaxRowsPerTick(): number {
     10,
   );
   if (!Number.isFinite(parsed)) return 500;
-  return Math.min(5_000, Math.max(1, parsed));
+  return Math.min(500, Math.max(1, parsed));
 }
 
 type GoogleRunMetadata = {
@@ -2325,6 +2332,136 @@ async function persistGoogleRecordsBatch(
   return { created, updated, failed, errors };
 }
 
+export async function enqueueFinanceSyncForUser(
+  userId: string,
+  connectorId: string,
+  options?: { scheduled?: boolean },
+): Promise<{
+  syncRunId: string;
+  jobId: string;
+  status: string;
+  deduped: boolean;
+}> {
+  return getDb().transaction(async (tx) => {
+    const lockResult = await tx.execute(
+      sql`SELECT pg_try_advisory_xact_lock(hashtextextended(${`finance-sync:${connectorId}`}, 0)) AS locked`,
+    );
+    const lockRows =
+      (
+        lockResult as unknown as {
+          rows?: Array<Record<string, unknown>>;
+        }
+      ).rows ??
+      (Array.isArray(lockResult)
+        ? (lockResult as unknown as Array<Record<string, unknown>>)
+        : []);
+    if (lockRows[0]?.locked !== true) {
+      const latest = await tx
+        .select({ id: syncRuns.id, status: syncRuns.status })
+        .from(syncRuns)
+        .where(eq(syncRuns.connectorId, connectorId))
+        .orderBy(desc(syncRuns.startedAt))
+        .limit(1);
+      return {
+        syncRunId: latest[0]?.id ?? `finance-snapshot:${connectorId}`,
+        jobId: latest[0]?.id ?? `finance-snapshot:${connectorId}`,
+        status: latest[0]?.status ?? "running",
+        deduped: true,
+      };
+    }
+    const connectorRows = await tx
+      .select()
+      .from(connectors)
+      .where(
+        and(
+          eq(connectors.id, connectorId),
+          eq(connectors.userId, userId),
+          eq(connectors.type, "finance_api"),
+        ),
+      )
+      .limit(1);
+    const connector = connectorRows[0];
+    if (!connector) throw new Error("Finance connector not found");
+    if (!connector.enabled) {
+      const error = new Error(
+        `${connector.name} is paused; enable it before syncing`,
+      ) as Error & { status?: number };
+      error.status = 409;
+      throw error;
+    }
+
+    const activeJobs = await tx
+      .select({ id: syncRuns.id, status: syncRuns.status })
+      .from(syncRuns)
+      .innerJoin(jobs, eq(jobs.id, syncRuns.id))
+      .where(
+        and(
+          eq(syncRuns.connectorId, connectorId),
+          inArray(jobs.status, ["queued", "processing"]),
+        ),
+      )
+      .orderBy(desc(syncRuns.startedAt))
+      .limit(1);
+    const recentRunning = await tx
+      .select({ id: syncRuns.id, status: syncRuns.status })
+      .from(syncRuns)
+      .where(
+        and(
+          eq(syncRuns.connectorId, connectorId),
+          eq(syncRuns.status, "running"),
+          gte(
+            syncRuns.startedAt,
+            financeRunningSyncCutoff(),
+          ),
+        ),
+      )
+      .orderBy(desc(syncRuns.startedAt))
+      .limit(1);
+    const active = activeJobs[0] ?? recentRunning[0];
+    if (active) {
+      return {
+        syncRunId: active.id,
+        jobId: active.id,
+        status: active.status,
+        deduped: true,
+      };
+    }
+
+    const syncRunId = newSyncRunId();
+    const now = new Date();
+    await tx.insert(syncRuns).values({
+      id: syncRunId,
+      userId,
+      connectorId,
+      status: "queued",
+      startedAt: now,
+      metadata: { financeScheduled: options?.scheduled === true },
+    });
+    await tx.insert(jobs).values({
+      id: syncRunId,
+      userId,
+      type: "connector_sync",
+      payload: { connectorId, syncRunId, connectorType: "finance_api" },
+      status: "queued",
+      attempts: 0,
+      maxAttempts: 3,
+      availableAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await tx
+      .update(connectors)
+      .set({ syncStatus: "syncing", updatedAt: now })
+      .where(eq(connectors.id, connectorId));
+    return {
+      syncRunId,
+      jobId: syncRunId,
+      status: "queued",
+      deduped: false,
+    };
+  });
+}
+
 export async function enqueueGoogleSyncForUser(
   userId: string,
   connectorId: string,
@@ -2480,6 +2617,7 @@ async function processGoogleSyncJobLocked(
   const maxRows = googleSyncMaxRowsPerTick();
 
   try {
+    await assertEvernoteImportSafe();
     let token = await ensureGoogleAccessToken(conn);
     let bundle = await fetchGoogleBundle(token.accessToken, token.mailbox, {
       since: typeof googleState.since === "string" ? googleState.since : null,
@@ -2679,6 +2817,15 @@ export async function processGoogleSyncJob(
     }
   },
   );
+}
+
+export async function processFinanceSyncJob(
+  userId: string,
+  connectorId: string,
+  syncRunId: string,
+): Promise<void> {
+  await assertEvernoteImportSafe();
+  await syncConnectorForUser(userId, connectorId, undefined, { syncRunId });
 }
 
 export async function enqueueEvernoteSyncForUser(
@@ -3723,12 +3870,154 @@ export async function failConnectorJobAndRun(
 
 export const failEvernoteSyncRun = failConnectorSyncRun;
 
+export type ConnectorSyncOutcome = {
+  syncRunId: string;
+  result: {
+    recordsFetched: number;
+    recordsCreated: number;
+    recordsUpdated: number;
+    recordsSkipped: number;
+    recordsDeferred: number;
+    recordsDeleted: number;
+    recordsFailed: number;
+  };
+};
+
+const FINANCE_RUNNING_BACKSTOP_MS = 15 * 60_000;
+
+export function financeRunningSyncCutoff(now = Date.now()): Date {
+  return new Date(now - FINANCE_RUNNING_BACKSTOP_MS);
+}
+
+async function skippedFinanceSyncOutcome(
+  connectorId: string,
+  executionSyncRunId: string | undefined,
+  reason: "advisory_lock" | "recent_running_sync",
+): Promise<ConnectorSyncOutcome> {
+  if (executionSyncRunId) {
+    const rows = await getDb()
+      .select({ metadata: syncRuns.metadata })
+      .from(syncRuns)
+      .where(eq(syncRuns.id, executionSyncRunId))
+      .limit(1);
+    await getDb()
+      .update(syncRuns)
+      .set({
+        status: "complete",
+        completedAt: new Date(),
+        metadata: {
+          ...(rows[0]?.metadata ?? {}),
+          skippedDueToOverlap: true,
+          overlapReason: reason,
+        },
+      })
+      .where(eq(syncRuns.id, executionSyncRunId));
+  }
+
+  const latestConditions = [
+    eq(syncRuns.connectorId, connectorId),
+    inArray(syncRuns.status, ["complete", "partial_success", "failed"]),
+  ];
+  if (executionSyncRunId) {
+    latestConditions.push(ne(syncRuns.id, executionSyncRunId));
+  }
+  const latest = await getDb()
+    .select()
+    .from(syncRuns)
+    .where(and(...latestConditions))
+    .orderBy(desc(syncRuns.startedAt))
+    .limit(1);
+  const row = latest[0];
+  return {
+    syncRunId: executionSyncRunId ?? row?.id ?? `finance-snapshot:${connectorId}`,
+    result: {
+      recordsFetched: row?.recordsFetched ?? 0,
+      recordsCreated: row?.recordsCreated ?? 0,
+      recordsUpdated: row?.recordsUpdated ?? 0,
+      recordsSkipped: row?.recordsSkipped ?? 0,
+      recordsDeferred: 0,
+      recordsDeleted: 0,
+      recordsFailed: row?.recordsFailed ?? 0,
+    },
+  };
+}
+
+async function hasRecentRunningFinanceSync(
+  connectorId: string,
+  excludeSyncRunId?: string,
+): Promise<boolean> {
+  const conditions = [
+    eq(syncRuns.connectorId, connectorId),
+    eq(syncRuns.status, "running"),
+    gte(
+      syncRuns.startedAt,
+      financeRunningSyncCutoff(),
+    ),
+  ];
+  if (excludeSyncRunId) conditions.push(ne(syncRuns.id, excludeSyncRunId));
+  const rows = await getDb()
+    .select({ id: syncRuns.id })
+    .from(syncRuns)
+    .where(and(...conditions))
+    .limit(1);
+  return rows.length > 0;
+}
+
 export async function syncConnectorForUser(
   userId: string,
   connectorId: string,
   payload?: { csvText?: string; records?: unknown[] },
   execution?: { syncRunId?: string },
-): Promise<{ syncRunId: string; result: { recordsFetched: number; recordsCreated: number; recordsUpdated: number; recordsSkipped: number; recordsDeferred: number; recordsDeleted: number; recordsFailed: number } }> {
+): Promise<ConnectorSyncOutcome> {
+  const connector = await getDb()
+    .select({ type: connectors.type })
+    .from(connectors)
+    .where(and(eq(connectors.id, connectorId), eq(connectors.userId, userId)))
+    .limit(1);
+  if (connector[0]?.type !== "finance_api") {
+    return syncConnectorForUserImpl(userId, connectorId, payload, execution);
+  }
+
+  try {
+    return await withDbAdvisoryLock(`finance-sync:${connectorId}`, async () => {
+      if (
+        await hasRecentRunningFinanceSync(
+          connectorId,
+          execution?.syncRunId,
+        )
+      ) {
+        logger.info(
+          { connectorId, syncRunId: execution?.syncRunId },
+          "Finance sync skipped because a recent run is still active",
+        );
+        return skippedFinanceSyncOutcome(
+          connectorId,
+          execution?.syncRunId,
+          "recent_running_sync",
+        );
+      }
+      return syncConnectorForUserImpl(userId, connectorId, payload, execution);
+    });
+  } catch (error) {
+    if (!(error instanceof DatabaseAdvisoryLockBusyError)) throw error;
+    logger.info(
+      { connectorId, syncRunId: execution?.syncRunId },
+      "Finance sync skipped because the connector lock is held",
+    );
+    return skippedFinanceSyncOutcome(
+      connectorId,
+      execution?.syncRunId,
+      "advisory_lock",
+    );
+  }
+}
+
+async function syncConnectorForUserImpl(
+  userId: string,
+  connectorId: string,
+  payload?: { csvText?: string; records?: unknown[] },
+  execution?: { syncRunId?: string },
+): Promise<ConnectorSyncOutcome> {
   const connRows = await getDb()
     .select()
     .from(connectors)
@@ -3834,43 +4123,101 @@ export async function syncConnectorForUser(
     recordsFailed = evernoteFetch?.recordsFailed ?? 0;
     syncErrors.push(...(evernoteFetch?.errors ?? []));
 
-    for (const normalizedRecord of normalized) {
-      const record = sanitizeNormalizedSourceRecord(normalizedRecord);
-      try {
-        const upsert = await upsertSourceRecord(
-          userId,
-          connectorId,
-          record,
-          { sanitized: true },
-        );
-        const sourceRecordId = upsert.id;
-        if (upsert.action === "created") {
-          recordsCreated++;
-        } else if (upsert.action === "updated") {
-          recordsUpdated++;
-        } else {
-          recordsSkipped++;
-          continue;
+    if (conn.type === "finance_api") {
+      await withDbTransaction(async () => {
+        const pageSize = 500;
+        for (
+          let pageStart = 0;
+          pageStart < normalized.length;
+          pageStart += pageSize
+        ) {
+          if (pageStart > 0) await assertEvernoteImportSafe();
+          const evidencePage: Parameters<
+            typeof upsertEvidenceForSourceRecordsBatch
+          >[1] = [];
+          for (const normalizedRecord of normalized.slice(
+            pageStart,
+            pageStart + pageSize,
+          )) {
+            const record = sanitizeNormalizedSourceRecord(normalizedRecord);
+            try {
+              const upsert = await upsertSourceRecord(
+                userId,
+                connectorId,
+                record,
+                { sanitized: true, touchSkipped: false },
+              );
+              const sourceRecordId = upsert.id;
+              if (upsert.action === "created") {
+                recordsCreated++;
+              } else if (upsert.action === "updated") {
+                recordsUpdated++;
+              } else {
+                recordsSkipped++;
+              }
+              for (const ev of impl.mapEvidence(record)) {
+                evidencePage.push({
+                  entityType: "source_record",
+                  entityId: sourceRecordId,
+                  claimType: ev.claimType,
+                  sourceRecordId,
+                  evidenceText: ev.evidenceText ?? null,
+                  url: ev.url ?? null,
+                  rowNumber: ev.rowNumber ?? null,
+                  insertOnly: upsert.action === "skipped",
+                });
+              }
+            } catch (error) {
+              recordsFailed++;
+              syncErrors.push(
+                error instanceof Error
+                  ? error.message.slice(0, 300)
+                  : "Finance source record upsert failed",
+              );
+            }
+          }
+          await upsertEvidenceForSourceRecordsBatch(userId, evidencePage);
         }
+      });
+    } else {
+      for (const normalizedRecord of normalized) {
+        const record = sanitizeNormalizedSourceRecord(normalizedRecord);
+        try {
+          const upsert = await upsertSourceRecord(
+            userId,
+            connectorId,
+            record,
+            { sanitized: true },
+          );
+          const sourceRecordId = upsert.id;
+          if (upsert.action === "created") {
+            recordsCreated++;
+          } else if (upsert.action === "updated") {
+            recordsUpdated++;
+          } else {
+            recordsSkipped++;
+            continue;
+          }
 
-        for (const ev of impl.mapEvidence(record)) {
-          await upsertEvidenceForSourceRecord(userId, {
-            entityType: "source_record",
-            entityId: sourceRecordId,
-            claimType: ev.claimType,
-            sourceRecordId,
-            evidenceText: ev.evidenceText ?? null,
-            url: ev.url ?? null,
-            rowNumber: ev.rowNumber ?? null,
-          });
+          for (const ev of impl.mapEvidence(record)) {
+            await upsertEvidenceForSourceRecord(userId, {
+              entityType: "source_record",
+              entityId: sourceRecordId,
+              claimType: ev.claimType,
+              sourceRecordId,
+              evidenceText: ev.evidenceText ?? null,
+              url: ev.url ?? null,
+              rowNumber: ev.rowNumber ?? null,
+            });
+          }
+        } catch (error) {
+          recordsFailed++;
+          syncErrors.push(
+            error instanceof Error
+              ? error.message.slice(0, 300)
+              : "Source record upsert failed",
+          );
         }
-      } catch (error) {
-        recordsFailed++;
-        syncErrors.push(
-          error instanceof Error
-            ? error.message.slice(0, 300)
-            : "Source record upsert failed",
-        );
       }
     }
 

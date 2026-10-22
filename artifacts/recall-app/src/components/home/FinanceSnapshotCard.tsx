@@ -8,6 +8,7 @@ type FinanceSnapshot = {
   topPayee: { payee: string; total: number } | null;
   href: string;
   needsSync: boolean;
+  updating: boolean;
 };
 
 function formatUsd(value: number): string {
@@ -29,6 +30,7 @@ export function FinanceSnapshotCard({ finance }: { finance: FinanceSnapshot | nu
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium uppercase tracking-wider text-emerald-300/70">
             Spending · {finance.rangeLabel}
+            {finance.updating ? " · Updating…" : ""}
           </p>
           {finance.needsSync ? (
             <p className="mt-1 text-sm text-white/60">

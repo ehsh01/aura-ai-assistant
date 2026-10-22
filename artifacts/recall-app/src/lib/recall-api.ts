@@ -1345,6 +1345,7 @@ export interface HomeBriefingResponse {
     topPayee: { payee: string; total: number } | null;
     href: string;
     needsSync: boolean;
+    updating: boolean;
   } | null;
   review: BriefingReview;
   morning: MorningBriefing;

@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  connectorRow: null as { id: string; lastSyncAt: Date | null } | null,
-  syncConnectorForUser: vi.fn(),
+  connectorRow: null as {
+    id: string;
+    lastSyncAt: Date | null;
+    syncStatus: string;
+  } | null,
+  enqueueFinanceSyncForUser: vi.fn(),
+  nudgeJobWorker: vi.fn(),
 }));
 
 vi.mock("../lib/db", () => ({
@@ -18,30 +23,41 @@ vi.mock("../lib/db", () => ({
 }));
 
 vi.mock("./connectors", () => ({
-  syncConnectorForUser: mocks.syncConnectorForUser,
+  enqueueFinanceSyncForUser: mocks.enqueueFinanceSyncForUser,
+}));
+
+vi.mock("./job-worker", () => ({
+  nudgeJobWorker: mocks.nudgeJobWorker,
+}));
+
+vi.mock("./evernote-watchdog", () => ({
+  checkEvernoteImportWatchdog: vi.fn(async () => ({
+    safe: true,
+    reasons: [],
+  })),
 }));
 
 import {
   ensureUserFinanceFresh,
-  ON_DEMAND_SYNC_TIMEOUT_MS,
+  FINANCE_ON_DEMAND_COOLDOWN_MS,
 } from "./finance-auto-sync";
 
-/**
- * In-flight syncs are coalesced per user in module state, so each test needs a
- * distinct user or a hung sync from one test would be handed to the next.
- */
-let userSeq = 0;
-let USER = "";
+const USER = "user-1";
 
 beforeEach(() => {
-  mocks.syncConnectorForUser.mockReset();
-  mocks.connectorRow = { id: "conn-1", lastSyncAt: null };
-  userSeq += 1;
-  USER = `user-${userSeq}`;
-});
-
-afterEach(() => {
-  vi.useRealTimers();
+  mocks.enqueueFinanceSyncForUser.mockReset();
+  mocks.nudgeJobWorker.mockReset();
+  mocks.connectorRow = {
+    id: "conn-1",
+    lastSyncAt: null,
+    syncStatus: "connected",
+  };
+  mocks.enqueueFinanceSyncForUser.mockResolvedValue({
+    syncRunId: "run-1",
+    jobId: "run-1",
+    status: "queued",
+    deduped: false,
+  });
 });
 
 describe("ensureUserFinanceFresh", () => {
@@ -50,69 +66,45 @@ describe("ensureUserFinanceFresh", () => {
     await expect(ensureUserFinanceFresh(USER)).resolves.toEqual({
       synced: false,
       skipped: true,
+      updating: false,
     });
-    expect(mocks.syncConnectorForUser).not.toHaveBeenCalled();
+    expect(mocks.enqueueFinanceSyncForUser).not.toHaveBeenCalled();
   });
 
-  it("skips a sync that ran inside the cooldown window", async () => {
-    mocks.connectorRow = { id: "conn-1", lastSyncAt: new Date() };
+  it("uses a 20-minute default cooldown instead of refreshing on every app open", async () => {
+    mocks.connectorRow = {
+      id: "conn-1",
+      lastSyncAt: new Date(Date.now() - FINANCE_ON_DEMAND_COOLDOWN_MS + 1_000),
+      syncStatus: "connected",
+    };
     const result = await ensureUserFinanceFresh(USER);
-    expect(result.skipped).toBe(true);
-    expect(mocks.syncConnectorForUser).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      synced: false,
+      skipped: true,
+      updating: false,
+    });
+    expect(mocks.enqueueFinanceSyncForUser).not.toHaveBeenCalled();
   });
 
-  it("gives up waiting on a slow sync instead of holding the request open", async () => {
-    vi.useFakeTimers();
-    // Never resolves: models MyFamilyBudget taking minutes, which previously
-    // stacked requests until the process ran out of heap.
-    mocks.syncConnectorForUser.mockReturnValue(new Promise(() => {}));
-
-    const pending = ensureUserFinanceFresh(USER, {
-      awaitSync: true,
-      timeoutMs: ON_DEMAND_SYNC_TIMEOUT_MS,
-    });
-    await vi.advanceTimersByTimeAsync(ON_DEMAND_SYNC_TIMEOUT_MS + 10);
-
-    await expect(pending).resolves.toEqual({
+  it("queues stale on-demand work and returns the snapshot immediately", async () => {
+    await expect(ensureUserFinanceFresh(USER)).resolves.toEqual({
       synced: false,
       skipped: false,
-      timedOut: true,
+      updating: true,
     });
+    expect(mocks.enqueueFinanceSyncForUser).toHaveBeenCalledWith(USER, "conn-1");
+    expect(mocks.nudgeJobWorker).toHaveBeenCalledWith("run-1");
   });
 
-  it("returns normally when the sync finishes inside the timeout", async () => {
-    mocks.syncConnectorForUser.mockResolvedValue(undefined);
+  it("supports the five-minute finance Ask cooldown", async () => {
+    mocks.connectorRow = {
+      id: "conn-1",
+      lastSyncAt: new Date(Date.now() - 4 * 60_000),
+      syncStatus: "connected",
+    };
     await expect(
-      ensureUserFinanceFresh(USER, {
-        awaitSync: true,
-        timeoutMs: ON_DEMAND_SYNC_TIMEOUT_MS,
-      }),
-    ).resolves.toEqual({ synced: true, skipped: false });
-  });
-
-  it("coalesces concurrent refreshes into a single upstream sync", async () => {
-    let release: () => void = () => {};
-    mocks.syncConnectorForUser.mockReturnValue(
-      new Promise<void>((resolve) => {
-        release = resolve;
-      }),
-    );
-
-    const all = Promise.all([
-      ensureUserFinanceFresh(USER, { maxAgeMs: 0 }),
-      ensureUserFinanceFresh(USER, { maxAgeMs: 0 }),
-      ensureUserFinanceFresh(USER, { maxAgeMs: 0 }),
-    ]);
-    release();
-    await all;
-
-    expect(mocks.syncConnectorForUser).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports failure without throwing so callers can use the last snapshot", async () => {
-    mocks.syncConnectorForUser.mockRejectedValue(new Error("upstream down"));
-    await expect(
-      ensureUserFinanceFresh(USER, { maxAgeMs: 0, awaitSync: true }),
-    ).resolves.toEqual({ synced: false, skipped: false });
+      ensureUserFinanceFresh(USER, { maxAgeMs: 5 * 60_000 }),
+    ).resolves.toMatchObject({ skipped: true });
+    expect(mocks.enqueueFinanceSyncForUser).not.toHaveBeenCalled();
   });
 });

@@ -18,6 +18,16 @@ import {
   watchdogMinMemoryMb,
 } from "./evernote-watchdog";
 
+function checkWatchdog(
+  deps: Parameters<typeof checkEvernoteImportWatchdog>[0] = {},
+) {
+  return checkEvernoteImportWatchdog({
+    selectOneLatencyMs: async () => 1,
+    recallActiveDbSessions: async () => 0,
+    ...deps,
+  });
+}
+
 beforeEach(() => {
   mocks.execute.mockReset();
 });
@@ -39,7 +49,7 @@ describe("Evernote import watchdog", () => {
   it("counts only client backends connected to the current database", async () => {
     mocks.execute.mockResolvedValue({ rows: [{ count: 7 }] });
 
-    const status = await checkEvernoteImportWatchdog({
+    const status = await checkWatchdog({
       availableMemoryMb: async () => 1_000,
       healthUrls: [],
     });
@@ -59,7 +69,7 @@ describe("Evernote import watchdog", () => {
   it("pauses at or above the DB connection limit and passes below it", async () => {
     process.env.EVERNOTE_WATCHDOG_DB_CONNECTIONS = "15";
     const checkConnections = (dbConnections: number) =>
-      checkEvernoteImportWatchdog({
+      checkWatchdog({
         dbConnections: async () => dbConnections,
         availableMemoryMb: async () => 1_000,
         healthUrls: [],
@@ -79,6 +89,37 @@ describe("Evernote import watchdog", () => {
     });
   });
 
+  it("pauses on slow DB probes and sustained active Recall sessions", async () => {
+    const pressure = { sinceMs: null as number | null };
+    const first = await checkEvernoteImportWatchdog({
+      dbConnections: async () => 1,
+      selectOneLatencyMs: async () => 251,
+      recallActiveDbSessions: async () => 2,
+      availableMemoryMb: async () => 1_000,
+      healthUrls: [],
+      nowMs: () => 1_000,
+      activeSessionPressureState: pressure,
+    });
+    expect(first.reasons).toContain("SELECT 1 latency 251.0 ms > 250 ms");
+    expect(first.reasons.some((reason) => reason.includes("2 >= 2"))).toBe(
+      false,
+    );
+
+    const status = await checkEvernoteImportWatchdog({
+      dbConnections: async () => 1,
+      selectOneLatencyMs: async () => 1,
+      recallActiveDbSessions: async () => 2,
+      availableMemoryMb: async () => 1_000,
+      healthUrls: [],
+      nowMs: () => 31_000,
+      activeSessionPressureState: pressure,
+    });
+    expect(status.safe).toBe(false);
+    expect(status.reasons.some((reason) => reason.includes("2 >= 2"))).toBe(
+      true,
+    );
+  });
+
   it("parses Linux MemAvailable", () => {
     expect(
       parseMemAvailableMb("MemTotal:       2048000 kB\nMemAvailable:    153600 kB\n"),
@@ -88,7 +129,7 @@ describe("Evernote import watchdog", () => {
   it("pauses for DB, RAM, or sibling health pressure and resumes when clear", async () => {
     process.env.EVERNOTE_WATCHDOG_DB_CONNECTIONS = "22";
     process.env.EVERNOTE_WATCHDOG_MIN_MEM_MB = "150";
-    const paused = await checkEvernoteImportWatchdog({
+    const paused = await checkWatchdog({
       dbConnections: async () => 22,
       availableMemoryMb: async () => 149,
       healthUrls: ["https://sibling.test/health"],
@@ -97,7 +138,7 @@ describe("Evernote import watchdog", () => {
     expect(paused.safe).toBe(false);
     expect(paused.reasons).toHaveLength(3);
 
-    const resumed = await checkEvernoteImportWatchdog({
+    const resumed = await checkWatchdog({
       dbConnections: async () => 21,
       availableMemoryMb: async () => 151,
       healthUrls: ["https://sibling.test/health"],
@@ -111,7 +152,7 @@ describe("Evernote import watchdog", () => {
   });
 
   it("keeps working when pg_stat_activity or procfs is unavailable", async () => {
-    const status = await checkEvernoteImportWatchdog({
+    const status = await checkWatchdog({
       dbConnections: async () => null,
       availableMemoryMb: async () => null,
       healthUrls: [],
@@ -122,7 +163,7 @@ describe("Evernote import watchdog", () => {
   it("requires max(200MB, 2.5x file size) for attachment work", async () => {
     expect(requiredMemoryMbForBytes(20 * 1024 * 1024)).toBe(200);
     expect(requiredMemoryMbForBytes(100 * 1024 * 1024)).toBe(250);
-    const paused = await checkEvernoteImportWatchdog({
+    const paused = await checkWatchdog({
       dbConnections: async () => 1,
       availableMemoryMb: async () => 199,
       healthUrls: [],
@@ -134,7 +175,7 @@ describe("Evernote import watchdog", () => {
   });
 
   it("fails closed when attachment memory cannot be measured", async () => {
-    const status = await checkEvernoteImportWatchdog({
+    const status = await checkWatchdog({
       dbConnections: async () => 1,
       availableMemoryMb: async () => null,
       healthUrls: [],

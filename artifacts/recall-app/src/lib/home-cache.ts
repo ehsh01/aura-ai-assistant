@@ -13,6 +13,7 @@ type Listener = (home: HomeBriefingResponse) => void;
 let cache: HomeBriefingResponse | null = null;
 let cacheAt = 0;
 let inflight: Promise<HomeBriefingResponse> | null = null;
+let generation = 0;
 const listeners = new Set<Listener>();
 
 function notify(home: HomeBriefingResponse): void {
@@ -29,20 +30,32 @@ export function getCachedHome(): HomeBriefingResponse | null {
   return cache;
 }
 
+/** Prevent one authenticated account from replaying another account's Home. */
+export function clearHomeCache(): void {
+  generation += 1;
+  cache = null;
+  cacheAt = 0;
+  inflight = null;
+}
+
 export async function loadHome(opts?: { force?: boolean }): Promise<HomeBriefingResponse> {
   if (!opts?.force && cache && Date.now() - cacheAt < FRESH_MS) return cache;
   if (inflight) return inflight;
-  inflight = fetchHome()
+  const requestGeneration = generation;
+  const request = fetchHome()
     .then((home) => {
-      cache = home;
-      cacheAt = Date.now();
-      notify(home);
+      if (generation === requestGeneration) {
+        cache = home;
+        cacheAt = Date.now();
+        notify(home);
+      }
       return home;
     })
     .finally(() => {
-      inflight = null;
+      if (inflight === request) inflight = null;
     });
-  return inflight;
+  inflight = request;
+  return request;
 }
 
 /** Subscribe to briefing updates; replays the cached value immediately. */

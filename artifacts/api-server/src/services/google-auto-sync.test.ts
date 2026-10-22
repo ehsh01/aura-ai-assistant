@@ -2,6 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   rows: [] as Array<{ id: string; userId: string }>,
+  runRows: [] as Array<{
+    connectorId: string;
+    status: string;
+    completedAt: Date | null;
+    startedAt: Date;
+  }>,
   limit: vi.fn(),
   enqueueGoogleSyncForUser: vi.fn(),
   nudgeJobWorker: vi.fn(),
@@ -9,13 +15,17 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../lib/db", () => ({
   getDb: () => ({
-    select: () => ({
+    select: (selection?: Record<string, unknown>) => ({
       from: () => ({
         where: () => ({
           orderBy: () => ({
             limit: (limit: number) => {
               mocks.limit(limit);
-              return Promise.resolve(mocks.rows.slice(0, limit));
+              return Promise.resolve(
+                selection?.connectorId
+                  ? mocks.runRows.slice(0, limit)
+                  : mocks.rows.slice(0, limit),
+              );
             },
           }),
         }),
@@ -37,11 +47,13 @@ import {
   startGoogleAutoSync,
   stopGoogleAutoSync,
   syncStaleGoogleConnectors,
+  googleFailureBackoffMs,
 } from "./google-auto-sync";
 
 beforeEach(() => {
   delete process.env.RECALL_GOOGLE_AUTO_SYNC_ENABLED;
   mocks.rows = [];
+  mocks.runRows = [];
   mocks.limit.mockReset();
   mocks.enqueueGoogleSyncForUser.mockReset();
   mocks.nudgeJobWorker.mockReset();
@@ -76,7 +88,7 @@ describe("Google auto-sync scheduling", () => {
     });
 
     await expect(syncStaleGoogleConnectors()).resolves.toBe(1);
-    expect(mocks.limit).toHaveBeenCalledWith(1);
+    expect(mocks.limit).toHaveBeenCalledWith(20);
     expect(mocks.enqueueGoogleSyncForUser).toHaveBeenCalledTimes(1);
     expect(mocks.enqueueGoogleSyncForUser).toHaveBeenCalledWith(
       "user-1",
@@ -84,6 +96,13 @@ describe("Google auto-sync scheduling", () => {
       { scheduled: true },
     );
     expect(mocks.nudgeJobWorker).toHaveBeenCalledWith("run-1");
+  });
+
+  it("backs off repeated failures exponentially", () => {
+    expect(googleFailureBackoffMs(1)).toBe(30 * 60_000);
+    expect(googleFailureBackoffMs(2)).toBe(60 * 60_000);
+    expect(googleFailureBackoffMs(3)).toBe(2 * 60 * 60_000);
+    expect(googleFailureBackoffMs(20)).toBe(6 * 60 * 60_000);
   });
 
   it("does not nudge a duplicate active job", async () => {

@@ -21,10 +21,7 @@ import {
 import { listProjectsForUser, type RecallProjectDto } from "./projects";
 import { listTasksForUser, type RecallTaskDto } from "./tasks";
 import { loadSyncedFinanceAggregate } from "./finance-sync";
-import {
-  ensureUserFinanceFresh,
-  ON_DEMAND_SYNC_TIMEOUT_MS,
-} from "./finance-auto-sync";
+import { ensureUserFinanceFresh } from "./finance-auto-sync";
 import { listWaitingOnForUser } from "./waiting-on";
 import { listWaitingItemsForUser, type WaitingItemDto } from "./waiting-items";
 import {
@@ -207,6 +204,8 @@ export interface FinanceSnapshot {
   href: string;
   /** True when a finance connector exists but no synced rows yet. */
   needsSync: boolean;
+  /** True while a durable worker refresh is queued or running. */
+  updating: boolean;
 }
 
 export interface HomeBriefingResponse {
@@ -641,13 +640,10 @@ function fallbackSummary(attentionCount: number, parts: string[]): string {
 
 /** This-month finance snapshot from already-synced source_records. */
 async function buildFinanceSnapshot(userId: string, today: string): Promise<FinanceSnapshot | null> {
-  // Refresh from MyFamilyBudget before reading (await so Home shows fresh
-  // totals), but never let a slow sync hold Today open — it fell back to the
-  // last snapshot only after the client had already given up.
-  await ensureUserFinanceFresh(userId, {
-    awaitSync: true,
-    timeoutMs: ON_DEMAND_SYNC_TIMEOUT_MS,
-  });
+  // Queue a worker refresh when stale, then immediately serve the last
+  // completed snapshot so Home never consumes an API-process DB connection for
+  // the external sync.
+  const refresh = await ensureUserFinanceFresh(userId);
   const synced = await loadSyncedFinanceAggregate(userId, "this month", today);
   if (!synced) return null;
   const top = synced.finance.topPayees[0] ?? null;
@@ -661,6 +657,7 @@ async function buildFinanceSnapshot(userId: string, today: string): Promise<Fina
       : null,
     href: "/connectors",
     needsSync: synced.needsSync,
+    updating: refresh.updating,
   };
 }
 
@@ -927,6 +924,52 @@ export async function buildHomeBriefing(
   }
 
   return extra;
+}
+
+const HOME_CACHE_MS = 60_000;
+const homeBriefingCache = new Map<
+  string,
+  {
+    value: HomeBriefingResponse | null;
+    expiresAt: number;
+    inflight: Promise<HomeBriefingResponse> | null;
+  }
+>();
+
+/** Per-user server cache for the expensive GET /api/home aggregation. */
+export async function getCachedHomeBriefing(
+  userId: string,
+  userName: string,
+): Promise<HomeBriefingResponse> {
+  const now = Date.now();
+  const cached = homeBriefingCache.get(userId);
+  if (cached?.value && cached.expiresAt > now) return cached.value;
+  if (cached?.inflight) return cached.inflight;
+
+  const entry = cached ?? { value: null, expiresAt: 0, inflight: null };
+  const inflight = buildHomeBriefing(userId, userName)
+    .then((value) => {
+      entry.value = value;
+      entry.expiresAt = Date.now() + HOME_CACHE_MS;
+      return value;
+    })
+    .finally(() => {
+      entry.inflight = null;
+    });
+  entry.inflight = inflight;
+  if (!homeBriefingCache.has(userId) && homeBriefingCache.size >= 500) {
+    for (const [cachedUserId, candidate] of homeBriefingCache) {
+      if (!candidate.inflight && candidate.expiresAt <= now) {
+        homeBriefingCache.delete(cachedUserId);
+      }
+    }
+    if (homeBriefingCache.size >= 500) {
+      const oldestUserId = homeBriefingCache.keys().next().value;
+      if (oldestUserId) homeBriefingCache.delete(oldestUserId);
+    }
+  }
+  homeBriefingCache.set(userId, entry);
+  return inflight;
 }
 
 /** Orchestration for GET /checkin — all queries reused from existing services. */

@@ -17,6 +17,7 @@ import {
 } from "@workspace/api-client-react";
 import { isAppPath, normalizeBrowserPath, pathnameOnly } from "@/lib/app-path";
 import { startCaptureQueueSync } from "@/lib/capture-queue";
+import { clearHomeCache } from "@/lib/home-cache";
 import { toast } from "@/hooks/use-toast";
 
 interface AuthContextValue {
@@ -78,6 +79,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(res.user);
       })
       .catch(() => {
+        clearHomeCache();
         setUser(null);
       })
       .finally(() => setIsLoading(false));
@@ -102,6 +104,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(
     async (data: LoginRequest) => {
       const res = await apiLogin(data);
+      clearHomeCache();
       setUser(res.user);
       normalizeBrowserPath();
       setLocation("/", { replace: true });
@@ -112,6 +115,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const register = useCallback(
     async (data: RegisterRequest) => {
       const res = await apiRegister(data);
+      clearHomeCache();
       setUser(res.user);
       normalizeBrowserPath();
       setLocation("/", { replace: true });
@@ -120,6 +124,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const logout = useCallback(() => {
+    clearHomeCache();
     void logoutOnServer().finally(() => {
       setUser(null);
       setLocation("/", { replace: true });

@@ -2,7 +2,10 @@ import { Router, type IRouter } from "express";
 import { requireAuth } from "../middleware/auth";
 import { buildTodayForUser } from "../services/today";
 import { buildTodayDashboardForUser } from "../services/today-dashboard";
-import { buildHomeBriefing, getEveningCheckinForUser } from "../services/home-briefing";
+import {
+  getCachedHomeBriefing,
+  getEveningCheckinForUser,
+} from "../services/home-briefing";
 import { getWeeklyDigestForUser } from "../services/weekly-digest";
 
 const router: IRouter = Router();
@@ -28,7 +31,11 @@ router.get("/today/dashboard", async (req, res, next) => {
 
 router.get("/home", async (req, res, next) => {
   try {
-    const data = await buildHomeBriefing(req.user!.id, req.user!.name);
+    const data = await getCachedHomeBriefing(req.user!.id, req.user!.name);
+    // The service has a per-user 60s cache. Keep personalized data out of the
+    // browser HTTP cache so account switching cannot reuse another user's Home.
+    res.set("Cache-Control", "private, no-store");
+    res.vary("Cookie");
     res.json(data);
   } catch (err) {
     next(err);
