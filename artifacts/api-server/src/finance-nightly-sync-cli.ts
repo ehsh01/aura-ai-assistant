@@ -2,6 +2,19 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+export const NIGHTLY_FINANCE_SKIPPED_EXIT_CODE = 75;
+
+export type NightlyFinanceSyncSummary = {
+  completed: number;
+  skipped: number;
+};
+
+export function nightlyFinanceExitCode(
+  summary: NightlyFinanceSyncSummary,
+): number {
+  return summary.skipped > 0 ? NIGHTLY_FINANCE_SKIPPED_EXIT_CODE : 0;
+}
+
 export function loadFinanceCliEnv(
   envPath = fileURLToPath(new URL("../.env", import.meta.url)),
 ): void {
@@ -35,7 +48,7 @@ function connectorIdArg(argv: string[]): string | null {
 
 export async function runNightlyFinanceSync(
   requestedConnectorId?: string | null,
-): Promise<number> {
+): Promise<NightlyFinanceSyncSummary> {
   loadFinanceCliEnv();
   requestedConnectorId ??= connectorIdArg(process.argv.slice(2));
   const [{ and, eq }, { connectors }, { getDb }, connectorService, watchdog] =
@@ -64,22 +77,36 @@ export async function runNightlyFinanceSync(
   }
 
   let completed = 0;
+  let skipped = 0;
   for (const row of rows) {
     await watchdog.assertEvernoteImportSafe();
     const outcome = await connectorService.syncConnectorForUser(
       row.userId,
       row.id,
     );
+    if (outcome.skipped) {
+      skipped += 1;
+      console.error(
+        JSON.stringify({
+          status: "skipped",
+          reason: outcome.skipReason ?? "finance_sync_overlap",
+          connectorId: row.id,
+          syncRunId: outcome.syncRunId,
+        }),
+      );
+      continue;
+    }
     completed += 1;
     console.log(
       JSON.stringify({
+        status: "completed",
         connectorId: row.id,
         syncRunId: outcome.syncRunId,
         result: outcome.result,
       }),
     );
   }
-  return completed;
+  return { completed, skipped };
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
@@ -87,8 +114,9 @@ const isMain = invokedPath === fileURLToPath(import.meta.url);
 
 if (isMain) {
   runNightlyFinanceSync()
-    .then((completed) => {
-      console.log(JSON.stringify({ completed }));
+    .then((summary) => {
+      console.log(JSON.stringify(summary));
+      process.exitCode = nightlyFinanceExitCode(summary);
     })
     .catch((error) => {
       console.error(

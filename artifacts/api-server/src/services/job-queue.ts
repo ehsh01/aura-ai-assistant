@@ -217,7 +217,7 @@ export async function claimNextJobOfTypes(workerId: string, allowedTypes?: reado
         AND available_at <= now()
         AND NOT (
           type = ${JOB_TYPE_CONNECTOR_SYNC}
-          AND payload->>'connectorType' = 'finance_api'
+          AND COALESCE(payload->>'connectorType', '') = 'finance_api'
           AND created_at < ${new Date(Date.now() - MAX_QUEUED_FINANCE_JOB_AGE_MS)}
         )
         ${typeFilter}
@@ -249,7 +249,7 @@ export async function claimJobById(workerId: string, jobId: string): Promise<Job
       AND available_at <= now()
       AND NOT (
         type = ${JOB_TYPE_CONNECTOR_SYNC}
-        AND payload->>'connectorType' = 'finance_api'
+        AND COALESCE(payload->>'connectorType', '') = 'finance_api'
         AND created_at < ${new Date(Date.now() - MAX_QUEUED_FINANCE_JOB_AGE_MS)}
       )
     RETURNING *

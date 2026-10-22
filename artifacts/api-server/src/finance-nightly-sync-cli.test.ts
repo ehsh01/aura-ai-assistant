@@ -2,7 +2,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadFinanceCliEnv } from "./finance-nightly-sync-cli";
+import {
+  NIGHTLY_FINANCE_SKIPPED_EXIT_CODE,
+  loadFinanceCliEnv,
+  nightlyFinanceExitCode,
+} from "./finance-nightly-sync-cli";
 
 const touched = ["DATABASE_URL", "FINANCE_API_KEY", "FINANCE_CONNECTOR_ID"];
 const original = Object.fromEntries(
@@ -39,5 +43,13 @@ describe("nightly finance CLI environment", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it("uses a distinct temporary-failure exit code when overlap skips work", () => {
+    expect(nightlyFinanceExitCode({ completed: 1, skipped: 0 })).toBe(0);
+    expect(nightlyFinanceExitCode({ completed: 0, skipped: 1 })).toBe(
+      NIGHTLY_FINANCE_SKIPPED_EXIT_CODE,
+    );
+    expect(NIGHTLY_FINANCE_SKIPPED_EXIT_CODE).toBe(75);
   });
 });

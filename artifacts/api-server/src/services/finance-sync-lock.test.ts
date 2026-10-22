@@ -62,6 +62,8 @@ describe("finance sync advisory lock", () => {
       syncConnectorForUser("user-1", "finance-1"),
     ).resolves.toEqual({
       syncRunId: "last-run",
+      skipped: true,
+      skipReason: "advisory_lock",
       result: {
         recordsFetched: 10,
         recordsCreated: 1,

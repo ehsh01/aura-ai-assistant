@@ -3883,6 +3883,8 @@ export const failEvernoteSyncRun = failConnectorSyncRun;
 
 export type ConnectorSyncOutcome = {
   syncRunId: string;
+  skipped?: boolean;
+  skipReason?: "advisory_lock" | "recent_running_sync";
   result: {
     recordsFetched: number;
     recordsCreated: number;
@@ -3941,6 +3943,8 @@ async function skippedFinanceSyncOutcome(
   const row = latest[0];
   return {
     syncRunId: executionSyncRunId ?? row?.id ?? `finance-snapshot:${connectorId}`,
+    skipped: true,
+    skipReason: reason,
     result: {
       recordsFetched: row?.recordsFetched ?? 0,
       recordsCreated: row?.recordsCreated ?? 0,

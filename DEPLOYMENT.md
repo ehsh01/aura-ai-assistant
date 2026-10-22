@@ -223,6 +223,10 @@ SECRETS_ENCRYPTION_KEY=...   # required so refresh tokens are encrypted at rest
 
 5. Restart the API (`systemctl restart recall-api` or your usual process). Users then click **Connect Google** on `/connectors`.
 
+Google durable sync pages are hard-capped at 500 rows per worker tick. The
+`RECALL_GOOGLE_SYNC_MAX_ROWS_PER_TICK` setting may lower that limit but values
+above 500 are clamped to 500 to protect the shared PostgreSQL cluster.
+
 ## Homey Pro connector (OAuth + Flow webhooks)
 
 Homey decides *when* something is important (Flows). Recall surfaces those alerts on Today and can read/control devices via Ask.
@@ -300,9 +304,10 @@ APP_PUBLIC_URL=https://recall-app.net
    hard ceiling); bytes are held only in memory and discarded.
 6. The worker auto-pauses at 22 DB connections, below 200MB available RAM, or
    when a configured sibling health URL fails. It resumes from its persisted
-   cursor when the gates recover. Incremental sync runs every 15 minutes after
-   the first import. Scheduled full reconciliation and image OCR run only from
-   1–5 AM America/New_York by default and are load-checked before work.
+   cursor when the gates recover. Incremental sync defaults to every 60 minutes
+   by day and 30 minutes in the night window. Scheduled full reconciliation and
+   image OCR run only from 1–5 AM America/New_York by default and are
+   load-checked before work.
 
 The existing OAuth1/EDAM and personal developer-token implementations remain
 disabled optional fallbacks:
@@ -337,12 +342,15 @@ batching, watchdog, and 15-minute running-row backstop as worker-triggered
 finance syncs. Repoint any older out-of-repo 02:00 script to this command:
 
 ```bash
-0 2 * * * cd /var/www/recall-app && pnpm --filter @workspace/api-server finance:nightly-sync >> /var/log/recall-finance-sync.log 2>&1
+0 2 * * * /usr/bin/node /var/www/recall-app/artifacts/api-server/dist/finance-nightly-sync-cli.mjs >> /var/log/recall-finance-sync.log 2>&1
 ```
 
 By default it syncs every enabled finance connector sequentially. Set
-`FINANCE_CONNECTOR_ID` or append `-- --connector-id <id>` to target one.
+`FINANCE_CONNECTOR_ID` or append `--connector-id <id>` to target one.
 `pnpm run build:api` must have completed before the cron runs.
+If another sync holds the connector lock, the CLI logs a JSON record with
+`"status":"skipped"` and exits with code **75**. Other failures exit with code
+1; a completed run exits 0.
 
 ## Database backups
 
