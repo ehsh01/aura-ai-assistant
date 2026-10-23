@@ -561,6 +561,43 @@ export function isEvernoteMcpSchemaValidationError(error: unknown): boolean {
   );
 }
 
+export type EvernoteTaskSearchStatus = "open" | "completed";
+
+const EVERNOTE_COMPLETED_TASKS_FROM = "2000-01-01T00:00:00.000Z";
+
+export async function searchEvernoteTasksPage(
+  client: EvernoteReadOnlyToolCaller,
+  status: EvernoteTaskSearchStatus,
+  cursor: string | null,
+): Promise<JsonRecord> {
+  return callEvernoteReadTool(client, "search_tasks", {
+    assigneeScope: "all",
+    status,
+    limit: 50,
+    ...(status === "completed"
+      ? { dueDate: { from: EVERNOTE_COMPLETED_TASKS_FROM } }
+      : {}),
+    ...(cursor ? { cursor } : {}),
+  });
+}
+
+export async function runEvernoteTasksPhaseFailSoft<T>(
+  operation: () => Promise<T>,
+): Promise<{ degraded: false; value: T } | { degraded: true; error: string }> {
+  try {
+    return { degraded: false, value: await operation() };
+  } catch (error) {
+    if (!isEvernoteMcpSchemaValidationError(error)) throw error;
+    const message =
+      error instanceof Error
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : "Unknown Evernote task schema validation error";
+    return { degraded: true, error: message.slice(0, 1_000) };
+  }
+}
+
 export async function getEvernoteAttachmentDownloadUrl(
   client: EvernoteReadOnlyToolCaller,
   input: { noteId: string; hash: string },
@@ -910,14 +947,14 @@ export async function processEvernoteTaskPage(input: {
   client: EvernoteReadOnlyToolCaller;
   userId: string;
   connectorId: string;
+  status: EvernoteTaskSearchStatus;
   cursor: string | null;
 }): Promise<{ complete: boolean; nextCursor: string | null; count: number }> {
-  const result = await callEvernoteReadTool(input.client, "search_tasks", {
-    assigneeScope: "all",
-    maxResults: 50,
-    ...(input.cursor ? { cursor: input.cursor } : {}),
-    completedAfter: "2000-01-01T00:00:00.000Z",
-  });
+  const result = await searchEvernoteTasksPage(
+    input.client,
+    input.status,
+    input.cursor,
+  );
   const tasks = firstArray(result, ["tasks", "results", "items"]).map(row);
   for (const rawTask of tasks) {
     const task = sanitizeConnectorJson(rawTask);
@@ -946,11 +983,11 @@ export async function processEvernoteTaskPage(input: {
   }
   const nextCursor = sanitizeConnectorJson(
     text(result.nextCursor) ??
-    text(result.cursor) ??
-    text(row(result.pageInfo).nextCursor),
+      text(result.cursor) ??
+      text(row(result.pageInfo).nextCursor),
   );
   return {
-    complete: !nextCursor || nextCursor === input.cursor || tasks.length === 0,
+    complete: !nextCursor || nextCursor === input.cursor,
     nextCursor,
     count: tasks.length,
   };
