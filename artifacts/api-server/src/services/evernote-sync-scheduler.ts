@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import {
   connectors,
   evernoteSyncState,
@@ -21,6 +21,8 @@ import {
 import { checkEvernoteImportWatchdog } from "./evernote-watchdog";
 
 const SCHEDULER_TICK_MS = 60_000;
+const FULL_RECONCILE_FAILURE_BACKOFF_MS = 60 * 60_000;
+const FULL_RECONCILE_FAILURE_BACKOFF_MAX_MS = 24 * 60 * 60_000;
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
 
@@ -32,6 +34,77 @@ function envMinutes(name: string, fallback: number): number {
 }
 
 export type EvernoteScheduleDecision = "full" | "incremental" | null;
+
+type EvernoteReconcileOutcome = {
+  status: string;
+  startedAt: Date;
+  completedAt: Date | null;
+  errorMessage: string | null;
+  metadata: Record<string, unknown> | null;
+};
+
+function reconcileFailureKey(message: string | null): string | null {
+  const normalized = message?.trim().replace(/\s+/g, " ").toLowerCase();
+  if (!normalized) return null;
+  const errorCodes = [
+    ...normalized.matchAll(
+      /\b(http(?: status)?|status|code)\s*[:=]?\s*([a-z][a-z0-9_-]*|\d{3})\b/g,
+    ),
+  ].map((match) => `${match[1]}:${match[2]}`);
+  const signature = normalized
+    .replace(
+      /\b\d{4}-\d{2}-\d{2}(?:t\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:z|[+-]\d{2}:\d{2}))?\b/g,
+      "<timestamp>",
+    )
+    .replace(
+      /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/g,
+      "<id>",
+    )
+    .replace(
+      /\b(request|trace|run|job|sync)[ _-]?id\s*[:=]?\s*["'`]?[a-z0-9][a-z0-9._:-]*["'`]?/g,
+      "$1 id <id>",
+    )
+    .replace(/\b(?:request|trace|run|job|sync)-[a-z0-9_-]{6,}\b/g, "<id>")
+    .replace(/\b[0-9a-f]{16,}\b/g, "<id>")
+    .replace(/\b\d+(?:\.\d+)?\b/g, "<n>")
+    .replace(/\s+/g, " ")
+    .trim();
+  return `${[...new Set(errorCodes)].sort().join(",")}|${signature}`;
+}
+
+export function repeatedFullReconcileFailureBackoffUntil(
+  outcomes: EvernoteReconcileOutcome[],
+  baseBackoffMs = FULL_RECONCILE_FAILURE_BACKOFF_MS,
+): Date | null {
+  const fullOutcomes = outcomes
+    .filter((outcome) => outcome.metadata?.evernoteSyncMode !== "incremental")
+    .sort(
+      (left, right) => right.startedAt.getTime() - left.startedAt.getTime(),
+    );
+  const latest = fullOutcomes[0];
+  if (!latest || latest.status !== "failed") return null;
+  const failureKey = reconcileFailureKey(latest.errorMessage);
+  if (!failureKey) return null;
+
+  let identicalFailures = 0;
+  for (const outcome of fullOutcomes) {
+    if (
+      outcome.status !== "failed" ||
+      reconcileFailureKey(outcome.errorMessage) !== failureKey
+    ) {
+      break;
+    }
+    identicalFailures += 1;
+  }
+  if (identicalFailures < 2) return null;
+
+  const delay = Math.min(
+    baseBackoffMs * 2 ** Math.min(identicalFailures - 2, 8),
+    FULL_RECONCILE_FAILURE_BACKOFF_MAX_MS,
+  );
+  const failedAt = latest.completedAt ?? latest.startedAt;
+  return new Date(failedAt.getTime() + delay);
+}
 
 export async function scheduledEvernoteLoadIsSafe(
   check: typeof checkEvernoteImportWatchdog = checkEvernoteImportWatchdog,
@@ -48,19 +121,25 @@ export function evernoteScheduleDecision(input: {
   autoFullImportEnabled: boolean;
   inNightWindow: boolean;
   attachmentBackfillInProgress?: boolean;
+  fullReconcileBackoffUntil?: Date | null;
   incrementalMinutes: number;
   fullReconcileMinutes: number;
 }): EvernoteScheduleDecision {
   const { now } = input;
+  const fullReconcileBackedOff =
+    input.fullReconcileBackoffUntil != null &&
+    input.fullReconcileBackoffUntil.getTime() > now.getTime();
   const hasCompletedSync = Boolean(
     input.lastSyncAt ||
     input.lastFullReconcileAt ||
-    input.attachmentBackfillInProgress,
+    input.attachmentBackfillInProgress ||
+    input.fullReconcileBackoffUntil,
   );
   if (!hasCompletedSync) {
     return input.autoFullImportEnabled &&
       input.fullReconcileEnabled &&
-      input.inNightWindow
+      input.inNightWindow &&
+      !fullReconcileBackedOff
       ? "full"
       : null;
   }
@@ -68,6 +147,7 @@ export function evernoteScheduleDecision(input: {
     !input.attachmentBackfillInProgress &&
     input.fullReconcileEnabled &&
     input.inNightWindow &&
+    !fullReconcileBackedOff &&
     (!input.lastFullReconcileAt ||
       now.getTime() - input.lastFullReconcileAt.getTime() >=
         input.fullReconcileMinutes * 60_000)
@@ -121,15 +201,39 @@ export async function scheduleDueEvernoteSyncs(
   let queued = 0;
   for (const { connector, state } of rows) {
     const inNightWindow = isEvernoteNightWindow(now);
+    const fullReconcileEnabled = isEvernoteFullReconcileEnabled();
+    let fullReconcileBackoffUntil: Date | null = null;
+    if (inNightWindow && fullReconcileEnabled) {
+      const recentOutcomes = await getDb()
+        .select({
+          status: syncRuns.status,
+          startedAt: syncRuns.startedAt,
+          completedAt: syncRuns.completedAt,
+          errorMessage: syncRuns.errorMessage,
+          metadata: syncRuns.metadata,
+        })
+        .from(syncRuns)
+        .where(
+          and(
+            eq(syncRuns.connectorId, connector.id),
+            inArray(syncRuns.status, ["complete", "partial_success", "failed"]),
+          ),
+        )
+        .orderBy(desc(syncRuns.startedAt))
+        .limit(10);
+      fullReconcileBackoffUntil =
+        repeatedFullReconcileFailureBackoffUntil(recentOutcomes);
+    }
     const mode = evernoteScheduleDecision({
       now,
       lastSyncAt: connector.lastSyncAt,
       lastFullReconcileAt: state?.lastFullReconcileAt ?? null,
       incrementalEnabled: isEvernoteIncrementalSyncEnabled(),
-      fullReconcileEnabled: isEvernoteFullReconcileEnabled(),
+      fullReconcileEnabled,
       autoFullImportEnabled: isEvernoteAutoFullImportEnabled(),
       inNightWindow,
       attachmentBackfillInProgress: attachmentBackfills.has(connector.id),
+      fullReconcileBackoffUntil,
       incrementalMinutes: envMinutes("EVERNOTE_INCREMENTAL_SYNC_MINUTES", 15),
       fullReconcileMinutes: envMinutes(
         "EVERNOTE_FULL_RECONCILE_MINUTES",

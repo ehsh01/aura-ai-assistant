@@ -7,10 +7,13 @@ import {
   interruptedAttachmentResetOutcome,
   isAllowedEvernoteAttachmentUrl,
   isEvernoteMcpSchemaValidationError,
+  runEvernoteTasksPhaseFailSoft,
+  searchEvernoteTasksPage,
   shouldResetEvernoteAttachmentFailure,
 } from "./evernote-full-sync";
 import {
   evernoteScheduleDecision,
+  repeatedFullReconcileFailureBackoffUntil,
   scheduledEvernoteLoadIsSafe,
 } from "./evernote-sync-scheduler";
 import {
@@ -155,8 +158,92 @@ describe("Evernote attachment URL boundary", () => {
       ),
     ).toBe(true);
     expect(
+      isEvernoteMcpSchemaValidationError(new Error("Required: noteId")),
+    ).toBe(true);
+    expect(
       isEvernoteMcpSchemaValidationError(new Error("503 backend read error")),
     ).toBe(false);
+    expect(
+      isEvernoteMcpSchemaValidationError(
+        new Error("Authentication required: reconnect Evernote"),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("Evernote task sync", () => {
+  it("uses the current paged search_tasks schema for open and completed tasks", async () => {
+    const calls: unknown[] = [];
+    const client = {
+      async callTool(input: unknown) {
+        calls.push(input);
+        return { structuredContent: { tasks: [], nextCursor: null } };
+      },
+    };
+    const previousPace = process.env.EVERNOTE_MCP_PACE_MS;
+    process.env.EVERNOTE_MCP_PACE_MS = "0";
+    try {
+      await searchEvernoteTasksPage(client, "open", null);
+      await searchEvernoteTasksPage(client, "completed", "completed-page-2");
+    } finally {
+      if (previousPace == null) delete process.env.EVERNOTE_MCP_PACE_MS;
+      else process.env.EVERNOTE_MCP_PACE_MS = previousPace;
+    }
+
+    expect(calls).toEqual([
+      {
+        name: "search_tasks",
+        arguments: {
+          assigneeScope: "all",
+          status: "open",
+          limit: 50,
+        },
+      },
+      {
+        name: "search_tasks",
+        arguments: {
+          assigneeScope: "all",
+          status: "completed",
+          limit: 50,
+          dueDate: { from: "2000-01-01T00:00:00.000Z" },
+          cursor: "completed-page-2",
+        },
+      },
+    ]);
+  });
+
+  it("degrades task schema failures without swallowing operational failures", async () => {
+    await expect(
+      runEvernoteTasksPhaseFailSoft(async () => {
+        throw new Error(
+          "Unrecognized key(s) in object: 'maxResults', 'completedAfter'",
+        );
+      }),
+    ).resolves.toEqual({
+      degraded: true,
+      error: "Unrecognized key(s) in object: 'maxResults', 'completedAfter'",
+    });
+
+    await expect(
+      runEvernoteTasksPhaseFailSoft(async () => {
+        throw new Error("503 backend read error");
+      }),
+    ).rejects.toThrow("503 backend read error");
+    await expect(
+      runEvernoteTasksPhaseFailSoft(async () => {
+        throw new Error("Authentication required: reconnect Evernote");
+      }),
+    ).rejects.toThrow("Authentication required");
+  });
+
+  it("keeps a task-degraded reconciliation in partial success", () => {
+    const implementation = readFileSync(
+      new URL("./connectors.ts", import.meta.url),
+      "utf8",
+    );
+    expect(implementation).toMatch(
+      /recordsFailed > 0 \|\|\s*!report\.pass \|\|\s*metadata\.evernoteTasksDegraded === true\s*\?\s*"partial_success"/,
+    );
   });
 });
 
@@ -274,6 +361,66 @@ describe("Evernote unattended schedule", () => {
         unhealthyUrls: [],
       })),
     ).toBe(true);
+  });
+
+  it("backs off repeated identical full failures while incremental notes continue", () => {
+    const now = new Date("2026-10-23T08:00:00.000Z");
+    const outcomes = [
+      {
+        status: "failed",
+        startedAt: new Date("2026-10-23T07:30:00.000Z"),
+        completedAt: new Date("2026-10-23T07:35:00.000Z"),
+        errorMessage: "search_tasks schema validation failed",
+        metadata: { evernoteSyncMode: "full" },
+      },
+      {
+        status: "failed",
+        startedAt: new Date("2026-10-23T07:00:00.000Z"),
+        completedAt: new Date("2026-10-23T07:05:00.000Z"),
+        errorMessage: " search_tasks   schema validation failed ",
+        metadata: { evernoteSyncMode: "full" },
+      },
+    ];
+    const backoffUntil = repeatedFullReconcileFailureBackoffUntil(outcomes);
+
+    expect(backoffUntil?.toISOString()).toBe("2026-10-23T08:35:00.000Z");
+    expect(
+      evernoteScheduleDecision({
+        now,
+        lastSyncAt: new Date("2026-10-23T07:00:00.000Z"),
+        lastFullReconcileAt: new Date("2026-10-22T01:00:00.000Z"),
+        incrementalEnabled: true,
+        fullReconcileEnabled: true,
+        autoFullImportEnabled: false,
+        inNightWindow: true,
+        fullReconcileBackoffUntil: backoffUntil,
+        incrementalMinutes: 15,
+        fullReconcileMinutes: 1440,
+      }),
+    ).toBe("incremental");
+  });
+
+  it("matches equivalent full failures after removing volatile details", () => {
+    const backoffUntil = repeatedFullReconcileFailureBackoffUntil([
+      {
+        status: "failed",
+        startedAt: new Date("2026-10-23T07:30:00.000Z"),
+        completedAt: new Date("2026-10-23T07:35:00.000Z"),
+        errorMessage:
+          "Run sync-1792271256921-4s1bym failed at 2026-10-23T07:34:59.321Z after 47 records: backend read error",
+        metadata: { evernoteSyncMode: "full" },
+      },
+      {
+        status: "failed",
+        startedAt: new Date("2026-10-23T07:00:00.000Z"),
+        completedAt: new Date("2026-10-23T07:05:00.000Z"),
+        errorMessage:
+          "Run sync-1792269450123-9z8yxw failed at 2026-10-23T07:04:51.004Z after 12 records: backend read error",
+        metadata: { evernoteSyncMode: "full" },
+      },
+    ]);
+
+    expect(backoffUntil?.toISOString()).toBe("2026-10-23T08:35:00.000Z");
   });
 });
 

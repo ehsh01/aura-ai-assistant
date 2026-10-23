@@ -556,9 +556,78 @@ export function isEvernoteMcpSchemaValidationError(error: unknown): boolean {
       : typeof error === "string"
         ? error
         : JSON.stringify(error ?? "");
-  return /\b(?:required|unrecognized key|invalid[_ ]type|invalid (?:input|arguments?)|schema validation|validation error|zod|expected (?:string|number|object|array))\b/i.test(
-    message,
-  );
+  if (
+    /\b(?:authentication|authorization|reauth\w*|oauth|credentials?|access token|refresh token|sign[ -]?in|login|permission|forbidden|unauthorized)\b/i.test(
+      message,
+    )
+  ) {
+    return false;
+  }
+  const parameterName = String.raw`(?:key(?:\(s\)|s)?|field(?:\(s\)|s)?|parameter(?:\(s\)|s)?|argument(?:\(s\)|s)?|path)`;
+  const parameterEnd = String.raw`(?=[\s:,.]|$)`;
+  return [
+    /\bschema validation\b/i,
+    /\bzod(?:error)?\b/i,
+    new RegExp(
+      String.raw`\b(?:unrecognized|unknown|unexpected|unsupported)\s+${parameterName}${parameterEnd}`,
+      "i",
+    ),
+    /\binvalid[_ ](?:arguments?|parameters?)\b/i,
+    new RegExp(
+      String.raw`\binvalid[_ ]type\b[^\n]*\b${parameterName}${parameterEnd}`,
+      "i",
+    ),
+    /(?:^|[;\n])\s*required\s*:\s*["'`]?[a-z_][\w.-]*/i,
+    new RegExp(
+      String.raw`\b${parameterName}${parameterEnd}[^\n]*\bis required\b`,
+      "i",
+    ),
+    new RegExp(
+      String.raw`\bvalidation error\b[^\n]*\b${parameterName}${parameterEnd}|\b${parameterName}${parameterEnd}[^\n]*\bvalidation error\b`,
+      "i",
+    ),
+    new RegExp(
+      String.raw`\bexpected (?:string|number|object|array|boolean)\b[^\n]*\b(?:for|at)\b[^\n]*\b${parameterName}${parameterEnd}`,
+      "i",
+    ),
+  ].some((pattern) => pattern.test(message));
+}
+
+export type EvernoteTaskSearchStatus = "open" | "completed";
+
+const EVERNOTE_COMPLETED_TASKS_FROM = "2000-01-01T00:00:00.000Z";
+
+export async function searchEvernoteTasksPage(
+  client: EvernoteReadOnlyToolCaller,
+  status: EvernoteTaskSearchStatus,
+  cursor: string | null,
+): Promise<JsonRecord> {
+  return callEvernoteReadTool(client, "search_tasks", {
+    assigneeScope: "all",
+    status,
+    limit: 50,
+    ...(status === "completed"
+      ? { dueDate: { from: EVERNOTE_COMPLETED_TASKS_FROM } }
+      : {}),
+    ...(cursor ? { cursor } : {}),
+  });
+}
+
+export async function runEvernoteTasksPhaseFailSoft<T>(
+  operation: () => Promise<T>,
+): Promise<{ degraded: false; value: T } | { degraded: true; error: string }> {
+  try {
+    return { degraded: false, value: await operation() };
+  } catch (error) {
+    if (!isEvernoteMcpSchemaValidationError(error)) throw error;
+    const message =
+      error instanceof Error
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : "Unknown Evernote task schema validation error";
+    return { degraded: true, error: message.slice(0, 1_000) };
+  }
 }
 
 export async function getEvernoteAttachmentDownloadUrl(
@@ -910,14 +979,14 @@ export async function processEvernoteTaskPage(input: {
   client: EvernoteReadOnlyToolCaller;
   userId: string;
   connectorId: string;
+  status: EvernoteTaskSearchStatus;
   cursor: string | null;
 }): Promise<{ complete: boolean; nextCursor: string | null; count: number }> {
-  const result = await callEvernoteReadTool(input.client, "search_tasks", {
-    assigneeScope: "all",
-    maxResults: 50,
-    ...(input.cursor ? { cursor: input.cursor } : {}),
-    completedAfter: "2000-01-01T00:00:00.000Z",
-  });
+  const result = await searchEvernoteTasksPage(
+    input.client,
+    input.status,
+    input.cursor,
+  );
   const tasks = firstArray(result, ["tasks", "results", "items"]).map(row);
   for (const rawTask of tasks) {
     const task = sanitizeConnectorJson(rawTask);
@@ -946,11 +1015,11 @@ export async function processEvernoteTaskPage(input: {
   }
   const nextCursor = sanitizeConnectorJson(
     text(result.nextCursor) ??
-    text(result.cursor) ??
-    text(row(result.pageInfo).nextCursor),
+      text(result.cursor) ??
+      text(row(result.pageInfo).nextCursor),
   );
   return {
-    complete: !nextCursor || nextCursor === input.cursor || tasks.length === 0,
+    complete: !nextCursor || nextCursor === input.cursor,
     nextCursor,
     count: tasks.length,
   };

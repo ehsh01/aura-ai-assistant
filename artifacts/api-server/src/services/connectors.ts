@@ -114,6 +114,7 @@ import {
   processEvernoteTaskPage,
   processOneEvernoteAttachment,
   resetInterruptedEvernoteAttachments,
+  runEvernoteTasksPhaseFailSoft,
   syncEvernoteReminderFlags,
   verifyOneEvernoteNotebook,
 } from "./evernote-full-sync";
@@ -3116,7 +3117,12 @@ async function processEvernoteSyncJobLocked(
       await heartbeat?.();
       return false;
     }
-    metadata = { ...metadata, evernotePhase: "tasks", evernoteTaskCursor: null };
+    metadata = {
+      ...metadata,
+      evernotePhase: "tasks",
+      evernoteTaskStatus: "open",
+      evernoteTaskCursor: null,
+    };
     await getDb()
       .update(syncRuns)
       .set({ metadata })
@@ -3124,21 +3130,65 @@ async function processEvernoteSyncJobLocked(
     return false;
   }
   if (phase === "tasks") {
+    const taskStatus =
+      metadata.evernoteTaskStatus === "completed" ? "completed" : "open";
     const cursor =
       typeof metadata.evernoteTaskCursor === "string"
         ? metadata.evernoteTaskCursor
         : null;
-    const processed = await withEvernoteMcpClient(
-      settings,
-      (client) =>
-        processEvernoteTaskPage({
-          client,
-          userId,
-          connectorId,
-          cursor,
-        }),
-      persistMcpState,
+    const taskPhase = await runEvernoteTasksPhaseFailSoft(() =>
+      withEvernoteMcpClient(
+        settings,
+        (client) =>
+          processEvernoteTaskPage({
+            client,
+            userId,
+            connectorId,
+            status: taskStatus,
+            cursor,
+          }),
+        persistMcpState,
+      ),
     );
+    if (taskPhase.degraded) {
+      const taskError =
+        `Evernote search_tasks schema validation failed: ${taskPhase.error}`.slice(
+          0,
+          1_000,
+        );
+      errors = [...errors, taskError.slice(0, 300)].slice(-100);
+      metadata = {
+        ...metadata,
+        evernotePhase: "verification",
+        evernoteVerificationOffset: 0,
+        evernoteTaskCursor: null,
+        evernoteTasksDegraded: true,
+        evernoteTasksError: taskError,
+        errors,
+      };
+      await getDb()
+        .update(syncRuns)
+        .set({
+          metadata,
+          sourceErrors: {
+            ...(run.sourceErrors ?? {}),
+            tasks: taskError,
+          },
+        })
+        .where(eq(syncRuns.id, syncRunId));
+      logger.warn(
+        {
+          connectorId,
+          syncRunId,
+          taskStatus,
+          error: taskError,
+        },
+        "Evernote tasks phase degraded; continuing note reconciliation",
+      );
+      await heartbeat?.();
+      return false;
+    }
+    const processed = taskPhase.value;
     await getDb()
       .update(connectors)
       .set({
@@ -3146,12 +3196,20 @@ async function processEvernoteSyncJobLocked(
         updatedAt: new Date(),
       })
       .where(eq(connectors.id, connectorId));
+    const completedStatus = processed.value.complete;
+    const tasksComplete = completedStatus && taskStatus === "completed";
     metadata = {
       ...metadata,
-      evernoteTaskCursor: processed.value.nextCursor,
+      evernoteTaskCursor: completedStatus
+        ? null
+        : processed.value.nextCursor,
+      evernoteTaskStatus:
+        completedStatus && taskStatus === "open" ? "completed" : taskStatus,
       evernoteTasksImported:
         (Number(metadata.evernoteTasksImported) || 0) + processed.value.count,
-      evernotePhase: processed.value.complete ? "verification" : "tasks",
+      evernoteTasksComplete: tasksComplete,
+      evernoteTasksDegraded: false,
+      evernotePhase: tasksComplete ? "verification" : "tasks",
       evernoteVerificationOffset: 0,
     };
     await getDb()
@@ -3244,13 +3302,19 @@ async function processEvernoteSyncJobLocked(
             ? trashCheckpoint.expectedTotal
             : null,
         expectedTaskCount:
+          metadata.evernoteTasksDegraded !== true &&
           typeof metadata.evernoteTasksImported === "number"
             ? metadata.evernoteTasksImported
             : null,
       }));
     const recordsSkipped = Number(run.recordsSkipped);
     const recordsFailed = Number(run.recordsFailed);
-    const status = recordsFailed > 0 || !report.pass ? "partial_success" : "complete";
+    const status =
+      recordsFailed > 0 ||
+      !report.pass ||
+      metadata.evernoteTasksDegraded === true
+        ? "partial_success"
+        : "complete";
     metadata = { ...metadata, evernotePhase: "complete", verification: report };
     await getDb()
       .update(syncRuns)
