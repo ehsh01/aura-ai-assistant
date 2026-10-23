@@ -45,7 +45,31 @@ type EvernoteReconcileOutcome = {
 
 function reconcileFailureKey(message: string | null): string | null {
   const normalized = message?.trim().replace(/\s+/g, " ").toLowerCase();
-  return normalized || null;
+  if (!normalized) return null;
+  const errorCodes = [
+    ...normalized.matchAll(
+      /\b(http(?: status)?|status|code)\s*[:=]?\s*([a-z][a-z0-9_-]*|\d{3})\b/g,
+    ),
+  ].map((match) => `${match[1]}:${match[2]}`);
+  const signature = normalized
+    .replace(
+      /\b\d{4}-\d{2}-\d{2}(?:t\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:z|[+-]\d{2}:\d{2}))?\b/g,
+      "<timestamp>",
+    )
+    .replace(
+      /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/g,
+      "<id>",
+    )
+    .replace(
+      /\b(request|trace|run|job|sync)[ _-]?id\s*[:=]?\s*["'`]?[a-z0-9][a-z0-9._:-]*["'`]?/g,
+      "$1 id <id>",
+    )
+    .replace(/\b(?:request|trace|run|job|sync)-[a-z0-9_-]{6,}\b/g, "<id>")
+    .replace(/\b[0-9a-f]{16,}\b/g, "<id>")
+    .replace(/\b\d+(?:\.\d+)?\b/g, "<n>")
+    .replace(/\s+/g, " ")
+    .trim();
+  return `${[...new Set(errorCodes)].sort().join(",")}|${signature}`;
 }
 
 export function repeatedFullReconcileFailureBackoffUntil(

@@ -158,7 +158,15 @@ describe("Evernote attachment URL boundary", () => {
       ),
     ).toBe(true);
     expect(
+      isEvernoteMcpSchemaValidationError(new Error("Required: noteId")),
+    ).toBe(true);
+    expect(
       isEvernoteMcpSchemaValidationError(new Error("503 backend read error")),
+    ).toBe(false);
+    expect(
+      isEvernoteMcpSchemaValidationError(
+        new Error("Authentication required: reconnect Evernote"),
+      ),
     ).toBe(false);
   });
 });
@@ -221,6 +229,21 @@ describe("Evernote task sync", () => {
         throw new Error("503 backend read error");
       }),
     ).rejects.toThrow("503 backend read error");
+    await expect(
+      runEvernoteTasksPhaseFailSoft(async () => {
+        throw new Error("Authentication required: reconnect Evernote");
+      }),
+    ).rejects.toThrow("Authentication required");
+  });
+
+  it("keeps a task-degraded reconciliation in partial success", () => {
+    const implementation = readFileSync(
+      new URL("./connectors.ts", import.meta.url),
+      "utf8",
+    );
+    expect(implementation).toMatch(
+      /recordsFailed > 0 \|\|\s*!report\.pass \|\|\s*metadata\.evernoteTasksDegraded === true\s*\?\s*"partial_success"/,
+    );
   });
 });
 
@@ -375,6 +398,29 @@ describe("Evernote unattended schedule", () => {
         fullReconcileMinutes: 1440,
       }),
     ).toBe("incremental");
+  });
+
+  it("matches equivalent full failures after removing volatile details", () => {
+    const backoffUntil = repeatedFullReconcileFailureBackoffUntil([
+      {
+        status: "failed",
+        startedAt: new Date("2026-10-23T07:30:00.000Z"),
+        completedAt: new Date("2026-10-23T07:35:00.000Z"),
+        errorMessage:
+          "Run sync-1792271256921-4s1bym failed at 2026-10-23T07:34:59.321Z after 47 records: backend read error",
+        metadata: { evernoteSyncMode: "full" },
+      },
+      {
+        status: "failed",
+        startedAt: new Date("2026-10-23T07:00:00.000Z"),
+        completedAt: new Date("2026-10-23T07:05:00.000Z"),
+        errorMessage:
+          "Run sync-1792269450123-9z8yxw failed at 2026-10-23T07:04:51.004Z after 12 records: backend read error",
+        metadata: { evernoteSyncMode: "full" },
+      },
+    ]);
+
+    expect(backoffUntil?.toISOString()).toBe("2026-10-23T08:35:00.000Z");
   });
 });
 

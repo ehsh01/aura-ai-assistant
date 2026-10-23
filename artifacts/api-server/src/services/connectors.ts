@@ -3309,7 +3309,12 @@ async function processEvernoteSyncJobLocked(
       }));
     const recordsSkipped = Number(run.recordsSkipped);
     const recordsFailed = Number(run.recordsFailed);
-    const status = recordsFailed > 0 || !report.pass ? "partial_success" : "complete";
+    const status =
+      recordsFailed > 0 ||
+      !report.pass ||
+      metadata.evernoteTasksDegraded === true
+        ? "partial_success"
+        : "complete";
     metadata = { ...metadata, evernotePhase: "complete", verification: report };
     await getDb()
       .update(syncRuns)

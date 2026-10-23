@@ -556,9 +556,41 @@ export function isEvernoteMcpSchemaValidationError(error: unknown): boolean {
       : typeof error === "string"
         ? error
         : JSON.stringify(error ?? "");
-  return /\b(?:required|unrecognized key|invalid[_ ]type|invalid (?:input|arguments?)|schema validation|validation error|zod|expected (?:string|number|object|array))\b/i.test(
-    message,
-  );
+  if (
+    /\b(?:authentication|authorization|reauth\w*|oauth|credentials?|access token|refresh token|sign[ -]?in|login|permission|forbidden|unauthorized)\b/i.test(
+      message,
+    )
+  ) {
+    return false;
+  }
+  const parameterName = String.raw`(?:key(?:\(s\)|s)?|field(?:\(s\)|s)?|parameter(?:\(s\)|s)?|argument(?:\(s\)|s)?|path)`;
+  const parameterEnd = String.raw`(?=[\s:,.]|$)`;
+  return [
+    /\bschema validation\b/i,
+    /\bzod(?:error)?\b/i,
+    new RegExp(
+      String.raw`\b(?:unrecognized|unknown|unexpected|unsupported)\s+${parameterName}${parameterEnd}`,
+      "i",
+    ),
+    /\binvalid[_ ](?:arguments?|parameters?)\b/i,
+    new RegExp(
+      String.raw`\binvalid[_ ]type\b[^\n]*\b${parameterName}${parameterEnd}`,
+      "i",
+    ),
+    /(?:^|[;\n])\s*required\s*:\s*["'`]?[a-z_][\w.-]*/i,
+    new RegExp(
+      String.raw`\b${parameterName}${parameterEnd}[^\n]*\bis required\b`,
+      "i",
+    ),
+    new RegExp(
+      String.raw`\bvalidation error\b[^\n]*\b${parameterName}${parameterEnd}|\b${parameterName}${parameterEnd}[^\n]*\bvalidation error\b`,
+      "i",
+    ),
+    new RegExp(
+      String.raw`\bexpected (?:string|number|object|array|boolean)\b[^\n]*\b(?:for|at)\b[^\n]*\b${parameterName}${parameterEnd}`,
+      "i",
+    ),
+  ].some((pattern) => pattern.test(message));
 }
 
 export type EvernoteTaskSearchStatus = "open" | "completed";
