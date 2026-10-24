@@ -18,6 +18,7 @@ import {
   connectorSyncFromPayload,
   continueJob,
   deferJob,
+  dropStaleQueuedFinanceJobs,
   enexImportFromPayload,
   failJob,
   getJobForUser,
@@ -39,7 +40,10 @@ let ticks = 0;
 const requestedJobIds = new Set<string>();
 const scheduledResumeIds = new Set<string>();
 
-const TIMER_SAFE_JOB_TYPES = [JOB_TYPE_ATTACHMENT_EXTRACT] as const;
+const TIMER_SAFE_JOB_TYPES =
+  process.env.RECALL_ROLE?.trim().toLowerCase() === "worker"
+    ? [JOB_TYPE_ATTACHMENT_EXTRACT, JOB_TYPE_CONNECTOR_SYNC]
+    : [JOB_TYPE_ATTACHMENT_EXTRACT];
 
 const workerId = `recall-api:${hostname()}:${process.pid}`;
 
@@ -58,6 +62,10 @@ function scheduleExplicitJobResume(job: Pick<Job, "id" | "availableAt">): void {
 }
 
 async function resumeQueuedConnectorJobs(): Promise<void> {
+  const dropped = await dropStaleQueuedFinanceJobs();
+  if (dropped > 0) {
+    logger.warn({ dropped }, "Dropped stale queued finance sync jobs");
+  }
   const queued = await listQueuedJobsOfType(JOB_TYPE_CONNECTOR_SYNC);
   for (const job of queued) scheduleExplicitJobResume(job);
 }
@@ -144,6 +152,14 @@ const handlers: Record<string, JobHandler> = {
       return complete
         ? undefined
         : { continueAfterMs: 30 * 60 * 1000 };
+    }
+    if (meta.connectorType === "finance_api") {
+      await connectorsService.processFinanceSyncJob(
+        job.userId,
+        meta.connectorId,
+        meta.syncRunId,
+      );
+      return;
     }
     const lease = setInterval(() => {
       void heartbeatJob(job.id).catch(() => undefined);
@@ -306,6 +322,10 @@ async function pollOnce(): Promise<void> {
   try {
     ticks += 1;
     if (ticks % STALE_RECOVERY_EVERY_TICKS === 1) {
+      const dropped = await dropStaleQueuedFinanceJobs();
+      if (dropped > 0) {
+        logger.warn({ dropped }, "Dropped stale queued finance sync jobs");
+      }
       const recovered = await recoverStaleProcessingJobs();
       if (recovered > 0) {
         logger.info({ recovered }, "Re-queued stale processing jobs");
@@ -363,6 +383,12 @@ export function startJobWorker(): void {
  * Timer polling is intentionally restricted to non-AI job types.
  */
 export function nudgeJobWorker(jobId?: string): void {
+  if (
+    process.env.RECALL_ROLE?.trim().toLowerCase() === "api" &&
+    process.env.RECALL_DISABLE_INLINE_WORKER === "1"
+  ) {
+    return;
+  }
   if (jobId) requestedJobIds.add(jobId);
   void pollOnce();
 }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { EvidenceInput, NormalizedSourceRecord, RecallConnector } from "./types";
 
 export type FinanceTransaction = {
@@ -15,6 +16,24 @@ export type FinanceTransaction = {
   affectsCashFlow?: boolean | null;
 };
 
+/** Stable across object key order and irrelevant upstream response fields. */
+export function financeTransactionContentHash(tx: FinanceTransaction): string {
+  const canonical = [
+    tx.id,
+    tx.date,
+    Number.isFinite(tx.amount) ? Math.round(tx.amount * 100) : tx.amount,
+    tx.payee ?? null,
+    tx.category ?? null,
+    tx.notes ?? null,
+    tx.type ?? null,
+    tx.transferSubtype ?? null,
+    tx.affectsSpending ?? null,
+    tx.affectsIncome ?? null,
+    tx.affectsCashFlow ?? null,
+  ];
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
 export const financeApiConnector: RecallConnector = {
   id: "finance_api",
   type: "finance_api",
@@ -25,7 +44,10 @@ export const financeApiConnector: RecallConnector = {
       recordType: "finance_transaction",
       recordTitle: tx.payee ?? `Transaction ${tx.id}`,
       recordText: `${tx.date} | ${tx.payee ?? "Unknown"} | $${tx.amount.toFixed(2)} | ${tx.category ?? ""}`,
-      recordMetadata: tx as unknown as Record<string, unknown>,
+      recordMetadata: {
+        ...(tx as unknown as Record<string, unknown>),
+        contentHash: financeTransactionContentHash(tx),
+      },
       sourceCreatedAt: tx.date,
     }));
   },

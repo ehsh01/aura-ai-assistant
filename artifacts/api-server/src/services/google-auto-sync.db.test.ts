@@ -73,6 +73,14 @@ beforeEach(async () => {
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+    CREATE TABLE sync_runs (
+      id varchar(64) PRIMARY KEY,
+      user_id uuid NOT NULL REFERENCES users(id),
+      connector_id varchar(64) NOT NULL REFERENCES connectors(id),
+      status varchar(32) NOT NULL DEFAULT 'running',
+      started_at timestamptz NOT NULL DEFAULT now(),
+      completed_at timestamptz
+    );
     INSERT INTO users (id) VALUES ('${USER_ID}');
     INSERT INTO connectors
       (id, user_id, name, type, enabled, sync_status, updated_at)

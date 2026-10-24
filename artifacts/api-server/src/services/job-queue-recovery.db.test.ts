@@ -20,6 +20,7 @@ const {
   MAX_STALE_RECOVERIES,
   claimNextJob,
   deferJob,
+  dropStaleQueuedFinanceJobs,
   failJob,
   recoverStaleProcessingJobs,
 } = await import("./job-queue");
@@ -29,6 +30,30 @@ describe("stale job recovery", () => {
     db = new PGlite();
     pgliteDb = drizzle(db, { schema });
     await db.exec('CREATE TABLE "users" ("id" uuid PRIMARY KEY)');
+    await db.exec(`
+      CREATE TABLE connectors (
+        id varchar(64) PRIMARY KEY,
+        user_id uuid NOT NULL REFERENCES users(id),
+        sync_status varchar(32) NOT NULL DEFAULT 'syncing',
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE TABLE sync_runs (
+        id varchar(64) PRIMARY KEY,
+        user_id uuid NOT NULL REFERENCES users(id),
+        connector_id varchar(64) NOT NULL REFERENCES connectors(id),
+        status varchar(32) NOT NULL DEFAULT 'running',
+        started_at timestamptz NOT NULL DEFAULT now(),
+        completed_at timestamptz,
+        records_fetched integer NOT NULL DEFAULT 0,
+        records_created integer NOT NULL DEFAULT 0,
+        records_updated integer NOT NULL DEFAULT 0,
+        records_skipped integer NOT NULL DEFAULT 0,
+        records_failed integer NOT NULL DEFAULT 0,
+        error_message text,
+        source_errors jsonb NOT NULL DEFAULT '{}'::jsonb,
+        metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+      );
+    `);
     await db.exec(await readFile(migrationUrl, "utf8"));
     await db.exec(`INSERT INTO users (id) VALUES ('${USER_ID}')`);
   });
@@ -207,6 +232,75 @@ describe("stale job recovery", () => {
       status: "failed",
       attempts: GOOGLE_SYNC_MAX_CURSOR_RETRIES,
       last_error: "Google sync database error",
+    });
+  });
+
+  it("drops queued finance jobs older than one hour before they can run", async () => {
+    await db.exec(`
+      INSERT INTO connectors (id, user_id)
+      VALUES
+        ('finance', '${USER_ID}'),
+        ('finance-old-only', '${USER_ID}');
+      INSERT INTO sync_runs (id, user_id, connector_id, status, started_at)
+      VALUES
+        ('old-finance', '${USER_ID}', 'finance', 'queued', now() - interval '2 hours'),
+        ('fresh-finance', '${USER_ID}', 'finance', 'queued', now()),
+        (
+          'old-finance-only', '${USER_ID}', 'finance-old-only', 'queued',
+          now() - interval '2 hours'
+        );
+      INSERT INTO jobs (
+        id, user_id, type, payload, status, created_at, updated_at
+      ) VALUES
+        (
+          'old-finance', '${USER_ID}', 'connector_sync',
+          '{"connectorId":"finance","syncRunId":"old-finance","connectorType":"finance_api"}',
+          'queued', now() - interval '2 hours', now() - interval '2 hours'
+        ),
+        (
+          'fresh-finance', '${USER_ID}', 'connector_sync',
+          '{"connectorId":"finance","syncRunId":"fresh-finance","connectorType":"finance_api"}',
+          'queued', now(), now()
+        ),
+        (
+          'old-finance-only', '${USER_ID}', 'connector_sync',
+          '{"connectorId":"finance-old-only","syncRunId":"old-finance-only","connectorType":"finance_api"}',
+          'queued', now() - interval '2 hours', now() - interval '2 hours'
+        );
+    `);
+
+    expect(await dropStaleQueuedFinanceJobs()).toBe(2);
+    const stale = await db.query<{
+      job_status: string;
+      run_status: string;
+      connector_status: string;
+    }>(`
+      SELECT
+        jobs.status AS job_status,
+        sync_runs.status AS run_status,
+        connectors.sync_status AS connector_status
+      FROM jobs
+      JOIN sync_runs USING (id)
+      JOIN connectors ON connectors.id = sync_runs.connector_id
+      WHERE jobs.id = 'old-finance'
+    `);
+    expect(stale.rows[0]).toEqual({
+      job_status: "failed",
+      run_status: "failed",
+      // A fresh job for this connector remains queued, so the connector stays
+      // syncing rather than being incorrectly marked failed.
+      connector_status: "syncing",
+    });
+    const oldOnly = await db.query<{ connector_status: string }>(`
+      SELECT sync_status AS connector_status
+      FROM connectors
+      WHERE id = 'finance-old-only'
+    `);
+    expect(oldOnly.rows[0]).toEqual({
+      connector_status: "sync_failed",
+    });
+    await expect(claimNextJob("worker")).resolves.toMatchObject({
+      id: "fresh-finance",
     });
   });
 });

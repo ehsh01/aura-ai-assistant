@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { evidence, type Evidence } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newEvidenceId } from "../lib/recall-format";
@@ -139,6 +139,83 @@ export async function upsertEvidenceForSourceRecord(
     .where(and(eq(evidence.id, existing.id), eq(evidence.userId, userId)))
     .returning();
   return toDto(row!);
+}
+
+/**
+ * Batch the expensive source/claim lookup used by connector pages. Existing
+ * duplicate rows are intentionally left untouched; like the single-row path,
+ * an update targets only the newest matching row.
+ */
+export async function upsertEvidenceForSourceRecordsBatch(
+  userId: string,
+  inputs: Array<
+    CreateEvidenceInput & {
+      sourceRecordId: string;
+      /** Repair missing evidence for hash-skipped rows without rewriting it. */
+      insertOnly?: boolean;
+    }
+  >,
+): Promise<void> {
+  if (inputs.length === 0) return;
+  const sourceRecordIds = [...new Set(inputs.map((input) => input.sourceRecordId))];
+  const existingRows = await getDb()
+    .selectDistinctOn(
+      [evidence.sourceRecordId, evidence.claimType],
+      {
+        id: evidence.id,
+        sourceRecordId: evidence.sourceRecordId,
+        claimType: evidence.claimType,
+        updatedAt: evidence.updatedAt,
+      },
+    )
+    .from(evidence)
+    .where(
+      and(
+        eq(evidence.userId, userId),
+        inArray(evidence.sourceRecordId, sourceRecordIds),
+      ),
+    )
+    .orderBy(
+      evidence.sourceRecordId,
+      evidence.claimType,
+      desc(evidence.updatedAt),
+    );
+
+  const newestBySourceClaim = new Map<
+    string,
+    (typeof existingRows)[number]
+  >();
+  for (const row of existingRows) {
+    if (!row.sourceRecordId) continue;
+    const key = `${row.sourceRecordId}\0${row.claimType}`;
+    if (!newestBySourceClaim.has(key)) newestBySourceClaim.set(key, row);
+  }
+
+  for (const input of inputs) {
+    const key = `${input.sourceRecordId}\0${input.claimType}`;
+    const existing = newestBySourceClaim.get(key);
+    if (!existing) {
+      await createEvidenceForUser(userId, input);
+      continue;
+    }
+    if (input.insertOnly) continue;
+    await getDb()
+      .update(evidence)
+      .set({
+        entityType: input.entityType,
+        entityId: input.entityId,
+        sourceCaptureId: input.sourceCaptureId ?? null,
+        evidenceText: input.evidenceText ?? null,
+        evidenceMetadata: input.evidenceMetadata ?? {},
+        fileName: input.fileName ?? null,
+        fileId: input.fileId ?? null,
+        rowNumber: input.rowNumber ?? null,
+        pageNumber: input.pageNumber ?? null,
+        url: input.url ?? null,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(evidence.id, existing.id), eq(evidence.userId, userId)));
+  }
 }
 
 export async function getEvidenceForUser(

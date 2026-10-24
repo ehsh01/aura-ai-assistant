@@ -223,6 +223,10 @@ SECRETS_ENCRYPTION_KEY=...   # required so refresh tokens are encrypted at rest
 
 5. Restart the API (`systemctl restart recall-api` or your usual process). Users then click **Connect Google** on `/connectors`.
 
+Google durable sync pages are hard-capped at 500 rows per worker tick. The
+`RECALL_GOOGLE_SYNC_MAX_ROWS_PER_TICK` setting may lower that limit but values
+above 500 are clamped to 500 to protect the shared PostgreSQL cluster.
+
 ## Homey Pro connector (OAuth + Flow webhooks)
 
 Homey decides *when* something is important (Flows). Recall surfaces those alerts on Today and can read/control devices via Ask.
@@ -260,7 +264,8 @@ EVERNOTE_MCP_MAX_429_RETRIES=2
 EVERNOTE_MCP_BACKFILL_CHUNK_SIZE=25
 EVERNOTE_SYNC_ENABLED=true
 EVERNOTE_INCREMENTAL_SYNC_ENABLED=true
-EVERNOTE_INCREMENTAL_SYNC_MINUTES=15
+EVERNOTE_INCREMENTAL_SYNC_DAY_MINUTES=60
+EVERNOTE_INCREMENTAL_SYNC_NIGHT_MINUTES=30
 EVERNOTE_FULL_RECONCILE_ENABLED=true
 EVERNOTE_FULL_RECONCILE_MINUTES=1440
 EVERNOTE_AUTO_FULL_IMPORT=false
@@ -268,6 +273,9 @@ EVERNOTE_NIGHT_WINDOW_START_HOUR=1
 EVERNOTE_NIGHT_WINDOW_END_HOUR=5
 EVERNOTE_NIGHT_WINDOW_TIMEZONE=America/New_York
 EVERNOTE_WATCHDOG_DB_CONNECTIONS=22
+RECALL_WATCHDOG_SELECT1_MS=250
+RECALL_WATCHDOG_ACTIVE_SESSIONS=2
+RECALL_WATCHDOG_ACTIVE_SUSTAINED_MS=30000
 EVERNOTE_WATCHDOG_MIN_MEM_MB=200
 # Comma-separated sibling-app health endpoints:
 EVERNOTE_WATCHDOG_HEALTH_URLS=
@@ -296,9 +304,10 @@ APP_PUBLIC_URL=https://recall-app.net
    hard ceiling); bytes are held only in memory and discarded.
 6. The worker auto-pauses at 22 DB connections, below 200MB available RAM, or
    when a configured sibling health URL fails. It resumes from its persisted
-   cursor when the gates recover. Incremental sync runs every 15 minutes after
-   the first import. Scheduled full reconciliation and image OCR run only from
-   1–5 AM America/New_York by default and are load-checked before work.
+   cursor when the gates recover. Incremental sync defaults to every 60 minutes
+   by day and 30 minutes in the night window. Scheduled full reconciliation and
+   image OCR run only from 1–5 AM America/New_York by default and are
+   load-checked before work.
 
 The existing OAuth1/EDAM and personal developer-token implementations remain
 disabled optional fallbacks:
@@ -324,6 +333,24 @@ excludes that connector from Ask.
 **Smoke blockers:** no static Evernote credentials are needed for MCP. Ernesto
 must have an eligible paid Evernote plan and complete the accounts.evernote.com
 browser consent before the live Connect → Sync Now → Ask flow can be verified.
+
+## Nightly finance sync
+
+The supported cron entry point is the bundled CLI below. It uses the same
+`finance-sync:<connectorId>` PostgreSQL advisory lock, content hash, evidence
+batching, watchdog, and 15-minute running-row backstop as worker-triggered
+finance syncs. Repoint any older out-of-repo 02:00 script to this command:
+
+```bash
+0 2 * * * /usr/bin/node /var/www/recall-app/artifacts/api-server/dist/finance-nightly-sync-cli.mjs >> /var/log/recall-finance-sync.log 2>&1
+```
+
+By default it syncs every enabled finance connector sequentially. Set
+`FINANCE_CONNECTOR_ID` or append `--connector-id <id>` to target one.
+`pnpm run build:api` must have completed before the cron runs.
+If another sync holds the connector lock, the CLI logs a JSON record with
+`"status":"skipped"` and exits with code **75**. Other failures exit with code
+1; a completed run exits 0.
 
 ## Database backups
 

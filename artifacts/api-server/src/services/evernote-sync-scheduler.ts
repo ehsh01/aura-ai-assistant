@@ -130,7 +130,9 @@ export async function scheduleDueEvernoteSyncs(
       autoFullImportEnabled: isEvernoteAutoFullImportEnabled(),
       inNightWindow,
       attachmentBackfillInProgress: attachmentBackfills.has(connector.id),
-      incrementalMinutes: envMinutes("EVERNOTE_INCREMENTAL_SYNC_MINUTES", 15),
+      incrementalMinutes: inNightWindow
+        ? envMinutes("EVERNOTE_INCREMENTAL_SYNC_NIGHT_MINUTES", 30)
+        : envMinutes("EVERNOTE_INCREMENTAL_SYNC_DAY_MINUTES", 60),
       fullReconcileMinutes: envMinutes(
         "EVERNOTE_FULL_RECONCILE_MINUTES",
         24 * 60,

@@ -30,6 +30,15 @@ export const evidence = pgTable(
     index("evidence_entity_idx").on(table.entityType, table.entityId),
     index("evidence_source_capture_idx").on(table.sourceCaptureId),
     index("evidence_user_id_idx").on(table.userId),
+    // Operations creates this with CREATE INDEX CONCURRENTLY in production.
+    // Keeping it in Drizzle makes future schema diffs idempotent without
+    // introducing a blocking index migration in this repository.
+    index("evidence_user_source_claim_idx").on(
+      table.userId,
+      table.sourceRecordId,
+      table.claimType,
+      table.updatedAt.desc().nullsFirst(),
+    ),
   ],
 );
 

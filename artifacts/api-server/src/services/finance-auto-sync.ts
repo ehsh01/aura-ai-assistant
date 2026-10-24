@@ -1,21 +1,17 @@
 import { and, eq, isNull, lt, or } from "drizzle-orm";
 import { connectors } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
-import { syncConnectorForUser } from "./connectors";
+import { enqueueFinanceSyncForUser } from "./connectors";
 import { logger } from "../lib/logger";
+import { nudgeJobWorker } from "./job-worker";
+import { checkEvernoteImportWatchdog } from "./evernote-watchdog";
 
 /** Background scheduler: only re-sync if older than this. */
 const STALE_MS = 6 * 60 * 60 * 1000; // 6 hours
-/** App-open / Ask: skip only if synced within this window (avoid double-hit). */
-const OPEN_COOLDOWN_MS = 45 * 1000;
-/**
- * Longest a request may block on a finance sync before answering from the last
- * snapshot. Without a bound, every caller waits for the full MyFamilyBudget
- * pull; requests then stack up for minutes and the process runs out of heap.
- */
-export const ON_DEMAND_SYNC_TIMEOUT_MS = 8_000;
+/** App-open/Home refresh cooldown; Ask explicitly uses five minutes. */
+export const FINANCE_ON_DEMAND_COOLDOWN_MS = 20 * 60 * 1000;
 const TICK_MS = 30 * 60 * 1000; // every 30 minutes
-const MAX_PER_TICK = 3;
+const MAX_PER_TICK = 1;
 
 let timer: NodeJS.Timeout | null = null;
 let running = false;
@@ -43,17 +39,33 @@ export async function syncStaleFinanceConnectors(): Promise<number> {
           or(isNull(connectors.lastSyncAt), lt(connectors.lastSyncAt, cutoff)),
         ),
       )
-      .limit(MAX_PER_TICK);
+      .orderBy(connectors.updatedAt)
+      .limit(20);
 
     let synced = 0;
     for (const row of rows) {
       try {
-        await syncConnectorForUser(row.userId, row.id);
+        const watchdog = await checkEvernoteImportWatchdog();
+        if (!watchdog.safe) {
+          logger.info(
+            { connectorId: row.id, reasons: watchdog.reasons },
+            "Finance auto-sync deferred by load watchdog",
+          );
+          return 0;
+        }
+        const queued = await enqueueFinanceSyncForUser(
+          row.userId,
+          row.id,
+          { scheduled: true },
+        );
+        if (queued.deduped) continue;
+        nudgeJobWorker(queued.jobId);
         synced += 1;
         logger.info(
-          { connectorId: row.id, userId: row.userId },
-          "Auto-synced finance connector",
+          { connectorId: row.id, userId: row.userId, jobId: queued.jobId },
+          "Queued finance auto-sync",
         );
+        if (synced >= MAX_PER_TICK) break;
       } catch (err) {
         logger.warn(
           { err, connectorId: row.id, userId: row.userId },
@@ -68,57 +80,30 @@ export async function syncStaleFinanceConnectors(): Promise<number> {
 }
 
 export type EnsureFinanceFreshOptions = {
-  /** Skip sync if last sync was within this many ms. Default: 45s cooldown. */
+  /** Skip sync if last sync was within this many ms. Default: 20 minutes. */
   maxAgeMs?: number;
-  /** Wait for sync to finish before returning (Home / Ask). Default true. */
-  awaitSync?: boolean;
-  /**
-   * When awaitSync is true, give up waiting after this many ms and let the
-   * caller answer from the last synced snapshot (sync continues in background).
-   */
-  timeoutMs?: number;
 };
 
 /**
- * One in-flight sync per user. Concurrent refresh calls (app open + Ask +
- * summary, or a user re-triggering after an aborted request) share the same
- * promise instead of stacking full syncs — each sync holds DB connections on
- * a shared cluster, so fan-out here starved sibling apps.
- */
-const inflightSyncs = new Map<string, Promise<unknown>>();
-
-function runCoalescedSync(userId: string, connectorId: string): Promise<unknown> {
-  const existing = inflightSyncs.get(userId);
-  if (existing) return existing;
-  const run = syncConnectorForUser(userId, connectorId).finally(() => {
-    inflightSyncs.delete(userId);
-  });
-  inflightSyncs.set(userId, run);
-  return run;
-}
-
-function delay(ms: number): Promise<"timeout"> {
-  return new Promise((resolve) => {
-    setTimeout(() => resolve("timeout"), ms);
-  });
-}
-
-/**
  * Refresh the user's finance connector from MyFamilyBudget.
- * Used on app open and before finance Ask answers.
+ * Used on app open and before finance Ask answers. It only queues durable
+ * worker work; callers always continue from the last completed snapshot.
  */
 export async function ensureUserFinanceFresh(
   userId: string,
   opts?: EnsureFinanceFreshOptions,
-): Promise<{ synced: boolean; skipped: boolean; timedOut?: boolean }> {
-  const maxAgeMs = opts?.maxAgeMs ?? OPEN_COOLDOWN_MS;
-  const awaitSync = opts?.awaitSync !== false;
-  const timeoutMs = opts?.timeoutMs;
+): Promise<{
+  synced: boolean;
+  skipped: boolean;
+  updating: boolean;
+}> {
+  const maxAgeMs = opts?.maxAgeMs ?? FINANCE_ON_DEMAND_COOLDOWN_MS;
 
   const rows = await getDb()
     .select({
       id: connectors.id,
       lastSyncAt: connectors.lastSyncAt,
+      syncStatus: connectors.syncStatus,
     })
     .from(connectors)
     .where(
@@ -131,45 +116,32 @@ export async function ensureUserFinanceFresh(
     .limit(1);
 
   const conn = rows[0];
-  if (!conn) return { synced: false, skipped: true };
+  if (!conn) return { synced: false, skipped: true, updating: false };
 
   if (
     maxAgeMs > 0 &&
     conn.lastSyncAt &&
     Date.now() - conn.lastSyncAt.getTime() < maxAgeMs
   ) {
-    return { synced: false, skipped: true };
+    return {
+      synced: false,
+      skipped: true,
+      updating: conn.syncStatus === "syncing",
+    };
   }
 
-  const run = runCoalescedSync(userId, conn.id);
-  if (awaitSync) {
-    try {
-      if (timeoutMs != null && timeoutMs > 0) {
-        const winner = await Promise.race([
-          run.then(() => "done" as const),
-          delay(timeoutMs),
-        ]);
-        if (winner === "timeout") {
-          logger.warn(
-            { userId, connectorId: conn.id, timeoutMs },
-            "On-demand finance sync still running; answering from last snapshot",
-          );
-          return { synced: false, skipped: false, timedOut: true };
-        }
-      } else {
-        await run;
-      }
-      return { synced: true, skipped: false };
-    } catch (err) {
-      logger.warn({ err, userId, connectorId: conn.id }, "On-demand finance sync failed");
-      return { synced: false, skipped: false };
-    }
+  try {
+    const queued = await enqueueFinanceSyncForUser(userId, conn.id);
+    if (!queued.deduped) nudgeJobWorker(queued.jobId);
+    return {
+      synced: false,
+      skipped: queued.deduped,
+      updating: true,
+    };
+  } catch (err) {
+    logger.warn({ err, userId, connectorId: conn.id }, "Could not queue finance sync");
+    return { synced: false, skipped: false, updating: false };
   }
-
-  void run.catch((err) => {
-    logger.warn({ err, userId, connectorId: conn.id }, "On-demand finance sync failed");
-  });
-  return { synced: true, skipped: false };
 }
 
 export function startFinanceAutoSync(): void {

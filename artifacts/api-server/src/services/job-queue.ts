@@ -1,5 +1,5 @@
-import { and, eq, lt, sql } from "drizzle-orm";
-import { jobs, type Job } from "@workspace/db/schema";
+import { and, eq, inArray, lt, sql } from "drizzle-orm";
+import { connectors, jobs, syncRuns, type Job } from "@workspace/db/schema";
 import { getDb } from "../lib/db";
 import { newExtractionJobId } from "../lib/recall-format";
 
@@ -32,6 +32,7 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 export const GOOGLE_SYNC_MAX_CURSOR_RETRIES = 3;
 /** Re-queue jobs stuck in processing longer than this (API crash mid-run). */
 export const STALE_PROCESSING_MS = 15 * 60 * 1000;
+export const MAX_QUEUED_FINANCE_JOB_AGE_MS = 60 * 60 * 1000;
 /** Bound crash/deploy recovery independently from real execution failures. */
 export const MAX_STALE_RECOVERIES = 20;
 
@@ -214,6 +215,11 @@ export async function claimNextJobOfTypes(workerId: string, allowedTypes?: reado
       FROM jobs
       WHERE status = 'queued'
         AND available_at <= now()
+        AND NOT (
+          type = ${JOB_TYPE_CONNECTOR_SYNC}
+          AND COALESCE(payload->>'connectorType', '') = 'finance_api'
+          AND created_at < ${new Date(Date.now() - MAX_QUEUED_FINANCE_JOB_AGE_MS)}
+        )
         ${typeFilter}
       ORDER BY available_at ASC, created_at ASC
       FOR UPDATE SKIP LOCKED
@@ -241,6 +247,11 @@ export async function claimJobById(workerId: string, jobId: string): Promise<Job
     WHERE id = ${jobId}
       AND status = 'queued'
       AND available_at <= now()
+      AND NOT (
+        type = ${JOB_TYPE_CONNECTOR_SYNC}
+        AND COALESCE(payload->>'connectorType', '') = 'finance_api'
+        AND created_at < ${new Date(Date.now() - MAX_QUEUED_FINANCE_JOB_AGE_MS)}
+      )
     RETURNING *
   `);
   const rawRows = (result as { rows?: RawJobRow[] }).rows ?? (Array.isArray(result) ? (result as RawJobRow[]) : []);
@@ -402,6 +413,107 @@ export async function recoverStaleProcessingJobs(olderThanMs: number = STALE_PRO
     .where(and(eq(jobs.status, "processing"), lt(jobs.lockedAt, cutoff)))
     .returning({ id: jobs.id });
   return result.length;
+}
+
+/** Never execute finance refreshes that sat queued through an old deploy. */
+export async function dropStaleQueuedFinanceJobs(
+  olderThanMs = MAX_QUEUED_FINANCE_JOB_AGE_MS,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - olderThanMs);
+  return getDb().transaction(async (tx) => {
+    const stale = await tx
+      .select({
+        id: jobs.id,
+        connectorId: sql<string>`${jobs.payload}->>'connectorId'`,
+      })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.type, JOB_TYPE_CONNECTOR_SYNC),
+          eq(jobs.status, "queued"),
+          lt(jobs.createdAt, cutoff),
+          sql`${jobs.payload}->>'connectorType' = 'finance_api'`,
+        ),
+      );
+    const candidateIds = stale.map((row) => row.id);
+    if (candidateIds.length === 0) return 0;
+    const candidateConnectorIds = [
+      ...new Set(stale.map((row) => row.connectorId).filter(Boolean)),
+    ];
+    // Enqueue takes this row lock before deciding whether an active job
+    // exists. Locking first makes the stale-job transition and enqueue's
+    // dedupe decision observe each other in one serial order.
+    const lockedConnectors =
+      candidateConnectorIds.length > 0
+        ? await tx
+            .select({ id: connectors.id })
+            .from(connectors)
+            .where(inArray(connectors.id, candidateConnectorIds))
+            .for("update")
+        : [];
+    const lockedConnectorIds = new Set(
+      lockedConnectors.map((row) => row.id),
+    );
+    const now = new Date();
+    const reason = "Dropped queued finance sync older than 1 hour";
+    const dropped = await tx
+      .update(jobs)
+      .set({
+        status: "failed",
+        lastError: reason,
+        completedAt: now,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          inArray(jobs.id, candidateIds),
+          eq(jobs.status, "queued"),
+          lt(jobs.createdAt, cutoff),
+        ),
+      )
+      .returning({ id: jobs.id });
+    const droppedIds = dropped.map((row) => row.id);
+    if (droppedIds.length === 0) return 0;
+    await tx
+      .update(syncRuns)
+      .set({
+        status: "failed",
+        completedAt: now,
+        errorMessage: reason,
+      })
+      .where(
+        and(
+          inArray(syncRuns.id, droppedIds),
+          inArray(syncRuns.status, ["queued", "running"]),
+        ),
+      );
+    const statusConnectorIds = [
+      ...new Set(
+        stale
+          .filter((row) => droppedIds.includes(row.id))
+          .map((row) => row.connectorId)
+          .filter((connectorId) => lockedConnectorIds.has(connectorId)),
+      ),
+    ];
+    if (statusConnectorIds.length > 0) {
+      await tx
+        .update(connectors)
+        .set({ syncStatus: "sync_failed", updatedAt: now })
+        .where(
+          and(
+            inArray(connectors.id, statusConnectorIds),
+            eq(connectors.syncStatus, "syncing"),
+            sql`not exists (
+              select 1
+              from ${jobs}
+              where ${jobs.status} in ('queued', 'processing')
+                and ${jobs.payload}->>'connectorId' = ${connectors.id}
+            )`,
+          ),
+        );
+    }
+    return droppedIds.length;
+  });
 }
 
 export function captureIdFromPayload(payload: Record<string, unknown>): string | null {

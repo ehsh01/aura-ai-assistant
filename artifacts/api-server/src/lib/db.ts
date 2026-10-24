@@ -170,6 +170,15 @@ export async function withDbAdvisoryLockWait<T>(
   }
 }
 
+/** Run service helpers atomically by scoping getDb() to one transaction. */
+export async function withDbTransaction<T>(
+  callback: () => Promise<T>,
+): Promise<T> {
+  return getDb().transaction(async (transaction) =>
+    scopedDb.run(transaction as unknown as Db, callback),
+  );
+}
+
 export async function closeDb(): Promise<void> {
   await pool?.end();
   pool = null;

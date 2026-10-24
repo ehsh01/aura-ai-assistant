@@ -9,6 +9,20 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: recall_test
+          POSTGRES_PASSWORD: recall_test
+          POSTGRES_DB: recall_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U recall_test -d recall_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -26,6 +40,8 @@ jobs:
         run: pnpm run typecheck
 
       - name: Unit tests
+        env:
+          RECALL_TEST_POSTGRES_URL: postgresql://recall_test:recall_test@127.0.0.1:5432/recall_test
         run: pnpm --filter "./artifacts/api-server" run test
 
       - name: Frontend unit tests

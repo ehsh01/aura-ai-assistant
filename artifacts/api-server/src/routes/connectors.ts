@@ -32,6 +32,7 @@ import {
   createConnectorForUser,
   deleteConnectorForUser,
   enqueueEvernoteSyncForUser,
+  enqueueFinanceSyncForUser,
   enqueueGoogleSyncForUser,
   upsertFlipperForceConnectorForUser,
   testFlipperForceConnectorForUser,
@@ -61,10 +62,7 @@ import {
   acknowledgeHomeyAlertForUser,
   listOpenHomeyAlertsForUser,
 } from "../services/homey-alerts";
-import {
-  ensureUserFinanceFresh,
-  ON_DEMAND_SYNC_TIMEOUT_MS,
-} from "../services/finance-auto-sync";
+import { ensureUserFinanceFresh } from "../services/finance-auto-sync";
 import {
   financeSummaryFromSynced,
   loadSyncedFinanceAggregate,
@@ -898,6 +896,15 @@ router.post("/connectors/:connectorId/sync", async (req, res, next) => {
       res.status(202).json(queued);
       return;
     }
+    if (connector.type === "finance_api") {
+      const queued = await enqueueFinanceSyncForUser(
+        req.user!.id,
+        req.params.connectorId,
+      );
+      if (!queued.deduped) nudgeJobWorker(queued.jobId);
+      res.status(202).json(queued);
+      return;
+    }
     const result = await syncConnectorForUser(
       req.user!.id,
       req.params.connectorId,
@@ -912,14 +919,9 @@ router.post("/connectors/:connectorId/sync", async (req, res, next) => {
 /** Refresh finance from MyFamilyBudget (called when the app opens). */
 router.post("/finance/refresh", async (req, res, next) => {
   try {
-    // The app shell calls this on every mount. Forcing a sync each time (and
-    // waiting for all of it) let refreshes stack until the process ran out of
-    // heap, so keep the normal cooldown and stop waiting after the timeout —
-    // the sync itself continues in the background either way.
-    const result = await ensureUserFinanceFresh(req.user!.id, {
-      awaitSync: true,
-      timeoutMs: ON_DEMAND_SYNC_TIMEOUT_MS,
-    });
+    // The app shell calls this on every mount. Queue durable worker work only;
+    // the request always returns the last completed snapshot state.
+    const result = await ensureUserFinanceFresh(req.user!.id);
     res.json({ ok: true, ...result });
   } catch (err) {
     next(err);
@@ -938,10 +940,7 @@ router.get("/finance/summary", async (req, res, next) => {
       res.status(404).json({ error: "NOT_FOUND", message: "Finance connector not found" });
       return;
     }
-    await ensureUserFinanceFresh(req.user!.id, {
-      awaitSync: true,
-      timeoutMs: ON_DEMAND_SYNC_TIMEOUT_MS,
-    });
+    await ensureUserFinanceFresh(req.user!.id);
     const synced = await loadSyncedFinanceAggregate(
       req.user!.id,
       "this month",

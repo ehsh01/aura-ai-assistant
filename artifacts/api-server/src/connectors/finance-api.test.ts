@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildFinanceUrl, sumTransactions } from "./finance-api";
+import {
+  buildFinanceUrl,
+  financeApiConnector,
+  financeTransactionContentHash,
+  sumTransactions,
+} from "./finance-api";
 
 describe("buildFinanceUrl", () => {
   it("preserves the base path (regression: dropped /api/v1)", () => {
@@ -33,5 +38,37 @@ describe("sumTransactions", () => {
 
   it("returns 0 for empty input", () => {
     expect(sumTransactions([])).toBe(0);
+  });
+});
+
+describe("finance content hash", () => {
+  it("is stable across object key order and changes with synced content", async () => {
+    const first = {
+      id: "tx-1",
+      date: "2026-10-22",
+      amount: -12.34,
+      payee: "Market",
+      category: "Groceries",
+      notes: "weekly",
+    };
+    const reordered = {
+      notes: "weekly",
+      category: "Groceries",
+      payee: "Market",
+      amount: -12.34,
+      date: "2026-10-22",
+      id: "tx-1",
+    };
+    expect(financeTransactionContentHash(first)).toBe(
+      financeTransactionContentHash(reordered),
+    );
+    expect(
+      financeTransactionContentHash({ ...first, amount: -13.34 }),
+    ).not.toBe(financeTransactionContentHash(first));
+
+    const normalized = await financeApiConnector.normalize([first]);
+    expect(normalized[0]?.recordMetadata?.contentHash).toBe(
+      financeTransactionContentHash(first),
+    );
   });
 });
